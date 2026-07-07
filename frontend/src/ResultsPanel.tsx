@@ -181,7 +181,7 @@ export default function ResultsPanel({ data, loading }: ResultsPanelProps) {
   );
 
   return (
-    <div className={isFullScreen ? "fixed inset-0 z-50 bg-white flex flex-col overflow-hidden" : "bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden"}>
+    <div className={isFullScreen ? "fixed inset-0 z-[9999] bg-white flex flex-col overflow-hidden" : "bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden"}>
       
       {/* Tabs Header */}
       <div className="flex justify-between border-b border-gray-200 bg-gray-50/50 pr-4">
@@ -349,8 +349,8 @@ export default function ResultsPanel({ data, loading }: ResultsPanelProps) {
                             <td className="p-3 border-r border-gray-100">{hasR2 ? run2Defect : ''}</td>
                             <td className="p-3 border-r border-gray-100">{dist2Formatted}</td>
                             <td className="p-3 border-r border-gray-100 font-medium">{hasR2 ? depth2 : ''}</td>
-                            <td className="p-3 border-r border-gray-100 text-blue-600">{cr}</td>
-                            <td className="p-3 text-blue-600">{latGrowth}</td>
+                            <td className="p-3 border-r border-gray-100 text-blue-600 font-bold">{cr}</td>
+                            <td className="p-3 text-blue-600 font-bold">{latGrowth}</td>
                           </tr>
                         );
                       })
