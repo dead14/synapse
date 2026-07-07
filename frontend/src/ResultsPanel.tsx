@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { FiSearch, FiFileText, FiSave, FiEdit, FiInfo, FiMaximize, FiMinimize } from 'react-icons/fi';
 import { Scatter } from 'react-chartjs-2';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, Title } from 'chart.js';
@@ -68,8 +69,7 @@ export default function ResultsPanel({ data, loading }: ResultsPanelProps) {
             'Unnamed: 6': newRow['Unnamed: 6'],
             'Unnamed: 7': newRow['Unnamed: 7']
           };
-          baseData = baseData.filter((_, i) => i !== oldIdx && i !== newIdx);
-          baseData.push(mergedRow);
+          baseData = [...baseData.slice(0, Math.min(oldIdx, newIdx)), ...baseData.slice(Math.min(oldIdx, newIdx) + 1, Math.max(oldIdx, newIdx)), ...baseData.slice(Math.max(oldIdx, newIdx) + 1), mergedRow];
         }
       }
     });
@@ -77,7 +77,7 @@ export default function ResultsPanel({ data, loading }: ResultsPanelProps) {
     return baseData;
   }, [data, interventions]);
 
-  // 2. Filter data
+  // 2. Filter data for view
   const filteredData = useMemo(() => {
     return processedData.filter((row: any) => {
       const run1 = row['Unnamed: 29'];
@@ -85,19 +85,16 @@ export default function ResultsPanel({ data, loading }: ResultsPanelProps) {
       const dist1 = row['DATA LAMA 2020 (Vendor Lama)  >'];
       const dist2 = row['<  DATA BARU 2025 (Vendor Baru)'];
       
-      const hasRun1 = run1 !== null && run1 !== undefined && run1 !== '' && run1 !== '-';
-      const hasRun2 = run2 !== null && run2 !== undefined && run2 !== '' && run2 !== '-';
+      const isUnmatchedOld = run1 && run1 !== '-' && (!run2 || run2 === '-');
+      const isUnmatchedNew = run2 && run2 !== '-' && (!run1 || run1 === '-');
       
-      const isMatched = hasRun1 && hasRun2;
-      const isUnmatchedOld = hasRun1 && !hasRun2;
-      const isUnmatchedNew = !hasRun1 && hasRun2;
-      
-      // Match type filter
-      let typeInclude = false;
-      if (!unmatchedOld && !unmatchedNew) typeInclude = isMatched;
-      else if (unmatchedOld && !unmatchedNew) typeInclude = isMatched || isUnmatchedOld;
-      else if (!unmatchedOld && unmatchedNew) typeInclude = isMatched || isUnmatchedNew;
-      else typeInclude = true; // both checked
+      // Checkbox filters
+      let typeInclude = true;
+      if (unmatchedOld || unmatchedNew) {
+        typeInclude = false;
+        if (unmatchedOld && isUnmatchedOld) typeInclude = true;
+        if (unmatchedNew && isUnmatchedNew) typeInclude = true;
+      }
       
       if (!typeInclude) return false;
       
@@ -180,7 +177,7 @@ export default function ResultsPanel({ data, loading }: ResultsPanelProps) {
     </div>
   );
 
-  return (
+  const panelContent = (
     <div className={isFullScreen ? "fixed inset-0 z-[9999] bg-white flex flex-col overflow-hidden" : "bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden"}>
       
       {/* Tabs Header */}
@@ -520,4 +517,6 @@ export default function ResultsPanel({ data, loading }: ResultsPanelProps) {
 
     </div>
   );
+
+  return isFullScreen ? createPortal(panelContent, document.body) : panelContent;
 }
