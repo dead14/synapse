@@ -346,8 +346,8 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
       </div>
 
       {/* Match Table */}
-      {isTableExpanded && <div className="fixed inset-0 bg-gray-900/40 z-40 backdrop-blur-sm" onClick={() => setIsTableExpanded(false)}></div>}
-      <div className={isTableExpanded ? "fixed inset-x-8 inset-y-12 z-50 bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col animate-fade-in" : "bg-white rounded-xl border border-gray-200 overflow-hidden mb-8 max-h-[300px] flex flex-col"}>
+      {isTableExpanded && <div className="fixed inset-0 bg-gray-900/40 z-[99998] backdrop-blur-sm" onClick={() => setIsTableExpanded(false)}></div>}
+      <div className={isTableExpanded ? "fixed inset-x-8 inset-y-12 z-[99999] bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col animate-fade-in" : "bg-white rounded-xl border border-gray-200 overflow-hidden mb-8 max-h-[300px] flex flex-col"}>
         <div className="flex justify-between items-center px-6 py-3 bg-gray-50 border-b border-gray-200 z-10 sticky top-0 shrink-0">
           <h4 className="font-semibold text-gray-800">Match Results Data</h4>
           <button 
