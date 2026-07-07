@@ -10,9 +10,9 @@ interface DefectVisualizerProps {
 
 const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData }: { renderLength: number, sLength: number, startDist: number, spoolData: any[] }) => {
   const geom = useMemo(() => {
-    // High-res geometry to allow painting heatmap vertices
+    // High-res geometry to allow painting heatmap vertices and physically deforming the mesh
     const segments = 64;
-    const heightSegments = Math.max(10, Math.ceil(renderLength * 5));
+    const heightSegments = Math.max(10, Math.ceil(renderLength * 8)); // Higher resolution for smooth bulge
     const geometry = new THREE.CylinderGeometry(2, 2, renderLength, segments, heightSegments, false);
     
     const pos = geometry.attributes.position;
@@ -20,9 +20,9 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData }: { renderLe
     const color = new THREE.Color();
     
     for (let i = 0; i < pos.count; i++) {
-      const vx = pos.getX(i);
+      let vx = pos.getX(i);
       const vy = pos.getY(i);
-      const vz = pos.getZ(i);
+      let vz = pos.getZ(i);
       
       // Default Base Pipe Color: Cyan/Light Blue
       color.set('#38bdf8');
@@ -35,20 +35,37 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData }: { renderLe
       if (theta < 0) theta += 2 * Math.PI;
       const orientDeg = theta * (180 / Math.PI);
       
-      // Check if this vertex falls into a GW band (every 12m from startDist)
-      const distToGw = (trueDist - startDist) % 12;
-      const isGw = (distToGw < 0.2 || distToGw > 11.8);
+      // Check distance to nearest Girth Weld (every 12m from startDist)
+      const distToGwRaw = (trueDist - startDist) % 12;
+      let minGwDist = distToGwRaw;
+      if (minGwDist > 6) minGwDist = 12 - minGwDist;
       
-      if (isGw) {
-        color.set('#1e3a8a'); // Dark blue for Girth Weld
+      const gwBulgeWidth = 0.25; // meters
+      
+      if (minGwDist < gwBulgeWidth) {
+        // We are inside the GW band. Paint it dark blue.
+        color.set('#1e3a8a');
+        
+        // Physically push the vertex outward radially to create a smooth bulge!
+        // Cosine curve: 1 at center (minGwDist=0), 0 at edge (minGwDist=gwBulgeWidth)
+        const bulgeAmount = (Math.cos((minGwDist / gwBulgeWidth) * Math.PI) + 1) * 0.5 * 0.08; 
+        
+        const currentR = Math.sqrt(vx*vx + vz*vz);
+        if (currentR > 0) {
+           const newR = currentR + bulgeAmount;
+           vx = vx * (newR / currentR);
+           vz = vz * (newR / currentR);
+           pos.setX(i, vx);
+           pos.setZ(i, vz);
+        }
       } else {
         // Check if vertex falls inside any defect
         let maxDepth = 0;
         spoolData.forEach(d => {
            const checkDefect = (dist: number, orient: number, len: number, wid: number, depth: number) => {
               // Exaggerate hitbox slightly so small defects are visible on the grid
-              const sLen = Math.max(0.4, len * 0.03); // Length threshold (meters)
-              const sWidAngle = Math.max(15, wid * 1.5); // Width threshold (degrees)
+              const sLen = Math.max(0.4, len * 0.03); 
+              const sWidAngle = Math.max(15, wid * 1.5); 
               
               const inDist = Math.abs(trueDist - dist) <= (sLen / 2);
               
@@ -66,11 +83,10 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData }: { renderLe
         });
         
         if (maxDepth > 0) {
-           // Heatmap colors based on depth
-           if (maxDepth > 1.5) color.set('#991b1b'); // Critical (Dark Red)
-           else if (maxDepth > 1.0) color.set('#ef4444'); // Deep (Red)
-           else if (maxDepth > 0.5) color.set('#f97316'); // Medium (Orange)
-           else color.set('#eab308'); // Shallow (Yellow)
+           if (maxDepth > 1.5) color.set('#991b1b'); 
+           else if (maxDepth > 1.0) color.set('#ef4444'); 
+           else if (maxDepth > 0.5) color.set('#f97316'); 
+           else color.set('#eab308'); 
         }
       }
       
@@ -79,20 +95,22 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData }: { renderLe
       colors[i * 3 + 2] = color.b;
     }
     
+    pos.needsUpdate = true; // Tell Three.js we modified positions!
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    
+    geometry.computeVertexNormals(); // Recompute lighting normals for the bulge
     return geometry;
   }, [renderLength, sLength, startDist, spoolData]);
 
   return (
     <group rotation={[Math.PI / 2, 0, 0]}>
-      {/* Painted FEA Surface */}
+      {/* Painted FEA Surface with Bulges */}
       <mesh geometry={geom}>
         <meshStandardMaterial vertexColors={true} roughness={0.7} metalness={0.2} />
       </mesh>
       
-      {/* Overlay Mesh Grid */}
-      <mesh>
-        <cylinderGeometry args={[2.01, 2.01, renderLength, 64, Math.max(10, Math.ceil(renderLength * 5)), true]} />
+      {/* Overlay Mesh Grid matching the bulges perfectly */}
+      <mesh geometry={geom} scale={[1.002, 1, 1.002]}>
         <meshBasicMaterial color="#0f172a" wireframe transparent opacity={0.25} />
       </mesh>
     </group>
