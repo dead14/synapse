@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Line } from 'react-chartjs-2';
-import { FiPlay, FiCheck, FiX, FiBox, FiChevronRight, FiChevronLeft, FiMaximize2, FiMinimize2 } from 'react-icons/fi';
+import { FiPlay, FiCheck, FiX, FiBox, FiChevronRight, FiChevronLeft, FiMaximize2, FiMinimize2, FiEdit, FiSave, FiDownload, FiSearch, FiPlus, FiMinus } from 'react-icons/fi';
 import Pipeline3DViewer from '../components/3d/Pipeline3DViewer';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Tooltip } from 'chart.js';
 
@@ -19,6 +19,59 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
   const [selectedTrack, setSelectedTrack] = useState<'old' | 'new' | null>(null);
   const [show3DViewer, setShow3DViewer] = useState(false);
   const [isTableExpanded, setIsTableExpanded] = useState(false);
+
+  const [activeTab, setActiveTab] = useState<'offset' | 'unmatched' | 'matched' | 'all'>('offset');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+  
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editRun1, setEditRun1] = useState<string>('');
+  const [editRun2, setEditRun2] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const unmatchedRanges = useMemo(() => {
+    const ranges: any[] = [];
+    let currentRange: any = null;
+
+    matches.forEach(m => {
+      if (m.status === 'Skipped') {
+        if (!currentRange) {
+           currentRange = {
+             id: m.id,
+             oldFrom: m.oldVal, oldTo: m.oldVal,
+             newFrom: m.newVal, newTo: m.newVal
+           };
+        } else {
+           if (m.oldVal !== null) {
+              if (currentRange.oldFrom === null) currentRange.oldFrom = m.oldVal;
+              currentRange.oldTo = m.oldVal;
+           }
+           if (m.newVal !== null) {
+              if (currentRange.newFrom === null) currentRange.newFrom = m.newVal;
+              currentRange.newTo = m.newVal;
+           }
+        }
+      } else {
+        if (currentRange) {
+           ranges.push(currentRange);
+           currentRange = null;
+        }
+      }
+    });
+    if (currentRange) ranges.push(currentRange);
+    return ranges;
+  }, [matches]);
+
+  const matchedOnly = matches.filter(m => m.status === 'Match');
+  const filteredMatched = matchedOnly.filter(m => 
+    searchQuery === '' || 
+    (m.oldVal !== null && m.oldVal.toString().includes(searchQuery)) ||
+    (m.newVal !== null && m.newVal.toString().includes(searchQuery))
+  );
+  
+  const paginatedMatched = filteredMatched.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const totalPages = Math.ceil(filteredMatched.length / itemsPerPage);
+
 
   const handleGWClick = (pos: number, track: 'old' | 'new') => {
     if (selectedTrack !== track) {
@@ -340,57 +393,247 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
         </div>
       </div>
 
-      {/* Offset Chart */}
-      <div className="h-64 mb-8 bg-gray-50 p-4 rounded-xl border border-gray-200">
-         <Line data={chartData} options={chartOptions as any} />
-      </div>
-
-      {/* Match Table */}
-      {isTableExpanded && <div className="fixed inset-0 bg-gray-900/40 z-[99998] backdrop-blur-sm" onClick={() => setIsTableExpanded(false)}></div>}
-      <div className={isTableExpanded ? "fixed inset-x-8 inset-y-12 z-[99999] bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col animate-fade-in" : "bg-white rounded-xl border border-gray-200 overflow-hidden mb-8 max-h-[300px] flex flex-col"}>
-        <div className="flex justify-between items-center px-6 py-3 bg-gray-50 border-b border-gray-200 z-10 sticky top-0 shrink-0">
-          <h4 className="font-semibold text-gray-800">Match Results Data</h4>
-          <button 
-            onClick={() => setIsTableExpanded(!isTableExpanded)}
-            className="text-gray-500 hover:text-gray-800 hover:bg-gray-200 rounded p-1.5 transition-colors flex items-center justify-center"
-            title={isTableExpanded ? "Minimize Table" : "Expand Table"}
+      
+      {/* Tabs Header */}
+      <div className="flex border-b border-gray-200 mb-6 bg-gray-50 rounded-t-xl overflow-hidden">
+        {[
+          { id: 'offset', label: 'GW Offset' },
+          { id: 'unmatched', label: 'Table GW Unmatched' },
+          { id: 'matched', label: 'Table GW Matched' },
+          { id: 'all', label: 'Table GW' }
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => { setActiveTab(tab.id as any); setCurrentPage(1); }}
+            className={`px-6 py-4 text-sm font-medium transition-colors border-b-2 ${
+              activeTab === tab.id 
+                ? 'border-blue-500 text-blue-600 bg-white' 
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+            }`}
           >
-            {isTableExpanded ? <FiMinimize2 size={16} /> : <FiMaximize2 size={16} />}
+            {tab.label}
           </button>
-        </div>
-        <div className="overflow-y-auto flex-1 custom-scrollbar">
-          <table className="w-full text-sm text-left">
-            <thead className="text-gray-500 bg-gray-50 sticky top-0 border-b border-gray-200 z-10">
-            <tr>
-              <th className="px-6 py-4 font-normal">Status</th>
-              <th className="px-6 py-4 font-normal">Old (m)</th>
-              <th className="px-6 py-4 font-normal">New (m)</th>
-              <th className="px-6 py-4 font-normal">Var %</th>
-              <th className="px-6 py-4 font-normal">Offset</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {matches.map((row) => (
-              <tr key={row.id} className="hover:bg-gray-100 transition-colors">
-                <td className="px-6 py-3 flex items-center gap-2">
-                  {row.status === 'Match' ? (
-                    <><div className="w-2 h-2 rounded-full bg-blue-400"></div> Match</>
-                  ) : (
-                    <><div className="w-2 h-2 rounded-full bg-rose-400"></div> Skipped</>
-                  )}
-                </td>
-                <td className="px-6 py-3">{row.oldVal !== null ? row.oldVal.toFixed(2) : '-'}</td>
-                <td className="px-6 py-3">{row.newVal !== null ? row.newVal.toFixed(2) : '-'}</td>
-                <td className="px-6 py-3 font-mono">{row.varPct.toFixed(1)}%</td>
-                <td className="px-6 py-3">{row.offset !== null ? row.offset.toFixed(2) : '-'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        </div>
+        ))}
       </div>
 
-      <div className="grid grid-cols-2 gap-8 mb-8 text-center border-t border-gray-200 pt-8">
+      <div className="mb-8 min-h-[300px]">
+        {activeTab === 'offset' && (
+          <div className="h-64 bg-gray-50 p-4 rounded-xl border border-gray-200">
+            <h4 className="text-center text-blue-600 font-semibold mb-2 bg-blue-600/10 py-1 inline-block px-4 mx-auto block w-max rounded">Girth Weld Offset</h4>
+             <Line data={chartData} options={chartOptions as any} />
+          </div>
+        )}
+
+        {activeTab === 'unmatched' && (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="p-3 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
+              <button className="p-2 bg-gray-700 text-white hover:bg-gray-800 rounded shadow-sm"><FiDownload size={16} /></button>
+              <div className="relative">
+                <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input type="text" placeholder="Search" className="pl-9 pr-4 py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 text-sm w-64" />
+              </div>
+            </div>
+            <table className="w-full text-sm text-left">
+              <thead className="text-gray-900 bg-gray-50 border-b border-gray-200 font-semibold">
+                <tr>
+                  <th className="px-6 py-3">Old From <span className="text-blue-500">m</span></th>
+                  <th className="px-6 py-3">Old To <span className="text-blue-500">m</span></th>
+                  <th className="px-6 py-3">New From <span className="text-blue-500">m</span></th>
+                  <th className="px-6 py-3">New To <span className="text-blue-500">m</span></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 text-gray-600">
+                {unmatchedRanges.map((r, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50">
+                    <td className="px-6 py-2">{r.oldFrom !== null ? r.oldFrom.toFixed(3) : ''}</td>
+                    <td className="px-6 py-2">{r.oldTo !== null && r.oldTo !== r.oldFrom ? r.oldTo.toFixed(3) : ''}</td>
+                    <td className="px-6 py-2">{r.newFrom !== null ? r.newFrom.toFixed(3) : ''}</td>
+                    <td className="px-6 py-2">{r.newTo !== null && r.newTo !== r.newFrom ? r.newTo.toFixed(3) : ''}</td>
+                  </tr>
+                ))}
+                {unmatchedRanges.length === 0 && (
+                  <tr><td colSpan={4} className="px-6 py-8 text-center text-gray-500">No unmatched ranges found.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {activeTab === 'matched' && (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="p-3 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
+              <div className="flex gap-2">
+                <button className="p-1.5 hover:bg-gray-200 rounded text-gray-700"><FiPlus size={18} /></button>
+                <button className="p-1.5 hover:bg-gray-200 rounded text-gray-700"><FiMinus size={18} /></button>
+                <button className="p-1.5 bg-gray-700 text-white hover:bg-gray-800 rounded shadow-sm ml-2"><FiDownload size={16} /></button>
+              </div>
+              <div className="relative">
+                <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input 
+                  type="text" 
+                  placeholder="Search" 
+                  value={searchQuery}
+                  onChange={(e) => {setSearchQuery(e.target.value); setCurrentPage(1);}}
+                  className="pl-9 pr-4 py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 text-sm w-64" 
+                />
+              </div>
+            </div>
+            
+            <table className="w-full text-sm text-left">
+              <thead className="text-gray-900 bg-gray-50 border-b border-gray-200 font-semibold">
+                <tr>
+                  <th className="px-4 py-3 w-12 text-center"></th>
+                  <th className="px-4 py-3 w-12 text-center"></th>
+                  <th className="px-6 py-3">GW Distance Run 1 <span className="text-blue-500">m</span></th>
+                  <th className="px-6 py-3">GW Distance Run 2 <span className="text-blue-500">m</span></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 text-gray-600">
+                {paginatedMatched.map((row) => (
+                  <React.Fragment key={row.id}>
+                    <tr className={`hover:bg-gray-50 ${editingId === row.id ? 'bg-[#0088cc] text-white hover:bg-[#0088cc]' : ''}`}>
+                      <td className="px-4 py-2 text-center">
+                        {editingId === row.id ? (
+                           <button onClick={() => setEditingId(null)} className="text-white hover:text-gray-200"><FiX size={18} /></button>
+                        ) : (
+                           <button 
+                              onClick={() => {
+                                setEditingId(row.id);
+                                setEditRun1(row.oldVal !== null ? row.oldVal.toFixed(3) : '');
+                                setEditRun2(row.newVal !== null ? row.newVal.toFixed(3) : '');
+                              }} 
+                              className="text-blue-500 hover:text-blue-700"
+                           >
+                             <FiEdit size={16} />
+                           </button>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-center">
+                        <input type="checkbox" className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500" />
+                      </td>
+                      <td className="px-6 py-2">{row.oldVal !== null ? row.oldVal.toFixed(3) : '-'}</td>
+                      <td className="px-6 py-2">{row.newVal !== null ? row.newVal.toFixed(3) : '-'}</td>
+                    </tr>
+                    
+                    {/* Inline Edit Form */}
+                    {editingId === row.id && (
+                      <tr className="bg-[#fffbe6]">
+                        <td colSpan={4} className="px-8 py-6 border-b border-gray-200">
+                          <h5 className="text-xl font-bold text-[#8a3324] mb-4">GirthWeld Match</h5>
+                          <div className="grid grid-cols-2 gap-4 max-w-lg mb-6">
+                            <div className="font-semibold text-gray-800">GW Distance Run 1</div>
+                            <div className="flex">
+                               <input type="text" value={editRun1} onChange={e => setEditRun1(e.target.value)} className="flex-1 bg-[#fef0b3] border border-gray-300 px-3 py-1 focus:outline-none" />
+                               <span className="bg-gray-100 border border-l-0 border-gray-300 px-3 py-1 text-gray-500">m</span>
+                            </div>
+                            
+                            <div className="font-semibold text-gray-800">GW Distance Run 2</div>
+                            <div className="flex">
+                               <input type="text" value={editRun2} onChange={e => setEditRun2(e.target.value)} className="flex-1 bg-[#fef0b3] border border-gray-300 px-3 py-1 focus:outline-none" />
+                               <span className="bg-gray-100 border border-l-0 border-gray-300 px-3 py-1 text-gray-500">m</span>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center gap-4 bg-gray-100 p-3 rounded border border-gray-200">
+                             <button 
+                               onClick={() => setEditingId(null)} 
+                               className="bg-[#0088cc] hover:bg-blue-600 text-white px-4 py-1.5 rounded shadow flex items-center gap-2"
+                             >
+                               <FiSave /> Save
+                             </button>
+                             <span className="text-gray-500 text-sm">or</span>
+                             <button 
+                               onClick={() => setEditingId(null)}
+                               className="text-red-500 hover:underline text-sm font-semibold"
+                             >
+                               Cancel
+                             </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+            
+            {/* Pagination */}
+            <div className="flex justify-between items-center px-4 py-3 bg-gray-50 border-t border-gray-200">
+               <div className="flex gap-1">
+                 {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => (
+                   <button 
+                     key={i} 
+                     onClick={() => setCurrentPage(i + 1)}
+                     className={`w-8 h-8 flex items-center justify-center border ${currentPage === i + 1 ? 'bg-gray-200 border-gray-300 font-semibold' : 'bg-white border-transparent hover:bg-gray-100'}`}
+                   >
+                     {i + 1}
+                   </button>
+                 ))}
+                 {totalPages > 5 && <span className="w-8 h-8 flex items-center justify-center">...</span>}
+                 {totalPages > 5 && (
+                   <button 
+                     onClick={() => setCurrentPage(totalPages)}
+                     className={`w-8 h-8 flex items-center justify-center border ${currentPage === totalPages ? 'bg-gray-200 border-gray-300 font-semibold' : 'bg-white border-transparent hover:bg-gray-100'}`}
+                   >
+                     {totalPages}
+                   </button>
+                 )}
+                 <button onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))} className="w-8 h-8 flex items-center justify-center hover:bg-gray-200"><FiChevronRight /></button>
+               </div>
+               <div className="flex items-center gap-2 text-sm text-gray-500">
+                 Items per page: 
+                 <select className="border border-gray-300 rounded px-2 py-1 bg-white">
+                   <option>10</option>
+                   <option>25</option>
+                   <option>50</option>
+                 </select>
+               </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'all' && (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden flex flex-col max-h-[400px]">
+             <div className="flex justify-between items-center px-6 py-3 bg-gray-50 border-b border-gray-200 sticky top-0 shrink-0">
+              <h4 className="font-semibold text-gray-800">Match Results Data</h4>
+              <button onClick={() => setIsTableExpanded(!isTableExpanded)} className="text-gray-500 hover:text-gray-800 hover:bg-gray-200 rounded p-1.5 transition-colors">
+                {isTableExpanded ? <FiMinimize2 size={16} /> : <FiMaximize2 size={16} />}
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 custom-scrollbar">
+              <table className="w-full text-sm text-left">
+                <thead className="text-gray-500 bg-gray-50 sticky top-0 border-b border-gray-200 z-10">
+                  <tr>
+                    <th className="px-6 py-4 font-normal">Status</th>
+                    <th className="px-6 py-4 font-normal">Old (m)</th>
+                    <th className="px-6 py-4 font-normal">New (m)</th>
+                    <th className="px-6 py-4 font-normal">Var %</th>
+                    <th className="px-6 py-4 font-normal">Offset</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {matches.map((row) => (
+                    <tr key={row.id} className="hover:bg-gray-100 transition-colors">
+                      <td className="px-6 py-3 flex items-center gap-2">
+                        {row.status === 'Match' ? (
+                          <><div className="w-2 h-2 rounded-full bg-blue-400"></div> Match</>
+                        ) : (
+                          <><div className="w-2 h-2 rounded-full bg-rose-400"></div> Skipped</>
+                        )}
+                      </td>
+                      <td className="px-6 py-3">{row.oldVal !== null ? row.oldVal.toFixed(2) : '-'}</td>
+                      <td className="px-6 py-3">{row.newVal !== null ? row.newVal.toFixed(2) : '-'}</td>
+                      <td className="px-6 py-3 font-mono">{row.varPct.toFixed(1)}%</td>
+                      <td className="px-6 py-3">{row.offset !== null ? row.offset.toFixed(2) : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+<div className="grid grid-cols-2 gap-8 mb-8 text-center border-t border-gray-200 pt-8">
         <div>
           <p className="text-gray-500 text-sm mb-1">Total Matches</p>
           <p className="text-2xl font-mono text-gray-900">{matches.filter(m => m.status === 'Match').length}</p>
