@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 
 export default function TimelineViewer() {
-  const [ota, setOta] = useState(1.5);
   const [zoom, setZoom] = useState(1);
 
   // Generate mock data for the timeline (e.g. 30 Girth Welds = ~360m of pipeline)
@@ -44,41 +43,22 @@ export default function TimelineViewer() {
   }
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 flex flex-col gap-8 hover:shadow-md transition-shadow">
-      {/* Description & OTA Slider */}
-      <div className="flex flex-col gap-4">
-        <p className="text-gray-600 text-sm font-medium">
-          Adjust the OTA % slider to see how the algorithm filters out local pipeline anomalies (like repair spools) vs how it forces matches.
-        </p>
-        <div className="bg-gradient-to-br from-gray-50 to-white border border-gray-100 rounded-xl p-5 w-fit min-w-[400px] shadow-inner">
-          <h3 className="text-sm font-bold text-gray-700 mb-4">Odometer Tracking Accuracy (OTA) Threshold</h3>
-          <div className="flex items-center gap-4">
-            <input 
-              type="range" 
-              min="0.1" max="5.0" step="0.1" 
-              value={ota} 
-              onChange={e => setOta(parseFloat(e.target.value))}
-              className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-            />
-            <div className="bg-white border border-gray-200 text-blue-600 font-extrabold px-3 py-1 rounded shadow-sm text-sm">
-              {ota.toFixed(1)}%
-            </div>
-          </div>
-        </div>
-      </div>
-
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 flex flex-col gap-6 hover:shadow-md transition-shadow">
       {/* Timeline Viewer */}
       <div className="flex flex-col gap-3">
         <div className="flex justify-between items-end">
-          <h3 className="text-sm font-bold text-gray-700">Timeline Viewer (12+ km)</h3>
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-bold text-gray-400">Zoom:</span>
+          <div>
+            <h3 className="text-lg font-extrabold text-gray-800 bg-gradient-to-r from-gray-900 to-gray-500 bg-clip-text text-transparent">Alignment Timeline Viewer (12+ km)</h3>
+            <p className="text-sm text-gray-500 font-medium mt-1">Visualize pipeline girth welds (GW) and matched anomalies between Reference and Current runs.</p>
+          </div>
+          <div className="flex items-center gap-3 bg-gray-50 px-4 py-2 rounded-xl border border-gray-100 shadow-inner">
+            <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Zoom:</span>
             <input 
               type="range" 
               min="1" max="5" step="0.1" 
               value={zoom} 
               onChange={e => setZoom(parseFloat(e.target.value))}
-              className="w-32 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-gray-500"
+              className="w-32 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
             />
           </div>
         </div>
