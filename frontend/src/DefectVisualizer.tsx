@@ -355,7 +355,7 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
                  const y = (-renderLength / 2) + (i * gwDistance);
                  if (y > renderLength / 2) return null; // safety bounds
                  return (
-                   <mesh position={[0, y, 0]} key={`gw-ring-${i}`}>
+                   <mesh position={[0, y, 0]} rotation={[Math.PI / 2, 0, 0]} key={`gw-ring-${i}`}>
                      <torusGeometry args={[2.02, 0.05, 16, 48]} />
                      <meshStandardMaterial color="#475569" metalness={0.8} roughness={0.5} />
                    </mesh>
