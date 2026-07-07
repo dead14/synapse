@@ -63,7 +63,7 @@ export default function StepExecution({ onBack }: StepExecutionProps) {
     <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 animate-fade-in flex flex-col gap-6">
       
       {/* Terminal View */}
-      <div className="flex-1 min-h-[300px] max-h-[400px] bg-gray-100 rounded-xl p-5 overflow-y-auto font-mono text-sm shadow-inner relative">
+      <div className="flex-1 min-h-[300px] max-h-[400px] bg-gray-900 rounded-xl p-5 overflow-y-auto font-mono text-sm shadow-inner relative">
         {terminalLines.map((line, i) => (
           <div key={i} className={line.includes('ERROR') ? 'text-red-400' : line.includes('SELESAI') ? 'text-yellow-300 font-bold' : 'text-green-400'}>
             {line}
