@@ -11,16 +11,26 @@ export default function IliComparisonPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('http://localhost:8000/api/ili-results')
-      .then(res => res.json())
-      .then(resData => {
-        setData(resData);
-        setLoading(false);
-      })
-      .catch(err => {
-        console.error(err);
-        setLoading(false);
-      });
+    // Generate dummy data since backend is not connected
+    const generateDummyData = () => {
+      const dummy = [{ /* header row */ }]; 
+      for(let i = 1; i <= 100; i++) {
+        dummy.push({
+          'Unnamed: 29': \`Defect \${i}\`,
+          'DATA LAMA 2020 (Vendor Lama)  >': 1000 + i * 12.5,
+          'Unnamed: 37': (10 + Math.random() * 20).toFixed(1),
+          'Unnamed: 2': \`Defect \${i}A\`,
+          '<  DATA BARU 2025 (Vendor Baru)': 1000 + i * 12.5 + (Math.random() * 0.2 - 0.1),
+          'Unnamed: 10': (12 + Math.random() * 20).toFixed(1)
+        });
+      }
+      return { comparison: dummy };
+    };
+
+    setTimeout(() => {
+      setData(generateDummyData());
+      setLoading(false);
+    }, 800);
   }, []);
 
   // Prepare dummy data for charts based on screenshot
