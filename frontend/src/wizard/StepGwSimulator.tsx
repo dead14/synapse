@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Line } from 'react-chartjs-2';
-import { FiPlay, FiCheck, FiX, FiBox, FiChevronRight, FiChevronLeft } from 'react-icons/fi';
+import { FiPlay, FiCheck, FiX, FiBox, FiChevronRight, FiChevronLeft, FiMaximize2, FiMinimize2 } from 'react-icons/fi';
 import Pipeline3DViewer from '../components/3d/Pipeline3DViewer';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Tooltip } from 'chart.js';
 
@@ -18,6 +18,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
   const [selectedGWs, setSelectedGWs] = useState<number[]>([]);
   const [selectedTrack, setSelectedTrack] = useState<'old' | 'new' | null>(null);
   const [show3DViewer, setShow3DViewer] = useState(false);
+  const [isTableExpanded, setIsTableExpanded] = useState(false);
 
   const handleGWClick = (pos: number, track: 'old' | 'new') => {
     if (selectedTrack !== track) {
@@ -345,9 +346,21 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
       </div>
 
       {/* Match Table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-8 max-h-[300px] overflow-y-auto">
-        <table className="w-full text-sm text-left">
-          <thead className="text-gray-500 bg-gray-50 sticky top-0 border-b border-gray-200">
+      {isTableExpanded && <div className="fixed inset-0 bg-gray-900/40 z-40 backdrop-blur-sm" onClick={() => setIsTableExpanded(false)}></div>}
+      <div className={isTableExpanded ? "fixed inset-x-8 inset-y-12 z-50 bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col animate-fade-in" : "bg-white rounded-xl border border-gray-200 overflow-hidden mb-8 max-h-[300px] flex flex-col"}>
+        <div className="flex justify-between items-center px-6 py-3 bg-gray-50 border-b border-gray-200 z-10 sticky top-0 shrink-0">
+          <h4 className="font-semibold text-gray-800">Match Results Data</h4>
+          <button 
+            onClick={() => setIsTableExpanded(!isTableExpanded)}
+            className="text-gray-500 hover:text-gray-800 hover:bg-gray-200 rounded p-1.5 transition-colors flex items-center justify-center"
+            title={isTableExpanded ? "Minimize Table" : "Expand Table"}
+          >
+            {isTableExpanded ? <FiMinimize2 size={16} /> : <FiMaximize2 size={16} />}
+          </button>
+        </div>
+        <div className="overflow-y-auto flex-1 custom-scrollbar">
+          <table className="w-full text-sm text-left">
+            <thead className="text-gray-500 bg-gray-50 sticky top-0 border-b border-gray-200 z-10">
             <tr>
               <th className="px-6 py-4 font-normal">Status</th>
               <th className="px-6 py-4 font-normal">Old (m)</th>
@@ -374,6 +387,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-8 mb-8 text-center border-t border-gray-200 pt-8">
