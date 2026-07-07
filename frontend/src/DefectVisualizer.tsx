@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { FiBox, FiX } from 'react-icons/fi';
@@ -6,6 +7,97 @@ import { FiBox, FiX } from 'react-icons/fi';
 interface DefectVisualizerProps {
   data: any[];
 }
+
+const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData }: { renderLength: number, sLength: number, startDist: number, spoolData: any[] }) => {
+  const geom = useMemo(() => {
+    // High-res geometry to allow painting heatmap vertices
+    const segments = 64;
+    const heightSegments = Math.max(10, Math.ceil(renderLength * 5));
+    const geometry = new THREE.CylinderGeometry(2, 2, renderLength, segments, heightSegments, false);
+    
+    const pos = geometry.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
+    const color = new THREE.Color();
+    
+    for (let i = 0; i < pos.count; i++) {
+      const vx = pos.getX(i);
+      const vy = pos.getY(i);
+      const vz = pos.getZ(i);
+      
+      // Default Base Pipe Color: Cyan/Light Blue
+      color.set('#38bdf8');
+      
+      // Map vertex Y back to real pipeline distance
+      const trueDist = ((vy + renderLength / 2) / renderLength) * sLength + startDist;
+      
+      // Calculate orientation (theta in degrees)
+      let theta = Math.atan2(vx, vz);
+      if (theta < 0) theta += 2 * Math.PI;
+      const orientDeg = theta * (180 / Math.PI);
+      
+      // Check if this vertex falls into a GW band (every 12m from startDist)
+      const distToGw = (trueDist - startDist) % 12;
+      const isGw = (distToGw < 0.2 || distToGw > 11.8);
+      
+      if (isGw) {
+        color.set('#1e3a8a'); // Dark blue for Girth Weld
+      } else {
+        // Check if vertex falls inside any defect
+        let maxDepth = 0;
+        spoolData.forEach(d => {
+           const checkDefect = (dist: number, orient: number, len: number, wid: number, depth: number) => {
+              // Exaggerate hitbox slightly so small defects are visible on the grid
+              const sLen = Math.max(0.4, len * 0.03); // Length threshold (meters)
+              const sWidAngle = Math.max(15, wid * 1.5); // Width threshold (degrees)
+              
+              const inDist = Math.abs(trueDist - dist) <= (sLen / 2);
+              
+              let angleDiff = Math.abs(orientDeg - orient);
+              if (angleDiff > 180) angleDiff = 360 - angleDiff;
+              const inOrient = angleDiff <= (sWidAngle / 2);
+              
+              if (inDist && inOrient) {
+                 maxDepth = Math.max(maxDepth, depth);
+              }
+           };
+           
+           if (d.dist1 !== null) checkDefect(d.dist1, d.orient1, d.len1, d.wid1, d.depth1);
+           if (d.dist2 !== null) checkDefect(d.dist2, d.orient2, d.len2, d.wid2, d.depth2);
+        });
+        
+        if (maxDepth > 0) {
+           // Heatmap colors based on depth
+           if (maxDepth > 1.5) color.set('#991b1b'); // Critical (Dark Red)
+           else if (maxDepth > 1.0) color.set('#ef4444'); // Deep (Red)
+           else if (maxDepth > 0.5) color.set('#f97316'); // Medium (Orange)
+           else color.set('#eab308'); // Shallow (Yellow)
+        }
+      }
+      
+      colors[i * 3] = color.r;
+      colors[i * 3 + 1] = color.g;
+      colors[i * 3 + 2] = color.b;
+    }
+    
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    return geometry;
+  }, [renderLength, sLength, startDist, spoolData]);
+
+  return (
+    <group rotation={[Math.PI / 2, 0, 0]}>
+      {/* Painted FEA Surface */}
+      <mesh geometry={geom}>
+        <meshStandardMaterial vertexColors={true} roughness={0.7} metalness={0.2} />
+      </mesh>
+      
+      {/* Overlay Mesh Grid */}
+      <mesh>
+        <cylinderGeometry args={[2.01, 2.01, renderLength, 64, Math.max(10, Math.ceil(renderLength * 5)), true]} />
+        <meshBasicMaterial color="#0f172a" wireframe transparent opacity={0.25} />
+      </mesh>
+    </group>
+  );
+};
 
 export default function DefectVisualizer({ data }: DefectVisualizerProps) {
   const [zoom, setZoom] = useState(1);
@@ -337,76 +429,12 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
              <directionalLight position={[10, 20, 10]} intensity={1.5} />
              <OrbitControls enableDamping dampingFactor={0.05} />
              
-             <group rotation={[Math.PI / 2, 0, 0]}>
-               {/* Semi-transparent Glass-like Pipeline Cylinder */}
-               <mesh>
-                 <cylinderGeometry args={[2, 2, renderLength, 48, 1, false]} />
-                 <meshStandardMaterial color="#cbd5e1" metalness={0.2} roughness={0.1} transparent opacity={0.65} side={2} />
-               </mesh>
-               
-               {/* FEA-style Mesh Grid Wireframe */}
-               <mesh>
-                 <cylinderGeometry args={[2.02, 2.02, renderLength, 36, Math.ceil(renderLength * 2), true]} />
-                 <meshBasicMaterial color="#334155" wireframe transparent opacity={0.5} />
-               </mesh>
-
-               {/* Girth Welds Rings */}
-               {Array.from({ length: Math.ceil(renderLength / gwDistance) + 1 }).map((_, i) => {
-                 const y = (-renderLength / 2) + (i * gwDistance);
-                 if (y > renderLength / 2) return null; // safety bounds
-                 return (
-                   <mesh position={[0, y, 0]} rotation={[Math.PI / 2, 0, 0]} key={`gw-ring-${i}`}>
-                     <torusGeometry args={[2.02, 0.05, 16, 48]} />
-                     <meshStandardMaterial color="#475569" metalness={0.8} roughness={0.5} />
-                   </mesh>
-                 );
-               })}
-
-               {/* Defects mapped onto the cylinder */}
-               {spoolData.map((d, i) => {
-                 const yPos = (dist: number) => ((dist - selectedRange.startDist) / sLength) * renderLength - (renderLength/2); 
-                 const rad = (orient: number) => (orient * Math.PI) / 180;
-                 
-                 const drawMarker = (dist: number, orient: number, len: number, wid: number, isExt: boolean, depth: number, suffix: string) => {
-                   const y = yPos(dist);
-                   const theta = rad(orient);
-                   
-                   // External = protrudes out at r=2.08, Internal = protrudes in at r=1.92
-                   const r = isExt ? 2.05 : 1.95; 
-                   const x = r * Math.sin(theta);
-                   const z = r * Math.cos(theta);
-                   
-                   let color = "#eab308"; 
-                   if (depth > 0.5) color = "#f97316"; 
-                   if (depth > 1.0) color = "#ef4444"; 
-                   if (depth > 1.5) color = "#991b1b"; 
-
-                   // Scale the irregular shape based on actual data
-                   // Exaggerate scale slightly so microscopic defects are visible
-                   const sLen = Math.max(0.15, len * 0.012);
-                   const sWid = Math.max(0.15, wid * 0.012);
-                   const sDep = Math.max(0.1, depth * 0.1);
-
-                   return (
-                     <mesh 
-                       position={[x, y, z]} 
-                       rotation={[0, theta, 0]} // Align with surface normal
-                       scale={[sWid, sLen, sDep]} 
-                       key={`3d-anom-${i}-${suffix}`}
-                     >
-                       {/* icosahedron detail=0 creates a low-poly irregular jagged rock/blob shape */}
-                       <icosahedronGeometry args={[1, 0]} />
-                       <meshStandardMaterial color={color} roughness={0.7} metalness={0.2} />
-                     </mesh>
-                   );
-                 };
-
-                 const markers = [];
-                 if (d.dist1 !== null) markers.push(drawMarker(d.dist1, d.orient1, d.len1, d.wid1, d.isExt1, d.depth1, 'old'));
-                 if (d.dist2 !== null) markers.push(drawMarker(d.dist2, d.orient2, d.len2, d.wid2, d.isExt2, d.depth2, 'new'));
-                 return markers;
-               })}
-             </group>
+             <FEAPipeMesh 
+               renderLength={renderLength} 
+               sLength={sLength} 
+               startDist={selectedRange.startDist} 
+               spoolData={spoolData} 
+             />
            </Canvas>
         </div>
       );
