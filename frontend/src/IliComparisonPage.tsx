@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FiBell, FiSettings } from 'react-icons/fi';
 import ResultsPanel from './ResultsPanel';
-import TimelineViewer from './TimelineViewer';
+import DefectVisualizer from './DefectVisualizer';
 
 export default function IliComparisonPage() {
   const [data, setData] = useState<any[]>([]);
@@ -104,8 +104,8 @@ export default function IliComparisonPage() {
 
       <div className="max-w-[1600px] mx-auto px-8 flex flex-col gap-6">
         
-        {/* Timeline Viewer (Replaces old KPIs and Charts) */}
-        <TimelineViewer />
+        {/* Advanced Defect Visualizer (Replaces old KPIs and Charts) */}
+        {data.length > 0 && <DefectVisualizer data={data} />}
 
         {/* Results Panel */}
         <div className="h-[600px] mt-4">
