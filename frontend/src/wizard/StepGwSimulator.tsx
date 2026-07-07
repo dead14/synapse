@@ -16,11 +16,22 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
   const [ota, setOta] = useState(1.5);
   const [zoom, setZoom] = useState(150);
   const [selectedGWs, setSelectedGWs] = useState<number[]>([]);
+  const [selectedTrack, setSelectedTrack] = useState<'old' | 'new' | null>(null);
   const [show3DViewer, setShow3DViewer] = useState(false);
 
-  const handleGWClick = (pos: number) => {
+  const handleGWClick = (pos: number, track: 'old' | 'new') => {
+    if (selectedTrack !== track) {
+      setSelectedTrack(track);
+      setSelectedGWs([pos]);
+      return;
+    }
+
     setSelectedGWs(prev => {
-      if (prev.includes(pos)) return prev.filter(p => p !== pos);
+      if (prev.includes(pos)) {
+        const newSelection = prev.filter(p => p !== pos);
+        if (newSelection.length === 0) setSelectedTrack(null);
+        return newSelection;
+      }
       if (prev.length >= 2) return [pos]; // Reset to just this one
       const newSelection = [...prev, pos].sort((a, b) => a - b);
       return newSelection;
@@ -264,16 +275,16 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
                 key={`old-${i}`} 
                 className="absolute top-10 flex flex-col items-center cursor-pointer group z-20" 
                 style={{ left: `${getPosPct(pos)}%`, transform: 'translateX(-50%)' }}
-                onClick={() => handleGWClick(pos)}
+                onClick={() => handleGWClick(pos, 'old')}
               >
-                 <div className={`w-2 h-6 rounded transition-all shadow-md ${isSelected ? 'bg-yellow-400 scale-125' : 'bg-green-500 group-hover:bg-green-400 group-hover:scale-110'}`}></div>
-                 <div className={`text-[10px] mt-1 font-mono font-bold ${isSelected ? 'text-yellow-400' : 'text-green-400'}`}>{pos.toFixed(2)}m</div>
+                 <div className={`w-2 h-6 rounded transition-all shadow-md ${isSelected && selectedTrack === 'old' ? 'bg-yellow-400 scale-125' : 'bg-green-500 group-hover:bg-green-400 group-hover:scale-110'}`}></div>
+                 <div className={`text-[10px] mt-1 font-mono font-bold ${isSelected && selectedTrack === 'old' ? 'text-yellow-400' : 'text-green-600'}`}>{pos.toFixed(2)}m</div>
               </div>
               )
            })}
 
-           {/* Selected Spool Highlight */}
-           {selectedGWs.length === 2 && (
+           {/* Selected Spool Highlight for Old */}
+           {selectedGWs.length === 2 && selectedTrack === 'old' && (
              <div 
                className="absolute top-10 h-6 bg-yellow-400/20 border-y border-yellow-400/50 z-10 animate-pulse"
                style={{ 
@@ -288,13 +299,30 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
            {newGWs.map((pos, i) => {
               const m = matches.find(mx => mx.newIndex === i);
               const isSkipped = m && m.status === 'Skipped';
+              const isSelected = selectedGWs.includes(pos);
               return (
-                <div key={`new-${i}`} className="absolute top-34 flex flex-col items-center" style={{ left: `${getPosPct(pos)}%`, transform: 'translateX(-50%)' }}>
-                   <div className={`w-1 h-5 rounded transition-all ${isSkipped ? 'bg-rose-400' : 'bg-blue-500'}`}></div>
-                   <div className={`text-[10px] mt-1 font-mono ${isSkipped ? 'text-rose-400' : 'text-blue-400'}`}>{pos.toFixed(2)}m</div>
+                <div 
+                  key={`new-${i}`} 
+                  className="absolute top-[136px] flex flex-col items-center cursor-pointer group z-20" 
+                  style={{ left: `${getPosPct(pos)}%`, transform: 'translateX(-50%)' }}
+                  onClick={() => handleGWClick(pos, 'new')}
+                >
+                   <div className={`w-1.5 h-6 rounded transition-all shadow-md ${isSelected && selectedTrack === 'new' ? 'bg-yellow-400 scale-125' : isSkipped ? 'bg-rose-500 group-hover:bg-rose-400 group-hover:scale-110' : 'bg-blue-500 group-hover:bg-blue-400 group-hover:scale-110'}`}></div>
+                   <div className={`text-[10px] mt-1 font-mono font-bold ${isSelected && selectedTrack === 'new' ? 'text-yellow-400' : isSkipped ? 'text-rose-500' : 'text-blue-600'}`}>{pos.toFixed(2)}m</div>
                 </div>
               )
            })}
+
+           {/* Selected Spool Highlight for New */}
+           {selectedGWs.length === 2 && selectedTrack === 'new' && (
+             <div 
+               className="absolute top-[136px] h-6 bg-yellow-400/20 border-y border-yellow-400/50 z-10 animate-pulse"
+               style={{ 
+                 left: `${getPosPct(selectedGWs[0])}%`, 
+                 width: `${getPosPct(selectedGWs[1]) - getPosPct(selectedGWs[0])}%` 
+               }}
+             />
+           )}
 
            {/* Draw dashed lines connecting matches */}
            <svg className="absolute inset-0 w-full h-full pointer-events-none">
