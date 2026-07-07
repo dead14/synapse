@@ -34,6 +34,7 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
         len1: parseFloat(item['Unnamed: 35']) || 10,
         wid1: parseFloat(item['Unnamed: 32']) || 10,
         orient1: parseFloat(item['Unnamed: 34']) || 0,
+        depth1: r1Depth,
         isExt1,
         
         id2: item['Unnamed: 2'] || '',
@@ -41,6 +42,7 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
         len2: parseFloat(item['Unnamed: 8']) || 10,
         wid2: parseFloat(item['Unnamed: 5']) || 10,
         orient2: parseFloat(item['Unnamed: 7']) || 0,
+        depth2: r2Depth,
         isExt2,
 
         isMatched
@@ -331,36 +333,60 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
         <div className="w-full h-[400px] bg-[#1e293b] rounded-xl overflow-hidden relative shadow-inner">
            <div className="absolute top-4 left-4 z-10 text-white/70 text-xs">Left Click: Rotate | Right Click: Pan | Scroll: Zoom</div>
            <Canvas camera={{ position: [0, 0, Math.min(20, renderLength / 2)], fov: 45 }}>
-             <ambientLight intensity={0.5} />
-             <directionalLight position={[10, 10, 10]} intensity={1} />
+             <ambientLight intensity={0.7} />
+             <directionalLight position={[10, 20, 10]} intensity={1.5} />
              <OrbitControls enableDamping dampingFactor={0.05} />
              
              <group rotation={[Math.PI / 2, 0, 0]}>
-               {/* Selected Pipe Cylinder */}
+               {/* Semi-transparent Glass-like Pipeline Cylinder */}
                <mesh>
-                 <cylinderGeometry args={[2, 2, renderLength, 32, 1, false]} />
-                 <meshStandardMaterial color="#64748b" metalness={0.6} roughness={0.4} />
+                 <cylinderGeometry args={[2, 2, renderLength, 48, 1, false]} />
+                 <meshStandardMaterial color="#cbd5e1" metalness={0.2} roughness={0.1} transparent opacity={0.65} side={2} />
                </mesh>
+               
+               {/* FEA-style Mesh Grid Wireframe */}
                <mesh>
-                 <cylinderGeometry args={[2.01, 2.01, renderLength, 12, Math.ceil(renderLength/2), true]} />
-                 <meshBasicMaterial color="#334155" wireframe transparent opacity={0.3} />
+                 <cylinderGeometry args={[2.02, 2.02, renderLength, 36, Math.ceil(renderLength * 2), true]} />
+                 <meshBasicMaterial color="#334155" wireframe transparent opacity={0.5} />
                </mesh>
+
+               {/* Girth Welds Rings */}
+               {Array.from({ length: Math.ceil(renderLength / gwDistance) + 1 }).map((_, i) => {
+                 const y = (-renderLength / 2) + (i * gwDistance);
+                 if (y > renderLength / 2) return null; // safety bounds
+                 return (
+                   <mesh position={[0, y, 0]} key={`gw-ring-${i}`}>
+                     <torusGeometry args={[2.02, 0.05, 16, 48]} />
+                     <meshStandardMaterial color="#475569" metalness={0.8} roughness={0.5} />
+                   </mesh>
+                 );
+               })}
 
                {/* Defects mapped onto the cylinder */}
                {spoolData.map((d, i) => {
                  const yPos = (dist: number) => ((dist - selectedRange.startDist) / sLength) * renderLength - (renderLength/2); 
                  const rad = (orient: number) => (orient * Math.PI) / 180;
                  
-                 const drawMarker = (dist: number, orient: number, isNew: boolean, isExt: boolean) => {
+                 const drawMarker = (dist: number, orient: number, isExt: boolean, depth: number, suffix: string) => {
                    const y = yPos(dist);
                    const theta = rad(orient);
-                   const r = 2.05; 
+                   
+                   // External = protrudes out at r=2.08, Internal = protrudes in at r=1.92
+                   const r = isExt ? 2.08 : 1.92; 
                    const x = r * Math.sin(theta);
                    const z = r * Math.cos(theta);
-                   const color = isNew ? "#ef4444" : (d.isMatched ? "#f59e0b" : "#3b82f6");
+                   
+                   // Determine color by depth (Mock depth: yellow < 20, orange 20-40, red 40-70, darkred > 70)
+                   // But wait, our mock depth from the CSV was originally floating point like 1.5, 0.6.
+                   // Let's normalize it for the visualizer. Assuming max depth is around 2.0 in our mocked data.
+                   // Let's just use strict numeric boundaries.
+                   let color = "#eab308"; // Yellow (Shallow)
+                   if (depth > 0.5) color = "#f97316"; // Orange (Medium)
+                   if (depth > 1.0) color = "#ef4444"; // Red (Deep)
+                   if (depth > 1.5) color = "#991b1b"; // Dark Red (Critical)
 
                    return (
-                     <mesh position={[x, y, z]} key={`3d-anom-${i}-${isNew}`}>
+                     <mesh position={[x, y, z]} key={`3d-anom-${i}-${suffix}`}>
                        <boxGeometry args={[0.3, 0.6, 0.3]} />
                        <meshStandardMaterial color={color} />
                      </mesh>
@@ -368,8 +394,8 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
                  };
 
                  const markers = [];
-                 if (d.dist1 !== null) markers.push(drawMarker(d.dist1, d.orient1, false, d.isExt1));
-                 if (d.dist2 !== null) markers.push(drawMarker(d.dist2, d.orient2, true, d.isExt2));
+                 if (d.dist1 !== null) markers.push(drawMarker(d.dist1, d.orient1, d.isExt1, d.depth1, 'old'));
+                 if (d.dist2 !== null) markers.push(drawMarker(d.dist2, d.orient2, d.isExt2, d.depth2, 'new'));
                  return markers;
                })}
              </group>
