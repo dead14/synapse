@@ -493,10 +493,10 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
               <tbody className="divide-y divide-gray-200 text-gray-600">
                 {paginatedMatched.map((row) => (
                   <React.Fragment key={row.id}>
-                    <tr className={`hover:bg-gray-50 ${editingId === row.id ? 'bg-[#0088cc] text-white hover:bg-[#0088cc]' : ''}`}>
+                    <tr className={`hover:bg-gray-50 transition-colors ${editingId === row.id ? 'bg-blue-50/40 text-blue-900 border-l-[3px] border-blue-500' : 'border-l-[3px] border-transparent'}`}>
                       <td className="px-4 py-2 text-center">
                         {editingId === row.id ? (
-                           <button onClick={() => setEditingId(null)} className="text-white hover:text-gray-200"><FiX size={18} /></button>
+                           <button onClick={() => setEditingId(null)} className="text-blue-500 hover:text-blue-700 p-1 bg-blue-100 rounded-full transition-colors"><FiX size={16} /></button>
                         ) : (
                            <button 
                               onClick={() => {
@@ -504,7 +504,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
                                 setEditRun1(row.oldVal !== null ? row.oldVal.toFixed(3) : '');
                                 setEditRun2(row.newVal !== null ? row.newVal.toFixed(3) : '');
                               }} 
-                              className="text-blue-500 hover:text-blue-700"
+                              className="text-gray-400 hover:text-blue-600 transition-colors"
                            >
                              <FiEdit size={16} />
                            </button>
@@ -519,34 +519,41 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
                     
                     {/* Inline Edit Form */}
                     {editingId === row.id && (
-                      <tr className="bg-[#fffbe6]">
-                        <td colSpan={4} className="px-8 py-6 border-b border-gray-200">
-                          <h5 className="text-xl font-bold text-[#8a3324] mb-4">GirthWeld Match</h5>
-                          <div className="grid grid-cols-2 gap-4 max-w-lg mb-6">
-                            <div className="font-semibold text-gray-800">GW Distance Run 1</div>
-                            <div className="flex">
-                               <input type="text" value={editRun1} onChange={e => setEditRun1(e.target.value)} className="flex-1 bg-[#fef0b3] border border-gray-300 px-3 py-1 focus:outline-none" />
-                               <span className="bg-gray-100 border border-l-0 border-gray-300 px-3 py-1 text-gray-500">m</span>
+                      <tr className="bg-white shadow-inner">
+                        <td colSpan={4} className="px-10 py-6 border-b border-gray-200 border-l-[3px] border-blue-500 relative">
+                          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-b from-blue-500/10 to-transparent"></div>
+                          <h5 className="text-[15px] font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                            <FiEdit className="text-blue-500" /> Adjust GirthWeld Match Distance
+                          </h5>
+                          
+                          <div className="flex gap-8 max-w-xl mb-6">
+                            <div className="flex-1">
+                              <label className="block text-xs font-medium text-gray-500 mb-1.5 uppercase tracking-wider">GW Distance Run 1</label>
+                              <div className="flex shadow-sm rounded-lg overflow-hidden border border-gray-200 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-all bg-white">
+                                 <input type="text" value={editRun1} onChange={e => setEditRun1(e.target.value)} className="flex-1 px-3 py-2 outline-none text-sm text-gray-900 font-mono" />
+                                 <span className="bg-gray-50 px-3 py-2 text-gray-400 text-sm border-l border-gray-200 font-medium">m</span>
+                              </div>
                             </div>
                             
-                            <div className="font-semibold text-gray-800">GW Distance Run 2</div>
-                            <div className="flex">
-                               <input type="text" value={editRun2} onChange={e => setEditRun2(e.target.value)} className="flex-1 bg-[#fef0b3] border border-gray-300 px-3 py-1 focus:outline-none" />
-                               <span className="bg-gray-100 border border-l-0 border-gray-300 px-3 py-1 text-gray-500">m</span>
+                            <div className="flex-1">
+                              <label className="block text-xs font-medium text-gray-500 mb-1.5 uppercase tracking-wider">GW Distance Run 2</label>
+                              <div className="flex shadow-sm rounded-lg overflow-hidden border border-gray-200 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-all bg-white">
+                                 <input type="text" value={editRun2} onChange={e => setEditRun2(e.target.value)} className="flex-1 px-3 py-2 outline-none text-sm text-gray-900 font-mono" />
+                                 <span className="bg-gray-50 px-3 py-2 text-gray-400 text-sm border-l border-gray-200 font-medium">m</span>
+                              </div>
                             </div>
                           </div>
                           
-                          <div className="flex items-center gap-4 bg-gray-100 p-3 rounded border border-gray-200">
+                          <div className="flex items-center gap-3 pt-2">
                              <button 
                                onClick={() => setEditingId(null)} 
-                               className="bg-[#0088cc] hover:bg-blue-600 text-white px-4 py-1.5 rounded shadow flex items-center gap-2"
+                               className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 shadow-sm text-sm"
                              >
-                               <FiSave /> Save
+                               <FiSave size={16} /> Save Changes
                              </button>
-                             <span className="text-gray-500 text-sm">or</span>
                              <button 
                                onClick={() => setEditingId(null)}
-                               className="text-red-500 hover:underline text-sm font-semibold"
+                               className="px-5 py-2 rounded-lg font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors text-sm"
                              >
                                Cancel
                              </button>
