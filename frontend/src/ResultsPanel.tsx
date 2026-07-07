@@ -178,7 +178,7 @@ export default function ResultsPanel({ data, loading }: ResultsPanelProps) {
   );
 
   const panelContent = (
-    <div className={isFullScreen ? "fixed inset-0 z-[9999] bg-white flex flex-col overflow-hidden" : "bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden"}>
+    <div className={isFullScreen ? "fixed inset-0 z-[999999] bg-white flex flex-col overflow-hidden" : "bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden"}>
       
       {/* Tabs Header */}
       <div className="flex justify-between border-b border-gray-200 bg-gray-50/50 pr-4">
