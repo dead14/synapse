@@ -284,13 +284,13 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
                   return (
                     <g key={`2d-match-${i}`}>
                       <line x1={cx1} y1={cy1} x2={cx2} y2={cy2} stroke="#fca5a5" strokeWidth="1" strokeDasharray="2 2" />
-                      <rect 
-                        x={cx1 - w1/2} y={cy1 - h1/2} width={w1} height={h1} rx="2"
+                      <ellipse 
+                        cx={cx1} cy={cy1} rx={w1/2} ry={h1/2}
                         fill={d.isExt1 ? "rgba(148, 163, 184, 0.4)" : "transparent"} 
                         stroke="#94a3b8" strokeWidth={d.isExt1 ? "1" : "2"} strokeDasharray={d.isExt1 ? "0" : "2"}
                       />
-                      <rect 
-                        x={cx2 - w2/2} y={cy2 - h2/2} width={w2} height={h2} rx="2"
+                      <ellipse 
+                        cx={cx2} cy={cy2} rx={w2/2} ry={h2/2}
                         fill={d.isExt2 ? "rgba(239, 68, 68, 0.6)" : "transparent"} 
                         stroke="#ef4444" strokeWidth={d.isExt2 ? "1" : "2"} strokeDasharray={d.isExt2 ? "0" : "2"}
                       />
@@ -310,8 +310,8 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
 
                   return (
                     <g key={`2d-unmatch-${i}`}>
-                      <rect 
-                        x={cx - w/2} y={cy - h/2} width={w} height={h} rx="2"
+                      <ellipse 
+                        cx={cx} cy={cy} rx={w/2} ry={h/2}
                         fill={isExt ? color : "transparent"} fillOpacity={0.6}
                         stroke={color} strokeWidth={isExt ? "1" : "2"} strokeDasharray={isExt ? "0" : "2"}
                       />
@@ -367,35 +367,43 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
                  const yPos = (dist: number) => ((dist - selectedRange.startDist) / sLength) * renderLength - (renderLength/2); 
                  const rad = (orient: number) => (orient * Math.PI) / 180;
                  
-                 const drawMarker = (dist: number, orient: number, isExt: boolean, depth: number, suffix: string) => {
+                 const drawMarker = (dist: number, orient: number, len: number, wid: number, isExt: boolean, depth: number, suffix: string) => {
                    const y = yPos(dist);
                    const theta = rad(orient);
                    
                    // External = protrudes out at r=2.08, Internal = protrudes in at r=1.92
-                   const r = isExt ? 2.08 : 1.92; 
+                   const r = isExt ? 2.05 : 1.95; 
                    const x = r * Math.sin(theta);
                    const z = r * Math.cos(theta);
                    
-                   // Determine color by depth (Mock depth: yellow < 20, orange 20-40, red 40-70, darkred > 70)
-                   // But wait, our mock depth from the CSV was originally floating point like 1.5, 0.6.
-                   // Let's normalize it for the visualizer. Assuming max depth is around 2.0 in our mocked data.
-                   // Let's just use strict numeric boundaries.
-                   let color = "#eab308"; // Yellow (Shallow)
-                   if (depth > 0.5) color = "#f97316"; // Orange (Medium)
-                   if (depth > 1.0) color = "#ef4444"; // Red (Deep)
-                   if (depth > 1.5) color = "#991b1b"; // Dark Red (Critical)
+                   let color = "#eab308"; 
+                   if (depth > 0.5) color = "#f97316"; 
+                   if (depth > 1.0) color = "#ef4444"; 
+                   if (depth > 1.5) color = "#991b1b"; 
+
+                   // Scale the irregular shape based on actual data
+                   // Exaggerate scale slightly so microscopic defects are visible
+                   const sLen = Math.max(0.15, len * 0.012);
+                   const sWid = Math.max(0.15, wid * 0.012);
+                   const sDep = Math.max(0.1, depth * 0.1);
 
                    return (
-                     <mesh position={[x, y, z]} key={`3d-anom-${i}-${suffix}`}>
-                       <boxGeometry args={[0.3, 0.6, 0.3]} />
-                       <meshStandardMaterial color={color} />
+                     <mesh 
+                       position={[x, y, z]} 
+                       rotation={[0, theta, 0]} // Align with surface normal
+                       scale={[sWid, sLen, sDep]} 
+                       key={`3d-anom-${i}-${suffix}`}
+                     >
+                       {/* icosahedron detail=0 creates a low-poly irregular jagged rock/blob shape */}
+                       <icosahedronGeometry args={[1, 0]} />
+                       <meshStandardMaterial color={color} roughness={0.7} metalness={0.2} />
                      </mesh>
                    );
                  };
 
                  const markers = [];
-                 if (d.dist1 !== null) markers.push(drawMarker(d.dist1, d.orient1, d.isExt1, d.depth1, 'old'));
-                 if (d.dist2 !== null) markers.push(drawMarker(d.dist2, d.orient2, d.isExt2, d.depth2, 'new'));
+                 if (d.dist1 !== null) markers.push(drawMarker(d.dist1, d.orient1, d.len1, d.wid1, d.isExt1, d.depth1, 'old'));
+                 if (d.dist2 !== null) markers.push(drawMarker(d.dist2, d.orient2, d.len2, d.wid2, d.isExt2, d.depth2, 'new'));
                  return markers;
                })}
              </group>
