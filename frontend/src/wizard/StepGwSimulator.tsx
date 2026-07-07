@@ -29,48 +29,6 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
   const [editRun2, setEditRun2] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
 
-  const unmatchedRanges = useMemo(() => {
-    const ranges: any[] = [];
-    let currentRange: any = null;
-
-    matches.forEach(m => {
-      if (m.status === 'Skipped') {
-        if (!currentRange) {
-           currentRange = {
-             id: m.id,
-             oldFrom: m.oldVal, oldTo: m.oldVal,
-             newFrom: m.newVal, newTo: m.newVal
-           };
-        } else {
-           if (m.oldVal !== null) {
-              if (currentRange.oldFrom === null) currentRange.oldFrom = m.oldVal;
-              currentRange.oldTo = m.oldVal;
-           }
-           if (m.newVal !== null) {
-              if (currentRange.newFrom === null) currentRange.newFrom = m.newVal;
-              currentRange.newTo = m.newVal;
-           }
-        }
-      } else {
-        if (currentRange) {
-           ranges.push(currentRange);
-           currentRange = null;
-        }
-      }
-    });
-    if (currentRange) ranges.push(currentRange);
-    return ranges;
-  }, [matches]);
-
-  const matchedOnly = matches.filter(m => m.status === 'Match');
-  const filteredMatched = matchedOnly.filter(m => 
-    searchQuery === '' || 
-    (m.oldVal !== null && m.oldVal.toString().includes(searchQuery)) ||
-    (m.newVal !== null && m.newVal.toString().includes(searchQuery))
-  );
-  
-  const paginatedMatched = filteredMatched.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-  const totalPages = Math.ceil(filteredMatched.length / itemsPerPage);
 
 
   const handleGWClick = (pos: number, track: 'old' | 'new') => {
@@ -218,6 +176,50 @@ export default function StepGwSimulator({ initialOta, onNext, onBack }: StepGwSi
     }
     return result;
   }, [ota]);
+
+  const unmatchedRanges = useMemo(() => {
+    const ranges: any[] = [];
+    let currentRange: any = null;
+
+    matches.forEach(m => {
+      if (m.status === 'Skipped') {
+        if (!currentRange) {
+           currentRange = {
+             id: m.id,
+             oldFrom: m.oldVal, oldTo: m.oldVal,
+             newFrom: m.newVal, newTo: m.newVal
+           };
+        } else {
+           if (m.oldVal !== null) {
+              if (currentRange.oldFrom === null) currentRange.oldFrom = m.oldVal;
+              currentRange.oldTo = m.oldVal;
+           }
+           if (m.newVal !== null) {
+              if (currentRange.newFrom === null) currentRange.newFrom = m.newVal;
+              currentRange.newTo = m.newVal;
+           }
+        }
+      } else {
+        if (currentRange) {
+           ranges.push(currentRange);
+           currentRange = null;
+        }
+      }
+    });
+    if (currentRange) ranges.push(currentRange);
+    return ranges;
+  }, [matches]);
+
+  const matchedOnly = matches.filter(m => m.status === 'Match');
+  const filteredMatched = matchedOnly.filter(m => 
+    searchQuery === '' || 
+    (m.oldVal !== null && m.oldVal.toString().includes(searchQuery)) ||
+    (m.newVal !== null && m.newVal.toString().includes(searchQuery))
+  );
+  
+  const paginatedMatched = filteredMatched.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const totalPages = Math.ceil(filteredMatched.length / itemsPerPage);
+
 
   // Extract matched points for the graph
   const graphPoints = matches.filter(m => m.status === 'Match').map(m => ({
