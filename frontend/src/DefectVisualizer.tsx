@@ -9,7 +9,8 @@ interface DefectVisualizerProps {
 
 export default function DefectVisualizer({ data }: DefectVisualizerProps) {
   const [zoom, setZoom] = useState(1);
-  const [selectedSpool, setSelectedSpool] = useState<{ index: number, startDist: number, endDist: number, length: number } | null>(null);
+  const [rangeStartGw, setRangeStartGw] = useState<number | null>(null);
+  const [rangeEndGw, setRangeEndGw] = useState<number | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalViewMode, setModalViewMode] = useState<'2D' | '3D'>('3D');
 
@@ -62,6 +63,32 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
 
   const numGws = Math.ceil(totalLength / 12);
   const gwDistance = 12;
+
+  // Determine actual selected range
+  let selectedRange: { startDist: number, endDist: number, length: number, startIdx: number, endIdx: number } | null = null;
+  if (rangeStartGw !== null && rangeEndGw !== null) {
+    const startIdx = Math.min(rangeStartGw, rangeEndGw);
+    const endIdx = Math.max(rangeStartGw, rangeEndGw);
+    if (startIdx !== endIdx) {
+      const sDist = startDist + startIdx * gwDistance;
+      const eDist = startDist + endIdx * gwDistance;
+      selectedRange = { startDist: sDist, endDist: eDist, length: eDist - sDist, startIdx, endIdx };
+    }
+  }
+
+  const handleGwClick = (index: number) => {
+    if (rangeStartGw === null || (rangeStartGw !== null && rangeEndGw !== null)) {
+      setRangeStartGw(index);
+      setRangeEndGw(null);
+    } else {
+      setRangeEndGw(index);
+    }
+  };
+
+  const handleSpoolClick = (index: number) => {
+    setRangeStartGw(index);
+    setRangeEndGw(index + 1);
+  };
   
   // Render functions
   const render1DTimeline = () => {
@@ -73,35 +100,52 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
             <text x="20" y="40" className="text-xs font-extrabold fill-gray-400 tracking-wider">RUN OLD (REFERENCE)</text>
             <line x1="0" y1="80" x2="100%" y2="80" stroke="#e2e8f0" strokeWidth="4" strokeLinecap="round" />
             
+            {/* Draw Highlighted Range Background First */}
+            {selectedRange && (
+              <rect 
+                x={mToX(selectedRange.startDist)} y="65" 
+                width={mToX(selectedRange.endDist) - mToX(selectedRange.startDist)} height="30" 
+                fill="rgba(253, 224, 71, 0.3)" 
+              />
+            )}
+            {selectedRange && (
+              <line 
+                x1={mToX(selectedRange.startDist)} y1="80" 
+                x2={mToX(selectedRange.endDist)} y2="80" 
+                stroke="#eab308" strokeWidth="6" strokeLinecap="round" 
+              />
+            )}
+            
             {/* Draw GW Ticks & Spool Hitboxes */}
             {Array.from({ length: numGws }).map((_, i) => {
                const dist1 = startDist + i * gwDistance;
                const dist2 = startDist + (i + 1) * gwDistance;
                const x1 = mToX(dist1);
                const x2 = mToX(dist2);
-               const isSelected = selectedSpool?.index === i;
-               const color = isSelected ? "#eab308" : "#10b981"; // yellow-500 or emerald-500
+               
+               const isGwSelected = (rangeStartGw === i && rangeEndGw === null) || 
+                                    (selectedRange && i >= selectedRange.startIdx && i <= selectedRange.endIdx);
+               const color = isGwSelected ? "#eab308" : "#10b981";
                
                return (
                  <g key={`gw-1-${i}`}>
                    {/* Spool Hitbox */}
                    <rect 
                      x={x1} y="65" width={x2 - x1} height="30" 
-                     fill={isSelected ? "rgba(253, 224, 71, 0.3)" : "transparent"} 
-                     className="cursor-pointer hover:fill-yellow-100/50 transition-colors"
-                     onClick={() => setSelectedSpool({ index: i, startDist: dist1, endDist: dist2, length: gwDistance })}
+                     fill="transparent" 
+                     className="cursor-pointer hover:fill-yellow-100/30 transition-colors"
+                     onClick={() => handleSpoolClick(i)}
                    />
-                   
-                   {/* Highlighted connecting line if selected */}
-                   {isSelected && (
-                     <line x1={x1} y1="80" x2={x2} y2="80" stroke="#eab308" strokeWidth="6" strokeLinecap="round" />
-                   )}
 
                    {/* Alignment guide */}
                    <line x1={x1} y1="80" x2={x1} y2="210" stroke="#f1f5f9" strokeWidth="1" strokeDasharray="4 4" />
                    
-                   {/* GW Marker */}
-                   <rect x={x1 - 3} y="60" width="6" height="40" rx="3" fill={color} />
+                   {/* GW Marker - Make it clickable */}
+                   <rect 
+                     x={x1 - 4} y="55" width="8" height="50" rx="4" fill={color} 
+                     className="cursor-pointer hover:brightness-110"
+                     onClick={() => handleGwClick(i)}
+                   />
                    <text x={x1} y="115" fontSize="10" fontWeight="bold" fill={color} textAnchor="middle">{dist1.toFixed(2)}m</text>
                  </g>
                );
@@ -109,10 +153,24 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
             
             {/* Draw the very last GW marker */}
             <g>
-              <rect x={mToX(startDist + numGws * gwDistance) - 3} y="60" width="6" height="40" rx="3" fill="#10b981" />
-              <text x={mToX(startDist + numGws * gwDistance)} y="115" fontSize="10" fontWeight="bold" fill="#059669" textAnchor="middle">
-                {(startDist + numGws * gwDistance).toFixed(2)}m
-              </text>
+              {(() => {
+                const i = numGws;
+                const dist1 = startDist + i * gwDistance;
+                const x1 = mToX(dist1);
+                const isGwSelected = (rangeStartGw === i && rangeEndGw === null) || 
+                                     (selectedRange && i >= selectedRange.startIdx && i <= selectedRange.endIdx);
+                const color = isGwSelected ? "#eab308" : "#10b981";
+                return (
+                  <>
+                    <rect 
+                      x={x1 - 4} y="55" width="8" height="50" rx="4" fill={color} 
+                      className="cursor-pointer hover:brightness-110"
+                      onClick={() => handleGwClick(i)}
+                    />
+                    <text x={x1} y="115" fontSize="10" fontWeight="bold" fill={color} textAnchor="middle">{dist1.toFixed(2)}m</text>
+                  </>
+                );
+              })()}
             </g>
 
             {/* Run 1 Anomalies */}
@@ -135,7 +193,8 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
             {Array.from({ length: numGws + 1 }).map((_, i) => {
                const dist = startDist + (i * gwDistance) + (i * 0.05);
                const x = mToX(dist);
-               const isSelected = selectedSpool?.index === i || selectedSpool?.index === i - 1; // Highlight related new GWs
+               const isSelected = (rangeStartGw === i && rangeEndGw === null) || 
+                                  (selectedRange && i >= selectedRange.startIdx && i <= selectedRange.endIdx);
                return (
                  <g key={`gw-2-${i}`}>
                    <rect x={x - 3} y="190" width="6" height="40" rx="3" fill={isSelected ? "#eab308" : "#3b82f6"} />
@@ -167,21 +226,21 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
   };
 
   const renderModalContent = () => {
-    if (!selectedSpool) return null;
+    if (!selectedRange) return null;
     
     // Filter data to only those inside the spool (using Run 1 distance as reference)
     const spoolData = parsedData.filter(d => {
       if (d === null) return false;
       const dist = d.dist1 !== null ? d.dist1 : d.dist2; // Fallback to dist2 if unmatched new
       if (dist === null) return false;
-      return dist >= selectedSpool.startDist && dist <= selectedSpool.endDist;
+      return dist >= selectedRange.startDist && dist <= selectedRange.endDist;
     });
 
-    const sLength = selectedSpool.length;
+    const sLength = selectedRange.length;
     // For 2D SVG rendering inside modal (fixed width)
     const modalSvgWidth = 800;
     const sToX = (dist: number) => {
-      return ((dist - selectedSpool.startDist) / sLength) * modalSvgWidth;
+      return ((dist - selectedRange.startDist) / sLength) * modalSvgWidth;
     };
 
     if (modalViewMode === '2D') {
@@ -265,28 +324,31 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
     }
 
     if (modalViewMode === '3D') {
+      // Limit 3D pipe length rendering so we don't build a 500m pipe if they selected a huge range
+      const renderLength = Math.min(sLength, 200); 
+
       return (
         <div className="w-full h-[400px] bg-[#1e293b] rounded-xl overflow-hidden relative shadow-inner">
            <div className="absolute top-4 left-4 z-10 text-white/70 text-xs">Left Click: Rotate | Right Click: Pan | Scroll: Zoom</div>
-           <Canvas camera={{ position: [0, 0, 10], fov: 45 }}>
+           <Canvas camera={{ position: [0, 0, Math.min(20, renderLength / 2)], fov: 45 }}>
              <ambientLight intensity={0.5} />
              <directionalLight position={[10, 10, 10]} intensity={1} />
              <OrbitControls enableDamping dampingFactor={0.05} />
              
              <group rotation={[Math.PI / 2, 0, 0]}>
-               {/* 12m Pipe Cylinder */}
+               {/* Selected Pipe Cylinder */}
                <mesh>
-                 <cylinderGeometry args={[2, 2, 12, 32, 1, false]} />
+                 <cylinderGeometry args={[2, 2, renderLength, 32, 1, false]} />
                  <meshStandardMaterial color="#64748b" metalness={0.6} roughness={0.4} />
                </mesh>
                <mesh>
-                 <cylinderGeometry args={[2.01, 2.01, 12, 12, 10, true]} />
+                 <cylinderGeometry args={[2.01, 2.01, renderLength, 12, Math.ceil(renderLength/2), true]} />
                  <meshBasicMaterial color="#334155" wireframe transparent opacity={0.3} />
                </mesh>
 
-               {/* Defects mapped onto the 12m cylinder */}
+               {/* Defects mapped onto the cylinder */}
                {spoolData.map((d, i) => {
-                 const yPos = (dist: number) => ((dist - selectedSpool.startDist) / sLength) * 12 - 6; // Center is 0, so -6 to +6
+                 const yPos = (dist: number) => ((dist - selectedRange.startDist) / sLength) * renderLength - (renderLength/2); 
                  const rad = (orient: number) => (orient * Math.PI) / 180;
                  
                  const drawMarker = (dist: number, orient: number, isNew: boolean, isExt: boolean) => {
@@ -334,10 +396,10 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
           </div>
           
           {/* Dynamic Selection Actions */}
-          {selectedSpool && (
+          {selectedRange && (
             <div className="flex items-center gap-3 animate-in fade-in slide-in-from-left-4 duration-300">
               <div className="px-4 py-2 bg-yellow-50 text-yellow-700 border border-yellow-200 font-bold rounded-full text-sm">
-                Spool Length: {selectedSpool.length.toFixed(2)}m
+                Selection Length: {selectedRange.length.toFixed(2)}m
               </div>
               <button 
                 onClick={() => setIsModalOpen(true)}
@@ -375,7 +437,7 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
             <div className="flex items-center justify-between px-8 py-5 border-b border-gray-100 bg-gray-50">
               <div>
                 <h2 className="text-xl font-black text-gray-800">Spool Detail View</h2>
-                <p className="text-sm text-gray-500 font-medium">Distance: {selectedSpool?.startDist.toFixed(2)}m to {selectedSpool?.endDist.toFixed(2)}m</p>
+                <p className="text-sm text-gray-500 font-medium">Distance: {selectedRange?.startDist.toFixed(2)}m to {selectedRange?.endDist.toFixed(2)}m</p>
               </div>
               
               <div className="flex items-center gap-6">
