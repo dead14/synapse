@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { FiSearch, FiFileText, FiSave, FiEdit, FiInfo } from 'react-icons/fi';
+import { FiSearch, FiFileText, FiSave, FiEdit, FiInfo, FiMaximize, FiMinimize } from 'react-icons/fi';
 import { Scatter } from 'react-chartjs-2';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, Title } from 'chart.js';
 
@@ -31,6 +31,7 @@ export default function ResultsPanel({ data, loading }: ResultsPanelProps) {
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(50);
+  const [isFullScreen, setIsFullScreen] = useState(false);
 
   const tabs = ['Results', 'ILI Run 1', 'ILI Run 2', 'Interventions'];
   
@@ -180,23 +181,32 @@ export default function ResultsPanel({ data, loading }: ResultsPanelProps) {
   );
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden">
+    <div className={isFullScreen ? "fixed inset-0 z-50 bg-white flex flex-col overflow-hidden" : "bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden"}>
       
       {/* Tabs Header */}
-      <div className="flex border-b border-gray-200 bg-gray-50/50">
-        {tabs.map(tab => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`px-6 py-3 text-sm font-medium transition-colors border-b-2 ${
-              activeTab === tab 
-                ? 'border-blue-500 text-blue-600 bg-white' 
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-            }`}
-          >
-            {tab}
-          </button>
-        ))}
+      <div className="flex justify-between border-b border-gray-200 bg-gray-50/50 pr-4">
+        <div className="flex">
+          {tabs.map(tab => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`px-6 py-3 text-sm font-medium transition-colors border-b-2 ${
+                activeTab === tab 
+                  ? 'border-blue-500 text-blue-600 bg-white' 
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+        <button 
+          onClick={() => setIsFullScreen(!isFullScreen)}
+          className="text-orange-500 hover:text-orange-700 self-center p-2 rounded-full hover:bg-orange-100 transition-colors flex items-center gap-2 font-medium"
+          title={isFullScreen ? "Exit Full Screen" : "Full Screen Data"}
+        >
+          {isFullScreen ? <FiMinimize size={20} /> : <FiMaximize size={20} />}
+        </button>
       </div>
 
       {(activeTab === 'Results' || activeTab === 'ILI Run 1' || activeTab === 'ILI Run 2') && (
