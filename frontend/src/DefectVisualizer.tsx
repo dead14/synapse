@@ -54,7 +54,8 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
   const totalLength = Math.max(10, maxDistance - minDistance + 20); // Add padding
   const startDist = Math.max(0, minDistance - 10);
 
-  const baseWidth = 1200;
+  // Provide a much wider base scale so defects aren't squished together on long pipelines
+  const baseWidth = Math.max(1200, totalLength * 5); // 5 pixels per meter at 1x zoom
   const svgWidth = baseWidth * zoom;
   
   const mToX = (meters: number) => {
@@ -331,7 +332,7 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
               <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Zoom:</span>
               <input 
                 type="range" 
-                min="1" max="5" step="0.1" 
+                min="1" max="25" step="0.1" 
                 value={zoom} 
                 onChange={e => setZoom(parseFloat(e.target.value))}
                 className="w-32 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
