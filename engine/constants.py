@@ -141,6 +141,21 @@ GROWTH_DEPTH_SUSPECT_DECREASE = 30.0
 GROWTH_DEPTH_IMPOSSIBLE       = 50.0
 CLOCK_SHIFT_NEIGHBOR_WINDOW   = 5
 CLOCK_SHIFT_OUTLIER_THRESHOLD = 45.0
+OTA_PCT = 1.5
 
-
+def update_tolerances(clock_tol=None, gw_tol=None, depth_max=None, ota_pct=None):
+    global CLOCK_HARD_GATE, W, GROWTH_DEPTH_IMPOSSIBLE, ANOMALY_ODO_PCT, OTA_PCT
+    if clock_tol is not None:
+        CLOCK_HARD_GATE["tight"] = float(clock_tol) * 0.5
+        CLOCK_HARD_GATE["medium"] = float(clock_tol)
+        CLOCK_HARD_GATE["loose"] = float(clock_tol) * 1.5
+        CLOCK_HARD_GATE["super"] = float(clock_tol) * 2.0
+    if gw_tol is not None:
+        W["gw_max_penalty_m"] = float(gw_tol)
+    if depth_max is not None:
+        GROWTH_DEPTH_IMPOSSIBLE = float(depth_max)
+    if ota_pct is not None:
+        OTA_PCT = float(ota_pct)
+        val = OTA_PCT / 100.0
+        ANOMALY_ODO_PCT = (0.0, val*0.5, val, val*1.5)
 # ══════════════════════════════════════════════════════════════════════════════════

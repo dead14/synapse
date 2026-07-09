@@ -3,9 +3,12 @@ import numpy as np
 import os
 import sys
 from .constants import *
+from .constants import *
 from .loader import *
 from .math_utils import *
+from .math_utils import match_welds_by_spool_variance
 from .matching import *
+from .matching import _get_landmarks, _hungarian_pass_generic, _commit_pairs, _build_offset_from_matched_landmarks, _enforce_monotonicity, _hungarian_pass_anomaly
 from .physics import *
 from .excel_writer import *
 #  BAGIAN 11 — ALIGNMENT UTAMA
@@ -50,12 +53,21 @@ def run_alignment(df_new, df_old):
 
     # ══ FASE 1: LANDMARK MATCHING (Tier 1: Valve+Tee, Tier 2: Weld) ═══════════
     print(f"\n   ── FASE 1: Landmark Matching (Tier-1: Valve+Tee, Tier-2: Weld) ──")
-    landmark_ordered = [t for t in ["Valve", "Tee", "Weld"] if t in all_types]
+    
+    # ── FASE 1a: Weld Matching by Spool Variance (OTA) ──
+    weld_matched = match_welds_by_spool_variance(df_new, df_old, OTA_PCT)
+    for n_idx, o_idx in weld_matched.items():
+        matched_new[n_idx] = o_idx
+        matched_old[o_idx] = n_idx
+        used_old.add(o_idx)
+    print(f"   Weld Match (OTA {OTA_PCT}%): +{len(weld_matched):4d}  (Spool Variance Matching)")
+
+    # ── FASE 1b: Valve & Tee Matching by Hungarian ──
+    landmark_ordered = [t for t in ["Valve", "Tee"] if t in all_types]
 
     for pass_name, pass_idx in passes:
         total_this = 0
         for feat_type in landmark_ordered:
-            # Valve: gunakan toleransi besar (Ground Truth)
             if feat_type == "Valve":
                 odo_tol = ODO_TOLERANCE_FIXED["Valve"][pass_idx]
             else:
@@ -77,7 +89,7 @@ def run_alignment(df_new, df_old):
             total_this += _commit_pairs(pairs, matched_new, matched_old, used_old)
 
         lm_matched = sum(1 for i in df_new[df_new["feature_type"]
-                                           .isin(landmark_ordered)].index
+                                           .isin(["Valve", "Tee", "Weld"])].index
                          if i in matched_new)
         if total_this or pass_name == "tight":
             print(f"   Landmark Pass {pass_name:6s}: +{total_this:4d}  "
@@ -253,84 +265,78 @@ def run_alignment(df_new, df_old):
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
-#  BAGIAN 13 — MAIN
+#  BAGIAN 13 — MAIN (DATABASE DRIVEN)
 # ══════════════════════════════════════════════════════════════════════════════════
 
-def main():
+def main(clockTol=None, distGwTol=None, depthGrowthMax=None, ota=None, runOldId=None, runNewId=None, sessionId=None):
+    from . import constants
+    constants.update_tolerances(clockTol, distGwTol, depthGrowthMax, ota)
+    
     print("=" * 80)
-    print("  ILI PIPELINE ALIGNMENT SYSTEM  v8.1  —  JOINT-CENTRIC + DTW + PHYSICS")
-    print("  [v8.1 BugFix]: DTW traceback | LIS patience sort | fh_res init |")
-    print("  joint counter fix | physics flag check | landmark used-set isolation")
+    print("  ILI PIPELINE ALIGNMENT SYSTEM  v9.0  —  DATABASE DRIVEN")
     print("=" * 80)
 
-    print("\n INPUT DATA ILI LAMA (OLD)")
-    old_file   = input("  File     : ").strip()
-    if not os.path.exists(old_file):
-        print(f"ERROR: {old_file} tidak ditemukan"); sys.exit(1)
-    old_year   = int(input("  Tahun    : ").strip())
-    old_vendor = input("  Vendor   : ").strip()
+    if not runOldId or not runNewId or not sessionId:
+        print("ERROR: Missing DB IDs. Must provide --runOldId, --runNewId, and --sessionId")
+        sys.exit(1)
+        
+    print(f"\n[DB] Initializing Database Connection...")
+    from backend.models import SessionLocal, AlignmentSession
+    from .db_writer import write_results_to_db
+    
+    db_session = SessionLocal()
+    
+    try:
+        print(f"\n[DB] Loading OLD data for run_id: {runOldId}")
+        df_old = load_ili_from_db(runOldId, db_session)
+        
+        print(f"\n[DB] Loading NEW data for run_id: {runNewId}")
+        df_new = load_ili_from_db(runNewId, db_session)
 
-    print("\n INPUT DATA ILI BARU (NEW)")
-    new_file   = input("  File     : ").strip()
-    if not os.path.exists(new_file):
-        print(f"ERROR: {new_file} tidak ditemukan"); sys.exit(1)
-    new_year   = int(input("  Tahun    : ").strip())
-    new_vendor = input("  Vendor   : ").strip()
+        if not len(df_new) or not len(df_old):
+            print("ERROR: File tidak memiliki data valid."); 
+            db_session.close()
+            sys.exit(1)
 
-    default_out = f"ILI_Comparison_{new_year}_vs_{old_year}_v8.1.xlsx"
-    out_name = input(
-        f"\n  Output [Enter={default_out}]: ").strip() or default_out
-    if not out_name.endswith(".xlsx"):
-        out_name += ".xlsx"
+        pipeline_length = compute_pipeline_length(df_new, df_old)
+        print(f"\nPipeline length : {pipeline_length:.1f} m")
 
-    print(f"\nMemuat OLD: {old_file}")
-    df_old = load_ili_universal(old_file, survey_year=old_year, vendor=old_vendor)
-    print(f"\nMemuat NEW: {new_file}")
-    df_new = load_ili_universal(new_file, survey_year=new_year, vendor=new_vendor)
+        print("\nRunning alignment v9.0...")
+        matched_new, matched_old, suspect_growth, suspect_clock, residuals = \
+            run_alignment(df_new, df_old)
 
-    if not len(df_new) or not len(df_old):
-        print("ERROR: File tidak memiliki data valid."); sys.exit(1)
+        print(f"\nSaving results to Database (Session ID: {sessionId})...")
+        nm, non, noo = write_results_to_db(
+            session_id=sessionId,
+            df_new=df_new, df_old=df_old,
+            matched_new=matched_new, matched_old=matched_old,
+            suspect_growth=suspect_growth, suspect_clock=suspect_clock,
+            residuals=residuals,
+            db_session=db_session
+        )
+        
+        # Update session status
+        session_record = db_session.query(AlignmentSession).filter(AlignmentSession.id == sessionId).first()
+        if session_record:
+            from datetime import datetime
+            session_record.status = "completed"
+            session_record.completed_at = datetime.utcnow()
+            db_session.commit()
 
-    pipeline_length = compute_pipeline_length(df_new, df_old)
-    print(f"\nPipeline length : {pipeline_length:.1f} m")
-
-    print("\nRunning alignment v8.1...")
-    matched_new, matched_old, suspect_growth, suspect_clock, residuals = \
-        run_alignment(df_new, df_old)
-
-    print(f"\nBuilding output: {out_name}")
-    nm, non, noo = build_output_excel(
-        df_new=df_new,          df_old=df_old,
-        matched_new=matched_new, matched_old=matched_old,
-        year_new=new_year,       year_old=old_year,
-        vendor_new=new_vendor,   vendor_old=old_vendor,
-        output_path=out_name,
-        pipeline_length=pipeline_length,
-        suspect_growth=suspect_growth,
-        suspect_clock=suspect_clock,
-        residuals=residuals,
-    )
-
-    print(f"\n{'='*80}")
-    print(f"  SELESAI: {out_name}")
-    print(f"  Matched={nm:,}  OnlyNEW={non:,}  OnlyOLD={noo:,}")
-    print(f"  Match rate = "
-          f"{100*nm/max(min(len(df_new),len(df_old)),1):.1f}%")
-    print(f"  Physics flags: "
-          f"GrowthRate={len(suspect_growth)} | "
-          f"ClockIntegrity={len(suspect_clock)}")
-    print(f"\n  v8.1 Garansi:")
-    print("  ✓ Joint-Centric: Anomali tidak loncat joint")
-    print("  ✓ DTW: Odometer drift non-linear terkoreksi")
-    print("  ✓ 5-Tier Hierarchy: Anchor → Skeleton → Assessment")
-    print("  ✓ Growth Rate: Flag depth decrease mencurigakan")
-    print("  ✓ Clock Integrity: Flag orientasi tidak konsisten")
-    print("  ✓ Residual Plot: Debugging misalignment lokal")
-    print("  ✓ Valve+Tee KEBAL dari Anti-Jump LIS")
-    print("  ✓ Output SELALU ascending tanpa data menyilang")
-    print("  ✓ 7 bug v8.0 diperbaiki (lihat summary sheet)")
-    print(f"{'='*80}")
-
+        print(f"\n{'='*80}")
+        print(f"  SELESAI: Database Updated")
+        print(f"  Matched={nm:,}  OnlyNEW={non:,}  OnlyOLD={noo:,}")
+        print(f"  Match rate = "
+              f"{100*nm/max(min(len(df_new),len(df_old)),1):.1f}%")
+        print(f"{'='*80}")
+    except Exception as e:
+        print(f"ERROR: {e}")
+        session_record = db_session.query(AlignmentSession).filter(AlignmentSession.id == sessionId).first()
+        if session_record:
+            session_record.status = "failed"
+            db_session.commit()
+    finally:
+        db_session.close()
 
 if __name__ == "__main__":
     main()

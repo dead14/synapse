@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { FiBell, FiSettings } from 'react-icons/fi';
 import StepDataSummary from './wizard/StepDataSummary';
 import StepScenarioFilter from './wizard/StepScenarioFilter';
@@ -8,11 +8,41 @@ import StepExecution from './wizard/StepExecution';
 import StepUploadILI from './wizard/StepUploadILI';
 
 export default function AlignmentPage() {
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(0); // 0 is Upload step
   const [wizardConfig, setWizardConfig] = useState<any>({});
+  const [isResuming, setIsResuming] = useState(true);
 
-  const handleNext = (data?: any) => {
-    if (data) setWizardConfig((prev: any) => ({ ...prev, ...data }));
+  useEffect(() => {
+    // Start fresh every time — no resume prompt, no empty session creation
+    setIsResuming(false);
+  }, []);
+
+  const handleNext = async (data?: any) => {
+    let updatedConfig = { ...wizardConfig };
+    // Guard against React Synthetic Events poisoning the JSON config
+    if (data && typeof data === 'object' && !('nativeEvent' in data)) {
+      updatedConfig = { ...updatedConfig, ...data };
+    }
+    
+    // Save to backend so python engines can access the latest state
+    const token = localStorage.getItem('synapse_token') || '';
+    try {
+      const res = await fetch('http://localhost:8000/api/wizard/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ config: updatedConfig, sessionId: updatedConfig.sessionId })
+      });
+      const resData = await res.json();
+      if (resData.success && resData.sessionId) {
+        // Always keep sessionId in sync — critical for ILI Comparison page
+        updatedConfig.sessionId = resData.sessionId;
+        localStorage.setItem('synapse_last_session_id', String(resData.sessionId));
+      }
+    } catch (err) {
+      console.error("Failed to save wizard state:", err);
+    }
+
+    setWizardConfig(updatedConfig);
     setStep(s => Math.min(s + 1, 5));
   };
 
@@ -23,8 +53,8 @@ export default function AlignmentPage() {
   const stepsList = [
     { id: 0, name: 'Upload', desc: 'Validate' },
     { id: 1, name: 'Data Summary', desc: 'Overview' },
-    { id: 2, name: 'Scenario Filter', desc: 'Thresholds' },
-    { id: 3, name: 'GW Matching', desc: 'Simulator' },
+    { id: 2, name: 'GW Matching', desc: 'Simulator' },
+    { id: 3, name: 'Scenario Filter', desc: 'Thresholds' },
     { id: 4, name: 'Anomaly Tolerances', desc: 'Matcher' },
     { id: 5, name: 'Execution', desc: 'Report Gen' }
   ];
@@ -48,15 +78,15 @@ export default function AlignmentPage() {
             </div>
 
             {/* Stepper Line */}
-            <div className="relative flex justify-between items-center w-full px-6 mt-4">
-              <div className="absolute top-1/2 left-6 right-6 h-[1px] bg-gray-200 -z-10 -translate-y-1/2"></div>
+            <div className="relative flex justify-between items-start w-full px-6 mt-4">
+              <div className="absolute top-[6px] left-6 right-6 h-[1px] bg-gray-200 -z-10"></div>
               
               {stepsList.map((s, index) => (
-                <div key={s.id} className="flex flex-col items-center gap-3">
-                  <div className={`w-3 h-3 rounded-full transition-all duration-300 ${
+                <div key={s.id} className="flex flex-col items-center gap-3 w-32">
+                  <div className={`w-3 h-3 rounded-full transition-all duration-300 shrink-0 ${
                     step >= index ? 'bg-brand-500 shadow-[0_0_15px_rgba(59,130,246,0.5)]' : 'bg-gray-300'
                   }`} />
-                  <div className="text-center">
+                  <div className="text-center mt-1">
                     <p className={`text-xs font-semibold whitespace-nowrap transition-colors ${step >= index ? 'text-gray-800' : 'text-gray-500'}`}>
                       {s.name}
                     </p>
@@ -72,18 +102,18 @@ export default function AlignmentPage() {
         {/* Wizard Steps Rendering */}
         <div className="w-full mt-4">
           {step === 0 && (
-            <StepUploadILI onNext={() => setStep(1)} />
+            <StepUploadILI onNext={handleNext} />
           )}
 
-          {step === 1 && <StepDataSummary onNext={handleNext} />}
+          {step === 1 && <StepDataSummary onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
           
-          {step === 2 && <StepScenarioFilter onNext={handleNext} onBack={handleBack} />}
+          {step === 2 && <StepGwSimulator initialOta={wizardConfig.ota || 1.5} onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 
-          {step === 3 && <StepGwSimulator initialOta={wizardConfig.ota || 1.0} onNext={handleNext} onBack={handleBack} />}
+          {step === 3 && <StepScenarioFilter onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 
-          {step === 4 && <StepAnomalyTolerances onNext={handleNext} onBack={handleBack} />}
+          {step === 4 && <StepAnomalyTolerances onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 
-          {step === 5 && <StepExecution onBack={handleBack} />}
+          {step === 5 && <StepExecution onBack={handleBack} config={wizardConfig} />}
           
         </div>
       </div>

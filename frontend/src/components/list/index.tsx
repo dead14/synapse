@@ -3,7 +3,6 @@ import OrderedList from "./OrderedList";
 import ListWithButton from "./ListWithButton";
 import ListWithIcon from "./ListWithIcon";
 import HorizontalList from "./HorizontalList";
-import ListWithRadio from "./ListWithRadio";
 import ListWithCheckbox from "./ListWithCheckbox";
 import ComponentCard from "../common/ComponentCard";
 
@@ -29,9 +28,6 @@ export default function ListExample() {
       </div>
       <ComponentCard title="List with checkbox">
         <ListWithCheckbox />
-      </ComponentCard>{" "}
-      <ComponentCard title="List with radio">
-        <ListWithRadio />
       </ComponentCard>
     </div>
   );

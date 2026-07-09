@@ -1,117 +1,141 @@
-import React, { useState, useEffect } from 'react';
-import { FiBell, FiSettings } from 'react-icons/fi';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import ResultsPanel from './ResultsPanel';
-import DefectVisualizer from './DefectVisualizer';
+
+// Lazy load heavy components - only downloaded when needed
+const DefectVisualizer = lazy(() => import('./DefectVisualizer'));
+const AdvancedCharts = lazy(() => import('./components/charts/AdvancedCharts'));
+
+const LoadingSpinner = ({ label }: { label: string }) => (
+  <div className="flex flex-col items-center justify-center gap-3 py-12 text-gray-400">
+    <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-500 rounded-full animate-spin" />
+    <span className="text-sm">{label}</span>
+  </div>
+);
 
 export default function IliComparisonPage() {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showAdvancedCharts, setShowAdvancedCharts] = useState(false);
+  const [showVisualizer, setShowVisualizer] = useState(false);
+  const [selectedRowIdx, setSelectedRowIdx] = useState<number | null>(null);
 
   useEffect(() => {
-    // Generate dummy data since backend is not connected
-    const generateDummyData = () => {
-      const dummy = [{ /* header row */ }]; 
-      
-      // Matched data 14 / 1
-      dummy.push({
-        'Unnamed: 29': '14', 'DATA LAMA 2020 (Vendor Lama)  >': 20.055, 'Unnamed: 37': '1.31', 'Unnamed: 35': '25.0', 'Unnamed: 32': '0.65', 'Unnamed: 33': '8.74', 'Unnamed: 34': '202.5',
-        'Unnamed: 2': '1', '<  DATA BARU 2025 (Vendor Baru)': 19.889, 'Unnamed: 10': '1.75', 'Unnamed: 8': '28.0', 'Unnamed: 5': '0.65', 'Unnamed: 6': '8.74', 'Unnamed: 7': '202.5'
-      });
-      // Matched data 37 / 2
-      dummy.push({
-        'Unnamed: 29': '37', 'DATA LAMA 2020 (Vendor Lama)  >': 288.472, 'Unnamed: 37': '0.96', 'Unnamed: 35': '18.0', 'Unnamed: 32': '7.66', 'Unnamed: 33': '8.74', 'Unnamed: 34': '25',
-        'Unnamed: 2': '2', '<  DATA BARU 2025 (Vendor Baru)': 288.223, 'Unnamed: 10': '1.05', 'Unnamed: 8': '20.0', 'Unnamed: 5': '7.66', 'Unnamed: 6': '8.74', 'Unnamed: 7': '25'
-      });
-      // Unmatched New data (only Run 2) - Defects 3, 4, 6
-      dummy.push({
-        'Unnamed: 29': '', 'DATA LAMA 2020 (Vendor Lama)  >': null, 'Unnamed: 37': '', 'Unnamed: 35': '', 'Unnamed: 32': '', 'Unnamed: 33': '', 'Unnamed: 34': '',
-        'Unnamed: 2': '3', '<  DATA BARU 2025 (Vendor Baru)': 596.014, 'Unnamed: 10': '0.72', 'Unnamed: 8': '12.0', 'Unnamed: 5': '3.21', 'Unnamed: 6': '6.40', 'Unnamed: 7': '110'
-      });
-      dummy.push({
-        'Unnamed: 29': '', 'DATA LAMA 2020 (Vendor Lama)  >': null, 'Unnamed: 37': '', 'Unnamed: 35': '', 'Unnamed: 32': '', 'Unnamed: 33': '', 'Unnamed: 34': '',
-        'Unnamed: 2': '4', '<  DATA BARU 2025 (Vendor Baru)': 619.582, 'Unnamed: 10': '0.67', 'Unnamed: 8': '11.0', 'Unnamed: 5': '4.11', 'Unnamed: 6': '6.40', 'Unnamed: 7': '120'
-      });
-      dummy.push({
-        'Unnamed: 29': '', 'DATA LAMA 2020 (Vendor Lama)  >': null, 'Unnamed: 37': '', 'Unnamed: 35': '', 'Unnamed: 32': '', 'Unnamed: 33': '', 'Unnamed: 34': '',
-        'Unnamed: 2': '6', '<  DATA BARU 2025 (Vendor Baru)': 619.696, 'Unnamed: 10': '0.61', 'Unnamed: 8': '10.5', 'Unnamed: 5': '4.22', 'Unnamed: 6': '6.40', 'Unnamed: 7': '125'
-      });
-      // Double Match example (Defect 87 -> 11, 13)
-      dummy.push({
-        'Unnamed: 29': '87', 'DATA LAMA 2020 (Vendor Lama)  >': 679.704, 'Unnamed: 37': '1.39', 'Unnamed: 35': '20.0', 'Unnamed: 32': '0.05', 'Unnamed: 33': '5.56', 'Unnamed: 34': '152.5',
-        'Unnamed: 2': '11', '<  DATA BARU 2025 (Vendor Baru)': 679.214, 'Unnamed: 10': '0.56', 'Unnamed: 8': '15.0', 'Unnamed: 5': '0.05', 'Unnamed: 6': '5.56', 'Unnamed: 7': '152.5'
-      });
-      dummy.push({
-        'Unnamed: 29': '87', 'DATA LAMA 2020 (Vendor Lama)  >': 679.704, 'Unnamed: 37': '1.39', 'Unnamed: 35': '20.0', 'Unnamed: 32': '0.05', 'Unnamed: 33': '5.56', 'Unnamed: 34': '152.5',
-        'Unnamed: 2': '13', '<  DATA BARU 2025 (Vendor Baru)': 679.297, 'Unnamed: 10': '1.45', 'Unnamed: 8': '22.0', 'Unnamed: 5': '0.15', 'Unnamed: 6': '5.56', 'Unnamed: 7': '152.5'
-      });
-
-      // Data for Distance filter 5300-5350
-      dummy.push({
-        'Unnamed: 29': '709', 'DATA LAMA 2020 (Vendor Lama)  >': 5302.224, 'Unnamed: 37': '0.56', 'Unnamed: 35': '15.0', 'Unnamed: 32': '1.20', 'Unnamed: 33': '6.00', 'Unnamed: 34': '90',
-        'Unnamed: 2': '247', '<  DATA BARU 2025 (Vendor Baru)': 5300.307, 'Unnamed: 10': '0.56', 'Unnamed: 8': '15.0', 'Unnamed: 5': '1.20', 'Unnamed: 6': '6.00', 'Unnamed: 7': '90'
-      });
-      // Defect 717 mapped to 250 and 252 (Double match / intervention target)
-      dummy.push({
-        'Unnamed: 29': '717', 'DATA LAMA 2020 (Vendor Lama)  >': 5320.274, 'Unnamed: 37': '0.72', 'Unnamed: 35': '18.0', 'Unnamed: 32': '2.10', 'Unnamed: 33': '6.00', 'Unnamed: 34': '100',
-        'Unnamed: 2': '250', '<  DATA BARU 2025 (Vendor Baru)': 5318.311, 'Unnamed: 10': '0.61', 'Unnamed: 8': '16.0', 'Unnamed: 5': '2.10', 'Unnamed: 6': '6.00', 'Unnamed: 7': '100'
-      });
-      dummy.push({
-        'Unnamed: 29': '716', 'DATA LAMA 2020 (Vendor Lama)  >': 5320.269, 'Unnamed: 37': '0.61', 'Unnamed: 35': '14.0', 'Unnamed: 32': '2.05', 'Unnamed: 33': '6.00', 'Unnamed: 34': '105',
-        'Unnamed: 2': '251', '<  DATA BARU 2025 (Vendor Baru)': 5318.312, 'Unnamed: 10': '0.61', 'Unnamed: 8': '14.0', 'Unnamed: 5': '2.05', 'Unnamed: 6': '6.00', 'Unnamed: 7': '105'
-      });
-      dummy.push({
-        'Unnamed: 29': '717', 'DATA LAMA 2020 (Vendor Lama)  >': 5320.274, 'Unnamed: 37': '0.72', 'Unnamed: 35': '18.0', 'Unnamed: 32': '2.10', 'Unnamed: 33': '6.00', 'Unnamed: 34': '100',
-        'Unnamed: 2': '252', '<  DATA BARU 2025 (Vendor Baru)': 5318.313, 'Unnamed: 10': '0.72', 'Unnamed: 8': '18.0', 'Unnamed: 5': '2.11', 'Unnamed: 6': '6.00', 'Unnamed: 7': '100'
-      });
-      
-      // Some Unmatched Old data (only Run 1)
-      dummy.push({
-        'Unnamed: 29': '999', 'DATA LAMA 2020 (Vendor Lama)  >': 7200.123, 'Unnamed: 37': '1.10', 'Unnamed: 35': '12.0', 'Unnamed: 32': '4.50', 'Unnamed: 33': '7.00', 'Unnamed: 34': '180',
-        'Unnamed: 2': '', '<  DATA BARU 2025 (Vendor Baru)': null, 'Unnamed: 10': '', 'Unnamed: 8': '', 'Unnamed: 5': '', 'Unnamed: 6': '', 'Unnamed: 7': ''
-      });
-
-      return { comparison: dummy };
+    const fetchData = async () => {
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const sessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
+        const token = localStorage.getItem('synapse_token') || '';
+        const response = await fetch(`http://localhost:8000/api/ili-results?sessionId=${sessionId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (!response.ok) throw new Error('Network response was not ok');
+        const resData = await response.json();
+        if (resData.comparison) {
+          setData(resData.comparison);
+        } else {
+          console.error("No comparison data found in response");
+        }
+      } catch (error) {
+        console.error("Failed to fetch ILI data:", error);
+      } finally {
+        setLoading(false);
+      }
     };
-
-    // Simulate fetch delay
-    setTimeout(() => {
-      const resData = generateDummyData();
-      setData(resData.comparison);
-      setLoading(false);
-    }, 500);
+    fetchData();
   }, []);
 
-  return (
-    <div className="min-h-screen bg-gray-50 font-sans pb-12 text-gray-800">
+  const handleUpdateMatch = (sourceIdx: number, targetIdx: number) => {
+    setData((prevData) => {
+      const newData = [...prevData];
+      const sourceRow = { ...newData[sourceIdx] };
+      const targetRow = { ...newData[targetIdx] };
       
-      {/* Premium Header */}
-      <div className="max-w-[1600px] mx-auto px-8 pt-8 pb-8 flex justify-between items-start">
-        <div>
-          <h1 className="text-3xl font-extrabold tracking-tight flex items-center gap-2 bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">
-            Hi, Engineer! <span className="text-2xl">👋</span>
-          </h1>
-          <p className="text-sm text-gray-500 mt-1 font-medium">Upload two ILI survey files to begin the 4-layer alignment process.</p>
-        </div>
-        <div className="flex gap-4">
-          <button className="p-2.5 text-gray-500 hover:text-blue-600 bg-white border border-gray-200 rounded-full hover:bg-blue-50 hover:border-blue-200 shadow-sm transition-all duration-300">
-            <FiBell size={20} />
-          </button>
-          <button className="p-2.5 text-gray-500 hover:text-blue-600 bg-white border border-gray-200 rounded-full hover:bg-blue-50 hover:border-blue-200 shadow-sm transition-all duration-300">
-            <FiSettings size={20} />
-          </button>
-        </div>
-      </div>
+      // Move all NEW properties from source to target
+      const newKeys = Object.keys(sourceRow).filter(k => k.includes('NEW') || k === "O'Clock NEW");
+      newKeys.forEach(k => {
+        targetRow[k] = sourceRow[k];
+        // Clear the source new data
+        if (typeof sourceRow[k] === 'number') {
+           sourceRow[k] = NaN;
+        } else {
+           sourceRow[k] = '-';
+        }
+      });
 
+      // Also ensure Identif. NEW is moved
+      targetRow['Identif. NEW'] = sourceRow['Identif. NEW'];
+      sourceRow['Identif. NEW'] = '-';
+      targetRow['Match/Unmatch'] = 'Match';
+
+      newData[sourceIdx] = sourceRow;
+      newData[targetIdx] = targetRow;
+
+      // Clean up empty rows if both OLD and NEW are missing
+      return newData.filter(row => {
+        const hasOld = row['Identif. OLD'] && row['Identif. OLD'] !== '-';
+        const hasNew = row['Identif. NEW'] && row['Identif. NEW'] !== '-';
+        return hasOld || hasNew;
+      });
+    });
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 font-sans pt-12 pb-12 text-gray-800 overflow-x-hidden w-full">
+
+      {/* Main Content Area */}
       <div className="max-w-[1600px] mx-auto px-8 flex flex-col gap-6">
-        
-        {/* Advanced Defect Visualizer (Replaces old KPIs and Charts) */}
-        {data.length > 0 && <DefectVisualizer data={data} />}
+
+        {/* Alignment Timeline Viewer - lazy loaded on demand */}
+        {data.length > 0 && (
+          <div>
+            {!showVisualizer ? (
+              <button
+                onClick={() => setShowVisualizer(true)}
+                className="w-full py-3 rounded-xl border-2 border-dashed border-blue-300 text-blue-500 hover:bg-blue-50 hover:border-blue-400 transition-all font-medium text-sm flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                </svg>
+                Tampilkan Alignment Timeline Viewer (3D Chart)
+              </button>
+            ) : (
+              <div className="relative">
+                <button
+                  onClick={() => setShowVisualizer(false)}
+                  className="absolute top-2 right-2 z-10 bg-white border border-gray-200 rounded-full px-3 py-1 text-xs text-gray-500 hover:bg-gray-100 shadow-sm"
+                >
+                  ✕ Sembunyikan Chart
+                </button>
+                <Suspense fallback={<LoadingSpinner label="Memuat Alignment Timeline Viewer..." />}>
+                  <DefectVisualizer data={data} selectedRowIdx={selectedRowIdx} onSelectRowIdx={setSelectedRowIdx} />
+                </Suspense>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Results Panel */}
-        <div className="h-[600px] mt-4">
-          <ResultsPanel data={data} loading={loading} />
+        <div className="h-[800px] mt-4">
+          <ResultsPanel 
+            data={data} 
+            loading={loading} 
+            onOpenAnalytics={() => setShowAdvancedCharts(true)} 
+            selectedRowIdx={selectedRowIdx} 
+            onSelectRowIdx={setSelectedRowIdx} 
+            onUpdateMatch={handleUpdateMatch}
+          />
         </div>
       </div>
+
+      {/* Advanced Analytics - lazy loaded on demand */}
+      {showAdvancedCharts && (
+        <Suspense fallback={<LoadingSpinner label="Memuat Advanced Analytics..." />}>
+          <AdvancedCharts data={data} onClose={() => setShowAdvancedCharts(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }

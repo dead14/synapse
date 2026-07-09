@@ -1,15 +1,15 @@
-import React from 'react';
 import { FiPieChart, FiInfo, FiChevronRight } from 'react-icons/fi';
 
 interface StepDataSummaryProps {
-  onNext: () => void;
+  onNext: (data?: any) => void;
+  onBack: () => void;
+  config?: any;
 }
 
-export default function StepDataSummary({ onNext }: StepDataSummaryProps) {
-  // Mock data representing the initial read from the uploaded ILI data
-  const dataSummary = {
-    newRun: { name: '2025 MFL Inspection', total: 4835, anomalies: 3498, welds: 1136, valves: 5, tees: 5, offtakes: 14, bends: 34, others: 143 },
-    oldRun: { name: '2020 MFL Inspection', total: 1538, anomalies: 253, welds: 1088, valves: 5, tees: 6, offtakes: 15, bends: 12, others: 159 }
+export default function StepDataSummary({ onNext, onBack, config }: StepDataSummaryProps) {
+  const dataSummary = config?.summaryData || {
+    newRun: { name: 'Waiting for data...', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 },
+    oldRun: { name: 'Waiting for data...', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 }
   };
 
   return (
@@ -23,6 +23,8 @@ export default function StepDataSummary({ onNext }: StepDataSummaryProps) {
           <p className="text-sm text-gray-500">Pipeline features extracted from uploaded files.</p>
         </div>
       </div>
+      
+
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
         {/* NEW Run Card */}
@@ -74,14 +76,22 @@ export default function StepDataSummary({ onNext }: StepDataSummaryProps) {
         </div>
       </div>
 
-      <div className="bg-yellow-50 p-4 rounded-xl flex gap-3 text-yellow-800 text-sm items-start mb-6 border border-yellow-200/50">
-        <FiInfo className="shrink-0 mt-0.5 text-yellow-600" />
-        <p>Please note the significant difference in total features. The NEW run reported 3x more anomalies. We recommend hiding non-critical features in the next step to improve alignment accuracy.</p>
-      </div>
+      {dataSummary.newRun.total > 0 && dataSummary.oldRun.total > 0 && (
+        <div className="bg-yellow-50 p-4 rounded-xl flex gap-3 text-yellow-800 text-sm items-start mb-6 border border-yellow-200/50">
+          <FiInfo className="shrink-0 mt-0.5 text-yellow-600" />
+          <p>Please note the significant difference in total features. We recommend hiding non-critical features in the next step to improve alignment accuracy.</p>
+        </div>
+      )}
 
-      <div className="flex justify-end">
+      <div className="flex justify-between mt-8">
         <button 
-          onClick={onNext}
+          onClick={onBack}
+          className="text-gray-600 hover:text-gray-900 px-6 py-3 rounded-xl font-medium transition-colors"
+        >
+          Back
+        </button>
+        <button 
+          onClick={() => onNext()}
           className="bg-gray-900 hover:bg-black text-white px-8 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-md shadow-gray-900/20"
         >
           Configure Scenario <FiChevronRight />

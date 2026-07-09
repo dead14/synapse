@@ -1,6 +1,7 @@
-import React, { useRef } from 'react';
+import React from 'react';
+import { useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Environment, ContactShadows, Text } from '@react-three/drei';
+import { OrbitControls, Environment, ContactShadows, Text, Center } from '@react-three/drei';
 import * as THREE from 'three';
 
 interface Anomaly {
@@ -92,24 +93,15 @@ function Pipe({ length = 12, od = 12, anomalies = [] }: Pipeline3DViewerProps) {
   );
 }
 
-export default function Pipeline3DViewer({ length = 12, od = 12 }: Pipeline3DViewerProps) {
-  // Generate some random fake anomalies for demonstration
-  const mockAnomalies = React.useMemo(() => {
-    return Array.from({ length: 5 }).map(() => ({
-      position: Math.random() * length,
-      depthPct: 10 + Math.random() * 50,
-      clockAngle: Math.random() * 360
-    }));
-  }, [length]);
+export default function Pipeline3DViewer({ length = 12, od = 12, anomalies = [] }: Pipeline3DViewerProps & { anomalies?: { position: number, depthPct: number, clockAngle: number }[] }) {
 
   return (
     <div className="w-full h-full min-h-[400px] bg-gradient-to-b from-gray-900 to-black rounded-xl overflow-hidden relative border border-gray-800">
       <div className="absolute top-4 left-4 z-10 pointer-events-none">
         <h3 className="text-white font-bold text-lg drop-shadow-md">3D Pipeline Spool Explorer</h3>
         <p className="text-gray-400 text-sm">Spool Length: {length.toFixed(2)}m | OD: {od}"</p>
-        <p className="text-red-400 text-xs font-semibold mt-1 flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-red-500 inline-block animate-pulse"></span>
-          Detected Metal Loss: {mockAnomalies.length}
+        <p className="text-[#ff3333] font-semibold text-sm mt-1">
+          Detected Metal Loss: {anomalies.length}
         </p>
       </div>
       
@@ -123,7 +115,9 @@ export default function Pipeline3DViewer({ length = 12, od = 12 }: Pipeline3DVie
         <directionalLight position={[-10, -10, -5]} intensity={0.5} color="#4466ff" />
         
         <React.Suspense fallback={null}>
-          <Pipe length={length} od={od} anomalies={mockAnomalies} />
+          <Center>
+            <Pipe length={length} od={od} anomalies={anomalies} />
+          </Center>
           <Environment preset="city" />
           <ContactShadows position={[0, -1.5, 0]} opacity={0.4} scale={20} blur={2} far={4} />
         </React.Suspense>

@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, ReactNode } from "react";
+import type { ReactNode } from 'react';
+import { useState, useRef, useEffect} from 'react';
 
 type Position = "top" | "right" | "bottom" | "left";
 

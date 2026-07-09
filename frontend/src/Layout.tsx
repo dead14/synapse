@@ -1,7 +1,7 @@
-import React from 'react';
+
 import { 
-  FiGrid, FiActivity, FiShield, FiTrendingUp, FiMap, 
-  FiTool, FiFileText, FiLink, FiSettings
+  FiGrid, FiDatabase, FiActivity, FiShield, FiTrendingUp, 
+  FiPieChart, FiTarget, FiTool, FiList, FiSettings, FiUser
 } from 'react-icons/fi';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -11,14 +11,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   const menuItems = [
     { name: 'Dashboard', icon: <FiGrid size={20} />, path: '/' },
-    { name: 'Alignment', icon: <FiActivity size={20} />, path: '/alignment' },
-    { name: 'FFS assessment', icon: <FiShield size={20} />, path: '/ffs' },
-    { name: 'Corrosion growth', icon: <FiTrendingUp size={20} />, path: '/corrosion' },
-    { name: 'Risk map', icon: <FiMap size={20} />, path: '/risk' },
-    { name: 'Dig sheet', icon: <FiTool size={20} />, path: '/dig' },
-    { name: 'Reports', icon: <FiFileText size={20} />, path: '/reports' },
-    { name: 'API / integrations', icon: <FiLink size={20} />, path: '/api' },
-    { name: 'Settings', icon: <FiSettings size={20} />, path: '/settings' }
+    { name: 'Data Management', icon: <FiDatabase size={20} />, path: '/data' },
+    { name: 'Corrosion Analysis', icon: <FiActivity size={20} />, path: '/corrosion' },
+    { name: 'FFS Anomaly Assessment', icon: <FiShield size={20} />, path: '/ffs' },
+    { name: 'Remaining Life & Risk', icon: <FiTrendingUp size={20} />, path: '/risk' },
+    { name: 'Reporting & Visualization', icon: <FiPieChart size={20} />, path: '/reports' },
+    { name: 'Tool Performance', icon: <FiTarget size={20} />, path: '/performance' },
+    { name: 'Repair & Excavation', icon: <FiTool size={20} />, path: '/repair' },
+    { name: 'Audit & Traceability', icon: <FiList size={20} />, path: '/audit' },
+    { name: 'Setting and Account', icon: <FiSettings size={20} />, path: '/settings' }
   ];
 
   return (

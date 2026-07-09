@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { FiFilter, FiSettings, FiChevronRight, FiChevronLeft, FiEye, FiEyeOff } from 'react-icons/fi';
 
 interface StepScenarioFilterProps {
@@ -6,8 +6,7 @@ interface StepScenarioFilterProps {
   onBack: () => void;
 }
 
-export default function StepScenarioFilter({ onNext, onBack }: StepScenarioFilterProps) {
-  const [ota, setOta] = useState(1.0);
+export default function StepScenarioFilter({ onNext, onBack, config }: StepScenarioFilterProps & { config?: any }) {
   const [distThresh, setDistThresh] = useState(0.3);
   const [depthThresh, setDepthThresh] = useState(10);
   
@@ -43,19 +42,6 @@ export default function StepScenarioFilter({ onNext, onBack }: StepScenarioFilte
             Matching Parameters
           </h3>
           <div className="space-y-5 bg-gray-50 p-6 rounded-2xl border border-gray-100">
-            <div>
-              <div className="flex justify-between mb-2">
-                <label className="text-sm font-medium text-gray-700">Odometer Tracking Accuracy (%)</label>
-                <span className="text-sm font-mono text-purple-600">{ota}%</span>
-              </div>
-              <input 
-                type="range" min="0.1" max="5.0" step="0.1" 
-                value={ota} onChange={(e) => setOta(parseFloat(e.target.value))}
-                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
-              />
-              <p className="text-xs text-gray-500 mt-1">Tolerance window for Girth Weld drift.</p>
-            </div>
-
             <div>
               <div className="flex justify-between mb-2">
                 <label className="text-sm font-medium text-gray-700">Distance Matching Threshold (m)</label>
@@ -131,12 +117,12 @@ export default function StepScenarioFilter({ onNext, onBack }: StepScenarioFilte
         >
           <FiChevronLeft /> Back
         </button>
-        <button 
-          onClick={() => onNext({ ota, distThresh, depthThresh, hiddenFeatures })}
-          className="bg-gray-100 hover:bg-black text-gray-900 px-8 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-md shadow-gray-900/20"
-        >
-          Run GW Simulator <FiChevronRight />
-        </button>
+          <button 
+            onClick={() => onNext({ distThresh, depthThresh, hiddenFeatures })}
+            className="px-6 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold rounded-xl flex items-center gap-2 transition-colors"
+          >
+            Next <FiChevronRight />
+          </button>
       </div>
     </div>
   );

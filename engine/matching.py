@@ -4,6 +4,7 @@ import bisect
 from scipy.optimize import linear_sum_assignment
 from .constants import *
 from .math_utils import *
+from .math_utils import _sf, _sstr, _clock_diff, _surface_compatible
 #  BAGIAN 6 — JOINT SEGMENTATION (JOINT-CENTRIC MATCHING)
 # ══════════════════════════════════════════════════════════════════════════════════
 

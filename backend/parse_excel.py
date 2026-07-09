@@ -5,12 +5,13 @@ import sys
 
 def main():
     try:
+        sys.stdout.reconfigure(encoding='utf-8')
         # Load excel data
-        # Skip row 0 (which is the title header), the actual columns are on row 1
-        df_comparison = pd.read_excel('../ILI_Comparison_Final.xlsx', sheet_name='Comparison', skiprows=1)
+        # Skip rows 0 and 1 (which are title and grouping headers), the actual columns are on row 2
+        df_comparison = pd.read_excel('../ILI_Comparison_Final.xlsx', sheet_name='Comparison', skiprows=2)
         
-        # We also need GW Match offset (let's say we generate a dummy one for now or extract from residual plot)
-        df_residual = pd.read_excel('../ILI_Comparison_Final.xlsx', sheet_name='Residual_Plot', skiprows=1)
+        # We also need GW Match offset
+        df_residual = pd.read_excel('../ILI_Comparison_Final.xlsx', sheet_name='Residual_Plot', skiprows=2)
         
         # Replace NaN with None for valid JSON
         df_comparison = df_comparison.replace({float('nan'): None})

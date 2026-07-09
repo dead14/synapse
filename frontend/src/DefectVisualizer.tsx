@@ -1,30 +1,39 @@
-import React, { useState, useMemo } from 'react';
+import React from 'react';
+import { useState, useMemo } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
+import { OrbitControls, Text } from '@react-three/drei';
 import { FiBox, FiX } from 'react-icons/fi';
 
 interface DefectVisualizerProps {
   data: any[];
+  selectedRowIdx?: number | null;
+  onSelectRowIdx?: (idx: number | null) => void;
 }
 
-const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData }: { renderLength: number, sLength: number, startDist: number, spoolData: any[] }) => {
+const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { renderLength: number, sLength: number, startDist: number, spoolData: any[], gwList: number[] }) => {
   const geom = useMemo(() => {
-    // High-res geometry to allow painting heatmap vertices and physically deforming the mesh
     const segments = 64;
-    const heightSegments = Math.max(10, Math.ceil(renderLength * 8)); // Higher resolution for smooth bulge
-    const geometry = new THREE.CylinderGeometry(2, 2, renderLength, segments, heightSegments, false);
+    const padding = 2.0;
+    const actualPipeLength = renderLength + (padding * 2);
+    const heightSegments = Math.max(10, Math.ceil(actualPipeLength * 10));
+    const pipeRadius = 2.0;
+    const geometry = new THREE.CylinderGeometry(pipeRadius, pipeRadius, actualPipeLength, segments, heightSegments, true);
     
     const pos = geometry.attributes.position;
     const colors = new Float32Array(pos.count * 3);
     const color = new THREE.Color();
+    
+    // Weld bead parameters (realistic proportions)
+    const weldHalfWidth = 0.15; // Half-width of weld bead in real meters (~15cm total width)
+    const weldBulgeHeight = 0.06; // Max radial bulge height (6cm cap reinforcement)
     
     for (let i = 0; i < pos.count; i++) {
       let vx = pos.getX(i);
       const vy = pos.getY(i);
       let vz = pos.getZ(i);
       
-      // Default Base Pipe Color: Cyan/Light Blue
+      // Default Base Pipe Color
       color.set('#38bdf8');
       
       // Map vertex Y back to real pipeline distance
@@ -35,58 +44,63 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData }: { renderLe
       if (theta < 0) theta += 2 * Math.PI;
       const orientDeg = theta * (180 / Math.PI);
       
-      // Check distance to nearest Girth Weld (every 12m from startDist)
-      const distToGwRaw = (trueDist - startDist) % 12;
-      let minGwDist = distToGwRaw;
-      if (minGwDist > 6) minGwDist = 12 - minGwDist;
+      // --- GIRTH WELD: Paint & Bulge ---
+      // Find nearest girth weld distance
+      let minGwDist = Infinity;
+      for (const gwDist of gwList) {
+        const d = Math.abs(trueDist - gwDist);
+        if (d < minGwDist) minGwDist = d;
+      }
       
-      const gwBulgeWidth = 0.25; // meters
+      // Convert weld half-width from real meters to the vy coordinate space
+      const weldHalfWidthVy = (weldHalfWidth / sLength) * renderLength;
+      const minGwDistVy = (minGwDist / sLength) * renderLength;
       
-      if (minGwDist < gwBulgeWidth) {
-        // We are inside the GW band. Paint it dark blue.
-        color.set('#1e3a8a');
+      let isInWeld = false;
+      if (minGwDistVy < weldHalfWidthVy) {
+        isInWeld = true;
+        // Smooth cosine profile for realistic weld cap shape
+        const t = minGwDistVy / weldHalfWidthVy; // 0 at center, 1 at edge
+        const bulge = (Math.cos(t * Math.PI) + 1) * 0.5 * weldBulgeHeight;
         
-        // Physically push the vertex outward radially to create a smooth bulge!
-        // Cosine curve: 1 at center (minGwDist=0), 0 at edge (minGwDist=gwBulgeWidth)
-        const bulgeAmount = (Math.cos((minGwDist / gwBulgeWidth) * Math.PI) + 1) * 0.5 * 0.08; 
-        
-        const currentR = Math.sqrt(vx*vx + vz*vz);
+        // Push vertex outward radially
+        const currentR = Math.sqrt(vx * vx + vz * vz);
         if (currentR > 0) {
-           const newR = currentR + bulgeAmount;
-           vx = vx * (newR / currentR);
-           vz = vz * (newR / currentR);
-           pos.setX(i, vx);
-           pos.setZ(i, vz);
+          const newR = currentR + bulge;
+          vx = vx * (newR / currentR);
+          vz = vz * (newR / currentR);
+          pos.setX(i, vx);
+          pos.setZ(i, vz);
         }
-      } else {
-        // Check if vertex falls inside any defect
+        
+        // Paint weld bead color - darker steel/silver tone
+        // Slight gradient: center is brighter (fresh weld), edge blends into pipe
+        const brightness = 0.35 + t * 0.15;
+        color.setRGB(brightness, brightness, brightness + 0.05);
+      }
+      
+      // --- DEFECT HEATMAP (only if not already painted as weld) ---
+      if (!isInWeld) {
         let maxDepth = 0;
         spoolData.forEach(d => {
-           const checkDefect = (dist: number, orient: number, len: number, wid: number, depth: number) => {
-              // Exaggerate hitbox slightly so small defects are visible on the grid
-              const sLen = Math.max(0.4, len * 0.03); 
-              const sWidAngle = Math.max(15, wid * 1.5); 
-              
-              const inDist = Math.abs(trueDist - dist) <= (sLen / 2);
-              
-              let angleDiff = Math.abs(orientDeg - orient);
-              if (angleDiff > 180) angleDiff = 360 - angleDiff;
-              const inOrient = angleDiff <= (sWidAngle / 2);
-              
-              if (inDist && inOrient) {
-                 maxDepth = Math.max(maxDepth, depth);
-              }
-           };
-           
-           if (d.dist1 !== null) checkDefect(d.dist1, d.orient1, d.len1, d.wid1, d.depth1);
-           if (d.dist2 !== null) checkDefect(d.dist2, d.orient2, d.len2, d.wid2, d.depth2);
+          const checkDefect = (dist: number, orient: number, len: number, wid: number, depth: number) => {
+            const sLen = Math.max(0.4, len * 0.03); 
+            const sWidAngle = Math.max(15, wid * 1.5); 
+            const inDist = Math.abs(trueDist - dist) <= (sLen / 2);
+            let angleDiff = Math.abs(orientDeg - orient);
+            if (angleDiff > 180) angleDiff = 360 - angleDiff;
+            const inOrient = angleDiff <= (sWidAngle / 2);
+            if (inDist && inOrient) maxDepth = Math.max(maxDepth, depth);
+          };
+          if (d.dist1 !== null) checkDefect(d.dist1, d.orient1, d.len1, d.wid1, d?.depth1);
+          if (d.dist2 !== null) checkDefect(d.dist2, d.orient2, d.len2, d.wid2, d?.depth2);
         });
         
         if (maxDepth > 0) {
-           if (maxDepth > 1.5) color.set('#991b1b'); 
-           else if (maxDepth > 1.0) color.set('#ef4444'); 
-           else if (maxDepth > 0.5) color.set('#f97316'); 
-           else color.set('#eab308'); 
+          if (maxDepth > 1.5) color.set('#991b1b'); 
+          else if (maxDepth > 1.0) color.set('#ef4444'); 
+          else if (maxDepth > 0.5) color.set('#f97316'); 
+          else color.set('#eab308'); 
         }
       }
       
@@ -95,67 +109,122 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData }: { renderLe
       colors[i * 3 + 2] = color.b;
     }
     
-    pos.needsUpdate = true; // Tell Three.js we modified positions!
+    pos.needsUpdate = true;
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    
-    geometry.computeVertexNormals(); // Recompute lighting normals for the bulge
+    geometry.computeVertexNormals();
     return geometry;
-  }, [renderLength, sLength, startDist, spoolData]);
+  }, [renderLength, sLength, startDist, spoolData, gwList]);
+
+  const padding = 2.0;
+  const clockRadius = 2.4;
+  const capY = -(renderLength / 2) - padding;
 
   return (
     <group rotation={[Math.PI / 2, 0, 0]}>
-      {/* Painted FEA Surface with Bulges */}
+      {/* Pipe Surface with integrated weld bulges & defect heatmap */}
       <mesh geometry={geom}>
-        <meshStandardMaterial vertexColors={true} roughness={0.7} metalness={0.2} />
+        <meshStandardMaterial vertexColors={true} roughness={0.55} metalness={0.35} side={THREE.DoubleSide} />
       </mesh>
       
-      {/* Overlay Mesh Grid matching the bulges perfectly */}
-      <mesh geometry={geom} scale={[1.002, 1, 1.002]}>
-        <meshBasicMaterial color="#0f172a" wireframe transparent opacity={0.25} />
+      {/* Subtle wireframe overlay */}
+      <mesh geometry={geom} scale={[1.001, 1, 1.001]}>
+        <meshBasicMaterial color="#0f172a" wireframe transparent opacity={0.15} side={THREE.DoubleSide} />
       </mesh>
+
+      {/* Clock Position Labels at pipe end */}
+      <Text position={[0, capY, clockRadius]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.4} color="#f87171" anchorX="center" anchorY="middle">12:00</Text>
+      <Text position={[clockRadius, capY, 0]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.4} color="#f87171" anchorX="center" anchorY="middle">3:00</Text>
+      <Text position={[0, capY, -clockRadius]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.4} color="#f87171" anchorX="center" anchorY="middle">6:00</Text>
+      <Text position={[-clockRadius, capY, 0]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.4} color="#f87171" anchorX="center" anchorY="middle">9:00</Text>
     </group>
   );
 };
 
-export default function DefectVisualizer({ data }: DefectVisualizerProps) {
+const DefectOverlayMeshes = ({ spoolData, renderLength, sLength, startDist, onHover, onSelect }: any) => {
+  return (
+    <group rotation={[Math.PI / 2, 0, 0]}>
+      {spoolData.map((d: any, i: number) => {
+        const renderMesh = (dist: number | null, orient: number, len: number, wid: number, depth: number, id: string) => {
+          if (dist === null) return null;
+          const vy = ((dist - startDist) / sLength) * renderLength - renderLength / 2;
+          const angle = orient * (Math.PI / 180);
+          const vx = Math.cos(angle) * 2.05;
+          const vz = Math.sin(angle) * 2.05;
+          const boxLen = Math.max(0.6, len * 0.05); 
+          const boxWid = Math.max(0.6, wid * 0.05);
+          return (
+            <mesh 
+              key={`def-3d-${i}-${id}-${dist}`} 
+              position={[vx, vy, vz]} 
+              rotation={[0, -angle, 0]} 
+              onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; }}
+              onPointerOut={(e) => { e.stopPropagation(); document.body.style.cursor = 'default'; }}
+              onClick={(e) => { e.stopPropagation(); onSelect(id, d, e); }}
+            >
+              <boxGeometry args={[boxWid, boxLen, 1.0]} />
+              <meshBasicMaterial transparent opacity={0.0} />
+            </mesh>
+          );
+        };
+        return (
+          <React.Fragment key={`frag-${i}`}>
+            {renderMesh(d.dist1, d.orient1, d.len1, d.wid1, d?.depth1, d?.id1)}
+            {renderMesh(d.dist2, d.orient2, d.len2, d.wid2, d?.depth2, d?.id2)}
+          </React.Fragment>
+        );
+      })}
+    </group>
+  );
+};
+
+export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx }: DefectVisualizerProps) {
   const [zoom, setZoom] = useState(1);
   const [rangeStartGw, setRangeStartGw] = useState<number | null>(null);
   const [rangeEndGw, setRangeEndGw] = useState<number | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalViewMode, setModalViewMode] = useState<'2D' | '3D'>('3D');
+  const [hoveredDefect, setHoveredDefect] = useState<any>(null);
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
   // Parse data into usable array of objects
   const parsedData = useMemo(() => {
-    return data.map(item => {
+    return data.map((item, idx) => {
       if (!item) return null;
       
-      const r1Dist = parseFloat(item['DATA LAMA 2020 (Vendor Lama)  >']);
-      const r2Dist = parseFloat(item['<  DATA BARU 2025 (Vendor Baru)']);
+      const r1Dist = parseFloat(item['Log Dist OLD (m)']);
+      const r2Dist = parseFloat(item['Log Dist NEW (m)']);
       const isMatched = !isNaN(r1Dist) && !isNaN(r2Dist);
       
-      const r1Depth = parseFloat(item['Unnamed: 37']) || 0;
-      const r2Depth = parseFloat(item['Unnamed: 10']) || 0;
+      const r1Depth = parseFloat(item['Depth OLD (%WT)']) || 0;
+      const r2Depth = parseFloat(item['Depth NEW (%WT)']) || 0;
       const isExt1 = r1Depth > 1.0;
       const isExt2 = r2Depth > 1.0;
+      
+      const isWeld1 = String(item['Feature Type OLD'] || '').toLowerCase().includes('weld');
+      const isWeld2 = String(item['Feature Type NEW'] || '').toLowerCase().includes('weld');
 
       return {
-        id1: item['Unnamed: 29'] || '',
+        id1: (item['Identif. OLD'] && item['Identif. OLD'] !== '-') ? String(item['Identif. OLD']) : (item['Log Dist OLD (m)'] !== undefined && item['Log Dist OLD (m)'] !== '') ? `DIST:${item['Log Dist OLD (m)']}` : null,
         dist1: isNaN(r1Dist) ? null : r1Dist,
-        len1: parseFloat(item['Unnamed: 35']) || 10,
-        wid1: parseFloat(item['Unnamed: 32']) || 10,
-        orient1: parseFloat(item['Unnamed: 34']) || 0,
+        len1: parseFloat(item['Length OLD (mm)']) || 10,
+        wid1: parseFloat(item['Dist GW OLD (m)']) || 10,
+        orient1: parseFloat(item["O'Clock OLD"]) || 0,
         depth1: r1Depth,
         isExt1,
+        isWeld1,
         
-        id2: item['Unnamed: 2'] || '',
+        id2: (item['Identif. NEW'] && item['Identif. NEW'] !== '-') ? String(item['Identif. NEW']) : (item['Log Dist NEW (m)'] !== undefined && item['Log Dist NEW (m)'] !== '') ? `DIST:${item['Log Dist NEW (m)']}` : null,
         dist2: isNaN(r2Dist) ? null : r2Dist,
-        len2: parseFloat(item['Unnamed: 8']) || 10,
-        wid2: parseFloat(item['Unnamed: 5']) || 10,
-        orient2: parseFloat(item['Unnamed: 7']) || 0,
+        len2: parseFloat(item['Length NEW (mm)']) || 10,
+        wid2: parseFloat(item['Dist GW NEW (m)']) || 10,
+        orient2: parseFloat(item["O'Clock NEW"]) || 0,
         depth2: r2Depth,
         isExt2,
+        isWeld2,
 
-        isMatched
+        isMatched,
+        rawItem: item,
+        dataIdx: idx
       };
     }).filter(Boolean);
   }, [data]);
@@ -173,17 +242,29 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
     return ((meters - startDist) / totalLength) * svgWidth;
   };
 
-  const numGws = Math.ceil(totalLength / 12);
-  const gwDistance = 12;
+  // Extract actual GWs from data
+  const gwList = useMemo(() => {
+    const list = parsedData
+      .filter((d: any) => d !== null)
+      .filter(d => (d.isWeld1 && d.dist1 !== null) || (d.isWeld2 && d.dist2 !== null && d.dist1 !== null))
+      .map(d => d.dist1 as number)
+      .sort((a, b) => a - b);
+    
+    // Add start and end boundaries if there are no welds (fallback)
+    if (list.length === 0) {
+       for(let d = startDist; d <= startDist + totalLength; d += 12) list.push(d);
+    }
+    return Array.from(new Set(list));
+  }, [parsedData, startDist, totalLength]);
 
   // Determine actual selected range
   let selectedRange: { startDist: number, endDist: number, length: number, startIdx: number, endIdx: number } | null = null;
   if (rangeStartGw !== null && rangeEndGw !== null) {
     const startIdx = Math.min(rangeStartGw, rangeEndGw);
     const endIdx = Math.max(rangeStartGw, rangeEndGw);
-    if (startIdx !== endIdx) {
-      const sDist = startDist + startIdx * gwDistance;
-      const eDist = startDist + endIdx * gwDistance;
+    if (startIdx !== endIdx && gwList[startIdx] !== undefined && gwList[endIdx] !== undefined) {
+      const sDist = gwList[startIdx];
+      const eDist = gwList[endIdx];
       selectedRange = { startDist: sDist, endDist: eDist, length: eDist - sDist, startIdx, endIdx };
     }
   }
@@ -229,21 +310,20 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
             )}
             
             {/* Draw GW Ticks & Spool Hitboxes */}
-            {Array.from({ length: numGws }).map((_, i) => {
-               const dist1 = startDist + i * gwDistance;
-               const dist2 = startDist + (i + 1) * gwDistance;
+            {gwList.slice(0, -1).map((dist1, i) => {
+               const dist2 = gwList[i + 1];
                const x1 = mToX(dist1);
                const x2 = mToX(dist2);
                
                const isGwSelected = (rangeStartGw === i && rangeEndGw === null) || 
-                                    (selectedRange && i >= selectedRange.startIdx && i <= selectedRange.endIdx);
+                                    (selectedRange && i >= selectedRange.startIdx && i < selectedRange.endIdx);
                const color = isGwSelected ? "#eab308" : "#10b981";
                
                return (
                  <g key={`gw-1-${i}`}>
                    {/* Spool Hitbox */}
                    <rect 
-                     x={x1} y="65" width={x2 - x1} height="30" 
+                     x={x1} y="65" width={Math.max(1, x2 - x1)} height="30" 
                      fill="transparent" 
                      className="cursor-pointer hover:fill-yellow-100/30 transition-colors"
                      onClick={() => handleSpoolClick(i)}
@@ -262,37 +342,36 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
                  </g>
                );
             })}
-            
             {/* Draw the very last GW marker */}
-            <g>
-              {(() => {
-                const i = numGws;
-                const dist1 = startDist + i * gwDistance;
-                const x1 = mToX(dist1);
-                const isGwSelected = (rangeStartGw === i && rangeEndGw === null) || 
-                                     (selectedRange && i >= selectedRange.startIdx && i <= selectedRange.endIdx);
-                const color = isGwSelected ? "#eab308" : "#10b981";
-                return (
-                  <>
-                    <rect 
-                      x={x1 - 4} y="55" width="8" height="50" rx="4" fill={color} 
-                      className="cursor-pointer hover:brightness-110"
-                      onClick={() => handleGwClick(i)}
-                    />
-                    <text x={x1} y="115" fontSize="10" fontWeight="bold" fill={color} textAnchor="middle">{dist1.toFixed(2)}m</text>
-                  </>
-                );
-              })()}
-            </g>
-
+            {gwList.length > 0 && (
+              <g>
+                <rect 
+                  x={mToX(gwList[gwList.length - 1]) - 4} y="55" width="8" height="50" rx="4" fill="#10b981" 
+                  className="cursor-pointer hover:brightness-110"
+                  onClick={() => handleGwClick(gwList.length - 1)}
+                />
+                <text x={mToX(gwList[gwList.length - 1])} y="115" fontSize="10" fontWeight="bold" fill="#10b981" textAnchor="middle">{gwList[gwList.length - 1].toFixed(2)}m</text>
+              </g>
+            )}
+            
             {/* Run 1 Anomalies */}
             {parsedData.map((d, i) => {
               if (d?.dist1 === null || d?.dist1 === undefined) return null;
               const x = mToX(d.dist1);
+              const searchStr = selectedRowIdx;
+              const isSel = searchStr !== null && searchStr !== undefined && d.dataIdx === searchStr;
               return (
-                <g key={`anom1-${i}`} className="cursor-pointer pointer-events-none">
-                  <circle cx={x} cy="80" r="6" fill={d.isMatched ? "#f59e0b" : "#ef4444"} stroke="#ffffff" strokeWidth="2" />
-                  <text x={x} y="55" fontSize="9" fontWeight="bold" fill={d.isMatched ? "#d97706" : "#ef4444"} textAnchor="middle">A-{d.id1}</text>
+                <g 
+                  key={`anom1-${i}`} 
+                  className={`cursor-pointer ${isSel ? 'z-20' : 'z-10'}`} 
+                  onClick={(e) => { 
+                    e.stopPropagation(); 
+                    setHoveredDefect(d);
+                    setTooltipPos({ x: e.clientX, y: e.clientY });
+                  }}
+                >
+                  <circle cx={x} cy="80" r={isSel ? "10" : "6"} fill={d.isMatched ? "#f59e0b" : "#ef4444"} stroke={isSel ? "#000000" : "#ffffff"} strokeWidth={isSel ? "3" : "2"} />
+                  <text x={x} y={isSel ? "40" : "55"} fontSize={isSel ? "11" : "9"} fontWeight="bold" fill={d.isMatched ? "#d97706" : "#ef4444"} textAnchor="middle">A-{d?.id1}</text>
                 </g>
               );
             })}
@@ -302,8 +381,8 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
             <line x1="0" y1="210" x2="100%" y2="210" stroke="#e2e8f0" strokeWidth="4" strokeLinecap="round" />
             
             {/* Draw Run 2 GW Ticks */}
-            {Array.from({ length: numGws + 1 }).map((_, i) => {
-               const dist = startDist + (i * gwDistance) + (i * 0.05);
+            {Array.from({ length: Math.ceil(totalLength / 12) + 1 }).map((_, i) => {
+               const dist = startDist + (i * 12) + (i * 0.05);
                const x = mToX(dist);
                const isSelected = (rangeStartGw === i && rangeEndGw === null) || 
                                   (selectedRange && i >= selectedRange.startIdx && i <= selectedRange.endIdx);
@@ -319,15 +398,23 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
             {parsedData.map((d, i) => {
               if (d?.dist2 === null || d?.dist2 === undefined) return null;
               const x2 = mToX(d.dist2);
-              
+              const isSel = selectedRowIdx !== null && selectedRowIdx !== undefined && d.dataIdx === selectedRowIdx;
               return (
-                <g key={`anom2-${i}`} className="cursor-pointer pointer-events-none">
+                <g 
+                  key={`anom2-${i}`} 
+                  className={`cursor-pointer ${isSel ? 'z-20' : 'z-10'}`} 
+                  onClick={(e) => { 
+                    e.stopPropagation(); 
+                    setHoveredDefect(d);
+                    setTooltipPos({ x: e.clientX, y: e.clientY });
+                  }}
+                >
                   {/* Match line */}
                   {d.isMatched && d.dist1 !== null && d.dist1 !== undefined && (
-                    <line x1={mToX(d.dist1)} y1="80" x2={x2} y2="210" stroke="#fca5a5" strokeWidth="2" strokeDasharray="4 4" />
+                    <line x1={mToX(d.dist1)} y1="80" x2={x2} y2="210" stroke={isSel ? "#ef4444" : "#fca5a5"} strokeWidth={isSel ? "3" : "2"} strokeDasharray="4 4" />
                   )}
-                  <circle cx={x2} cy="210" r="6" fill={d.isMatched ? "#f59e0b" : "#ef4444"} stroke="#ffffff" strokeWidth="2" />
-                  <text x={x2} y="235" fontSize="9" fontWeight="bold" fill={d.isMatched ? "#d97706" : "#ef4444"} textAnchor="middle">A-{d.id2}</text>
+                  <circle cx={x2} cy="210" r={isSel ? "10" : "6"} fill={d.isMatched ? "#f59e0b" : "#ef4444"} stroke={isSel ? "#000000" : "#ffffff"} strokeWidth={isSel ? "3" : "2"} />
+                  <text x={x2} y={isSel ? "250" : "235"} fontSize={isSel ? "11" : "9"} fontWeight="bold" fill={d.isMatched ? "#d97706" : "#ef4444"} textAnchor="middle">A-{d?.id2}</text>
                 </g>
               );
             })}
@@ -392,7 +479,15 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
                   const h2 = scaleDim(d.wid2);
 
                   return (
-                    <g key={`2d-match-${i}`}>
+                    <g 
+                      key={`2d-match-${i}`}
+                      className="cursor-pointer"
+                      onClick={(e) => { 
+                        e.stopPropagation(); 
+                        setHoveredDefect(d);
+                        setTooltipPos({ x: e.clientX, y: e.clientY });
+                      }}
+                    >
                       <line x1={cx1} y1={cy1} x2={cx2} y2={cy2} stroke="#fca5a5" strokeWidth="1" strokeDasharray="2 2" />
                       <ellipse 
                         cx={cx1} cy={cy1} rx={w1/2} ry={h1/2}
@@ -419,7 +514,15 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
                   const color = isRun1 ? "#3b82f6" : "#f59e0b";
 
                   return (
-                    <g key={`2d-unmatch-${i}`}>
+                    <g 
+                      key={`2d-unmatch-${i}`}
+                      className="cursor-pointer"
+                      onClick={(e) => { 
+                        e.stopPropagation(); 
+                        setHoveredDefect(d);
+                        setTooltipPos({ x: e.clientX, y: e.clientY });
+                      }}
+                    >
                       <ellipse 
                         cx={cx} cy={cy} rx={w/2} ry={h/2}
                         fill={isExt ? color : "transparent"} fillOpacity={0.6}
@@ -452,6 +555,18 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
                sLength={sLength} 
                startDist={selectedRange.startDist} 
                spoolData={spoolData} 
+               gwList={gwList}
+             />
+             <DefectOverlayMeshes 
+               spoolData={spoolData} 
+               renderLength={renderLength} 
+               sLength={sLength} 
+               startDist={selectedRange.startDist} 
+               onHover={() => {}}
+               onSelect={(id: string, d: any, e: any) => {
+                 setHoveredDefect(d);
+                 if (e) setTooltipPos({ x: e.clientX, y: e.clientY });
+               }}
              />
            </Canvas>
         </div>
@@ -577,6 +692,61 @@ export default function DefectVisualizer({ data }: DefectVisualizerProps) {
             </div>
           </div>
         </div>
+      )}
+
+
+      {hoveredDefect && (
+        <>
+          <div className="fixed inset-0 z-[90]" onClick={() => setHoveredDefect(null)} />
+          <div 
+            className="fixed z-[100] bg-white border border-gray-200 shadow-xl rounded-lg p-3 text-xs w-64 pointer-events-auto"
+            style={{ left: tooltipPos.x + 15, top: tooltipPos.y + 15 }}
+          >
+            <div className="font-bold border-b pb-1 mb-2 text-gray-800 flex justify-between items-center gap-2">
+              <span>ID: {hoveredDefect.id1 || hoveredDefect.id2}</span>
+              <span className={`px-2 py-0.5 rounded text-[10px] ${hoveredDefect.isMatched ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                {hoveredDefect.isMatched ? 'Matched' : 'Unmatched'}
+              </span>
+            </div>
+            <div className="flex flex-col gap-1 mb-3">
+              <div className="flex justify-between border-b border-gray-50 pb-1">
+                <span className="text-gray-500 font-medium">Dist U/S GW:</span>
+                <span className="font-bold text-gray-800">{hoveredDefect.rawItem['Dist GW OLD (m)'] || hoveredDefect.rawItem['Dist GW NEW (m)'] || '-'} m</span>
+              </div>
+              <div className="flex justify-between border-b border-gray-50 pb-1">
+                <span className="text-gray-500 font-medium">Clock:</span>
+                <span className="font-bold text-gray-800">{hoveredDefect.rawItem["O'Clock OLD"] || hoveredDefect.rawItem["O'Clock NEW"] || '-'}</span>
+              </div>
+              <div className="flex justify-between border-b border-gray-50 pb-1">
+                <span className="text-gray-500 font-medium">Ext/Int:</span>
+                <span className="font-bold text-gray-800">{hoveredDefect.rawItem['Int/Ext OLD'] || hoveredDefect.rawItem['Int/Ext NEW'] || hoveredDefect.rawItem['Feature Type OLD'] || (hoveredDefect.isExt1 ? 'External' : 'Internal')}</span>
+              </div>
+              <div className="flex justify-between border-b border-gray-50 pb-1">
+                <span className="text-gray-500 font-medium">Depth:</span>
+                <span className="font-bold text-gray-800">{hoveredDefect.rawItem['Depth OLD (%WT)'] || hoveredDefect.rawItem['Depth NEW (%WT)'] || '-'} %WT</span>
+              </div>
+              <div className="flex justify-between border-b border-gray-50 pb-1">
+                <span className="text-gray-500 font-medium">Length:</span>
+                <span className="font-bold text-gray-800">{hoveredDefect.rawItem['Length OLD (mm)'] || hoveredDefect.rawItem['Length NEW (mm)'] || '-'} mm</span>
+              </div>
+              <div className="flex justify-between pb-1">
+                <span className="text-gray-500 font-medium">Width:</span>
+                <span className="font-bold text-gray-800">{hoveredDefect.rawItem['Width OLD (mm)'] || hoveredDefect.rawItem['Width NEW (mm)'] || '-'} mm</span>
+              </div>
+            </div>
+            <button 
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectRowIdx?.(hoveredDefect.dataIdx);
+                setHoveredDefect(null);
+                if (isModalOpen) setIsModalOpen(false);
+              }}
+              className="w-full bg-blue-500 text-white rounded py-2 hover:bg-blue-600 transition-colors font-bold cursor-pointer shadow-sm"
+            >
+              Cari & Sorot Data di Tabel
+            </button>
+          </div>
+        </>
       )}
 
     </div>

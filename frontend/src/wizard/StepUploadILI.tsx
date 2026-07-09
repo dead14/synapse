@@ -1,12 +1,137 @@
-import React, { useState } from 'react';
-import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettings, FiShield } from 'react-icons/fi';
+import { useState } from 'react';
+import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettings, FiShield, FiStar, FiPlus } from 'react-icons/fi';
+import * as XLSX from 'xlsx';
 
 interface StepUploadILIProps {
-  onNext: () => void;
+  onNext: (data?: any) => void;
 }
 
 export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   const [expandedSection, setExpandedSection] = useState<string | null>('all');
+  const [datasets, setDatasets] = useState<any[]>([{ id: 1, year: '2020', vendor: 'Rosen', file: null }, { id: 2, year: '2023', vendor: 'Baker Hughes', file: null }]);
+  const [masterIndex, setMasterIndex] = useState(1);
+  const [algorithm, setAlgorithm] = useState('dtw_hungarian');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [sessionName, setSessionName] = useState('');
+
+  const allFilesUploaded = datasets.every(ds => ds.file !== null);
+
+  const handleInitialize = async () => {
+    setIsProcessing(true);
+    try {
+      const summaryData: any = {
+        sessionName: sessionName || 'Untitled Alignment Session',
+        newRun: { name: 'Waiting for data...', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 },
+        oldRun: { name: 'Waiting for data...', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 }
+      };
+
+      for (let i = 0; i < datasets.length; i++) {
+        const ds = datasets[i];
+        if (!ds.file) continue;
+        
+        // Asumsi index master = Reference Run (OLD)
+        const runKey = i === masterIndex ? 'oldRun' : 'newRun';
+        
+        const data = await ds.file.arrayBuffer();
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const jsonData: any[] = XLSX.utils.sheet_to_json(sheet);
+        
+        const counts = { total: jsonData.length, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
+        const rawFeatures: any[] = [];
+        
+        jsonData.forEach((row: any, idx: number) => {
+          const keys = Object.keys(row);
+          // Safely find the type column, avoiding "Feature ID"
+          const typeKey = keys.find(k => /feature type|feature_type|^type$/i.test(k)) 
+                       || keys.find(k => /type|feature/i.test(k) && !/id/i.test(k));
+          let ftype = (typeKey ? row[typeKey] : '').toString().toLowerCase();
+          
+          let standardizedType = 'other';
+          if (ftype.includes('metal loss') || ftype.includes('corrosion') || ftype.includes('ml')) { counts.anomalies++; standardizedType = 'anomaly'; }
+          else if (ftype.includes('weld') || ftype === 'gw' || ftype.includes('girth') || ftype.includes('seam')) { counts.welds++; standardizedType = 'weld'; }
+          else if (ftype.includes('valve')) { counts.valves++; standardizedType = 'valve'; }
+          else if (ftype.includes('tee')) { counts.tees++; standardizedType = 'tee'; }
+          else if (ftype.includes('tap') || ftype.includes('offtake')) { counts.offtakes++; standardizedType = 'offtake'; }
+          else if (ftype.includes('bend')) { counts.bends++; standardizedType = 'bend'; }
+          else { counts.others++; }
+          
+          const distKey = keys.find(k => /odometer|distance|dist|log|m/i.test(k));
+          let dist = 0;
+          if (distKey && row[distKey] !== undefined && row[distKey] !== null) {
+            dist = parseFloat(String(row[distKey]).replace(/,/g, ''));
+          } else {
+            // Fallback: Find the first key that contains a valid number and is not an ID
+            const numericKey = keys.find(k => !isNaN(parseFloat(String(row[k]))) && !/id|type|feature|anomaly/i.test(k));
+            if (numericKey) {
+              dist = parseFloat(String(row[numericKey]).replace(/,/g, ''));
+            }
+          }
+          
+          const idKey = keys.find(k => /id|identifier|joint/i.test(k));
+          const id = idKey ? row[idKey] : `F-${idx}`;
+          
+          const depthKey = keys.find(k => /depth|dpt|%wt|wt loss|kedalaman/i.test(k));
+          const clockKey = keys.find(k => /clock|orientation|ori|angle|pos|jam|arah/i.test(k));
+          const lengthKey = keys.find(k => /length|len|panjang/i.test(k));
+          const widthKey = keys.find(k => /width|wid|lebar/i.test(k));
+          
+          let depth = depthKey && row[depthKey] !== undefined ? parseFloat(String(row[depthKey]).replace(/,/g, '')) : null;
+          
+          let clockVal = clockKey && row[clockKey] !== undefined ? row[clockKey] : '-';
+          let clock = '-';
+          if (clockVal !== '-') {
+            let clockStr = String(clockVal);
+            if (!clockStr.includes(':') && !isNaN(parseFloat(clockStr.replace(/,/g, '.')))) {
+              let clockNum = parseFloat(clockStr.replace(/,/g, '.'));
+              // Excel stores time as a fraction of a 24-hour day
+              if (clockNum >= 0 && clockNum <= 1) {
+                let totalHours = clockNum * 24;
+                let h = Math.floor(totalHours);
+                let m = Math.round((totalHours - h) * 60);
+                if (m === 60) { h += 1; m = 0; }
+                if (h === 0) h = 12; // Pipe top is usually 12:00
+                clock = `${h}:${m.toString().padStart(2, '0')}`;
+              } else {
+                clock = clockStr;
+              }
+            } else {
+              clock = clockStr;
+            }
+          }
+          
+          let length = lengthKey && row[lengthKey] !== undefined ? parseFloat(String(row[lengthKey]).replace(/,/g, '')) : null;
+          let width = widthKey && row[widthKey] !== undefined ? parseFloat(String(row[widthKey]).replace(/,/g, '')) : null;
+          
+          rawFeatures.push({
+            ...row,
+            id: String(id),
+            type: standardizedType,
+            dist: isNaN(dist) ? 0 : dist,
+            originalType: typeKey ? row[typeKey] : 'Unknown',
+            depth: isNaN(depth as number) ? null : depth,
+            clock: clock,
+            length: isNaN(length as number) ? null : length,
+            width: isNaN(width as number) ? null : width
+          });
+        });
+
+        summaryData[runKey] = {
+          name: ds.file.name,
+          rawFeatures: rawFeatures,
+          ...counts
+        };
+      }
+      
+      onNext({ summaryData });
+    } catch (err) {
+      console.error(err);
+      alert('Gagal membaca file Excel. Pastikan formatnya benar.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   const toggleSection = (section: string) => {
     if (expandedSection === 'all') {
@@ -29,12 +154,23 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           </h2>
           <p className="text-gray-500 mt-1">Define pipeline parameters and upload ILI data for alignment processing.</p>
         </div>
-        <button 
-          onClick={onNext}
-          className="mt-4 sm:mt-0 bg-brand-500 hover:bg-brand-600 text-white px-8 py-3 rounded-xl font-medium transition-colors shadow-md shadow-brand-500/20"
-        >
-          Initialize Alignment
-        </button>
+        <div className="mt-4 sm:mt-0 flex gap-3">
+          <a 
+            href="http://localhost:8000/api/download-template"
+            target="_blank"
+            rel="noreferrer"
+            className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-6 py-3 rounded-xl font-medium transition-colors shadow-sm flex items-center gap-2"
+          >
+            Download Excel Template
+          </a>
+          <button 
+            onClick={handleInitialize}
+            disabled={!allFilesUploaded || isProcessing}
+            className={`px-8 py-3 rounded-xl font-medium transition-colors shadow-md flex items-center gap-2 ${allFilesUploaded && !isProcessing ? 'bg-brand-500 hover:bg-brand-600 text-white shadow-brand-500/20' : 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'}`}
+          >
+            {isProcessing ? 'Reading Data...' : 'Initialize Alignment'}
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-col-reverse gap-6">
@@ -56,8 +192,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
             {isExpanded('asset') && (
               <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-5">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Pipeline Name</label>
-                  <input type="text" className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none"   placeholder="e.g. SMR-SBY Gas Line" />
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Pipeline Name (Session Name)</label>
+                  <input type="text" value={sessionName} onChange={(e) => setSessionName(e.target.value)} className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none"   placeholder="e.g. SMR-SBY Gas Line" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Segment Route</label>
@@ -170,91 +306,129 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         {/* Right Column: ILI Uploads */}
         <div className="flex flex-col gap-6">
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden h-full flex flex-col">
-            <div className="px-6 py-4 bg-gray-50/50 border-b border-gray-100">
-              <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-                <FiShield className="text-gray-500" /> ILI Data Configuration
-              </h3>
+            <div className="px-6 py-4 bg-gray-50/50 border-b border-gray-100 flex justify-between items-center flex-wrap gap-4">
+              <div className="flex items-center gap-4">
+                <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+                  <FiShield className="text-gray-500" /> ILI Data Configuration
+                </h3>
+                {datasets.length < 5 && (
+                  <button 
+                    onClick={() => setDatasets([...datasets, { id: Date.now(), year: '', vendor: 'Rosen', file: null }])}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-dashed border-gray-300 text-xs font-medium text-gray-500 hover:border-brand-500 hover:text-brand-500 hover:bg-brand-50 transition-all bg-white shadow-sm"
+                  >
+                    <FiPlus size={14} /> Add another ILI data
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="text-sm font-medium text-gray-700">Algorithm Strategy:</label>
+                <select 
+                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none bg-white font-medium text-brand-600 shadow-sm"
+                  value={algorithm}
+                  onChange={(e) => setAlgorithm(e.target.value)}
+                >
+                  <option value="dtw_hungarian">DTW + Hungarian Match</option>
+                  <option value="traditional_hungarian">Traditional Hungarian</option>
+                  <option value="manual">Manual Algorithm</option>
+                  <option value="polygenesis">Polygenesis (AI Predictive)</option>
+                </select>
+              </div>
             </div>
             
-            <div className="p-6 flex-1 grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <div className="p-6 flex-1 flex gap-6 overflow-x-auto snap-x pb-4 no-scrollbar">
               
-              {/* Baseline Upload */}
-              <div className="p-5 rounded-xl border border-gray-100 bg-gray-50/30">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="w-2 h-6 bg-gray-400 rounded-full"></div>
-                  <h4 className="font-bold text-gray-700">Baseline (Previous ILI)</h4>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Vendor</label>
-                    <select className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none bg-white"  >
-                      <option>Rosen</option>
-                      <option>Baker Hughes</option>
-                      <option>NDT Global</option>
-                      <option>TDW</option>
-                      <option>Other</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Year & Tool</label>
-                    <div className="flex gap-2">
-                      <input type="text" className="w-1/3 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none"   placeholder="YYYY" />
-                      <select className="w-2/3 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none bg-white"  >
-                        <option>MFL-A</option>
-                        <option>MFL-C</option>
-                        <option>UT-WM</option>
-                        <option>Combo</option>
-                      </select>
+              {datasets.map((ds, index) => {
+                const isMaster = index === masterIndex;
+                return (
+                  <div key={ds.id} className={`flex-1 min-w-[400px] max-w-[600px] p-5 rounded-xl border snap-start ${isMaster ? 'border-brand-500 bg-brand-50/30 ring-2 ring-brand-500/20' : 'border-gray-200 bg-gray-50/30'}`}>
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-2 h-6 rounded-full ${isMaster ? 'bg-brand-500' : 'bg-gray-400'}`}></div>
+                        <h4 className={`font-bold ${isMaster ? 'text-brand-700' : 'text-gray-700'}`}>Dataset {ds.year ? ds.year : ''}</h4>
+                      </div>
+                      <button 
+                        onClick={() => setMasterIndex(index)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${isMaster ? 'bg-brand-500 text-white shadow-md' : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                      >
+                        <FiStar className={isMaster ? "fill-white" : ""} size={14} /> {isMaster ? 'Master Data' : 'Set as Master'}
+                      </button>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Vendor</label>
+                        <select 
+                          className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none bg-white"
+                          value={ds.vendor}
+                          onChange={(e) => {
+                            const newDs = [...datasets];
+                            newDs[index].vendor = e.target.value;
+                            setDatasets(newDs);
+                          }}
+                        >
+                          <option>Rosen</option>
+                          <option>Baker Hughes</option>
+                          <option>NDT Global</option>
+                          <option>TDW</option>
+                          <option>Other</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Year & Tool</label>
+                        <div className="flex gap-2">
+                          <input 
+                            type="text" 
+                            className="w-1/3 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none" 
+                            placeholder="YYYY" 
+                            value={ds.year}
+                            onChange={(e) => {
+                              const newDs = [...datasets];
+                              newDs[index].year = e.target.value;
+                              setDatasets(newDs);
+                            }}
+                          />
+                          <select className="w-2/3 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none bg-white">
+                            <option>MFL-A</option>
+                            <option>MFL-C</option>
+                            <option>UT-WM</option>
+                            <option>Combo</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center bg-white transition-colors cursor-pointer group relative ${isMaster ? 'border-brand-300 hover:border-brand-500 hover:bg-brand-50' : 'border-gray-300 hover:border-brand-400 hover:bg-gray-50'}`}>
+                      <input 
+                        type="file" 
+                        accept=".csv,.xlsx" 
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            const newDs = [...datasets];
+                            newDs[index].file = e.target.files[0];
+                            setDatasets(newDs);
+                          }
+                        }}
+                      />
+                      {ds.file ? (
+                        <>
+                          <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center mb-2">
+                            <FiDatabase className="text-green-600 text-xl" />
+                          </div>
+                          <p className="text-sm font-bold text-gray-800 text-center px-4 truncate w-full">{ds.file.name}</p>
+                          <p className="text-xs text-gray-500 mt-1">Click to replace</p>
+                        </>
+                      ) : (
+                        <>
+                          <FiUploadCloud className={`text-3xl mb-2 ${isMaster ? 'text-brand-400 group-hover:text-brand-500' : 'text-gray-400 group-hover:text-brand-500'}`} />
+                          <p className="text-sm font-medium text-gray-700">Upload Data File</p>
+                          <p className="text-xs text-gray-500 mt-1">Drag & drop or click to browse</p>
+                        </>
+                      )}
                     </div>
                   </div>
-                </div>
-
-                <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 flex flex-col items-center justify-center bg-white hover:border-brand-500 hover:bg-brand-50 transition-colors cursor-pointer group">
-                  <FiUploadCloud className="text-3xl text-gray-500 group-hover:text-brand-500 mb-2" />
-                  <p className="text-sm font-medium text-gray-700">Upload Baseline Excel</p>
-                  <p className="text-xs text-gray-500 mt-1">Drag & drop or click to browse</p>
-                </div>
-              </div>
-
-              {/* Current Upload */}
-              <div className="p-5 rounded-xl border border-brand-100 bg-brand-50/30">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="w-2 h-6 bg-brand-500 rounded-full"></div>
-                  <h4 className="font-bold text-gray-800">Current (New ILI)</h4>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Vendor</label>
-                    <select className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none bg-white"  >
-                      <option>Rosen</option>
-                      <option>Baker Hughes</option>
-                      <option>NDT Global</option>
-                      <option>TDW</option>
-                      <option>Other</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Year & Tool</label>
-                    <div className="flex gap-2">
-                      <input type="text" className="w-1/3 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none"   placeholder="YYYY" />
-                      <select className="w-2/3 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none bg-white"  >
-                        <option>MFL-A</option>
-                        <option>MFL-C</option>
-                        <option>UT-WM</option>
-                        <option>Combo</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="border-2 border-dashed border-brand-300 rounded-xl p-6 flex flex-col items-center justify-center bg-white hover:border-brand-500 hover:bg-brand-50 transition-colors cursor-pointer group">
-                  <FiUploadCloud className="text-3xl text-brand-400 group-hover:text-brand-500 mb-2" />
-                  <p className="text-sm font-medium text-gray-700">Upload Current Excel</p>
-                  <p className="text-xs text-gray-500 mt-1">Drag & drop or click to browse</p>
-                </div>
-              </div>
+                );
+              })}
 
             </div>
           </div>

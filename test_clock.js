@@ -1,0 +1,1 @@
+let clockVal = 0.125; let clockStr = String(clockVal); let clockNum = parseFloat(clockStr.replace(/,/g, '.')); let clock = ''; if (clockNum >= 0 && clockNum <= 1) { let totalHours = clockNum * 24; let h = Math.floor(totalHours); let m = Math.round((totalHours - h) * 60); if (m === 60) { h += 1; m = 0; } if (h === 0) h = 12; clock = \\:\\; } console.log(clock);

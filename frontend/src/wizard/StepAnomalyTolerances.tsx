@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { FiSliders, FiChevronRight, FiChevronLeft, FiAward, FiAlertCircle } from 'react-icons/fi';
 
 interface StepAnomalyTolerancesProps {
   onNext: (config: any) => void;
   onBack: () => void;
+  config?: any;
 }
 
-export default function StepAnomalyTolerances({ onNext, onBack }: StepAnomalyTolerancesProps) {
+export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAnomalyTolerancesProps) {
   const [clockTol, setClockTol] = useState(15);
   const [distGwTol, setDistGwTol] = useState(0.2);
   const [depthGrowthMax, setDepthGrowthMax] = useState(25); // Max lateral growth %WT

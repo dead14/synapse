@@ -1,42 +1,43 @@
-import React from 'react';
+import { useState, useEffect } from 'react';
 import { FiEye, FiDownload, FiSettings, FiBell, FiActivity, FiClock, FiCheckCircle } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
+import { format } from 'date-fns';
 
-const mockRuns = [
-  {
-    id: 1,
-    lineName: "MT-KLK Water Pipeline",
-    date: "15 Oct 2026",
-    status: "Completed",
-    matchRate: "82.8%",
-    anomalies: 1273,
-    vendorOld: "Vendor Lama (2020)",
-    vendorNew: "Vendor Baru (2025)"
-  },
-  {
-    id: 2,
-    lineName: "JKT-BDG Gas Segment",
-    date: "10 Oct 2026",
-    status: "Completed",
-    matchRate: "91.2%",
-    anomalies: 840,
-    vendorOld: "Vendor A (2018)",
-    vendorNew: "Vendor B (2023)"
-  },
-  {
-    id: 3,
-    lineName: "HU-CPA Crude Oil",
-    date: "05 Oct 2026",
-    status: "Completed",
-    matchRate: "76.5%",
-    anomalies: 2104,
-    vendorOld: "Vendor X (2019)",
-    vendorNew: "Vendor Y (2024)"
-  }
-];
+interface PipelineRun {
+  id: string;
+  pipelineName: string;
+  date: string;
+  status: string;
+  matchRate?: string;
+  anomaliesFound: number;
+  vendorLama: string;
+  vendorBaru: string;
+}
 
 export default function PipelineRuns() {
   const navigate = useNavigate();
+  const [runs, setRuns] = useState<PipelineRun[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchRuns = async () => {
+      try {
+        const token = localStorage.getItem('synapse_token');
+        const res = await fetch('http://localhost:8000/api/pipeline-runs', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setRuns(data);
+        }
+      } catch (err) {
+        console.error('Failed to fetch pipeline runs:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchRuns();
+  }, []);
 
   return (
     <div className="min-h-screen bg-[#f8f9fc] flex flex-col items-center pb-12">
@@ -78,35 +79,54 @@ export default function PipelineRuns() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {mockRuns.map((run) => (
-                  <tr key={run.id} className="hover:bg-gray-50 transition-colors group">
-                    <td className="px-6 py-5">
-                      <div className="font-bold text-gray-900 text-base">{run.lineName}</div>
-                      <div className="text-xs text-gray-500 mt-1">{run.vendorOld} vs {run.vendorNew}</div>
+                {loading ? (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                      Loading pipeline runs...
                     </td>
+                  </tr>
+                ) : runs.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                      No pipeline runs found. Upload a CSV to start an alignment.
+                    </td>
+                  </tr>
+                ) : runs.map((run) => (
+                  <tr key={run.id} className="hover:bg-blue-50/30 transition-colors group">
                     <td className="px-6 py-5">
-                      <div className="flex items-center gap-2 text-sm text-gray-600">
-                        <FiClock className="text-gray-400" />
-                        {run.date}
+                      <div className="font-bold text-gray-800 text-[15px]">{run.pipelineName}</div>
+                      <div className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                        <FiEye size={12} /> {run.vendorLama} vs {run.vendorBaru}
                       </div>
                     </td>
                     <td className="px-6 py-5">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-sm font-bold text-gray-900">{run.matchRate}</span>
-                        <span className="text-xs text-gray-500">{run.anomalies} anomalies</span>
+                      <div className="text-sm font-medium text-gray-700">
+                        {run.date ? format(new Date(run.date), 'dd MMM yyyy') : '-'}
+                      </div>
+                      <div className="text-xs text-gray-400">Total Anomalies: {run.anomaliesFound}</div>
+                    </td>
+                    <td className="px-6 py-5">
+                      <div className="inline-flex items-center justify-center px-3 py-1 rounded-full bg-blue-50 text-blue-700 font-bold text-sm">
+                        {run.matchRate || 'N/A'}
                       </div>
                     </td>
                     <td className="px-6 py-5">
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-200">
-                        <FiCheckCircle size={12} />
-                        {run.status}
-                      </span>
+                      {run.status === "Aligned" ? (
+                        <div className="flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full text-sm font-medium w-fit">
+                          <FiCheckCircle size={14} /> {run.status}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-amber-600 bg-amber-50 px-3 py-1 rounded-full text-sm font-medium w-fit">
+                          <FiClock size={14} /> {run.status}
+                        </div>
+                      )}
                     </td>
-                    <td className="px-6 py-5">
+                    <td className="px-6 py-5 text-right">
                       <div className="flex justify-end gap-3 opacity-80 group-hover:opacity-100 transition-opacity">
                         
                         {/* Action: View Data */}
                         <button 
+                          onClick={() => navigate(`/ili-comparison?sessionId=${run.id}`)}
                           className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-colors"
                           title="View Alignment Data"
                         >

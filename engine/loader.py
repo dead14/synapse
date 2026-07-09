@@ -193,3 +193,54 @@ def load_ili_universal(file_path, field_map=None, survey_year=None, vendor=None,
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
+# BAGIAN 4 — DATABASE LOADER
+# ══════════════════════════════════════════════════════════════════════════════════
+
+def load_ili_from_db(run_id, db_session):
+    from backend.models import ILIFeature
+    
+    features = db_session.query(ILIFeature).filter(ILIFeature.run_id == run_id).order_by(ILIFeature.log_distance_m).all()
+    
+    if not features:
+        print(f"   [WARN] No features found for run_id {run_id}")
+        return pd.DataFrame(columns=UNIVERSAL_COLS)
+        
+    data = []
+    for f in features:
+        data.append({
+            "feature_id": f.feature_id,
+            "log_distance_m": f.log_distance_m,
+            "joint_number": f.joint_number,
+            "dist_to_us_gw_m": f.dist_to_us_gw_m,
+            "joint_length_m": f.joint_length_m,
+            "feature_type": f.feature_type,
+            "feature_identification": f.feature_identification,
+            "dim_classification": f.dim_classification,
+            "clock_position": f.clock_position,
+            "wall_thickness_mm": f.wall_thickness_mm,
+            "length_mm": f.length_mm,
+            "width_mm": f.width_mm,
+            "depth_pct": f.depth_pct,
+            "surface_location": f.surface_location,
+            "erf_asme": f.erf_asme,
+            "psafe_bar": f.psafe_bar,
+            "comment": f.comment,
+            "_source_file": f"DB_RUN_{run_id}",
+            "_survey_year": f.run.survey_year if f.run else None,
+            "_vendor": f.run.vendor if f.run else None,
+            "_import_timestamp": "DB",
+            # We also need the DB ID so we can save alignment results back!
+            "_db_id": f.id
+        })
+        
+    df_uni = pd.DataFrame(data)
+    
+    n_total = len(df_uni)
+    gw_ok   = df_uni["dist_to_us_gw_m"].notna().sum()
+    surf_v  = dict(df_uni["surface_location"].value_counts())
+    print(f"   DB Run {run_id}: {n_total:,} baris | dist_gw={gw_ok:,} ({100*gw_ok/max(n_total,1):.0f}%) "
+          f"| surface={surf_v}")
+          
+    # Ensure log distance is numeric
+    df_uni["log_distance_m"] = pd.to_numeric(df_uni["log_distance_m"], errors="coerce")
+    return df_uni

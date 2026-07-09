@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import bisect
 from .constants import *
 #  BAGIAN 4 — HELPER FUNGSI
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -75,6 +76,70 @@ def compute_cost_generic(odo_diff, rn, ro):
     if gn is not None and go is not None:
         cost += W["gw_max_penalty_m"] * (min(abs(gn - go), 2.0) / 2.0)
     return cost
+
+
+def match_welds_by_spool_variance(df_new, df_old, ota_pct):
+    # Retrieve all Weld features ordered by distance
+    welds_new = df_new[df_new["feature_type"] == "Weld"].sort_values("log_distance_m")
+    welds_old = df_old[df_old["feature_type"] == "Weld"].sort_values("log_distance_m")
+    
+    if len(welds_new) == 0 or len(welds_old) == 0:
+        return {}
+
+    idx_n = welds_new.index.tolist()
+    idx_o = welds_old.index.tolist()
+    d_n = [float(v) for v in welds_new["log_distance_m"].values]
+    d_o = [float(v) for v in welds_old["log_distance_m"].values]
+
+    matched_new = {}
+    
+    # First GW is matched by default (benchmark anchor)
+    matched_new[idx_n[0]] = idx_o[0]
+    
+    i = 1
+    j = 1
+    
+    while i < len(d_o) and j < len(d_n):
+        # Find the last matched pair
+        last_n = idx_n[0]
+        last_o = idx_o[0]
+        for rev_j in range(j-1, -1, -1):
+            if idx_n[rev_j] in matched_new:
+                last_n = idx_n[rev_j]
+                last_o = matched_new[last_n]
+                break
+                
+        prev_n_val = df_new.at[last_n, "log_distance_m"]
+        prev_o_val = df_old.at[last_o, "log_distance_m"]
+        
+        found_match = False
+        # Search window ahead to recover from anomalies (simulating StepGwSimulator logic)
+        for window in range(7):
+            for di in range(window + 1):
+                dj = window - di
+                if i + di < len(d_o) and j + dj < len(d_n):
+                    sOld = d_o[i + di] - prev_o_val
+                    sNew = d_n[j + dj] - prev_n_val
+                    
+                    if sNew <= 0: continue
+                    
+                    v = abs((sOld / sNew) - 1.0) * 100.0
+                    if v <= ota_pct:
+                        # Found match!
+                        matched_new[idx_n[j + dj]] = idx_o[i + di]
+                        i += di + 1
+                        j += dj + 1
+                        found_match = True
+                        break
+            if found_match:
+                break
+                
+        if not found_match:
+            # Skip both if no valid pair found within window
+            i += 1
+            j += 1
+
+    return matched_new
 
 
 # ══════════════════════════════════════════════════════════════════════════════════

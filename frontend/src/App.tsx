@@ -6,9 +6,8 @@ import {
 import AlignmentPage from './AlignmentPage';
 import PipelineRuns from './PipelineRuns';
 import IliComparisonPage from './IliComparisonPage';
+import IliSectioningPage from './sectioning/IliSectioningPage';
 import Layout from './Layout';
-import RiskTrendChart from './components/charts/RiskTrendChart';
-import AssetCompositionChart from './components/charts/AssetCompositionChart';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -174,14 +173,14 @@ const Dashboard = () => {
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-4">
                 <h2 className="text-lg font-bold text-gray-800 dark:text-white/90">Risk Trend (12 Months)</h2>
               </div>
-              <RiskTrendChart />
+              <div className="h-64 flex items-center justify-center bg-gray-50 rounded text-gray-400">Chart Placeholder</div>
             </div>
 
             <div className="col-span-12 xl:col-span-4 rounded-2xl border border-gray-200 bg-white px-5 pt-7 pb-5 shadow-sm dark:border-gray-800 dark:bg-white/[0.03] sm:px-7">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-4">
                 <h2 className="text-lg font-bold text-gray-800 dark:text-white/90">Asset Composition</h2>
               </div>
-              <AssetCompositionChart />
+              <div className="h-64 flex items-center justify-center bg-gray-50 rounded text-gray-400">Chart Placeholder</div>
             </div>
           </div>
 
@@ -345,6 +344,7 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/alignment" element={<AlignmentPage />} />
         <Route path="/ili-comparison" element={<IliComparisonPage />} />
+        <Route path="/ili-sectioning" element={<IliSectioningPage />} />
         <Route path="/runs" element={<PipelineRuns />} />
       </Route>
     </Routes>

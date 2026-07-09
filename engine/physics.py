@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 from .constants import *
+from .math_utils import _sf, _clock_diff
+
 #  BAGIAN 10 — PHYSICS VALIDATION
 # ══════════════════════════════════════════════════════════════════════════════════
 
