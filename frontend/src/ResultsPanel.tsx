@@ -190,8 +190,8 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
 
   // Extract all columns
   const allColumns = useMemo(() => {
-    if (data && data.length > 1) {
-      const keys = Object.keys(data[1]).filter(k => k !== 'Match/Unmatch');
+    if (data && data.length > 0) {
+      const keys = Object.keys(data[0]).filter(k => k !== 'Match/Unmatch');
       // Add computed columns at the end
       keys.push('CR mm/yr', 'Lateral Growth');
       return ['Section', ...keys];
@@ -821,11 +821,24 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
                           const actualIdx = visibleRows.startIdx + i;
                           const isSelected = selectedRowIdx !== null && selectedRowIdx !== undefined && row.__origIdx === selectedRowIdx;
                           const isDragTarget = activeTab === 'Interventions' && draggedRowIdx !== null && draggedRowIdx !== row.__origIdx;
+                          
+                          const isMatch = row['Match/Unmatch'] === 'Match';
+                          const featType = String(row['Feature Type OLD'] || row['Feature Type NEW'] || '').toLowerCase();
+                          let bgClass = 'hover:bg-blue-50/50';
+                          if (isMatch) {
+                            if (featType.includes('valve')) bgClass = 'bg-purple-200 hover:bg-purple-300';
+                            else if (featType.includes('weld')) bgClass = 'bg-blue-200 hover:bg-blue-300';
+                            else if (featType.includes('bend')) bgClass = 'bg-yellow-200 hover:bg-yellow-300';
+                            else if (featType.includes('anomaly') || featType.includes('metal') || featType.includes('dent') || featType.includes('corrosion')) bgClass = 'bg-red-200 hover:bg-red-300';
+                            else bgClass = 'bg-gray-200 hover:bg-gray-300';
+                          }
+                          if (isSelected) bgClass = 'bg-indigo-300 hover:bg-indigo-400 font-semibold';
+                          
                           return (
                             <tr 
                               key={actualIdx} 
                               style={{ height: ROW_HEIGHT }} 
-                              className={`transition-colors cursor-pointer ${isSelected ? 'bg-blue-100 hover:bg-blue-200' : 'hover:bg-blue-50/50'} ${isDragTarget ? 'hover:bg-green-100 border-2 border-dashed border-green-400' : ''}`}
+                              className={`transition-colors cursor-pointer ${bgClass} ${isDragTarget ? 'hover:bg-green-200 border-2 border-dashed border-green-500' : ''}`}
                               onClick={() => onSelectRowIdx?.(row.__origIdx)}
                               onDragOver={(e) => {
                                 if (!isDragTarget) return;

@@ -142,6 +142,30 @@ class AlignmentResult(Base):
     feature_old = relationship("ILIFeature", foreign_keys=[feature_old_id])
 
 # Database Setup
+class FieldSynonymDictionary(Base):
+    """
+    Stores known column synonyms from different vendors to auto-detect mappings.
+    e.g. universal_column='log_distance_m', known_synonym='Absolute Distance, m'
+    """
+    __tablename__ = 'field_synonym_dictionary'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    universal_column = Column(String, index=True, nullable=False)
+    known_synonym = Column(String, index=True, nullable=False)
+
+
+class FeatureTypeSynonym(Base):
+    """
+    Stores known feature type synonyms/acronyms to auto-detect feature types.
+    e.g. standard_name='Metal Loss', known_synonym='cocl'
+    """
+    __tablename__ = 'feature_type_synonym'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    standard_name = Column(String, index=True, nullable=False)
+    known_synonym = Column(String, index=True, nullable=False)
+
+# Database Setup
 engine = create_engine('postgresql://postgres:123456789@localhost:5432/synapse', echo=False)
 
 def init_db():

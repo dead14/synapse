@@ -20,6 +20,9 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api', ffsRoutes); // for /api/download-template
 app.use('/api', alignmentRoutes); // for /api/upload-csv and /api/run
 
+// Initialize background worker
+require('./modules/alignment/alignmentWorker');
+
 // Serve static frontend in production
 const frontendDistPath = path.join(__dirname, '../../frontend/dist');
 

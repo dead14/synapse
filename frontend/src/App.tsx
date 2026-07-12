@@ -337,15 +337,21 @@ const Dashboard = () => {
 
 import AppLayout from './layout/AppLayout';
 
+import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
+
 export default function App() {
   return (
     <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/signup" element={<RegisterPage />} />
       <Route element={<AppLayout />}>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/data" element={<PipelineRuns />} />
+        <Route path="/runs" element={<PipelineRuns />} />
         <Route path="/alignment" element={<AlignmentPage />} />
         <Route path="/ili-comparison" element={<IliComparisonPage />} />
         <Route path="/ili-sectioning" element={<IliSectioningPage />} />
-        <Route path="/runs" element={<PipelineRuns />} />
       </Route>
     </Routes>
   );

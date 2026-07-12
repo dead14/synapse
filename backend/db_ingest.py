@@ -9,7 +9,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.models import SessionLocal, Pipeline, SurveyRun, ILIFeature, init_db
 from engine.constants import UNIVERSAL_COLS, UNIVERSAL_SCHEMA
+import engine.constants as constants
 from engine.loader import find_best_col, normalize_clock, normalize_surface, normalize_feature_type
+from engine.parser_dict import auto_detect_field_map, load_feature_type_normalization
 from datetime import datetime
 
 def _autodetect_header(path, field_map, max_scan=8):
@@ -51,14 +53,24 @@ def ingest_csv(file_path, pipeline_name, survey_year, vendor):
         session.add(run)
         session.commit()
         run_id = run.id
-
-        # Dummy field map since we don't have FIELD_MAP sheet in CSV
-        # We'll use the UNIVERSAL_COLS as the field map itself to fuzzy match
-        field_map = {c: c for c in UNIVERSAL_COLS}
         
-        header_row, score = _autodetect_header(file_path, field_map)
-        print(f"Detected header at row {header_row} with score {score}")
+        # Load feature type mapping and update constants
+        feat_map = load_feature_type_normalization()
+        if feat_map:
+            constants.FEATURE_TYPE_NORMALIZATION.update(feat_map)
+            print(f"Updated FEATURE_TYPE_NORMALIZATION with {len(feat_map)} keys from database.")
 
+        if file_path.lower().endswith('.xlsx') or file_path.lower().endswith('.xls'):
+            # Read first few rows just to auto-detect header row
+            df_temp = pd.read_excel(file_path, header=None, nrows=10)
+        else:
+            df_temp = pd.read_csv(file_path, header=None, nrows=10)
+            
+        # Try to find header row using synonym dictionary
+        header_row, score = _autodetect_header(file_path, {c: c for c in UNIVERSAL_COLS})
+        print(f"Detected header at row {header_row} (fallback fuzzy score {score})")
+        
+        # Load actual raw data with the detected header row
         if file_path.lower().endswith('.xlsx') or file_path.lower().endswith('.xls'):
             df_raw = pd.read_excel(file_path, header=header_row)
         else:
@@ -67,6 +79,13 @@ def ingest_csv(file_path, pipeline_name, survey_year, vendor):
         df_raw = df_raw.dropna(how="all").reset_index(drop=True)
         df_raw.columns = [str(c).strip() if pd.notna(c) else f"_col{i}" for i, c in enumerate(df_raw.columns)]
         
+        # Auto-detect field map from Synonym Database using the loaded column headers!
+        field_map = auto_detect_field_map(df_raw.columns)
+        
+        if not field_map:
+            print(f"Synonym auto-detect failed. Falling back to fuzzy matching for all columns.")
+            field_map = {c: c for c in UNIVERSAL_COLS}
+            
         n = len(df_raw)
         df_uni = pd.DataFrame({col: pd.Series([np.nan]*n) for col in UNIVERSAL_COLS})
 

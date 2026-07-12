@@ -13,8 +13,8 @@ export default function RegisterPage() {
         <div className="absolute inset-0 bg-[url('/Pipeline.avif')] bg-cover bg-center"></div>
         <div className="absolute inset-0 bg-white/40 backdrop-blur-md"></div>
         <div className="relative z-10 flex flex-col items-center p-10 text-center">
-          <img src="/logo.png" alt="Synapse Logo" className="w-48 h-48 mb-6 object-contain drop-shadow-sm" />
-          <h2 className="text-4xl font-black text-gray-900 mb-2 tracking-tight">Synapse PIMS</h2>
+          <img src="/logo.png" alt="Synapse Logo" className="w-48 h-48 mb-6 object-contain drop-shadow-sm scale-125" />
+          <h2 className="text-6xl font-black text-gray-900 mb-2 tracking-tighter uppercase">Synapse</h2>
           <p className="text-gray-800 max-w-sm text-lg font-medium">
             Flawless Matching, Seamless Processing.
           </p>

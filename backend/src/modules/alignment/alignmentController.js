@@ -1,6 +1,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const { alignmentQueue } = require('./alignmentWorker');
 
 exports.uploadCsv = (req, res) => {
     const { pipelineName, surveyYear, vendor } = req.body;
@@ -39,47 +40,22 @@ exports.uploadCsv = (req, res) => {
     });
 };
 
-exports.runAlignment = (req, res) => {
+exports.runAlignment = async (req, res) => {
     const { runId, algorithm } = req.body;
     if (!runId) {
         return res.status(400).json({ error: 'runId is required' });
     }
     
     const algoArg = algorithm || 'dtw_hungarian';
-    
     console.log(`Starting alignment for run ${runId} using ${algoArg}...`);
     
-    // We expect the script to execute relative to the backend folder (as that is where it is run from)
-    const pythonProcess = spawn('python', ['alignment_engine.py', runId.toString(), algoArg]);
-    let output = '';
-
-    pythonProcess.stdout.on('data', (data) => {
-        output += data.toString();
-        console.log(`Alignment: ${data}`);
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-        console.error(`Alignment Error: ${data}`);
-    });
-
-    pythonProcess.on('close', (code) => {
-        if (code === 0) {
-            try {
-                // Find JSON part in output
-                const jsonMatch = output.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                    const result = JSON.parse(jsonMatch[0]);
-                    res.json(result);
-                } else {
-                    res.status(500).json({ error: 'No JSON result found', raw: output });
-                }
-            } catch (err) {
-                res.status(500).json({ error: 'Failed to parse alignment output', raw: output });
-            }
-        } else {
-            res.status(500).json({ error: `Alignment failed with code ${code}` });
-        }
-    });
+    try {
+        const job = await alignmentQueue.add('run-alignment', { runId, algorithm: algoArg });
+        res.json({ success: true, jobId: job.id, message: 'Alignment job added to queue' });
+    } catch (err) {
+        console.error("Queue error:", err);
+        res.status(500).json({ error: 'Failed to enqueue alignment job' });
+    }
 };
 
 exports.getAlignmentResults = async (req, res) => {
@@ -101,7 +77,8 @@ exports.getAlignmentResults = async (req, res) => {
 exports.runDtwAlignment = (req, res) => {
     const payload = req.body;
     
-    // Convert payload to JSON string
+    // DTW is lightweight and called repeatedly by the GW Simulator slider,
+    // so it runs synchronously (no queue). Only Hungarian uses the Redis queue.
     const inputData = JSON.stringify(payload);
     
     const pythonProcess = spawn('python', ['dtw_engine.py']);
@@ -120,7 +97,6 @@ exports.runDtwAlignment = (req, res) => {
     pythonProcess.on('close', (code) => {
         if (code === 0) {
             try {
-                // Find JSON part in output in case of print statements
                 const firstBrace = output.indexOf('{');
                 const lastBrace = output.lastIndexOf('}');
                 if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
@@ -294,47 +270,36 @@ exports.getIliResults = async (req, res) => {
         
         const config = result.rows[0].params_json;
         
-        // Spawn Python process for Hungarian alignment
-        const { spawn } = require('child_process');
-        const pythonProcess = spawn('python', ['hungarian_engine.py']);
-        
-        let output = '';
-        let errorOutput = '';
-
-        pythonProcess.stdout.on('data', (data) => {
-            output += data.toString();
-        });
-
-        pythonProcess.stderr.on('data', (data) => {
-            errorOutput += data.toString();
-        });
-
-        pythonProcess.on('close', (code) => {
-            if (code === 0) {
-                try {
-                    const firstBrace = output.indexOf('{');
-                    const lastBrace = output.lastIndexOf('}');
-                    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-                        const jsonStr = output.substring(firstBrace, lastBrace + 1);
-                        const resultData = JSON.parse(jsonStr);
-                        res.json(resultData);
-                    } else {
-                        res.status(500).json({ error: 'No JSON result found from Hungarian engine', raw: output });
-                    }
-                } catch (err) {
-                    res.status(500).json({ error: 'Failed to parse Hungarian engine output', raw: output });
-                }
-            } else {
-                res.status(500).json({ error: `Hungarian engine failed with code ${code}`, details: errorOutput });
-            }
-        });
-        
-        // Write params_json to stdin
-        pythonProcess.stdin.write(JSON.stringify(config));
-        pythonProcess.stdin.end();
+        try {
+            console.log("Enqueuing run-hungarian job for session:", sessionId);
+            const job = await alignmentQueue.add('run-hungarian', config);
+            res.json({ success: true, jobId: job.id, message: 'Hungarian alignment job added to queue' });
+        } catch (err) {
+            console.error("Queue error:", err);
+            res.status(500).json({ error: 'Failed to enqueue Hungarian job' });
+        }
 
     } catch (err) {
         console.error("Failed to get ILI results:", err);
         res.status(500).json({ error: 'Failed to get ILI results' });
+    }
+};
+
+exports.getJobResult = async (req, res) => {
+    const { jobId } = req.params;
+    try {
+        const job = await alignmentQueue.getJob(jobId);
+        if (!job) {
+            return res.status(404).json({ error: 'Job not found' });
+        }
+        const state = await job.getState();
+        const progress = job.progress;
+        const result = job.returnvalue;
+        const failedReason = job.failedReason;
+
+        res.json({ jobId, state, progress, result, failedReason });
+    } catch (err) {
+        console.error("Get job result error:", err);
+        res.status(500).json({ error: 'Failed to get job status' });
     }
 };

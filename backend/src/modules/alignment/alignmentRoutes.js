@@ -21,5 +21,7 @@ router.get('/pipeline-runs', authMiddleware, alignmentController.getPipelineRuns
 
 router.get('/ili-results', authMiddleware, alignmentController.getIliResults);
 router.get('/results/:runId', authMiddleware, alignmentController.getAlignmentResults);
+// router.get('/job/:jobId/result', authMiddleware, alignmentController.getJobResult);
+router.get('/job/:jobId/result', alignmentController.getJobResult);
 
 module.exports = router;

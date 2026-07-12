@@ -4,6 +4,8 @@ import { SectionDef } from './IliSectioningPage';
 interface SectionModalProps {
   startGw: any;
   endGw: any;
+  autoStartCoords?: {lat: number, lng: number};
+  autoEndCoords?: {lat: number, lng: number};
   onClose: () => void;
   onSave: (section: Partial<SectionDef>) => void;
 }
@@ -18,7 +20,7 @@ const SECTION_TYPES = [
   { id: 'OTH', label: 'OTH - Lainnya' }
 ];
 
-export default function SectionModal({ startGw, endGw, onClose, onSave }: SectionModalProps) {
+export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndCoords, onClose, onSave }: SectionModalProps) {
   const [name, setName] = useState('');
   const [type, setType] = useState('RL');
   const [notes, setNotes] = useState('');
@@ -27,6 +29,17 @@ export default function SectionModal({ startGw, endGw, onClose, onSave }: Sectio
   const [lngStart, setLngStart] = useState('');
   const [latEnd, setLatEnd] = useState('');
   const [lngEnd, setLngEnd] = useState('');
+
+  React.useEffect(() => {
+    if (autoStartCoords) {
+      setLatStart(autoStartCoords.lat.toFixed(6));
+      setLngStart(autoStartCoords.lng.toFixed(6));
+    }
+    if (autoEndCoords) {
+      setLatEnd(autoEndCoords.lat.toFixed(6));
+      setLngEnd(autoEndCoords.lng.toFixed(6));
+    }
+  }, [autoStartCoords, autoEndCoords]);
 
   const distance = Math.abs(endGw.dist - startGw.dist);
   const orderedGWs = [startGw, endGw].sort((a,b) => a.dist - b.dist);

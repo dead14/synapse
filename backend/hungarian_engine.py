@@ -1,5 +1,6 @@
 import sys
 import json
+import math
 import bisect
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -145,14 +146,156 @@ def get_fallback(f, keywords):
                 pass
     return None
 
-def row_from_pair(f1, f2, oi, ni, match_status):
+
+def _feat_dist(feature):
+    """Safely get distance from a feature dict, fallback to 0."""
+    try:
+        return float(feature.get('dist', 0) or 0)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def build_joint_segments(gw_matches, old_features, new_features):
+    """
+    Build per-joint containment segments from LOCKED girth-weld matches.
+
+    Each consecutive pair of matched GWs defines one "joint room":
+        joint k = {old_lo, old_hi, new_lo, new_hi, joint_len_new}
+
+    Anomalies inside joint k (OLD side) may ONLY match anomalies inside the
+    same joint k (NEW side). This is the strict containment that eliminates
+    cross-joint false matches ("data loncat").
+
+    Concept ported from engine/matching.py:build_joint_segments().
+
+    Returns (segments, n_segments). Empty if <2 matched GWs.
+    """
+    # Resolve matched GWs into (old_dist, new_dist) pairs.
+    gw_pairs = []
+    for m in gw_matches:
+        if m.get('status') not in ('Match', 'Flagged'):
+            continue
+        # Prefer resolved distances; fallback to oldDist/newDist/oldVal/newVal
+        d_old = m.get('oldDist', m.get('oldVal'))
+        d_new = m.get('newDist', m.get('newVal'))
+        if d_old is None or d_new is None:
+            # Try resolving via feature index/id
+            oi = m.get('oldIndex')
+            ni = m.get('newIndex')
+            if oi is not None and oi < len(old_features):
+                d_old = _feat_dist(old_features[oi])
+            if ni is not None and ni < len(new_features):
+                d_new = _feat_dist(new_features[ni])
+        if d_old is None or d_new is None:
+            continue
+        try:
+            gw_pairs.append((float(d_old), float(d_new)))
+        except (ValueError, TypeError):
+            continue
+
+    if len(gw_pairs) < 2:
+        return [], 0
+
+    gw_pairs.sort(key=lambda x: x[0])
+
+    segments = []
+    for i in range(len(gw_pairs) - 1):
+        old_lo, new_lo = gw_pairs[i]
+        old_hi, new_hi = gw_pairs[i + 1]
+        # Guard against non-increasing bounds (duplicate/degenerate GW pairs)
+        if old_hi <= old_lo or new_hi <= new_lo:
+            continue
+        segments.append({
+            'old_lo': old_lo,
+            'old_hi': old_hi,
+            'new_lo': new_lo,
+            'new_hi': new_hi,
+            'joint_len_new': new_hi - new_lo,
+            'joint_len_old': old_hi - old_lo,
+        })
+    return segments, len(segments)
+
+
+def compute_confidence(f_old, f_new, dist_diff):
+    """
+    Naive Bayes match confidence as a percentage (0-100).
+
+    Ported from the frontend ProbabilityModal (ResultsPanel.tsx): a product of
+    Gaussian likelihoods over distance, depth, length, width, and clock
+    differences, compared against a fixed unmatch prior.
+
+    Missing attributes contribute a neutral likelihood of 1.0 (no penalty),
+    so confidence degrades gracefully when vendor data is sparse.
+
+    Sigma values match the ProbabilityModal implementation:
+        dist sigma=0.5m, depth sigma=10 %WT, length/width sigma=20mm, clock sigma=1hr
+    """
+    def _gauss(delta, sigma):
+        # exp(-delta^2 / (2*sigma^2)); delta of 0 => 1.0 (perfect)
+        return math.exp(-(float(delta) ** 2) / (2.0 * float(sigma) ** 2))
+
+    # Distance likelihood (always available)
+    l_dist = _gauss(dist_diff, 0.5)
+
+    # Depth likelihood (optional)
+    d_old = f_old.get('depth')
+    d_new = f_new.get('depth')
+    if d_old is not None and d_new is not None:
+        try:
+            l_depth = _gauss(abs(float(d_old) - float(d_new)), 10.0)
+        except (ValueError, TypeError):
+            l_depth = 1.0
+    else:
+        l_depth = 1.0
+
+    # Length likelihood (optional, with keyword fallback)
+    len_old = f_old.get('length') if f_old.get('length') is not None else get_fallback(f_old, ['length', 'len', 'panjang'])
+    len_new = f_new.get('length') if f_new.get('length') is not None else get_fallback(f_new, ['length', 'len', 'panjang'])
+    if len_old is not None and len_new is not None:
+        try:
+            l_length = _gauss(abs(float(len_old) - float(len_new)), 20.0)
+        except (ValueError, TypeError):
+            l_length = 1.0
+    else:
+        l_length = 1.0
+
+    # Width likelihood (optional)
+    wid_old = f_old.get('width') if f_old.get('width') is not None else get_fallback(f_old, ['width', 'wid', 'lebar'])
+    wid_new = f_new.get('width') if f_new.get('width') is not None else get_fallback(f_new, ['width', 'wid', 'lebar'])
+    if wid_old is not None and wid_new is not None:
+        try:
+            l_width = _gauss(abs(float(wid_old) - float(wid_new)), 20.0)
+        except (ValueError, TypeError):
+            l_width = 1.0
+    else:
+        l_width = 1.0
+
+    # Clock likelihood (optional)
+    c_old = clock_to_hours(f_old.get('clock'))
+    c_new = clock_to_hours(f_new.get('clock'))
+    if c_old is not None and c_new is not None:
+        l_clock = _gauss(circular_clock_diff(c_old, c_new), 1.0)
+    else:
+        l_clock = 1.0
+
+    # Type-family match multiplier
+    type_match = 1.0 if type_family(f_old.get('type')) == type_family(f_new.get('type')) else 0.001
+
+    p_match = l_dist * l_depth * l_length * l_width * l_clock * type_match
+    p_unmatch = 0.05
+    confidence = (p_match / (p_match + p_unmatch)) * 100.0
+    return max(0.0, min(100.0, confidence))
+
+
+def row_from_pair(f1, f2, oi, ni, match_status, confidence=0.0):
     len1 = f1.get('length') if f1.get('length') is not None else get_fallback(f1, ['length', 'len', 'panjang'])
     wid1 = f1.get('width') if f1.get('width') is not None else get_fallback(f1, ['width', 'wid', 'lebar'])
     len2 = f2.get('length') if f2.get('length') is not None else get_fallback(f2, ['length', 'len', 'panjang'])
     wid2 = f2.get('width') if f2.get('width') is not None else get_fallback(f2, ['width', 'wid', 'lebar'])
-    
+
     c = {
         "Match/Unmatch": match_status,
+        "Confidence (%)": round(confidence, 1),
         "Identif. OLD": f1.get('featureId', f"Old-{oi}") if oi is not None else "-",
         "Identif. NEW": f2.get('featureId', f"New-{ni}") if ni is not None else "-",
         "Log Dist OLD (m)": f1.get('dist', None) if oi is not None else None,
@@ -292,7 +435,8 @@ def run_hungarian_alignment(params):
             gw_resolved += 1
             f1 = old_features[oi] if oi is not None else {}
             f2 = new_features[ni] if ni is not None else {}
-            comparison.append(row_from_pair(f1, f2, oi, ni, "Match"))
+            gw_conf = match.get('confidence', 100.0)
+            comparison.append(row_from_pair(f1, f2, oi, ni, "Match", gw_conf))
         elif is_confirmed:
             gw_failed += 1
             _sys.stderr.write(f"[HUNGARIAN] FAILED to resolve GW match: oldId={old_id_raw}, newId={new_id_raw}, status={status}\n")
@@ -309,97 +453,217 @@ def run_hungarian_alignment(params):
 
     # -----------------------------------------------------------------
     # 2. Remaining features -> Hungarian assignment
+    #
+    # v10.0 STRICT PER-JOINT CONTAINMENT:
+    #   - Anomalies (metal_loss, mechanical_damage, crack_like, ...) are
+    #     matched ONLY within the joint room bounded by two consecutive
+    #     LOCKED GWs. This eliminates cross-joint false matches ("data
+    #     loncat") where an anomaly in joint A jumps to a candidate in
+    #     joint B/C.
+    #   - Landmarks (valve, tee, bend, offtake) remain GLOBAL Hungarian:
+    #     they are sparse physical fixtures that may legitimately match
+    #     across wider distances.
+    # Concept ported from engine/matching.py:run_joint_centric_matching().
     # -----------------------------------------------------------------
     remaining_old_indices = [i for i in range(n) if i not in processed_old]
     remaining_new_indices = [j for j in range(m) if j not in processed_new]
 
-    ro = len(remaining_old_indices)
-    rn = len(remaining_new_indices)
+    # Build joint segments from the locked GW matches.
+    joint_segments, n_joints = build_joint_segments(gw_matches, old_features, new_features)
 
-    if ro > 0 and rn > 0:
-        # FIX (performance hardening): sort remaining new features by
-        # corrected distance and use bisect to only consider candidates
-        # within a generous window, instead of an unconditional O(ro*rn)
-        # full scan. Window is threshold-based so correctness is preserved.
+    # Classify remaining features into anomaly vs landmark buckets.
+    ANOMALY_TYPES = {'anomaly', 'metal loss', 'metal_loss', 'corrosion',
+                     'pitting', 'dent', 'gouge', 'crack', 'scc', 'lamination'}
+    anomaly_old = []
+    anomaly_new = []
+    landmark_old = []
+    landmark_new = []
+    for i in remaining_old_indices:
+        t = str(old_features[i].get('type', '')).lower()
+        if t in LANDMARK_TYPES:
+            landmark_old.append(i)
+        elif t in ANOMALY_TYPES or t not in ('weld',):
+            anomaly_old.append(i)
+    for j in remaining_new_indices:
+        t = str(new_features[j].get('type', '')).lower()
+        if t in LANDMARK_TYPES:
+            landmark_new.append(j)
+        elif t in ANOMALY_TYPES or t not in ('weld',):
+            anomaly_new.append(j)
+
+    _sys.stderr.write(
+        f"[HUNGARIAN] Joints: {n_joints} | "
+        f"anomalies OLD/NEW: {len(anomaly_old)}/{len(anomaly_new)} | "
+        f"landmarks OLD/NEW: {len(landmark_old)}/{len(landmark_new)}\n"
+    )
+
+    # -----------------------------------------------------------------
+    # 2a. PER-JOINT Hungarian for anomalies (strict containment).
+    # -----------------------------------------------------------------
+    anomaly_matched_pairs = []  # list of (old_idx, new_idx, dist_diff)
+    if n_joints > 0 and anomaly_old and anomaly_new:
+        for seg in joint_segments:
+            old_lo, old_hi = seg['old_lo'], seg['old_hi']
+            new_lo, new_hi = seg['new_lo'], seg['new_hi']
+            jlen_new = seg['joint_len_new']
+            jlen_old = seg['joint_len_old']
+
+            # Anomalies inside this joint (OLD side), not yet matched.
+            seg_old = [
+                i for i in anomaly_old
+                if i not in processed_old
+                and old_lo <= _feat_dist(old_features[i]) < old_hi
+            ]
+            # Anomalies inside this joint (NEW side), not yet matched.
+            seg_new = [
+                j for j in anomaly_new
+                if j not in processed_new
+                and new_lo <= _feat_dist(new_features[j]) < new_hi
+            ]
+            if not seg_old or not seg_new:
+                continue
+
+            na = len(seg_old)
+            nb = len(seg_new)
+            side = max(na, nb)
+            cost_mat = np.full((side, side), 1e9)
+
+            for a, i in enumerate(seg_old):
+                f1 = old_features[i]
+                dist1_old = _feat_dist(f1)
+                # Linear-reference the OLD anomaly position into the NEW
+                # joint space: ratio within the OLD joint applied to NEW span.
+                if jlen_old > 0:
+                    ratio = (dist1_old - old_lo) / jlen_old
+                else:
+                    ratio = 0.0
+                ratio = max(0.0, min(1.0, ratio))
+                dist1_mapped = new_lo + ratio * jlen_new
+                depth1 = f1.get('depth')
+                clock1 = clock_to_hours(f1.get('clock'))
+
+                for b, j in enumerate(seg_new):
+                    f2 = new_features[j]
+                    dist2 = _feat_dist(f2)
+                    dist_diff = abs(dist1_mapped - dist2)
+
+                    # Within-joint threshold is strict and fixed.
+                    if dist_diff > dist_thresh_base:
+                        continue
+
+                    cost = dist_diff
+                    if w_depth and depth1 is not None and f2.get('depth') is not None:
+                        cost += w_depth * abs(depth1 - f2.get('depth'))
+                    if w_clock:
+                        clock2 = clock_to_hours(f2.get('clock'))
+                        cost += w_clock * circular_clock_diff(clock1, clock2)
+                    cost_mat[a, b] = cost
+
+            row_ind, col_ind = linear_sum_assignment(cost_mat)
+            for a, b in zip(row_ind, col_ind):
+                if cost_mat[a, b] >= 1e9:
+                    continue
+                i = seg_old[a]
+                j = seg_new[b]
+                if i in processed_old or j in processed_new:
+                    continue
+                processed_old.add(i)
+                processed_new.add(j)
+                f1 = old_features[i]
+                f2 = new_features[j]
+                dd = abs(_feat_dist(f1) - _feat_dist(f2))
+                anomaly_matched_pairs.append((i, j, dd))
+
+        for (i, j, dd) in anomaly_matched_pairs:
+            f1 = old_features[i]
+            f2 = new_features[j]
+            conf = compute_confidence(f1, f2, dd)
+            comparison.append(row_from_pair(f1, f2, i, j, "Match", conf))
+
+        _sys.stderr.write(
+            f"[HUNGARIAN] Per-joint anomaly matches: {len(anomaly_matched_pairs)}\n"
+        )
+    elif anomaly_old and anomaly_new and n_joints == 0:
+        warnings.append(
+            "No locked girth-weld matches found — anomaly containment "
+            "disabled (no joints). All anomalies left unmatched. Run the "
+            "GW Simulator step first to lock weld pairs."
+        )
+        _sys.stderr.write("[HUNGARIAN] WARNING: 0 joints — anomalies cannot be contained, left unmatched\n")
+
+    # -----------------------------------------------------------------
+    # 2b. GLOBAL Hungarian for landmarks (valve, tee, bend, offtake).
+    # These are sparse physical fixtures; global matching is appropriate.
+    # -----------------------------------------------------------------
+    lo = len(landmark_old)
+    ln = len(landmark_new)
+    if lo > 0 and ln > 0:
         new_dist_pairs = sorted(
             (
                 (get_corrected_dist(new_features[j], dist_correction_map), j_idx)
-                for j_idx, j in enumerate(remaining_new_indices)
+                for j_idx, j in enumerate(landmark_new)
             ),
             key=lambda p: p[0]
         )
         new_dists_sorted = [p[0] for p in new_dist_pairs]
         new_jidx_sorted = [p[1] for p in new_dist_pairs]
 
-        cost_matrix = np.full((ro, rn), 1e9)
-
+        cost_matrix = np.full((lo, ln), 1e9)
         max_window = landmark_thresh + dist_thresh_base + dist_thresh_pct * 1e6
-        # cap window search generously; still verified by exact threshold below
 
-        for i_idx, i in enumerate(remaining_old_indices):
+        for i_idx, i in enumerate(landmark_old):
             f1 = old_features[i]
             t1_raw = str(f1.get('type', '')).lower()
-            is_landmark_1 = t1_raw in LANDMARK_TYPES
-            fam1 = type_family(t1_raw)
             dist1 = get_corrected_dist(f1, dist_correction_map)
             clock1 = clock_to_hours(f1.get('clock'))
             depth1 = f1.get('depth')
 
-            lo = bisect.bisect_left(new_dists_sorted, dist1 - max_window)
-            hi = bisect.bisect_right(new_dists_sorted, dist1 + max_window)
+            lo_w = bisect.bisect_left(new_dists_sorted, dist1 - max_window)
+            hi_w = bisect.bisect_right(new_dists_sorted, dist1 + max_window)
 
-            for k in range(lo, hi):
+            for k in range(lo_w, hi_w):
                 j_idx = new_jidx_sorted[k]
-                j = remaining_new_indices[j_idx]
+                j = landmark_new[j_idx]
                 f2 = new_features[j]
                 t2_raw = str(f2.get('type', '')).lower()
-                is_landmark_2 = t2_raw in LANDMARK_TYPES
-                fam2 = type_family(t2_raw)
 
-                if is_landmark_1 != is_landmark_2:
-                    continue
-                if is_landmark_1 and is_landmark_2 and t1_raw != t2_raw:
-                    continue
-                # FIX #3: non-landmark types must now also be compatible
-                # (same family), rather than passing through unchecked.
-                if not is_landmark_1 and not is_landmark_2 and fam1 != fam2:
+                # Landmarks require exact type match.
+                if t1_raw != t2_raw:
                     continue
 
                 dist2 = get_corrected_dist(f2, dist_correction_map)
                 dist_diff = abs(dist1 - dist2)
 
-                if is_landmark_1:
-                    threshold = landmark_thresh
-                else:
-                    threshold = dist_thresh_base + dist_thresh_pct * max(dist1, dist2)
-
-                if dist_diff > threshold:
+                if dist_diff > landmark_thresh:
                     continue
 
-                # FIX #4: soft penalty on top of distance, only among
-                # candidates that already pass the hard distance threshold.
                 cost = dist_diff
                 if w_depth and depth1 is not None and f2.get('depth') is not None:
                     cost += w_depth * abs(depth1 - f2.get('depth'))
                 if w_clock:
                     clock2 = clock_to_hours(f2.get('clock'))
                     cost += w_clock * circular_clock_diff(clock1, clock2)
-
                 cost_matrix[i_idx, j_idx] = cost
 
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
-
+        lm_count = 0
         for i_idx, j_idx in zip(row_ind, col_ind):
             cost = cost_matrix[i_idx, j_idx]
             if cost >= 1e9:
                 continue
-            i = remaining_old_indices[i_idx]
-            j = remaining_new_indices[j_idx]
-            f1 = old_features[i]
-            f2 = new_features[j]
+            i = landmark_old[i_idx]
+            j = landmark_new[j_idx]
+            if i in processed_old or j in processed_new:
+                continue
             processed_old.add(i)
             processed_new.add(j)
-            comparison.append(row_from_pair(f1, f2, i, j, "Match"))
+            f1 = old_features[i]
+            f2 = new_features[j]
+            dd = abs(_feat_dist(f1) - _feat_dist(f2))
+            conf = compute_confidence(f1, f2, dd)
+            comparison.append(row_from_pair(f1, f2, i, j, "Match", conf))
+            lm_count += 1
+        _sys.stderr.write(f"[HUNGARIAN] Global landmark matches: {lm_count}\n")
 
     # -----------------------------------------------------------------
     # 3 & 4. Remaining unmatched Old / New
