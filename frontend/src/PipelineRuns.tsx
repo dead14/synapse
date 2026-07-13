@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FiEye, FiDownload, FiSettings, FiBell, FiActivity, FiClock, FiCheckCircle } from 'react-icons/fi';
+import { FiEye, FiDownload, FiSettings, FiBell, FiActivity, FiClock, FiCheckCircle, FiTrash2 } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 
@@ -43,7 +43,7 @@ export default function PipelineRuns() {
     <div className="min-h-screen bg-[#f8f9fc] flex flex-col items-center pb-12">
       {/* Header Area */}
       <div className="w-full bg-white shadow-sm pb-6 pt-8 px-8 flex justify-center border-b border-gray-100">
-        <div className="w-full max-w-6xl flex justify-between items-start">
+        <div className="w-full flex justify-between items-start">
           <div>
             <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
               <span className="bg-[#1a2130] text-white p-2 rounded-xl"><FiActivity size={24} /></span>
@@ -63,10 +63,10 @@ export default function PipelineRuns() {
       </div>
 
       {/* Main Content Area */}
-      <div className="w-full max-w-6xl px-8 mt-8 flex flex-col gap-6">
+      <div className="w-full mt-8 flex flex-col gap-6">
         
         {/* Table Container */}
-        <div className="bg-white rounded-[24px] shadow-sm border border-gray-100 overflow-hidden">
+        <div className="bg-white shadow-sm border-y border-gray-100 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
@@ -149,6 +149,24 @@ export default function PipelineRuns() {
                           title="Fitness For Service"
                         >
                           ⚙️ FFS
+                        </button>
+
+                        {/* Action: Delete */}
+                        <button 
+                          onClick={() => {
+                            if(window.confirm('Are you sure you want to delete this run?')) {
+                              fetch(`http://localhost:8000/api/pipeline-runs/${run.id}`, {
+                                method: 'DELETE',
+                                headers: { Authorization: `Bearer ${localStorage.getItem('synapse_token')}` }
+                              }).then(() => {
+                                setRuns(prev => prev.filter(r => r.id !== run.id));
+                              }).catch(err => console.error('Failed to delete', err));
+                            }
+                          }}
+                          className="flex items-center justify-center p-2 text-red-500 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
+                          title="Delete Run"
+                        >
+                          <FiTrash2 size={18} />
                         </button>
                       </div>
                     </td>

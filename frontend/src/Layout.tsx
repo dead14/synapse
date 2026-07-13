@@ -23,27 +23,27 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   ];
 
   return (
-    <div className="w-screen h-screen bg-[#f8f9fc] flex font-sans text-gray-700 overflow-hidden">
+    <div className="w-screen h-screen bg-[#f8f9fc] flex flex-col font-sans text-gray-700 overflow-hidden">
       
-      {/* Expanded Sidebar */}
-      <div className="w-64 bg-white border-r border-gray-100 flex flex-col py-8 px-4 shadow-sm z-10 shrink-0">
-        <h2 className="font-bold text-lg text-gray-900 mb-8 px-4">Pipeline integrity suite</h2>
+      {/* Top Navbar */}
+      <div className="w-full h-16 bg-white border-b border-gray-100 flex items-center px-6 shadow-sm z-20 shrink-0">
+        <h2 className="font-bold text-lg text-gray-900 shrink-0 mr-8">Pipeline integrity suite</h2>
         
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-row items-center gap-2 overflow-x-auto h-full hide-scrollbar flex-1">
           {menuItems.map((item, idx) => {
             const isActive = location.pathname === item.path;
             return (
               <div 
                 key={idx}
                 onClick={() => navigate(item.path)}
-                className={`flex items-center gap-4 px-4 py-3 rounded-xl cursor-pointer transition-colors font-medium
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer transition-colors font-medium whitespace-nowrap
                   ${isActive 
                     ? 'bg-[#dbeafe] text-blue-700' 
                     : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                   }`}
               >
                 {item.icon}
-                <span>{item.name}</span>
+                <span className="text-sm">{item.name}</span>
               </div>
             );
           })}

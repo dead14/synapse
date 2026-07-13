@@ -191,7 +191,7 @@ layer(base);
 }
 
 @utility menu-item {
-  @apply relative flex items-center w-full gap-1.5 px-2 py-1 font-medium rounded-md text-[11px];
+  @apply relative flex items-center w-full gap-2 px-3 py-2 font-medium rounded-lg text-sm;
 }
 
 @utility menu-item-active {
@@ -212,7 +212,7 @@ layer(base);
 
 @utility menu-item-icon-size {
   & svg {
-    @apply !size-3.5;
+    @apply !size-5;
   }
 }
 
@@ -233,7 +233,7 @@ layer(base);
 }
 
 @utility menu-dropdown-item {
-  @apply relative flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium;
+  @apply relative flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium;
 }
 
 @utility menu-dropdown-item-active {

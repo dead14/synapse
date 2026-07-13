@@ -253,465 +253,422 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
   const getPosPct = (val: number) => (val / maxDist) * 100;
 
   return (
-    <div className="bg-white text-gray-800 rounded-2xl p-8 shadow-2xl border border-gray-200 animate-fade-in font-sans">
-      <div className="flex gap-6 items-center justify-between bg-gray-50 p-6 rounded-2xl border border-gray-200 mb-6">
-        <div>
-          <h3 className="font-bold text-gray-800 text-lg mb-1">Matching Parameters</h3>
-          <p className="text-sm text-gray-500">Adjust the OTA % slider and toggle DTW Correction to optimize Girth Weld alignment.</p>
-        </div>
-        <div className="flex items-center gap-8">
-          <div className="flex flex-col min-w-[250px]">
-            <label className="text-sm font-medium text-gray-700 mb-2 flex justify-between">
-              <span>Slippage Tolerance</span>
-              <span className="font-bold text-blue-600">{ota}%</span>
-            </label>
-            <input type="range" min="0" max="15" step="0.5" value={ota} onChange={e => setOta(parseFloat(e.target.value))} className="w-full accent-blue-500" />
-          </div>
-          <div className="flex items-center gap-4 bg-white px-4 py-3 rounded-xl border border-gray-200">
-            <span className="font-medium text-sm leading-tight text-gray-700">Apply DTW<br/><span className="text-xs text-gray-500">Correction</span></span>
-            <button onClick={() => setDtwOn(!dtwOn)} className={`w-14 h-8 rounded-full transition-colors relative ${dtwOn ? 'bg-blue-500' : 'bg-gray-300'}`}>
-              <div className={`w-6 h-6 bg-white rounded-full absolute top-1 transition-all shadow-sm ${dtwOn ? 'left-7' : 'left-1'}`} />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Visualizer Header with Zoom Control */}
-      <div className="flex justify-between items-end mb-2 mt-4">
-         <div className="flex items-center gap-4">
-           <h3 className="text-sm font-bold text-gray-500">Timeline Viewer (12+ km)</h3>
-           {selectedGWs.length === 2 && (
-             <div className="flex items-center gap-3 bg-yellow-400/10 px-4 py-1.5 rounded-full border border-yellow-400/30 animate-fade-in">
-               <span className="text-xs text-yellow-400 font-mono">
-                 Spool Length: {(selectedGWs[1] - selectedGWs[0]).toFixed(2)}m
-               </span>
-               <button 
-                 onClick={() => setShow3DViewer(true)}
-                 className="flex items-center gap-2 bg-yellow-500 hover:bg-yellow-400 text-gray-900 text-xs font-bold px-3 py-1 rounded shadow-lg transition-colors"
-               >
-                 <FiBox /> Look 3D Pipeline
-               </button>
-             </div>
-           )}
-         </div>
-         <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-500">Zoom:</span>
-            <input 
-              type="range" min="100" max="15000" step="100" 
-              value={zoom} onChange={(e) => setZoom(parseInt(e.target.value))}
-              className="w-32 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-gray-400"
-            />
-         </div>
-      </div>
-
-      {/* Timeline Visualizer */}
-      <div className="mb-8 relative h-80 bg-gray-50 rounded-xl border border-gray-200 overflow-x-auto custom-scrollbar">
-        {isCalculating && (
-          <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] z-50 flex items-center justify-center">
-            <div className="bg-white border border-blue-200 px-6 py-3 rounded-xl shadow-lg font-bold text-blue-600 animate-pulse flex items-center gap-3">
-               <svg className="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-               AI Recalculating DTW...
-            </div>
-          </div>
-        )}
-        <div className="relative h-full" style={{ width: `${zoom}%`, minWidth: '100%', padding: '0 40px' }}>
-          <div className="relative w-full h-full">
-           <div className="absolute top-4 left-0 text-xs font-bold text-gray-500 uppercase sticky left-0">Run Old (Reference)</div>
-           <div className="absolute top-20 left-0 right-0 h-[2px] bg-gray-700"></div>
-           {oldGWs.map((pos, i) => {
-              const m = matches.find(mx => mx.oldIndex === i);
-              const isSkipped = m && m.status === 'Skipped';
-              const isFlagged = m && m.status === 'Flagged';
-              const isSelected = selectedGWs.includes(pos);
-              return (
-              <div 
-                key={`old-${i}`} 
-                className="absolute top-[72px] flex flex-col items-center cursor-pointer group z-20" 
-                style={{ left: `${getPosPct(pos)}%`, transform: 'translateX(-50%)' }}
-                onClick={() => handleGWClick(pos, 'old')}
-              >
-                 <div className={`w-2 h-6 rounded transition-all shadow-md ${isSelected && selectedTrack === 'old' ? 'bg-yellow-400 scale-125' : isSkipped ? 'bg-rose-500 group-hover:bg-rose-400' : isFlagged ? 'bg-amber-400 group-hover:bg-amber-300' : 'bg-green-500 group-hover:bg-green-400 group-hover:scale-110'}`}></div>
-                 <div className={`text-[10px] mt-1 font-mono font-bold ${isSelected && selectedTrack === 'old' ? 'text-yellow-400' : isSkipped ? 'text-rose-500' : isFlagged ? 'text-amber-500' : 'text-green-600'}`}>{pos.toFixed(2)}m</div>
-              </div>
-              )
-           })}
-
-           {/* Selected Spool Highlight for Old */}
-           {selectedGWs.length === 2 && selectedTrack === 'old' && (
-             <div 
-               className="absolute top-[72px] h-6 bg-yellow-400/20 border-y border-yellow-400/50 z-10 animate-pulse"
-               style={{ 
-                 left: `${getPosPct(selectedGWs[0])}%`, 
-                 width: `${getPosPct(selectedGWs[1]) - getPosPct(selectedGWs[0])}%` 
-               }}
-             />
-           )}
-
-           <div className="absolute top-[200px] left-0 text-xs font-bold text-gray-500 uppercase sticky left-0">Run New (Current)</div>
-           <div className="absolute top-[240px] left-0 right-0 h-[2px] bg-gray-700"></div>
-           {newGWs.map((pos, i) => {
-              const m = matches.find(mx => mx.newIndex === i);
-              const isSkipped = m && m.status === 'Skipped';
-              const isFlagged = m && m.status === 'Flagged';
-              const isSelected = selectedGWs.includes(pos);
-              return (
-                <div 
-                  key={`new-${i}`} 
-                  className="absolute top-[232px] flex flex-col items-center cursor-pointer group z-20" 
-                  style={{ left: `${getPosPct(pos)}%`, transform: 'translateX(-50%)' }}
-                  onClick={() => handleGWClick(pos, 'new')}
-                >
-                   <div className={`w-1.5 h-6 rounded transition-all shadow-md ${isSelected && selectedTrack === 'new' ? 'bg-yellow-400 scale-125' : isSkipped ? 'bg-rose-500 group-hover:bg-rose-400' : isFlagged ? 'bg-amber-400 group-hover:bg-amber-300' : 'bg-blue-500 group-hover:bg-blue-400'}`}></div>
-                   <div className={`text-[10px] mt-1 font-mono font-bold ${isSelected && selectedTrack === 'new' ? 'text-yellow-400' : isSkipped ? 'text-rose-500' : isFlagged ? 'text-amber-500' : 'text-blue-600'}`}>{pos.toFixed(2)}m</div>
-                </div>
-              )
-           })}
-
-           {/* Selected Spool Highlight for New */}
-           {selectedGWs.length === 2 && selectedTrack === 'new' && (
-             <div 
-               className="absolute top-[232px] h-6 bg-yellow-400/20 border-y border-yellow-400/50 z-10 animate-pulse"
-               style={{ 
-                 left: `${getPosPct(selectedGWs[0])}%`, 
-                 width: `${getPosPct(selectedGWs[1]) - getPosPct(selectedGWs[0])}%` 
-               }}
-             />
-           )}
-
-           {/* Draw dashed lines connecting matches */}
-           <svg className="absolute inset-0 w-full h-full pointer-events-none">
-              {/* MATCHING LINES (Draw for Match and Flagged) */}
-              {matches.filter(m => m.status === 'Match' || m.status === 'Flagged').map((m, i) => {
-                 const x1 = `${getPosPct(m.oldVal as number)}%`;
-                 const y1 = 116; // bottom of old text
-                 const x2 = `${getPosPct(m.newVal as number)}%`;
-                 const y2 = 232; // top of new tick
-                 const isFlagged = m.status === 'Flagged';
-                 return (
-                   <line key={`line-${i}`} x1={x1} y1={y1} x2={x2} y2={y2} stroke={isFlagged ? "rgba(251, 191, 36, 0.6)" : "rgba(147, 197, 253, 0.4)"} strokeWidth="1.5" strokeDasharray="4 4" />
-                 );
-              })}
-           </svg>
-          </div>
-        </div>
-      </div>
-
+    <div className="bg-transparent text-gray-800 font-sans flex flex-col gap-6 animate-fade-in">
       
-      {/* Tabs Header */}
-      <div className="flex border-b border-gray-200 mb-6 bg-gray-50 rounded-t-xl overflow-hidden">
-        {[
-          { id: 'odometer', label: 'Odometer Slippage' },
-          { id: 'offset', label: 'GW Offset' },
-          { id: 'unmatched', label: 'Table GW Unmatched' },
-          { id: 'matched', label: 'Table GW Matched' },
-          { id: 'all', label: 'Table GW' }
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => { setActiveTab(tab.id as any); setCurrentPage(1); }}
-            className={`px-6 py-4 text-sm font-medium transition-colors border-b-2 ${
-              activeTab === tab.id 
-                ? 'border-blue-500 text-blue-600 bg-white' 
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="mb-8 min-h-[300px]">
-        {activeTab === 'odometer' && <OdometerDashboard matches={matches.filter(m => m.status === 'Match')} ota={ota} setOta={setOta} dtwOn={dtwOn} setDtwOn={setDtwOn} />}
-        {activeTab === 'offset' && (
-          <div className="h-64 bg-gray-50 p-4 rounded-xl border border-gray-200">
-            <h4 className="text-center text-blue-600 font-semibold mb-2 bg-blue-600/10 py-1 inline-block px-4 mx-auto block w-max rounded">Girth Weld Offset</h4>
-             <Line data={chartData} options={{
-                ...chartOptions,
-                onClick: (e: any, elements: any[]) => {
-                  if (elements.length > 0) {
-                    const idx = elements[0].index;
-                    const match = matches[idx];
-                    if (match && match.oldVal !== null) {
-                      // Select GW
-                      setSelectedGWs(prev => {
-                        const dist = match.oldVal;
-                        if (prev.includes(dist)) return prev.filter(d => d !== dist);
-                        const next = [...prev, dist].slice(-2);
-                        if (next.length === 2) setShow3DViewer(true);
-                        return next;
-                      });
-                      
-                      // Scroll to table row
-                      const rowEl = tableRowRefs.current[match.id];
-                      if (rowEl) {
-                        rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        rowEl.classList.add('animate-pulse', 'bg-yellow-200');
-                        setTimeout(() => rowEl.classList.remove('animate-pulse', 'bg-yellow-200'), 2000);
-                      }
-                    }
-                  }
-                }
-              } as any} />
-          </div>
-        )}
-
-        {activeTab === 'unmatched' && (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="p-3 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
-              <button className="p-2 bg-gray-700 text-white hover:bg-gray-800 rounded shadow-sm"><FiDownload size={16} /></button>
-              <div className="relative">
-                <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input type="text" placeholder="Search" className="pl-9 pr-4 py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 text-sm w-64" />
-              </div>
-            </div>
-            <table className="w-full text-sm text-left">
-              <thead className="text-gray-900 bg-gray-50 border-b border-gray-200 font-semibold">
-                <tr>
-                  <th className="px-6 py-3">Old From <span className="text-blue-500">m</span></th>
-                  <th className="px-6 py-3">Old To <span className="text-blue-500">m</span></th>
-                  <th className="px-6 py-3">New From <span className="text-blue-500">m</span></th>
-                  <th className="px-6 py-3">New To <span className="text-blue-500">m</span></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 text-gray-600">
-                {unmatchedRanges.map((r, idx) => (
-                  <tr key={idx} className="hover:bg-gray-50">
-                    <td className="px-6 py-2">{r.oldFrom !== null ? r.oldFrom.toFixed(3) : ''}</td>
-                    <td className="px-6 py-2">{r.oldTo !== null && r.oldTo !== r.oldFrom ? r.oldTo.toFixed(3) : ''}</td>
-                    <td className="px-6 py-2">{r.newFrom !== null ? r.newFrom.toFixed(3) : ''}</td>
-                    <td className="px-6 py-2">{r.newTo !== null && r.newTo !== r.newFrom ? r.newTo.toFixed(3) : ''}</td>
-                  </tr>
-                ))}
-                {unmatchedRanges.length === 0 && (
-                  <tr><td colSpan={4} className="px-6 py-8 text-center text-gray-500">No unmatched ranges found.</td></tr>
+      {/* 2-Column Dashboard Grid */}
+      <div className="grid grid-cols-1 xl:grid-cols-5 gap-5 items-start">
+        
+        {/* LEFT COLUMN: Visuals & Trends */}
+        <div className="xl:col-span-3 flex flex-col gap-5">
+          
+          {/* Top: Timeline Viewer */}
+          <div className="bg-white rounded-2xl p-6 shadow-xl shadow-blue-900/5 border border-gray-200 flex flex-col">
+            {/* Visualizer Header */}
+            <div className="flex justify-between items-end mb-4 border-b border-gray-100 pb-4">
+              <div className="flex items-center gap-4">
+                <div>
+                  <h3 className="text-lg font-bold text-gray-800">Timeline Viewer</h3>
+                  <p className="text-xs font-medium text-gray-500 mt-1">12+ km Interactive Pipeline Alignment Map</p>
+                </div>
+                {selectedGWs.length === 2 && (
+                  <div className="flex items-center gap-3 bg-yellow-400/10 px-4 py-1.5 rounded-full border border-yellow-400/30 animate-fade-in">
+                    <span className="text-xs text-yellow-500 font-mono font-bold">
+                      Spool Length: {(selectedGWs[1] - selectedGWs[0]).toFixed(2)}m
+                    </span>
+                    <button 
+                      onClick={() => setShow3DViewer(true)}
+                      className="flex items-center gap-2 bg-yellow-500 hover:bg-yellow-400 text-gray-900 text-xs font-bold px-3 py-1 rounded shadow-md transition-colors"
+                    >
+                      <FiBox /> View in 3D
+                    </button>
+                  </div>
                 )}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {activeTab === 'matched' && (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="p-3 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
-              <div className="flex gap-2">
-                <button className="p-1.5 hover:bg-gray-200 rounded text-gray-700"><FiPlus size={18} /></button>
-                <button className="p-1.5 hover:bg-gray-200 rounded text-gray-700"><FiMinus size={18} /></button>
-                <button className="p-1.5 bg-gray-700 text-white hover:bg-gray-800 rounded shadow-sm ml-2"><FiDownload size={16} /></button>
               </div>
-              <div className="relative">
-                <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <div className="flex items-center gap-2 bg-gray-50 px-4 py-2 rounded-xl border border-gray-200 shadow-inner">
+                <span className="text-xs font-bold text-gray-500 tracking-wide uppercase">Zoom</span>
                 <input 
-                  type="text" 
-                  placeholder="Search" 
-                  value={searchQuery}
-                  onChange={(e) => {setSearchQuery(e.target.value); setCurrentPage(1);}}
-                  className="pl-9 pr-4 py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 text-sm w-64" 
+                  type="range" min="100" max="15000" step="100" 
+                  value={zoom} onChange={(e) => setZoom(parseInt(e.target.value))}
+                  className="w-32 h-1.5 bg-gray-300 rounded-lg appearance-none cursor-pointer accent-blue-600"
                 />
               </div>
             </div>
-            
-            <table className="w-full text-sm text-left">
-              <thead className="text-gray-900 bg-gray-50 border-b border-gray-200 font-semibold">
-                <tr>
-                  <th className="px-4 py-3 w-12 text-center"></th>
-                  <th className="px-4 py-3 w-12 text-center"></th>
-                  <th className="px-6 py-3">GW Distance Run 1 <span className="text-blue-500">m</span></th>
-                  <th className="px-6 py-3">GW Distance Run 2 <span className="text-blue-500">m</span></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 text-gray-600">
-                {paginatedMatched.map((row) => (
-                  <React.Fragment key={row.id}>
-                    <tr className={`hover:bg-gray-50 transition-colors ${editingId === row.id ? 'bg-blue-50/40 text-blue-900 border-l-[3px] border-blue-500' : 'border-l-[3px] border-transparent'}`}>
-                      <td className="px-4 py-2 text-center">
-                        {editingId === row.id ? (
-                           <button onClick={() => setEditingId(null)} className="text-blue-500 hover:text-blue-700 p-1 bg-blue-100 rounded-full transition-colors"><FiX size={16} /></button>
-                        ) : (
-                           <button 
-                              onClick={() => {
-                                setEditingId(row.id);
-                                setEditRun1(row.oldVal !== null ? row.oldVal.toFixed(3) : '');
-                                setEditRun2(row.newVal !== null ? row.newVal.toFixed(3) : '');
-                              }} 
-                              className="text-gray-400 hover:text-blue-600 transition-colors"
-                           >
-                             <FiEdit size={16} />
-                           </button>
-                        )}
-                      </td>
-                      <td className="px-4 py-2 text-center">
-                        <input type="checkbox" className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500" />
-                      </td>
-                      <td className="px-6 py-2">{row.oldVal !== null ? row.oldVal.toFixed(3) : '-'}</td>
-                      <td className="px-6 py-2">{row.newVal !== null ? row.newVal.toFixed(3) : '-'}</td>
-                    </tr>
-                    
-                    {/* Inline Edit Form */}
-                    {editingId === row.id && (
-                      <tr className="bg-white shadow-inner">
-                        <td colSpan={4} className="px-10 py-6 border-b border-gray-200 border-l-[3px] border-blue-500 relative">
-                          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-b from-blue-500/10 to-transparent"></div>
-                          <h5 className="text-[15px] font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                            <FiEdit className="text-blue-500" /> Adjust GirthWeld Match Distance
-                          </h5>
-                          
-                          <div className="flex gap-8 max-w-xl mb-6">
-                            <div className="flex-1">
-                              <label className="block text-xs font-medium text-gray-500 mb-1.5 uppercase tracking-wider">GW Distance Run 1</label>
-                              <div className="flex shadow-sm rounded-lg overflow-hidden border border-gray-200 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-all bg-white">
-                                 <input type="text" value={editRun1} onChange={e => setEditRun1(e.target.value)} className="flex-1 px-3 py-2 outline-none text-sm text-gray-900 font-mono" />
-                                 <span className="bg-gray-50 px-3 py-2 text-gray-400 text-sm border-l border-gray-200 font-medium">m</span>
-                              </div>
-                            </div>
-                            
-                            <div className="flex-1">
-                              <label className="block text-xs font-medium text-gray-500 mb-1.5 uppercase tracking-wider">GW Distance Run 2</label>
-                              <div className="flex shadow-sm rounded-lg overflow-hidden border border-gray-200 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-all bg-white">
-                                 <input type="text" value={editRun2} onChange={e => setEditRun2(e.target.value)} className="flex-1 px-3 py-2 outline-none text-sm text-gray-900 font-mono" />
-                                 <span className="bg-gray-50 px-3 py-2 text-gray-400 text-sm border-l border-gray-200 font-medium">m</span>
-                              </div>
-                            </div>
-                          </div>
-                          
-                          <div className="flex items-center gap-3 pt-2">
-                             <button 
-                               onClick={() => setEditingId(null)} 
-                               className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 shadow-sm text-sm"
-                             >
-                               <FiSave size={16} /> Save Changes
-                             </button>
-                             <button 
-                               onClick={() => setEditingId(null)}
-                               className="px-5 py-2 rounded-lg font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors text-sm"
-                             >
-                               Cancel
-                             </button>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table>
-            
-            {/* Pagination */}
-            <div className="flex justify-between items-center px-4 py-3 bg-gray-50 border-t border-gray-200">
-               <div className="flex gap-1">
-                 {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => (
-                   <button 
-                     key={i} 
-                     onClick={() => setCurrentPage(i + 1)}
-                     className={`w-8 h-8 flex items-center justify-center border ${currentPage === i + 1 ? 'bg-gray-200 border-gray-300 font-semibold' : 'bg-white border-transparent hover:bg-gray-100'}`}
-                   >
-                     {i + 1}
-                   </button>
-                 ))}
-                 {totalPages > 5 && <span className="w-8 h-8 flex items-center justify-center">...</span>}
-                 {totalPages > 5 && (
-                   <button 
-                     onClick={() => setCurrentPage(totalPages)}
-                     className={`w-8 h-8 flex items-center justify-center border ${currentPage === totalPages ? 'bg-gray-200 border-gray-300 font-semibold' : 'bg-white border-transparent hover:bg-gray-100'}`}
-                   >
-                     {totalPages}
-                   </button>
-                 )}
-                 <button onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))} className="w-8 h-8 flex items-center justify-center hover:bg-gray-200"><FiChevronRight /></button>
-               </div>
-               <div className="flex items-center gap-2 text-sm text-gray-500">
-                 Items per page: 
-                 <select className="border border-gray-300 rounded px-2 py-1 bg-white">
-                   <option>10</option>
-                   <option>25</option>
-                   <option>50</option>
-                 </select>
-               </div>
-            </div>
-          </div>
-        )}
 
-        {(activeTab === 'all' || activeTab === 'odometer') && (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden flex flex-col max-h-[400px] mt-8">
-             <div className="flex justify-between items-center px-6 py-3 bg-gray-50 border-b border-gray-200 sticky top-0 shrink-0">
-              <h4 className="font-semibold text-gray-800">Match Results Data</h4>
-              <div className="flex gap-2">
-                <button onClick={handleDownloadExcel} className="text-sm flex items-center gap-2 bg-green-600 text-white px-3 py-1.5 rounded-lg hover:bg-green-700 transition-colors">
-                  <FiDownload /> Export Excel
-                </button>
-                <button onClick={() => setIsTableExpanded(!isTableExpanded)} className="text-gray-500 hover:text-gray-800 hover:bg-gray-200 rounded p-1.5 transition-colors">
-                  {isTableExpanded ? <FiMinimize2 size={16} /> : <FiMaximize2 size={16} />}
-                </button>
+            {/* Timeline Visualizer */}
+            <div className="relative h-72 bg-gradient-to-r from-gray-50 to-white rounded-xl border border-gray-200 overflow-x-auto custom-scrollbar shadow-inner">
+              {isCalculating && (
+                <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] z-50 flex items-center justify-center rounded-xl">
+                  <div className="bg-white border border-blue-200 px-6 py-3 rounded-xl shadow-xl font-bold text-blue-600 animate-pulse flex items-center gap-3">
+                    <svg className="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    AI Recalculating DTW...
+                  </div>
+                </div>
+              )}
+              <div className="relative h-full" style={{ width: `${zoom}%`, minWidth: '100%', padding: '0 40px' }}>
+                <div className="relative w-full h-full">
+                  <div className="absolute top-4 left-0 text-[10px] font-bold text-gray-400 tracking-wider uppercase sticky">Run Old (Reference)</div>
+                  <div className="absolute top-[70px] left-0 right-0 h-px bg-green-500/50"></div>
+                  {oldGWs.map((pos, i) => {
+                    const m = matches.find(mx => mx.oldIndex === i);
+                    const isSkipped = m && m.status === 'Skipped';
+                    const isFlagged = m && m.status === 'Flagged';
+                    const isSelected = selectedGWs.includes(pos);
+                    return (
+                    <div 
+                      key={`old-${i}`} 
+                      className="absolute top-[60px] flex flex-col items-center cursor-pointer group z-20" 
+                      style={{ left: `${getPosPct(pos)}%`, transform: 'translateX(-50%)' }}
+                      onClick={() => handleGWClick(pos, 'old')}
+                    >
+                      <div className={`w-1.5 h-5 rounded-full transition-all shadow-sm ${isSelected && selectedTrack === 'old' ? 'bg-yellow-400 scale-125 shadow-yellow-500/50' : isSkipped ? 'bg-rose-500 group-hover:bg-rose-400' : isFlagged ? 'bg-amber-400 group-hover:bg-amber-300' : 'bg-green-500 group-hover:bg-green-400 group-hover:scale-110'}`}></div>
+                      <div className={`text-[9px] mt-1.5 font-mono font-bold ${isSelected && selectedTrack === 'old' ? 'text-yellow-500' : isSkipped ? 'text-rose-500' : isFlagged ? 'text-amber-500' : 'text-green-600/80'}`}>{pos.toFixed(2)}m</div>
+                    </div>
+                    )
+                  })}
+
+                  {/* Selected Spool Highlight for Old */}
+                  {selectedGWs.length === 2 && selectedTrack === 'old' && (
+                    <div 
+                      className="absolute top-[60px] h-5 bg-yellow-400/20 border-y border-yellow-400/50 z-10 animate-pulse rounded"
+                      style={{ 
+                        left: `${getPosPct(selectedGWs[0])}%`, 
+                        width: `${getPosPct(selectedGWs[1]) - getPosPct(selectedGWs[0])}%` 
+                      }}
+                    />
+                  )}
+
+                  <div className="absolute top-[170px] left-0 text-[10px] font-bold text-gray-400 tracking-wider uppercase sticky">Run New (Current)</div>
+                  <div className="absolute top-[200px] left-0 right-0 h-px bg-blue-500/50"></div>
+                  {newGWs.map((pos, i) => {
+                    const m = matches.find(mx => mx.newIndex === i);
+                    const isSkipped = m && m.status === 'Skipped';
+                    const isFlagged = m && m.status === 'Flagged';
+                    const isSelected = selectedGWs.includes(pos);
+                    return (
+                      <div 
+                        key={`new-${i}`} 
+                        className="absolute top-[190px] flex flex-col items-center cursor-pointer group z-20" 
+                        style={{ left: `${getPosPct(pos)}%`, transform: 'translateX(-50%)' }}
+                        onClick={() => handleGWClick(pos, 'new')}
+                      >
+                        <div className={`w-1.5 h-5 rounded-full transition-all shadow-sm ${isSelected && selectedTrack === 'new' ? 'bg-yellow-400 scale-125 shadow-yellow-500/50' : isSkipped ? 'bg-rose-500 group-hover:bg-rose-400' : isFlagged ? 'bg-amber-400 group-hover:bg-amber-300' : 'bg-blue-500 group-hover:bg-blue-400 group-hover:scale-110'}`}></div>
+                        <div className={`text-[9px] mt-1.5 font-mono font-bold ${isSelected && selectedTrack === 'new' ? 'text-yellow-500' : isSkipped ? 'text-rose-500' : isFlagged ? 'text-amber-500' : 'text-blue-600/80'}`}>{pos.toFixed(2)}m</div>
+                      </div>
+                    )
+                  })}
+
+                  {/* Selected Spool Highlight for New */}
+                  {selectedGWs.length === 2 && selectedTrack === 'new' && (
+                    <div 
+                      className="absolute top-[190px] h-5 bg-yellow-400/20 border-y border-yellow-400/50 z-10 animate-pulse rounded"
+                      style={{ 
+                        left: `${getPosPct(selectedGWs[0])}%`, 
+                        width: `${getPosPct(selectedGWs[1]) - getPosPct(selectedGWs[0])}%` 
+                      }}
+                    />
+                  )}
+
+                  {/* Draw dashed lines connecting matches */}
+                  <svg className="absolute inset-0 w-full h-full pointer-events-none">
+                    {/* MATCHING LINES */}
+                    {matches.filter(m => m.status === 'Match' || m.status === 'Flagged').map((m, i) => {
+                        const x1 = `${getPosPct(m.oldVal as number)}%`;
+                        const y1 = 80; // bottom of old text
+                        const x2 = `${getPosPct(m.newVal as number)}%`;
+                        const y2 = 190; // top of new tick
+                        const isFlagged = m.status === 'Flagged';
+                        return (
+                          <line key={`line-${i}`} x1={x1} y1={y1} x2={x2} y2={y2} stroke={isFlagged ? "rgba(251, 191, 36, 0.4)" : "rgba(147, 197, 253, 0.3)"} strokeWidth="1" strokeDasharray="3 3" />
+                        );
+                    })}
+                  </svg>
+                </div>
               </div>
             </div>
-            <div className="overflow-y-auto flex-1 custom-scrollbar">
-              <table className="w-full text-sm text-left">
-                <thead className="text-gray-500 bg-gray-50 sticky top-0 border-b border-gray-200 z-10">
-                  <tr>
-                    <th className="px-6 py-4 font-normal">Status</th>
-                    <th className="px-6 py-4 font-normal">Old (m)</th>
-                    <th className="px-6 py-4 font-normal">New (m)</th>
-                    <th className="px-6 py-4 font-normal">Var %</th>
-                    <th className="px-6 py-4 font-normal">Offset</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {matches.map((row) => (
-                    <tr key={row.id} 
-                      ref={(el: HTMLTableRowElement | null) => { if (el) tableRowRefs.current[row.id] = el; }}
-                      className={`transition-colors cursor-pointer ${
-                        (row.oldVal !== null && selectedGWs.includes(row.oldVal)) || (row.newVal !== null && selectedGWs.includes(row.newVal))
-                          ? 'bg-yellow-100 hover:bg-yellow-200' 
-                          : row.status === 'Skipped'
-                            ? 'bg-rose-50 hover:bg-rose-100'
-                            : row.status === 'Flagged'
-                              ? 'bg-amber-50 hover:bg-amber-100'
-                              : 'hover:bg-gray-100'
-                      }`}
-                      onMouseMove={(e) => setTooltipState({ x: e.clientX, y: e.clientY, row: row })}
-                      onMouseLeave={() => setTooltipState(null)}
-                      onClick={() => {
-                        if (row.oldVal === null) return;
-                        setSelectedGWs(prev => {
-                          const dist = row.oldVal;
-                          if (prev.includes(dist)) return prev.filter(d => d !== dist);
-                          const next = [...prev, dist].slice(-2);
-                          if (next.length === 2) setShow3DViewer(true);
-                          return next;
-                        });
-                      }}>
-                      <td className="px-6 py-3 flex items-center gap-2">
-                        {row.status === 'Match' ? (
-                          <><div className="w-2 h-2 rounded-full bg-blue-400"></div> Match</>
-                        ) : (
-                          <><div className="w-2 h-2 rounded-full bg-rose-400"></div> Skipped</>
-                        )}
-                      </td>
-                      <td className="px-6 py-3">{row.oldVal !== null ? row.oldVal.toFixed(2) : '-'}</td>
-                      <td className="px-6 py-3">{row.newVal !== null ? row.newVal.toFixed(2) : '-'}</td>
-                      <td className="px-6 py-3 font-mono">{row.varPct.toFixed(1)}%</td>
-                      <td className="px-6 py-3">{row.offset !== null ? row.offset.toFixed(2) : '-'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          </div>
+        </div>
+
+        {/* RIGHT COLUMN: Tables & Analytics */}
+        <div className="xl:col-span-2 flex flex-col gap-5">
+          
+          {/* Data Tables Container */}
+          <div className="bg-white rounded-2xl shadow-xl shadow-blue-900/5 border border-gray-200 flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 280px)', minHeight: '500px', maxHeight: '750px' }}>
+            
+            {/* Tabs Header */}
+            <div className="flex border-b border-gray-200 bg-gray-50">
+              {[
+                { id: 'all', label: 'All GWs' },
+                { id: 'matched', label: 'Matched' },
+                { id: 'unmatched', label: 'Unmatched' }
+              ].map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => { setActiveTab(tab.id as any); setCurrentPage(1); }}
+                  className={`flex-1 py-3 text-xs font-bold transition-colors border-b-2 tracking-wide uppercase ${
+                    activeTab === tab.id || (activeTab === 'offset' && tab.id === 'all') || (activeTab === 'odometer' && tab.id === 'all')
+                      ? 'border-blue-600 text-blue-600 bg-white shadow-[0_2px_0_0_white]' 
+                      : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-100'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex-1 flex flex-col overflow-hidden relative">
+              {/* Unmatched Table */}
+              {(activeTab === 'unmatched') && (
+                <div className="absolute inset-0 flex flex-col bg-white">
+                  <div className="p-2 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                    <span className="text-xs font-bold text-gray-600 pl-2">Anomalies Detected</span>
+                    <button className="text-gray-500 hover:text-gray-800 p-1.5 hover:bg-gray-200 rounded transition-colors"><FiDownload size={14} /></button>
+                  </div>
+                  <div className="flex-1 overflow-auto custom-scrollbar">
+                    <table className="w-full text-left text-[11px] leading-tight">
+                      <thead className="text-gray-500 bg-gray-50 sticky top-0 border-b border-gray-200 z-10 shadow-sm">
+                        <tr>
+                          <th className="px-3 py-2 font-bold">Old From</th>
+                          <th className="px-3 py-2 font-bold">New From</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {unmatchedRanges.map((r, idx) => (
+                          <tr key={idx} className="hover:bg-rose-50/50 transition-colors group">
+                            <td className="px-3 py-2 font-mono text-gray-700">{r.oldFrom !== null ? r.oldFrom.toFixed(3) : ''}</td>
+                            <td className="px-3 py-2 font-mono text-gray-700">{r.newFrom !== null ? r.newFrom.toFixed(3) : ''}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Matched Table */}
+              {(activeTab === 'matched') && (
+                <div className="absolute inset-0 flex flex-col bg-white">
+                  <div className="p-2 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                    <div className="relative flex-1 max-w-[180px]">
+                      <FiSearch className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" size={12} />
+                      <input 
+                        type="text" placeholder="Search GW..." 
+                        value={searchQuery} onChange={(e) => {setSearchQuery(e.target.value); setCurrentPage(1);}}
+                        className="w-full pl-7 pr-2 py-1 text-xs border border-gray-200 rounded bg-white focus:outline-none focus:border-blue-500" 
+                      />
+                    </div>
+                    <button className="text-gray-500 hover:text-gray-800 p-1.5 hover:bg-gray-200 rounded transition-colors"><FiDownload size={14} /></button>
+                  </div>
+                  <div className="flex-1 overflow-auto custom-scrollbar">
+                    <table className="w-full text-left text-[11px] leading-tight">
+                      <thead className="text-gray-500 bg-gray-50 sticky top-0 border-b border-gray-200 z-10 shadow-sm">
+                        <tr>
+                          <th className="px-2 py-2 w-8 text-center font-bold"></th>
+                          <th className="px-3 py-2 font-bold">Old (m)</th>
+                          <th className="px-3 py-2 font-bold">New (m)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {paginatedMatched.map((row) => (
+                          <React.Fragment key={row.id}>
+                            <tr className={`hover:bg-blue-50/50 transition-colors ${editingId === row.id ? 'bg-blue-50/80 border-l-2 border-blue-500' : 'border-l-2 border-transparent'}`}>
+                              <td className="px-2 py-2 text-center">
+                                {editingId === row.id ? (
+                                  <button onClick={() => setEditingId(null)} className="text-rose-500 hover:text-rose-700 transition-colors"><FiX size={14} /></button>
+                                ) : (
+                                  <button onClick={() => { setEditingId(row.id); setEditRun1(row.oldVal?.toFixed(3) || ''); setEditRun2(row.newVal?.toFixed(3) || ''); }} className="text-gray-400 hover:text-blue-600 transition-colors"><FiEdit size={12} /></button>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 font-mono text-gray-700">{row.oldVal !== null ? row.oldVal.toFixed(3) : '-'}</td>
+                              <td className="px-3 py-2 font-mono text-gray-700">{row.newVal !== null ? row.newVal.toFixed(3) : '-'}</td>
+                            </tr>
+                            {editingId === row.id && (
+                              <tr className="bg-white">
+                                <td colSpan={3} className="px-4 py-3 border-b border-gray-200 bg-blue-50/30">
+                                  <div className="flex gap-2 mb-2">
+                                    <input type="text" value={editRun1} onChange={e => setEditRun1(e.target.value)} className="w-full px-2 py-1 text-xs border border-gray-300 rounded font-mono" />
+                                    <input type="text" value={editRun2} onChange={e => setEditRun2(e.target.value)} className="w-full px-2 py-1 text-xs border border-gray-300 rounded font-mono" />
+                                  </div>
+                                  <div className="flex justify-end gap-2">
+                                    <button onClick={() => setEditingId(null)} className="px-3 py-1 bg-blue-600 text-white text-[10px] font-bold rounded">Save</button>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {/* Pagination Mini */}
+                  <div className="px-3 py-2 bg-gray-50 border-t border-gray-200 flex justify-between items-center text-[10px]">
+                    <div className="flex gap-1">
+                      <button onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))} className="p-1 text-gray-500 hover:bg-gray-200 rounded"><FiChevronLeft/></button>
+                      <span className="p-1 font-bold text-gray-700">{currentPage} / {totalPages}</span>
+                      <button onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))} className="p-1 text-gray-500 hover:bg-gray-200 rounded"><FiChevronRight/></button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* All Table (Default) */}
+              {(activeTab === 'all' || activeTab === 'offset' || activeTab === 'odometer') && (
+                <div className="absolute inset-0 flex flex-col bg-white">
+                   <div className="p-2 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                    <span className="text-xs font-bold text-gray-600 pl-2">All Pipeline Features</span>
+                    <button onClick={handleDownloadExcel} className="text-blue-600 bg-blue-50 hover:bg-blue-100 flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold rounded transition-colors uppercase"><FiDownload /> Export</button>
+                  </div>
+                  <div className="flex-1 overflow-auto custom-scrollbar">
+                    <table className="w-full text-left text-[11px] leading-tight">
+                      <thead className="text-gray-500 bg-gray-50 sticky top-0 border-b border-gray-200 z-10 shadow-sm">
+                        <tr>
+                          <th className="px-3 py-2 font-bold w-6"></th>
+                          <th className="px-3 py-2 font-bold">Old (m)</th>
+                          <th className="px-3 py-2 font-bold">New (m)</th>
+                          <th className="px-3 py-2 font-bold text-right">Offset</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {matches.map((row) => (
+                          <tr key={row.id} 
+                            ref={(el: HTMLTableRowElement | null) => { if (el) tableRowRefs.current[row.id] = el; }}
+                            className={`transition-colors cursor-pointer group ${
+                              (row.oldVal !== null && selectedGWs.includes(row.oldVal)) || (row.newVal !== null && selectedGWs.includes(row.newVal))
+                                ? 'bg-yellow-100 hover:bg-yellow-200' 
+                                : row.status === 'Skipped'
+                                  ? 'bg-rose-50 hover:bg-rose-100'
+                                  : row.status === 'Flagged'
+                                    ? 'bg-amber-50 hover:bg-amber-100'
+                                    : 'hover:bg-blue-50/50'
+                            }`}
+                            onMouseMove={(e) => setTooltipState({ x: e.clientX, y: e.clientY, row: row })}
+                            onMouseLeave={() => setTooltipState(null)}
+                            onClick={() => {
+                              if (row.oldVal === null) return;
+                              setSelectedGWs(prev => {
+                                const dist = row.oldVal;
+                                if (prev.includes(dist)) return prev.filter(d => d !== dist);
+                                const next = [...prev, dist].slice(-2);
+                                if (next.length === 2) setShow3DViewer(true);
+                                return next;
+                              });
+                            }}>
+                            <td className="px-3 py-2.5">
+                              <div className={`w-1.5 h-1.5 rounded-full ${row.status === 'Match' ? 'bg-blue-500' : 'bg-rose-500'}`}></div>
+                            </td>
+                            <td className="px-3 py-2.5 font-mono text-gray-700">{row.oldVal !== null ? row.oldVal.toFixed(2) : '-'}</td>
+                            <td className="px-3 py-2.5 font-mono text-gray-700">{row.newVal !== null ? row.newVal.toFixed(2) : '-'}</td>
+                            <td className="px-3 py-2.5 font-mono font-bold text-right text-gray-800">{row.offset !== null ? row.offset.toFixed(2) : '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            {/* Table Footer Stats */}
+            <div className="bg-gray-50 border-t border-gray-200 px-4 py-3 flex justify-between items-center text-xs">
+               <div className="flex flex-col">
+                 <span className="font-bold text-gray-800">{matches.filter(m => m.status === 'Match').length}</span>
+                 <span className="text-gray-500 text-[10px] uppercase tracking-wider">Total Matches</span>
+               </div>
+               <div className="h-6 w-px bg-gray-300"></div>
+               <div className="flex flex-col text-right">
+                 <span className="font-bold text-blue-600">{(graphPoints.reduce((sum, p) => sum + p.y, 0) / (graphPoints.length || 1)).toFixed(2)}m</span>
+                 <span className="text-gray-500 text-[10px] uppercase tracking-wider">Mean Offset</span>
+               </div>
             </div>
           </div>
-        )}
-      </div>
-<div className="grid grid-cols-2 gap-8 mb-8 text-center border-t border-gray-200 pt-8">
-        <div>
-          <p className="text-gray-500 text-sm mb-1">Total Matches</p>
-          <p className="text-2xl font-mono text-gray-900">{matches.filter(m => m.status === 'Match').length}</p>
+          
         </div>
-        <div>
-          <p className="text-gray-500 text-sm mb-1">Mean Offset</p>
-          <p className="text-2xl font-mono text-gray-900">
-            {(graphPoints.reduce((sum, p) => sum + p.y, 0) / (graphPoints.length || 1)).toFixed(2)} m
-          </p>
-        </div>
+
       </div>
 
-      <div className="flex justify-between mt-8">
+      {/* Middle Row: OTA Settings & GW Offset Trends */}
+      <div className="grid grid-cols-1 xl:grid-cols-5 gap-5 items-stretch">
+        
+        {/* LEFT: OTA Settings */}
+        <div className="xl:col-span-2 flex">
+          <div className="bg-white rounded-2xl p-6 shadow-xl shadow-blue-900/5 border border-gray-200 flex flex-col justify-between w-full">
+             <div>
+               <h3 className="font-bold text-gray-800 text-lg mb-1">OTA Settings</h3>
+               <p className="text-xs text-gray-500 mb-6 leading-relaxed">Adjust slippage tolerance and toggle DTW correction to force alignment.</p>
+               
+               <div className="mb-4 bg-gray-50 p-4 rounded-xl border border-gray-100 w-full">
+                 <label className="text-sm font-bold text-gray-700 mb-3 flex justify-between items-center">
+                   <span>Slippage Tolerance</span>
+                   <span className="font-mono bg-white px-2 py-1 rounded shadow-sm border border-gray-200 text-blue-600">{ota}%</span>
+                 </label>
+                 <input type="range" min="0" max="15" step="0.5" value={ota} onChange={e => setOta(parseFloat(e.target.value))} className="w-full accent-blue-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer" />
+               </div>
+             </div>
+
+             <div className="flex items-center justify-between bg-blue-50/50 px-5 py-4 rounded-xl border border-blue-100 w-full">
+               <div>
+                 <span className="font-bold text-sm text-blue-900">Apply DTW Correction</span>
+                 <p className="text-[10px] text-blue-600/80 font-medium mt-0.5">Corrects raw odometer using reference run</p>
+               </div>
+               <button onClick={() => setDtwOn(!dtwOn)} className={`w-12 h-6 rounded-full transition-colors relative shadow-inner ${dtwOn ? 'bg-blue-600' : 'bg-gray-300'}`}>
+                 <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-all shadow-md ${dtwOn ? 'left-7' : 'left-1'}`} />
+               </button>
+             </div>
+          </div>
+        </div>
+
+        {/* RIGHT: GW Offset Chart */}
+        <div className="xl:col-span-3 flex">
+      <div className="bg-white rounded-2xl p-6 shadow-xl shadow-blue-900/5 border border-gray-200 flex flex-col w-full">
+        <div className="flex justify-between items-start mb-4">
+          <div>
+            <h3 className="font-bold text-gray-800 text-lg">GW Offset Trends</h3>
+            <p className="text-xs text-gray-500">Difference in distance (m) over pipeline</p>
+          </div>
+          <div className="bg-blue-50 px-2 py-1 rounded text-blue-700 text-xs font-bold font-mono">Matched Only</div>
+        </div>
+        <div className="w-full relative h-[300px]">
+          <Line data={chartData} options={{
+            ...chartOptions,
+            maintainAspectRatio: false,
+            onClick: (e: any, elements: any[]) => {
+              if (elements.length > 0) {
+                const idx = elements[0].index;
+                const match = matches[idx];
+                if (match && match.oldVal !== null) {
+                  setSelectedGWs(prev => {
+                    const dist = match.oldVal;
+                    if (prev.includes(dist)) return prev.filter(d => d !== dist);
+                    const next = [...prev, dist].slice(-2);
+                    if (next.length === 2) setShow3DViewer(true);
+                    return next;
+                  });
+                  const rowEl = tableRowRefs.current[match.id];
+                  if (rowEl) {
+                    rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    rowEl.classList.add('animate-pulse', 'bg-yellow-200');
+                    setTimeout(() => rowEl.classList.remove('animate-pulse', 'bg-yellow-200'), 2000);
+                  }
+                }
+              }
+            }
+          } as any} />
+        </div>
+      </div>
+      </div>
+      </div>
+
+      {/* Full-Width Odometer Slippage Section */}
+      <div className="bg-white rounded-2xl p-6 shadow-xl shadow-blue-900/5 border border-gray-200">
+        <div className="flex items-center justify-between mb-4 border-b border-gray-100 pb-4">
+          <div>
+            <h3 className="text-lg font-bold text-gray-800">Odometer Slippage Analysis</h3>
+            <p className="text-xs font-medium text-gray-500 mt-1">Baseline vs. Raw odometer drift and joint deviation ratios</p>
+          </div>
+        </div>
+        <OdometerDashboard matches={matches.filter(m => m.status === 'Match')} ota={ota} setOta={setOta} dtwOn={dtwOn} setDtwOn={setDtwOn} />
+      </div>
+
+      <div className="flex justify-between mt-4">
         <button 
           onClick={onBack}
           className="px-6 py-3 rounded-xl font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors flex items-center gap-2"
