@@ -19,7 +19,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
       setLoading(true);
       try {
         const token = localStorage.getItem('token');
-        const response = await fetch('http://localhost:5000/api/alignment/estimate-tiein-offset', {
+        const response = await fetch('http://localhost:8000/api/alignment/estimate-tiein-offset', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
