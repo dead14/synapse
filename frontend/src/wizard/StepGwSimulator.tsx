@@ -146,12 +146,18 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                finalVarPct = 0;
             }
 
+            const oldFeature = config?.summaryData?.oldRun?.rawFeatures?.find((f: any) => f.id === m.oldId);
+            const newFeature = config?.summaryData?.newRun?.rawFeatures?.find((f: any) => f.id === m.newId);
+            const oldDesc = oldFeature?.feature_identification || oldFeature?.originalType || 'Weld';
+            const newDesc = newFeature?.feature_identification || newFeature?.originalType || 'Weld';
+
             return {
               id: `match-${idx}`,
               oldIndex: m.oldIndex, newIndex: m.newIndex,
               oldId: m.oldId, newId: m.newId,
+              oldDesc, newDesc,
               oldVal: m.oldDist, newVal: correctedNewVal,
-              originalNewVal: m.newDist - globalOffset,
+              originalNewVal: m.newDist !== null ? m.newDist - globalOffset : null,
               varPct: finalVarPct,
               offset: correctedOffset,
               status: m.status,
@@ -474,8 +480,10 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                       <thead className="text-gray-500 bg-gray-50 sticky top-0 border-b border-gray-200 z-10 shadow-sm">
                         <tr>
                           <th className="px-2 py-2 w-8 text-center font-bold"></th>
-                          <th className="px-3 py-2 font-bold">Old (m)</th>
-                          <th className="px-3 py-2 font-bold">New (m)</th>
+                          <th className="px-3 py-2 font-bold">Old Run (m)</th>
+                          <th className="px-3 py-2 font-bold">Old Desc</th>
+                          <th className="px-3 py-2 font-bold">New Run (m)</th>
+                          <th className="px-3 py-2 font-bold">New Desc</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
@@ -486,15 +494,17 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                                 {editingId === row.id ? (
                                   <button onClick={() => setEditingId(null)} className="text-rose-500 hover:text-rose-700 transition-colors"><FiX size={14} /></button>
                                 ) : (
-                                  <button onClick={() => { setEditingId(row.id); setEditRun1(row.oldVal?.toFixed(3) || ''); setEditRun2(row.newVal?.toFixed(3) || ''); }} className="text-gray-400 hover:text-blue-600 transition-colors"><FiEdit size={12} /></button>
+                                  <button onClick={() => { setEditingId(row.id); setEditRun1(row.oldVal?.toFixed(3) || ''); setEditRun2(row.originalNewVal?.toFixed(3) || ''); }} className="text-gray-400 hover:text-blue-600 transition-colors"><FiEdit size={12} /></button>
                                 )}
                               </td>
                               <td className="px-3 py-2 font-mono text-gray-700">{row.oldVal !== null ? row.oldVal.toFixed(3) : '-'}</td>
-                              <td className="px-3 py-2 font-mono text-gray-700">{row.newVal !== null ? row.newVal.toFixed(3) : '-'}</td>
+                              <td className="px-3 py-2 text-gray-500 truncate max-w-[100px]" title={row.oldDesc}>{row.oldDesc}</td>
+                              <td className="px-3 py-2 font-mono text-gray-700">{row.originalNewVal !== undefined && row.originalNewVal !== null ? row.originalNewVal.toFixed(3) : '-'}</td>
+                              <td className="px-3 py-2 text-gray-500 truncate max-w-[100px]" title={row.newDesc}>{row.newDesc}</td>
                             </tr>
                             {editingId === row.id && (
                               <tr className="bg-white">
-                                <td colSpan={3} className="px-4 py-3 border-b border-gray-200 bg-blue-50/30">
+                                <td colSpan={5} className="px-4 py-3 border-b border-gray-200 bg-blue-50/30">
                                   <div className="flex gap-2 mb-2">
                                     <input type="text" value={editRun1} onChange={e => setEditRun1(e.target.value)} className="w-full px-2 py-1 text-xs border border-gray-300 rounded font-mono" />
                                     <input type="text" value={editRun2} onChange={e => setEditRun2(e.target.value)} className="w-full px-2 py-1 text-xs border border-gray-300 rounded font-mono" />
@@ -533,8 +543,10 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                       <thead className="text-gray-500 bg-gray-50 sticky top-0 border-b border-gray-200 z-10 shadow-sm">
                         <tr>
                           <th className="px-3 py-2 font-bold w-6"></th>
-                          <th className="px-3 py-2 font-bold">Old (m)</th>
-                          <th className="px-3 py-2 font-bold">New (m)</th>
+                          <th className="px-3 py-2 font-bold">Old Run (m)</th>
+                          <th className="px-3 py-2 font-bold hidden md:table-cell">Old Desc</th>
+                          <th className="px-3 py-2 font-bold">New Run (m)</th>
+                          <th className="px-3 py-2 font-bold hidden md:table-cell">New Desc</th>
                           <th className="px-3 py-2 font-bold text-right">Offset</th>
                         </tr>
                       </thead>
@@ -567,7 +579,9 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                               <div className={`w-1.5 h-1.5 rounded-full ${row.status === 'Match' ? 'bg-blue-500' : 'bg-rose-500'}`}></div>
                             </td>
                             <td className="px-3 py-2.5 font-mono text-gray-700">{row.oldVal !== null ? row.oldVal.toFixed(2) : '-'}</td>
+                            <td className="px-3 py-2.5 text-gray-500 hidden md:table-cell truncate max-w-[100px]" title={row.oldDesc}>{row.oldDesc}</td>
                             <td className="px-3 py-2.5 font-mono text-gray-700">{row.originalNewVal !== undefined && row.originalNewVal !== null ? row.originalNewVal.toFixed(2) : '-'}</td>
+                            <td className="px-3 py-2.5 text-gray-500 hidden md:table-cell truncate max-w-[100px]" title={row.newDesc}>{row.newDesc}</td>
                             <td className="px-3 py-2.5 font-mono font-bold text-right text-gray-800">{row.offset !== null ? row.offset.toFixed(2) : '-'}</td>
                           </tr>
                         ))}
