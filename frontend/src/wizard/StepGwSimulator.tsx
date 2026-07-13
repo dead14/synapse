@@ -151,6 +151,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
               oldIndex: m.oldIndex, newIndex: m.newIndex,
               oldId: m.oldId, newId: m.newId,
               oldVal: m.oldDist, newVal: correctedNewVal,
+              originalNewVal: m.newDist - globalOffset,
               varPct: finalVarPct,
               offset: correctedOffset,
               status: m.status,
@@ -353,6 +354,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                     const isSkipped = m && m.status === 'Skipped';
                     const isFlagged = m && m.status === 'Flagged';
                     const isSelected = selectedGWs.includes(pos);
+                    const originalPos = pos - (config?.globalOffset || 0);
                     return (
                       <div 
                         key={`new-${i}`} 
@@ -361,7 +363,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                         onClick={() => handleGWClick(pos, 'new')}
                       >
                         <div className={`w-1.5 h-5 rounded-full transition-all shadow-sm ${isSelected && selectedTrack === 'new' ? 'bg-yellow-400 scale-125 shadow-yellow-500/50' : isSkipped ? 'bg-rose-500 group-hover:bg-rose-400' : isFlagged ? 'bg-amber-400 group-hover:bg-amber-300' : 'bg-blue-500 group-hover:bg-blue-400 group-hover:scale-110'}`}></div>
-                        <div className={`text-[9px] mt-1.5 font-mono font-bold ${isSelected && selectedTrack === 'new' ? 'text-yellow-500' : isSkipped ? 'text-rose-500' : isFlagged ? 'text-amber-500' : 'text-blue-600/80'}`}>{pos.toFixed(2)}m</div>
+                        <div className={`text-[9px] mt-1.5 font-mono font-bold ${isSelected && selectedTrack === 'new' ? 'text-yellow-500' : isSkipped ? 'text-rose-500' : isFlagged ? 'text-amber-500' : 'text-blue-600/80'}`}>{originalPos.toFixed(2)}m</div>
                       </div>
                     )
                   })}
@@ -565,7 +567,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                               <div className={`w-1.5 h-1.5 rounded-full ${row.status === 'Match' ? 'bg-blue-500' : 'bg-rose-500'}`}></div>
                             </td>
                             <td className="px-3 py-2.5 font-mono text-gray-700">{row.oldVal !== null ? row.oldVal.toFixed(2) : '-'}</td>
-                            <td className="px-3 py-2.5 font-mono text-gray-700">{row.newVal !== null ? row.newVal.toFixed(2) : '-'}</td>
+                            <td className="px-3 py-2.5 font-mono text-gray-700">{row.originalNewVal !== undefined && row.originalNewVal !== null ? row.originalNewVal.toFixed(2) : '-'}</td>
                             <td className="px-3 py-2.5 font-mono font-bold text-right text-gray-800">{row.offset !== null ? row.offset.toFixed(2) : '-'}</td>
                           </tr>
                         ))}

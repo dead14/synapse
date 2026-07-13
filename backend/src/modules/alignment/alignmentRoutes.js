@@ -10,7 +10,7 @@ const upload = multer({ dest: path.join(__dirname, '../../../uploads/') });
 router.post('/upload-csv', authMiddleware, upload.single('file'), alignmentController.uploadCsv);
 router.post('/run', authMiddleware, alignmentController.runAlignment);
 router.post('/align-dtw', authMiddleware, alignmentController.runDtwAlignment);
-router.post('/estimate-tiein-offset', authMiddleware, alignmentController.estimateTieInOffset);
+router.post('/estimate-tiein-offset', alignmentController.estimateTieInOffset);
 
 // Wizard State Persistence
 router.post('/wizard/save', authMiddleware, alignmentController.saveWizardState);
