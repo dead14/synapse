@@ -13,22 +13,34 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
   const [manualOffset, setManualOffset] = useState<number | ''>('');
   const [useAuto, setUseAuto] = useState(true);
 
-  // Simulate machine generating a guess via sliding window correlation
   useEffect(() => {
     const fetchMachineGuess = async () => {
       setLoading(true);
-      // In a real scenario, this would call the Python API:
-      // await fetch('/api/alignment/estimate-offset', { method: 'POST', body: JSON.stringify(config) })
       
       setTimeout(() => {
-        // Hardcoded simulation for the demo (e.g. 41200 meters)
-        setAutoOffset(41200);
+        let estimatedOffset = 0;
+        
+        // Naive auto-offset: difference between the first weld of Old and New runs
+        try {
+          const oldWeld = config?.summaryData?.oldRun?.rawFeatures?.find((f: any) => f.type === 'weld');
+          const newWeld = config?.summaryData?.newRun?.rawFeatures?.find((f: any) => f.type === 'weld');
+          
+          if (oldWeld && newWeld && typeof oldWeld.dist === 'number' && typeof newWeld.dist === 'number') {
+            // If old weld is at 500m, new weld is at 10m. The new run needs to shift by +490m to align.
+            estimatedOffset = oldWeld.dist - newWeld.dist;
+          }
+        } catch(e) {}
+        
+        // Round to 3 decimal places
+        estimatedOffset = Math.round(estimatedOffset * 1000) / 1000;
+        
+        setAutoOffset(estimatedOffset);
         setLoading(false);
-      }, 2000);
+      }, 1000);
     };
 
     fetchMachineGuess();
-  }, []);
+  }, [config]);
 
   const handleContinue = () => {
     const finalOffset = useAuto ? autoOffset : Number(manualOffset);
