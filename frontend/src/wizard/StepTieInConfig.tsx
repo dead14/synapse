@@ -10,6 +10,7 @@ interface StepTieInConfigProps {
 export default function StepTieInConfig({ onNext, onBack, config }: StepTieInConfigProps) {
   const [loading, setLoading] = useState(true);
   const [autoOffset, setAutoOffset] = useState<number | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [manualOffset, setManualOffset] = useState<number | ''>('');
   const [useAuto, setUseAuto] = useState(true);
 
@@ -35,14 +36,17 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
           // Round to 3 decimal places
           const roundedOffset = Math.round(data.offset * 1000) / 1000;
           setAutoOffset(roundedOffset);
+          setErrorMessage(null);
           // Store additional metrics if needed, e.g. confidence
           (window as any)._tieInMetrics = { confidence: data.confidence, message: data.message };
         } else {
           console.error("Tie-in estimation failed:", data.error);
+          setErrorMessage(data.error || "Engine failed to return a valid offset.");
           setAutoOffset(0);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("Failed to fetch tie-in offset:", err);
+        setErrorMessage(err.message || "Network error while connecting to engine.");
         setAutoOffset(0);
       } finally {
         setLoading(false);
@@ -99,18 +103,26 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                   <p className="text-gray-600 mb-4">
                     Based on cross-correlation, the system detected that the New Run starts approximately at:
                   </p>
-                  <div className="bg-white p-4 rounded-lg border border-gray-200 flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-500 font-medium">Estimated Global Offset</p>
-                      <p className="text-3xl font-black text-gray-800 mt-1">{autoOffset?.toLocaleString()} <span className="text-xl text-gray-500 font-medium">meters</span></p>
+                  {errorMessage ? (
+                    <div className="bg-red-50 p-4 rounded-lg border border-red-200 text-red-700 text-sm mb-4">
+                      <strong>Engine Error:</strong> {errorMessage}
+                      <br/>
+                      <span className="text-red-500 text-xs">Please use Manual Override below.</span>
                     </div>
-                    <div className="text-right">
-                      <p className={`text-sm font-bold flex items-center gap-1 justify-end ${(window as any)._tieInMetrics?.confidence > 80 ? 'text-green-600' : 'text-amber-600'}`}>
-                        <FiCheckCircle /> {(window as any)._tieInMetrics?.confidence ? `${(window as any)._tieInMetrics?.confidence.toFixed(1)}% Confidence` : 'Estimated'}
-                      </p>
-                      <p className="text-xs text-gray-400 mt-1">{(window as any)._tieInMetrics?.message || 'Sliding Window Cross-Correlation'}</p>
+                  ) : (
+                    <div className="bg-white p-4 rounded-lg border border-gray-200 flex items-center justify-between">
+                      <div>
+                        <p className="text-sm text-gray-500 font-medium">Estimated Global Offset</p>
+                        <p className="text-3xl font-black text-gray-800 mt-1">{autoOffset?.toLocaleString()} <span className="text-xl text-gray-500 font-medium">meters</span></p>
+                      </div>
+                      <div className="text-right">
+                        <p className={`text-sm font-bold flex items-center gap-1 justify-end ${(window as any)._tieInMetrics?.confidence > 80 ? 'text-green-600' : 'text-amber-600'}`}>
+                          <FiCheckCircle /> {(window as any)._tieInMetrics?.confidence ? `${(window as any)._tieInMetrics?.confidence.toFixed(1)}% Confidence` : 'Estimated'}
+                        </p>
+                        <p className="text-xs text-gray-400 mt-1">{(window as any)._tieInMetrics?.message || 'Sequence Alignment (Anchors)'}</p>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             </div>
