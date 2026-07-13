@@ -119,6 +119,47 @@ exports.runDtwAlignment = (req, res) => {
     pythonProcess.stdin.end();
 };
 
+exports.estimateTieInOffset = (req, res) => {
+    const payload = req.body;
+    const inputData = JSON.stringify(payload);
+    
+    const pythonProcess = spawn('python', ['tiein_engine.py'], { cwd: path.join(__dirname, '../../..') });
+    let output = '';
+    let errorOutput = '';
+
+    pythonProcess.stdout.on('data', (data) => {
+        output += data.toString();
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+        errorOutput += data.toString();
+        console.error(`TieIn Engine Error: ${data}`);
+    });
+
+    pythonProcess.on('close', (code) => {
+        if (code === 0) {
+            try {
+                const firstBrace = output.indexOf('{');
+                const lastBrace = output.lastIndexOf('}');
+                if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                    const jsonStr = output.substring(firstBrace, lastBrace + 1);
+                    const result = JSON.parse(jsonStr);
+                    res.json(result);
+                } else {
+                    res.status(500).json({ error: 'No JSON result found from TieIn engine', raw: output });
+                }
+            } catch (err) {
+                res.status(500).json({ error: 'Failed to parse TieIn engine output', raw: output });
+            }
+        } else {
+            res.status(500).json({ error: `TieIn engine failed with code ${code}`, details: errorOutput });
+        }
+    });
+
+    pythonProcess.stdin.write(inputData);
+    pythonProcess.stdin.end();
+};
+
 exports.saveWizardState = async (req, res) => {
     const pool = require('../../config/db');
     const { config, sessionId } = req.body;

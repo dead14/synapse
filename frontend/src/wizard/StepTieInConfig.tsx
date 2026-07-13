@@ -16,27 +16,37 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
   useEffect(() => {
     const fetchMachineGuess = async () => {
       setLoading(true);
-      
-      setTimeout(() => {
-        let estimatedOffset = 0;
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch('http://localhost:5000/api/alignment/estimate-tiein-offset', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            oldRun: config?.summaryData?.oldRun?.rawFeatures || [],
+            newRun: config?.summaryData?.newRun?.rawFeatures || []
+          })
+        });
+        const data = await response.json();
         
-        // Naive auto-offset: difference between the first weld of Old and New runs
-        try {
-          const oldWeld = config?.summaryData?.oldRun?.rawFeatures?.find((f: any) => f.type === 'weld');
-          const newWeld = config?.summaryData?.newRun?.rawFeatures?.find((f: any) => f.type === 'weld');
-          
-          if (oldWeld && newWeld && typeof oldWeld.dist === 'number' && typeof newWeld.dist === 'number') {
-            // If old weld is at 500m, new weld is at 10m. The new run needs to shift by +490m to align.
-            estimatedOffset = oldWeld.dist - newWeld.dist;
-          }
-        } catch(e) {}
-        
-        // Round to 3 decimal places
-        estimatedOffset = Math.round(estimatedOffset * 1000) / 1000;
-        
-        setAutoOffset(estimatedOffset);
+        if (data.success) {
+          // Round to 3 decimal places
+          const roundedOffset = Math.round(data.offset * 1000) / 1000;
+          setAutoOffset(roundedOffset);
+          // Store additional metrics if needed, e.g. confidence
+          (window as any)._tieInMetrics = { confidence: data.confidence, message: data.message };
+        } else {
+          console.error("Tie-in estimation failed:", data.error);
+          setAutoOffset(0);
+        }
+      } catch (err) {
+        console.error("Failed to fetch tie-in offset:", err);
+        setAutoOffset(0);
+      } finally {
         setLoading(false);
-      }, 1000);
+      }
     };
 
     fetchMachineGuess();
@@ -95,10 +105,10 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                       <p className="text-3xl font-black text-gray-800 mt-1">{autoOffset?.toLocaleString()} <span className="text-xl text-gray-500 font-medium">meters</span></p>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm text-green-600 font-bold flex items-center gap-1 justify-end">
-                        <FiCheckCircle /> High Confidence
+                      <p className={`text-sm font-bold flex items-center gap-1 justify-end ${(window as any)._tieInMetrics?.confidence > 80 ? 'text-green-600' : 'text-amber-600'}`}>
+                        <FiCheckCircle /> {(window as any)._tieInMetrics?.confidence ? `${(window as any)._tieInMetrics?.confidence.toFixed(1)}% Confidence` : 'Estimated'}
                       </p>
-                      <p className="text-xs text-gray-400 mt-1">Cross-Correlation Score: 0.94</p>
+                      <p className="text-xs text-gray-400 mt-1">{(window as any)._tieInMetrics?.message || 'Sliding Window Cross-Correlation'}</p>
                     </div>
                   </div>
                 </div>
