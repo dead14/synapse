@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettings, FiShield, FiStar, FiPlus } from 'react-icons/fi';
 import * as XLSX from 'xlsx';
 
@@ -11,8 +11,27 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   const [datasets, setDatasets] = useState<any[]>([{ id: 1, year: '2020', vendor: 'Rosen', file: null }, { id: 2, year: '2023', vendor: 'Baker Hughes', file: null }]);
   const [masterIndex, setMasterIndex] = useState(1);
   const [algorithm, setAlgorithm] = useState('dtw_hungarian');
+  const [enablePartialRun, setEnablePartialRun] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [sessionName, setSessionName] = useState('');
+
+  useEffect(() => {
+    if (algorithm === 'phylogenetic') {
+      setDatasets([
+        { id: 1, year: '2020', vendor: 'Rosen', file: null, phyloLabel: 'Ancestor Data' },
+        { id: 2, year: '2023', vendor: 'Baker Hughes', file: null, phyloLabel: 'ILI Alignment 1' },
+        { id: 3, year: '2026', vendor: 'NDT Global', file: null, phyloLabel: 'ILI Alignment 2' }
+      ]);
+      setMasterIndex(0);
+    } else if (datasets.length === 3 && datasets[0].phyloLabel) {
+      // Revert back to 2 datasets when leaving phylogenetic
+      setDatasets([
+        { id: 1, year: '2020', vendor: 'Rosen', file: null },
+        { id: 2, year: '2023', vendor: 'Baker Hughes', file: null }
+      ]);
+      setMasterIndex(1);
+    }
+  }, [algorithm]);
 
   const allFilesUploaded = datasets.every(ds => ds.file !== null);
 
@@ -21,16 +40,31 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
     try {
       const summaryData: any = {
         sessionName: sessionName || 'Untitled Alignment Session',
-        newRun: { name: 'Waiting for data...', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 },
-        oldRun: { name: 'Waiting for data...', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 }
+        algorithm: algorithm,
+        enablePartialRun: enablePartialRun
       };
+
+      if (algorithm === 'phylogenetic') {
+        summaryData.ancestorRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
+        summaryData.run1 = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
+        summaryData.run2 = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
+      } else {
+        summaryData.newRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
+        summaryData.oldRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
+      }
 
       for (let i = 0; i < datasets.length; i++) {
         const ds = datasets[i];
         if (!ds.file) continue;
         
-        // Asumsi index master = Reference Run (OLD)
-        const runKey = i === masterIndex ? 'oldRun' : 'newRun';
+        let runKey = '';
+        if (algorithm === 'phylogenetic') {
+          if (i === 0) runKey = 'ancestorRun';
+          else if (i === 1) runKey = 'run1';
+          else if (i === 2) runKey = 'run2';
+        } else {
+          runKey = i === masterIndex ? 'oldRun' : 'newRun';
+        }
         
         const data = await ds.file.arrayBuffer();
         const workbook = XLSX.read(data, { type: 'array' });
@@ -119,6 +153,9 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
 
         summaryData[runKey] = {
           name: ds.file.name,
+          vendor: ds.vendor || '',
+          year: ds.year || '',
+          tool: ds.tool || '',
           rawFeatures: rawFeatures,
           ...counts
         };
@@ -147,7 +184,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
     <div className="w-full flex flex-col gap-6 animate-fade-in">
       
       {/* Page Title */}
-      <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 flex flex-col sm:flex-row justify-between items-start sm:items-center">
+      <div className="bg-white rounded-none p-8 shadow-sm border border-gray-100 flex flex-col sm:flex-row justify-between items-start sm:items-center">
         <div>
           <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
             <FiDatabase className="text-brand-500" /> Inspection Intake Form
@@ -178,7 +215,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           
           {/* Section 1: Asset Identification */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="bg-white rounded-none shadow-sm border border-gray-100 overflow-hidden">
             <button 
               onClick={() => toggleSection('asset')}
               className="w-full px-6 py-4 flex justify-between items-center bg-gray-50/50 hover:bg-gray-50 transition-colors border-b border-gray-100"
@@ -231,7 +268,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           </div>
 
           {/* Section 2: Physical Specs & Protection */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="bg-white rounded-none shadow-sm border border-gray-100 overflow-hidden">
             <button 
               onClick={() => toggleSection('specs')}
               className="w-full px-6 py-4 flex justify-between items-center bg-gray-50/50 hover:bg-gray-50 transition-colors border-b border-gray-100"
@@ -305,13 +342,13 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
 
         {/* Right Column: ILI Uploads */}
         <div className="flex flex-col gap-6">
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden h-full flex flex-col">
+          <div className="bg-white rounded-none shadow-sm border border-gray-100 overflow-hidden h-full flex flex-col">
             <div className="px-6 py-4 bg-gray-50/50 border-b border-gray-100 flex justify-between items-center flex-wrap gap-4">
               <div className="flex items-center gap-4">
                 <h3 className="font-semibold text-gray-800 flex items-center gap-2">
                   <FiShield className="text-gray-500" /> ILI Data Configuration
                 </h3>
-                {datasets.length < 5 && (
+                {algorithm !== 'phylogenetic' && datasets.length < 5 && (
                   <button 
                     onClick={() => setDatasets([...datasets, { id: Date.now(), year: '', vendor: 'Rosen', file: null }])}
                     className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-dashed border-gray-300 text-xs font-medium text-gray-500 hover:border-brand-500 hover:text-brand-500 hover:bg-brand-50 transition-all bg-white shadow-sm"
@@ -330,9 +367,22 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                   <option value="dtw_hungarian">DTW + Hungarian Match</option>
                   <option value="traditional_hungarian">Traditional Hungarian</option>
                   <option value="manual">Manual Algorithm</option>
-                  <option value="polygenesis">Polygenesis (AI Predictive)</option>
+                  <option value="phylogenetic">Phylogenetic Algorithm</option>
                 </select>
               </div>
+              {algorithm !== 'phylogenetic' && (
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-700 flex items-center gap-2 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      className="w-4 h-4 rounded text-brand-600 focus:ring-brand-500" 
+                      checked={enablePartialRun}
+                      onChange={(e) => setEnablePartialRun(e.target.checked)}
+                    />
+                    Enable Partial Run (Tie-In)
+                  </label>
+                </div>
+              )}
             </div>
             
             <div className="p-6 flex-1 flex gap-6 overflow-x-auto snap-x pb-4 no-scrollbar">
@@ -344,14 +394,24 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-2">
                         <div className={`w-2 h-6 rounded-full ${isMaster ? 'bg-brand-500' : 'bg-gray-400'}`}></div>
-                        <h4 className={`font-bold ${isMaster ? 'text-brand-700' : 'text-gray-700'}`}>Dataset {ds.year ? ds.year : ''}</h4>
+                        <h4 className={`font-bold ${isMaster ? 'text-brand-700' : 'text-gray-700'}`}>
+                          {algorithm === 'phylogenetic' ? ds.phyloLabel : `Dataset ${ds.year ? ds.year : ''}`}
+                        </h4>
                       </div>
-                      <button 
-                        onClick={() => setMasterIndex(index)}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${isMaster ? 'bg-brand-500 text-white shadow-md' : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50'}`}
-                      >
-                        <FiStar className={isMaster ? "fill-white" : ""} size={14} /> {isMaster ? 'Master Data' : 'Set as Master'}
-                      </button>
+                      {algorithm !== 'phylogenetic' ? (
+                        <button 
+                          onClick={() => setMasterIndex(index)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${isMaster ? 'bg-brand-500 text-white shadow-md' : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                        >
+                          <FiStar className={isMaster ? "fill-white" : ""} size={14} /> {isMaster ? 'Master Data' : 'Set as Master'}
+                        </button>
+                      ) : (
+                        isMaster && (
+                          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-brand-500 text-white shadow-md">
+                            <FiStar className="fill-white" size={14} /> Master Data
+                          </div>
+                        )
+                      )}
                     </div>
                     
                     <div className="grid grid-cols-2 gap-4 mb-4">

@@ -6,6 +6,7 @@ import StepGwSimulator from './wizard/StepGwSimulator';
 import StepAnomalyTolerances from './wizard/StepAnomalyTolerances';
 import StepExecution from './wizard/StepExecution';
 import StepUploadILI from './wizard/StepUploadILI';
+import StepTieInConfig from './wizard/StepTieInConfig';
 
 export default function AlignmentPage() {
   const [step, setStep] = useState(0); // 0 is Upload step
@@ -17,14 +18,24 @@ export default function AlignmentPage() {
     setIsResuming(false);
   }, []);
 
+  const baseSteps = [
+    { id: 'upload', name: 'Upload', desc: 'Validate' },
+    { id: 'tiein', name: 'Tie-In Config', desc: 'Offset Calc', conditional: true },
+    { id: 'summary', name: 'Data Summary', desc: 'Overview' },
+    { id: 'gw', name: 'GW Matching', desc: 'Simulator' },
+    { id: 'scenario', name: 'Scenario Filter', desc: 'Thresholds' },
+    { id: 'anomaly', name: 'Anomaly Tolerances', desc: 'Matcher' },
+    { id: 'exec', name: 'Execution', desc: 'Report Gen' }
+  ];
+
+  const stepsList = baseSteps.filter(s => !s.conditional || (s.id === 'tiein' && wizardConfig.enablePartialRun));
+  
   const handleNext = async (data?: any) => {
     let updatedConfig = { ...wizardConfig };
-    // Guard against React Synthetic Events poisoning the JSON config
     if (data && typeof data === 'object' && !('nativeEvent' in data)) {
       updatedConfig = { ...updatedConfig, ...data };
     }
     
-    // Save to backend so python engines can access the latest state
     const token = localStorage.getItem('synapse_token') || '';
     try {
       const res = await fetch('http://localhost:8000/api/wizard/save', {
@@ -34,7 +45,6 @@ export default function AlignmentPage() {
       });
       const resData = await res.json();
       if (resData.success && resData.sessionId) {
-        // Always keep sessionId in sync — critical for ILI Comparison page
         updatedConfig.sessionId = resData.sessionId;
         localStorage.setItem('synapse_last_session_id', String(resData.sessionId));
       }
@@ -43,29 +53,20 @@ export default function AlignmentPage() {
     }
 
     setWizardConfig(updatedConfig);
-    setStep(s => Math.min(s + 1, 5));
+    setStep(s => Math.min(s + 1, stepsList.length - 1));
   };
 
   const handleBack = () => {
     setStep(s => Math.max(s - 1, 0));
   };
 
-  const stepsList = [
-    { id: 0, name: 'Upload', desc: 'Validate' },
-    { id: 1, name: 'Data Summary', desc: 'Overview' },
-    { id: 2, name: 'GW Matching', desc: 'Simulator' },
-    { id: 3, name: 'Scenario Filter', desc: 'Thresholds' },
-    { id: 4, name: 'Anomaly Tolerances', desc: 'Matcher' },
-    { id: 5, name: 'Execution', desc: 'Report Gen' }
-  ];
-
   return (
     <div className="min-h-screen bg-[#f8f9fc] flex flex-col items-center pt-8 pb-20">
-      <div className="w-full max-w-[1400px] px-8 flex flex-col gap-6">
+      <div className="w-full flex flex-col gap-6">
         
         {/* Alignment Progress Bar (Matches Screenshot 2) */}
         {step > 0 && (
-        <div className="bg-white rounded-[24px] p-8 shadow-sm border border-gray-100 flex justify-between items-center relative overflow-hidden">
+        <div className="bg-white p-8 shadow-sm border-y border-gray-100 flex justify-between items-center relative overflow-hidden">
           <div className="relative z-10 w-full">
             <div className="flex justify-between items-end mb-8">
                <div>
@@ -73,7 +74,7 @@ export default function AlignmentPage() {
                  <p className="text-gray-500 text-sm">Executing multi-step sequential matching algorithm</p>
                </div>
                <div className="text-5xl font-black text-brand-500 tracking-tighter">
-                  {Math.round((step / 5) * 100)}%
+                  {Math.round((step / (stepsList.length - 1)) * 100)}%
                </div>
             </div>
 
@@ -101,19 +102,21 @@ export default function AlignmentPage() {
 
         {/* Wizard Steps Rendering */}
         <div className="w-full mt-4">
-          {step === 0 && (
+          {stepsList[step]?.id === 'upload' && (
             <StepUploadILI onNext={handleNext} />
           )}
 
-          {step === 1 && <StepDataSummary onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
+          {stepsList[step]?.id === 'tiein' && <StepTieInConfig onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
+
+          {stepsList[step]?.id === 'summary' && <StepDataSummary onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
           
-          {step === 2 && <StepGwSimulator initialOta={wizardConfig.ota || 1.5} onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
+          {stepsList[step]?.id === 'gw' && <StepGwSimulator initialOta={wizardConfig.ota || 1.5} onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 
-          {step === 3 && <StepScenarioFilter onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
+          {stepsList[step]?.id === 'scenario' && <StepScenarioFilter onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 
-          {step === 4 && <StepAnomalyTolerances onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
+          {stepsList[step]?.id === 'anomaly' && <StepAnomalyTolerances onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 
-          {step === 5 && <StepExecution onBack={handleBack} config={wizardConfig} />}
+          {stepsList[step]?.id === 'exec' && <StepExecution onBack={handleBack} config={wizardConfig} />}
           
         </div>
       </div>

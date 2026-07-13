@@ -56,6 +56,41 @@ class Pipeline(Base):
     runs = relationship("SurveyRun", back_populates="pipeline")
     sessions = relationship("AlignmentSession", back_populates="pipeline")
     organization = relationship("Organization", back_populates="pipelines")
+    canonical_anchors = relationship("CanonicalAnchor", back_populates="pipeline")
+
+class CanonicalAnchor(Base):
+    __tablename__ = 'canonical_anchors'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pipeline_id = Column(Integer, ForeignKey('pipelines.id'), index=True, nullable=False)
+    abs_chainage = Column(Float, nullable=False, index=True)
+    sigma = Column(Float, nullable=False, default=0.5)
+    confidence = Column(Float, nullable=False, default=0.5)
+    is_golden = Column(Boolean, nullable=False, default=False, index=True)
+    anchor_type = Column(String(20), nullable=False, default='GW')
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    pipeline = relationship("Pipeline", back_populates="canonical_anchors")
+    alignment_links = relationship("AlignmentLink", back_populates="canonical_anchor", cascade="all, delete-orphan")
+
+class AlignmentLink(Base):
+    __tablename__ = 'alignment_links'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    canonical_id = Column(Integer, ForeignKey('canonical_anchors.id'), index=True, nullable=False)
+    ili_run_id = Column(Integer, ForeignKey('survey_runs.id'), index=True, nullable=False)
+    odometer = Column(Float, nullable=False)
+    confidence = Column(Float, nullable=False, default=0.5)
+    source_job_id = Column(Integer, ForeignKey('alignment_sessions.id'), index=True)
+    is_outlier = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    canonical_anchor = relationship("CanonicalAnchor", back_populates="alignment_links")
+    ili_run = relationship("SurveyRun", back_populates="alignment_links")
+    source_job = relationship("AlignmentSession", foreign_keys=[source_job_id])
 
 class SurveyRun(Base):
     __tablename__ = 'survey_runs'
@@ -71,6 +106,7 @@ class SurveyRun(Base):
     # Relationships
     pipeline = relationship("Pipeline", back_populates="runs")
     features = relationship("ILIFeature", back_populates="run", cascade="all, delete-orphan")
+    alignment_links = relationship("AlignmentLink", back_populates="ili_run", cascade="all, delete-orphan")
 
 class ILIFeature(Base):
     __tablename__ = 'ili_features'
@@ -115,7 +151,7 @@ class AlignmentSession(Base):
     # Relationships
     pipeline = relationship("Pipeline", back_populates="sessions")
     results = relationship("AlignmentResult", back_populates="session", cascade="all, delete-orphan")
-
+    
 class AlignmentResult(Base):
     __tablename__ = 'alignment_results'
 
