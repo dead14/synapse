@@ -97,10 +97,19 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
       setIsCalculating(true);
       const token = localStorage.getItem('synapse_token') || '';
       try {
+        const globalOffset = config?.globalOffset || 0;
+        const rawNewRun = config?.summaryData?.newRun?.rawFeatures || [];
+        
+        // Apply global offset to new run features if partial run mode is enabled
+        const adjustedNewRun = globalOffset !== 0 
+          ? rawNewRun.map((f: any) => ({ ...f, dist: f.dist + globalOffset }))
+          : rawNewRun;
+
         const payload = {
           ota,
           oldRun: config?.summaryData?.oldRun?.rawFeatures || [],
-          newRun: config?.summaryData?.newRun?.rawFeatures || []
+          newRun: adjustedNewRun,
+          globalOffset
         };
         
         const res = await fetch('http://localhost:8000/api/align-dtw', {

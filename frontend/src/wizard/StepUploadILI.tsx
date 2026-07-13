@@ -161,7 +161,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         };
       }
       
-      onNext({ summaryData });
+      onNext({ summaryData, enablePartialRun });
     } catch (err) {
       console.error(err);
       alert('Gagal membaca file Excel. Pastikan formatnya benar.');
