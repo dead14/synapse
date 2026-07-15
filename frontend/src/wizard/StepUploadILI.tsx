@@ -8,7 +8,7 @@ interface StepUploadILIProps {
 
 export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   const [expandedSection, setExpandedSection] = useState<string | null>('all');
-  const [datasets, setDatasets] = useState<any[]>([{ id: 1, year: '2020', vendor: 'Rosen', file: null }, { id: 2, year: '2023', vendor: 'Baker Hughes', file: null }]);
+  const [datasets, setDatasets] = useState<any[]>([{ id: 1, year: '', vendor: '', file: null }, { id: 2, year: '', vendor: '', file: null }]);
   const [masterIndex, setMasterIndex] = useState(1);
   const [algorithm, setAlgorithm] = useState('dtw_hungarian');
   const [enablePartialRun, setEnablePartialRun] = useState(false);
@@ -465,7 +465,15 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                         onChange={(e) => {
                           if (e.target.files && e.target.files[0]) {
                             const newDs = [...datasets];
-                            newDs[index].file = e.target.files[0];
+                            const file = e.target.files[0];
+                            newDs[index].file = file;
+                            
+                            // Auto-extract year from filename if it matches YYYY
+                            const yearMatch = file.name.match(/\b(19|20)\d{2}\b/);
+                            if (yearMatch) {
+                              newDs[index].year = yearMatch[0];
+                            }
+                            
                             setDatasets(newDs);
                           }
                         }}

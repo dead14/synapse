@@ -1,5 +1,5 @@
 import React from 'react';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Text } from '@react-three/drei';
@@ -185,6 +185,40 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
   const [modalViewMode, setModalViewMode] = useState<'2D' | '3D'>('3D');
   const [hoveredDefect, setHoveredDefect] = useState<any>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  const [runOldName, setRunOldName] = useState('RUN OLD (REFERENCE)');
+  const [runNewName, setRunNewName] = useState('RUN NEW (CURRENT)');
+  const [oldRawFeatures, setOldRawFeatures] = useState<any[]>([]);
+  const [newRawFeatures, setNewRawFeatures] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchSession = async () => {
+      try {
+        const sessionId = new URLSearchParams(window.location.search).get('sessionId') || localStorage.getItem('synapse_last_session_id');
+        if (sessionId) {
+          const token = localStorage.getItem('synapse_token') || '';
+          const res = await fetch(`http://localhost:8000/api/wizard-session/${sessionId}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          const data = await res.json();
+          if (data.config) {
+             const config = typeof data.config === 'string' ? JSON.parse(data.config) : data.config;
+             const oldY = config?.summaryData?.oldRun?.year || config?.oldRun?.year;
+             const newY = config?.summaryData?.newRun?.year || config?.newRun?.year;
+             if (oldY) setRunOldName(`${oldY} (Reference)`);
+             if (newY) setRunNewName(`${newY} (Current)`);
+             
+             if (config?.summaryData?.oldRun?.rawFeatures) {
+               setOldRawFeatures(config.summaryData.oldRun.rawFeatures);
+             }
+             if (config?.summaryData?.newRun?.rawFeatures) {
+               setNewRawFeatures(config.summaryData.newRun.rawFeatures);
+             }
+          }
+        }
+      } catch (e) {}
+    };
+    fetchSession();
+  }, []);
 
   // Parse data into usable array of objects
   const parsedData = useMemo(() => {
@@ -202,25 +236,33 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
       
       const isWeld1 = String(item['Feature Type OLD'] || '').toLowerCase().includes('weld');
       const isWeld2 = String(item['Feature Type NEW'] || '').toLowerCase().includes('weld');
+      const isValve1 = String(item['Feature Type OLD'] || '').toLowerCase().includes('valve');
+      const isValve2 = String(item['Feature Type NEW'] || '').toLowerCase().includes('valve');
+      const isTee1 = String(item['Feature Type OLD'] || '').toLowerCase().includes('tee');
+      const isTee2 = String(item['Feature Type NEW'] || '').toLowerCase().includes('tee');
 
       return {
         id1: (item['Identif. OLD'] && item['Identif. OLD'] !== '-') ? String(item['Identif. OLD']) : (item['Log Dist OLD (m)'] !== undefined && item['Log Dist OLD (m)'] !== '') ? `DIST:${item['Log Dist OLD (m)']}` : null,
         dist1: isNaN(r1Dist) ? null : r1Dist,
         len1: parseFloat(item['Length OLD (mm)']) || 10,
-        wid1: parseFloat(item['Dist GW OLD (m)']) || 10,
+        wid1: parseFloat(item['Width OLD (mm)']) || 10,
         orient1: parseFloat(item["O'Clock OLD"]) || 0,
         depth1: r1Depth,
         isExt1,
         isWeld1,
+        isValve1,
+        isTee1,
         
         id2: (item['Identif. NEW'] && item['Identif. NEW'] !== '-') ? String(item['Identif. NEW']) : (item['Log Dist NEW (m)'] !== undefined && item['Log Dist NEW (m)'] !== '') ? `DIST:${item['Log Dist NEW (m)']}` : null,
         dist2: isNaN(r2Dist) ? null : r2Dist,
         len2: parseFloat(item['Length NEW (mm)']) || 10,
-        wid2: parseFloat(item['Dist GW NEW (m)']) || 10,
+        wid2: parseFloat(item['Width NEW (mm)']) || 10,
         orient2: parseFloat(item["O'Clock NEW"]) || 0,
         depth2: r2Depth,
         isExt2,
         isWeld2,
+        isValve2,
+        isTee2,
 
         isMatched,
         rawItem: item,
@@ -290,7 +332,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
         <div style={{ width: svgWidth, minWidth: '100%', height: '280px' }} className="relative transition-all duration-300">
           <svg width="100%" height="100%" style={{ position: 'absolute', top: 0, left: 0 }}>
             {/* --- RUN OLD (REFERENCE) --- */}
-            <text x="20" y="40" className="text-xs font-extrabold fill-gray-400 tracking-wider">RUN OLD (REFERENCE)</text>
+            <text x="20" y="40" className="text-xs font-extrabold fill-gray-400 tracking-wider uppercase">{runOldName}</text>
             <line x1="0" y1="80" x2="100%" y2="80" stroke="#e2e8f0" strokeWidth="4" strokeLinecap="round" />
             
             {/* Draw Highlighted Range Background First */}
@@ -354,12 +396,32 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
               </g>
             )}
             
-            {/* Run 1 Anomalies */}
+            {/* Raw Features: Valves & Tees (Run 1) */}
+            {oldRawFeatures.map((feat, i) => {
+              const typeStr = String(feat['Feature Type'] || feat['type'] || feat['feature_identification'] || '').toLowerCase();
+              if (typeStr.includes('valve') || typeStr.includes('tee')) {
+                const dist = parseFloat(feat['Log Dist (m)'] || feat['Log Distance (m)'] || feat['Distance (m)']);
+                if (!isNaN(dist) && dist >= startDist && dist <= startDist + totalLength) {
+                  const x = mToX(dist);
+                  const label = typeStr.includes('valve') ? 'VALVE' : 'TEE';
+                  return (
+                    <g key={`raw-landmark1-${i}`} className="z-20">
+                      <circle cx={x} cy="65" r="4" fill="#8b5cf6" stroke="#ffffff" strokeWidth="1" />
+                      <text x={x} y="55" fontSize="9" fontWeight="black" fill="#8b5cf6" textAnchor="middle">{label}</text>
+                    </g>
+                  );
+                }
+              }
+              return null;
+            })}
+
+            {/* Run 1 Anomalies & Landmarks */}
             {parsedData.map((d, i) => {
               if (d?.dist1 === null || d?.dist1 === undefined) return null;
               const x = mToX(d.dist1);
               const searchStr = selectedRowIdx;
               const isSel = searchStr !== null && searchStr !== undefined && d.dataIdx === searchStr;
+
               return (
                 <g 
                   key={`anom1-${i}`} 
@@ -377,7 +439,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
             })}
 
             {/* --- RUN NEW (CURRENT) --- */}
-            <text x="20" y="170" className="text-xs font-extrabold fill-gray-400 tracking-wider">RUN NEW (CURRENT)</text>
+            <text x="20" y="170" className="text-xs font-extrabold fill-gray-400 tracking-wider uppercase">{runNewName}</text>
             <line x1="0" y1="210" x2="100%" y2="210" stroke="#e2e8f0" strokeWidth="4" strokeLinecap="round" />
             
             {/* Draw Run 2 GW Ticks */}
@@ -394,11 +456,31 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
                );
             })}
 
-            {/* Run 2 Anomalies */}
+            {/* Raw Features: Valves & Tees (Run 2) */}
+            {newRawFeatures.map((feat, i) => {
+              const typeStr = String(feat['Feature Type'] || feat['type'] || feat['feature_identification'] || '').toLowerCase();
+              if (typeStr.includes('valve') || typeStr.includes('tee')) {
+                const dist = parseFloat(feat['Log Dist (m)'] || feat['Log Distance (m)'] || feat['Distance (m)']);
+                if (!isNaN(dist) && dist >= startDist && dist <= startDist + totalLength) {
+                  const x2 = mToX(dist);
+                  const label = typeStr.includes('valve') ? 'VALVE' : 'TEE';
+                  return (
+                    <g key={`raw-landmark2-${i}`} className="z-20">
+                      <circle cx={x2} cy="195" r="4" fill="#8b5cf6" stroke="#ffffff" strokeWidth="1" />
+                      <text x={x2} y="185" fontSize="9" fontWeight="black" fill="#8b5cf6" textAnchor="middle">{label}</text>
+                    </g>
+                  );
+                }
+              }
+              return null;
+            })}
+
+            {/* Run 2 Anomalies & Landmarks */}
             {parsedData.map((d, i) => {
               if (d?.dist2 === null || d?.dist2 === undefined) return null;
               const x2 = mToX(d.dist2);
               const isSel = selectedRowIdx !== null && selectedRowIdx !== undefined && d.dataIdx === selectedRowIdx;
+
               return (
                 <g 
                   key={`anom2-${i}`} 
@@ -583,10 +665,10 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
         <div className="flex items-center gap-6">
           <div>
             <h3 className="text-xl font-extrabold text-gray-800 bg-gradient-to-r from-gray-900 to-gray-500 bg-clip-text text-transparent">
-              Alignment Timeline Viewer (12+ km)
+              Alignment Timeline Viewer
             </h3>
             <p className="text-sm text-gray-500 font-medium mt-1">
-              Select a spool segment between Girth Welds to view 2D/3D details.
+              {(totalLength / 1000).toFixed(1)}+ km Interactive Pipeline Alignment Map
             </p>
           </div>
           

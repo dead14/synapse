@@ -130,9 +130,11 @@ const ProbabilityModal = ({ sourceRow, targetRow, onConfirm, onCancel }: { sourc
 
 export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, selectedRowIdx, onSelectRowIdx, onUpdateMatch }: ResultsPanelProps) {
   const data = useMemo(() => {
-    if (Array.isArray(rawData)) return rawData;
-    if (rawData && typeof rawData === 'object') {
-       return [
+    let flattened: any[] = [];
+    if (Array.isArray(rawData)) {
+       flattened = rawData;
+    } else if (rawData && typeof rawData === 'object') {
+       flattened = [
           ...(rawData.gw_locked || []),
           ...(rawData.gw_unmatched || []),
           ...(rawData.anomaly_matched || []),
@@ -140,7 +142,21 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
           ...(rawData.anomaly_only_new || [])
        ];
     }
-    return [];
+    // The backend keeps separate buckets for the matching phases.  The
+    // Results view is one pipeline, so merge those buckets by odometer and
+    // keep OLD/NEW pairs adjacent instead of rendering phase-sized blocks.
+    return flattened
+      .map((row: any, index: number) => ({ row, index }))
+      .sort((a: any, b: any) => {
+        const aDistances = [a.row['Log Dist OLD (m)'], a.row['Log Dist NEW (m)']]
+          .map(Number).filter(Number.isFinite);
+        const bDistances = [b.row['Log Dist OLD (m)'], b.row['Log Dist NEW (m)']]
+          .map(Number).filter(Number.isFinite);
+        const aSortable = aDistances.length ? Math.min(...aDistances) : Number.POSITIVE_INFINITY;
+        const bSortable = bDistances.length ? Math.min(...bDistances) : Number.POSITIVE_INFINITY;
+        return aSortable - bSortable || a.index - b.index;
+      })
+      .map(({ row }: { row: any }) => row);
   }, [rawData]);
 
   const navigate = useNavigate();

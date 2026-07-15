@@ -8,17 +8,11 @@ interface StepAnomalyTolerancesProps {
 }
 
 export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAnomalyTolerancesProps) {
-  const [clockTol, setClockTol] = useState(15);
-  const [usGwTol, setUsGwTol] = useState(0.2);
-  const [dsGwTol, setDsGwTol] = useState(0.2);
-  const [depthTol, setDepthTol] = useState(10); // %WT
-  const [lengthTol, setLengthTol] = useState(50); // mm
-  const [maxTotalCost, setMaxTotalCost] = useState(10.2); // Just for UI, normally calculated
-
-  // Automatically update maxTotalCost if users change US GW or Depth Tol
-  useEffect(() => {
-    setMaxTotalCost(Number((usGwTol + depthTol).toFixed(2)));
-  }, [usGwTol, depthTol]);
+  const [clockTol, setClockTol] = useState(config?.ToleranceConfig?.clock_tolerance ?? 15);
+  const [usGwTol, setUsGwTol] = useState(config?.ToleranceConfig?.us_gw_distance_tolerance ?? config?.scenario?.distThresh ?? 0.2);
+  const [dsGwTol, setDsGwTol] = useState(config?.ToleranceConfig?.ds_gw_distance_tolerance ?? config?.scenario?.distThresh ?? 0.2);
+  const [depthTol, setDepthTol] = useState(config?.ToleranceConfig?.depth_tolerance ?? 10);
+  const [lengthTol, setLengthTol] = useState(config?.ToleranceConfig?.length_tolerance ?? 50);
   
   const applyRecommended = () => {
     setClockTol(15);
@@ -35,8 +29,7 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
         us_gw_distance_tolerance: usGwTol,
         ds_gw_distance_tolerance: dsGwTol,
         depth_tolerance: depthTol,
-        length_tolerance: lengthTol,
-        max_total_cost: maxTotalCost
+        length_tolerance: lengthTol
       }
     });
   };
@@ -134,15 +127,6 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
             value={lengthTol} onChange={(e) => setLengthTol(parseInt(e.target.value))}
             className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
           />
-        </div>
-
-        {/* Max Total Cost */}
-        <div className="border border-gray-200 rounded-xl p-5 bg-gray-100 opacity-80">
-          <div className="flex justify-between items-start mb-4">
-            <label className="text-sm font-bold text-gray-700">Max Total Cost (Threshold)</label>
-            <span className="bg-white px-2 py-1 rounded text-gray-600 font-mono text-sm shadow-sm border border-gray-100">{maxTotalCost}</span>
-          </div>
-          <p className="text-xs text-gray-500">Auto-calculated based on Distance + Depth constraints to gate Hungarian matches.</p>
         </div>
 
       </div>

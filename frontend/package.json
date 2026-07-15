@@ -37,6 +37,7 @@
     "react-leaflet": "^5.0.0",
     "react-router-dom": "^7.18.1",
     "simplebar-react": "^3.3.2",
+    "socket.io-client": "^4.8.3",
     "tailwind-merge": "^3.6.0",
     "three": "^0.185.1",
     "xlsx": "^0.18.5"

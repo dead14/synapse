@@ -465,7 +465,7 @@ exports.getIliResults = async (req, res) => {
         if (sessionId && sessionId !== '') {
             // Use the specific session requested by the frontend
             result = await pool.query(
-                `SELECT params_json FROM alignment_sessions WHERE id = $1`,
+                `SELECT id, params_json FROM alignment_sessions WHERE id = $1`,
                 [sessionId]
             );
         }
@@ -473,7 +473,7 @@ exports.getIliResults = async (req, res) => {
         // Fallback: if no sessionId or session not found, use latest with actual data
         if (!result || result.rows.length === 0) {
             result = await pool.query(
-                `SELECT params_json FROM alignment_sessions 
+                `SELECT id, params_json FROM alignment_sessions
                  WHERE status = 'in_progress' AND params_json IS NOT NULL AND params_json::text != 'null'
                  ORDER BY started_at DESC LIMIT 1`
             );
@@ -483,10 +483,11 @@ exports.getIliResults = async (req, res) => {
             return res.json({ comparison: [] });
         }
         
+        const resolvedSessionId = result.rows[0].id || sessionId;
         const config = result.rows[0].params_json;
         
         try {
-            console.log("Starting run-hungarian job for session:", sessionId);
+            console.log("Starting run-hungarian job for session:", resolvedSessionId);
             const jobId = `job_hungarian_${Date.now()}`;
             
             // Initialize job in local map
@@ -499,7 +500,7 @@ exports.getIliResults = async (req, res) => {
 
             // Run asynchronously
             setTimeout(() => {
-                const pythonProcess = spawn('python', ['src/python_engines/hungarian_engine.py', sessionId.toString()], { cwd: path.join(__dirname, '../../..') });
+                const pythonProcess = spawn('python', ['src/python_engines/hungarian_engine.py', resolvedSessionId.toString()], { cwd: path.join(__dirname, '../../..') });
                 let output = '';
                 let errorOutput = '';
 

@@ -141,46 +141,12 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
             Post-Alignment Validation Results
           </h3>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-            <div className="bg-white border border-red-100 rounded-2xl p-6 shadow-[0_4px_20px_-4px_rgba(239,68,68,0.1)] relative overflow-hidden">
-               <div className="absolute top-0 left-0 w-1 h-full bg-red-500"></div>
-               <h4 className="font-bold text-red-700 flex items-center gap-2 mb-4">
-                 <FiAlertTriangle className="text-red-500" /> Physics Red Flags
-               </h4>
-               <ul className="text-sm text-gray-600 space-y-3">
-                 <li className="flex items-start gap-2">
-                   <div className="w-1.5 h-1.5 rounded-full bg-red-400 mt-1.5 shrink-0" />
-                   <span><strong className="text-red-600">4 Anomalies</strong> show impossible depth regression (Depth NEW &lt; Depth OLD).</span>
-                 </li>
-                 <li className="flex items-start gap-2">
-                   <div className="w-1.5 h-1.5 rounded-full bg-red-400 mt-1.5 shrink-0" />
-                   <span><strong className="text-red-600">3 Anomalies</strong> flagged for severe orientation shift (&gt;45° clock rotation).</span>
-                 </li>
-                 <li className="flex items-start gap-2">
-                   <div className="w-1.5 h-1.5 rounded-full bg-red-400 mt-1.5 shrink-0" />
-                   <span><strong className="text-red-600">1 Anomaly</strong> changed location classification (Internal to External).</span>
-                 </li>
-               </ul>
-            </div>
-            
-            <div className="bg-white border border-blue-100 rounded-2xl p-6 shadow-[0_4px_20px_-4px_rgba(59,130,246,0.1)] relative overflow-hidden">
-               <div className="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>
-               <h4 className="font-bold text-blue-800 flex items-center gap-2 mb-4">
-                 <FiCheckCircle className="text-blue-500" /> Naive Bayes Confidence
-               </h4>
-               <ul className="text-sm text-gray-600 space-y-2">
-                 <li className="flex justify-between items-center py-1 border-b border-gray-50">
-                   <span className="text-gray-500">High Confidence (&gt;90%)</span> <span className="font-bold text-gray-800 bg-gray-100 px-2 py-0.5 rounded">1,150 matches</span>
-                 </li>
-                 <li className="flex justify-between items-center py-1 border-b border-gray-50">
-                   <span className="text-gray-500">Medium Confidence (70-90%)</span> <span className="font-bold text-gray-800 bg-gray-100 px-2 py-0.5 rounded">103 matches</span>
-                 </li>
-                 <li className="flex justify-between items-center py-1">
-                   <span className="text-gray-500">Low Confidence (&lt;70%)</span> <span className="font-bold text-red-500 bg-red-50 px-2 py-0.5 rounded">20 matches</span>
-                 </li>
-               </ul>
-               <p className="text-[11px] text-blue-600/70 mt-4 italic bg-blue-50/50 p-2 rounded-lg">Low confidence matches usually indicate severe odometer drift or sensor noise around the anomaly.</p>
-            </div>
+          <div className="bg-white border border-green-100 rounded-2xl p-6 shadow-sm mb-8 text-center">
+            <h4 className="font-bold text-gray-800 mb-2">Alignment Process Completed Successfully</h4>
+            <p className="text-sm text-gray-600">
+              The dataset has been processed by the DTW and Hungarian matching engines. 
+              You can now view the comprehensive results in the final dashboard.
+            </p>
           </div>
           
           <div className="flex gap-4 justify-end pt-4 border-t border-gray-100">

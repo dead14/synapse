@@ -216,6 +216,28 @@ class HungarianAnomalyAlignmentEngine:
         offset_table: list[tuple[float, float]],
         offset_keys: list[float] = None
     ) -> np.ndarray:
+        # Handle hidden features and depth threshold filtering from Scenario Assessment
+        filtered_1 = []
+        for f in anomalies_1:
+            orig_type = str(f.get("originalType", "")).lower()
+            if orig_type in self.hidden_features:
+                continue
+            if f.get("depth_pct") is not None and f.get("depth_pct") < self.depth_thresh:
+                continue
+            filtered_1.append(f)
+            
+        filtered_2 = []
+        for f in anomalies_2:
+            orig_type = str(f.get("originalType", "")).lower()
+            if orig_type in self.hidden_features:
+                continue
+            if f.get("depth_pct") is not None and f.get("depth_pct") < self.depth_thresh:
+                continue
+            filtered_2.append(f)
+            
+        anomalies_1 = filtered_1
+        anomalies_2 = filtered_2
+
         n = len(anomalies_1)
         m = len(anomalies_2)
         cost = np.full((n, m), self.INF_COST, dtype=float)
@@ -242,9 +264,9 @@ class HungarianAnomalyAlignmentEngine:
                 # Keep the historical base tolerance as a floor.  The UI values
                 # refine the directional tolerance but must not make an existing
                 # valid alignment disappear merely because the default was 0.5 m.
-                distance_tolerance = max(distance_tolerance, self.distance_tolerance_m)
+                # EDIT: Removed 0.5m floor to strictly obey UI input
                 if diff <= distance_tolerance:
-                    base_cost = diff
+                    base_cost = 0.0
                     
                     # 1. GW Penalty
                     gw1 = f1.get("dist_to_us_gw_m")
@@ -252,21 +274,27 @@ class HungarianAnomalyAlignmentEngine:
                     if gw1 is not None and gw2 is not None:
                         base_cost += w_gw * (min(abs(gw1 - gw2), 2.0) / 2.0)
                         
-                    # 2. Clock Penalty (assume 60 degrees max allowed for penalty scale)
+                    # 2. Clock Penalty
                     cd = self._clock_diff(f1.get("clock_position"), f2.get("clock_position"))
                     if cd is not None:
-                        base_cost += w_clock * min(cd / self.clock_tolerance, 1.0)
+                        if cd > self.clock_tolerance:
+                            continue # Strict gating
+                        base_cost += w_clock * (cd / self.clock_tolerance)
                         
                     # 3. Depth Penalty
                     d1, d2 = f1.get("depth_pct"), f2.get("depth_pct")
                     if d1 is not None and d2 is not None:
                         depth_difference = abs(d1 - d2)
+                        if depth_difference > self.depth_tolerance:
+                            continue # Strict gating
                         base_cost += w_depth * (depth_difference / self.depth_tolerance)
                         
                     # 4. Length Penalty
                     l1, l2 = f1.get("length_mm"), f2.get("length_mm")
                     if l1 is not None and l2 is not None:
                         length_difference = abs(l1 - l2)
+                        if length_difference > self.length_tolerance:
+                            continue # Strict gating
                         base_cost += w_length * (length_difference / self.length_tolerance)
                         
                     # 5. Width Penalty
@@ -296,18 +324,35 @@ class HungarianAnomalyAlignmentEngine:
         offset_table = self._build_offset_table(gw_pairs)
         offset_keys = [x[0] for x in offset_table] if offset_table else []
 
-        # Read ToleranceConfig from params_json
+        # Read parameters from params_json
+        params_json = {}
+        try:
+            params_json = json.loads(sys.argv[4])
+        except Exception:
+            pass
+
+        self.scenario_filter = params_json.get("scenario", {})
+        self.hidden_features = self.scenario_filter.get("hiddenFeatures", [])
+        self.depth_thresh = float(self.scenario_filter.get("depthThresh", 0))
+
+        # We will map distThresh to us_gw_distance_tolerance if provided in ToleranceConfig
+        tol_config = params_json.get("ToleranceConfig", {})
+        
+        # Override tolerances if config provides them
+        if "clock_tolerance" in tol_config:
+            self.clock_tolerance = float(tol_config["clock_tolerance"])
+        if "us_gw_distance_tolerance" in tol_config:
+            self.us_gw_distance_tolerance = float(tol_config["us_gw_distance_tolerance"])
+        if "ds_gw_distance_tolerance" in tol_config:
+            self.ds_gw_distance_tolerance = float(tol_config["ds_gw_distance_tolerance"])
+        if "depth_tolerance" in tol_config:
+            self.depth_tolerance = float(tol_config["depth_tolerance"])
+        if "length_tolerance" in tol_config:
+            self.length_tolerance = float(tol_config["length_tolerance"])
+
         try:
             sess = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
             if sess and sess.params_json:
-                tol_config = sess.params_json.get("ToleranceConfig", {})
-                self.clock_tolerance = tol_config.get("clock_tolerance", self.clock_tolerance)
-                self.us_gw_distance_tolerance = tol_config.get("us_gw_distance_tolerance", self.distance_tolerance_m)
-                self.ds_gw_distance_tolerance = tol_config.get("ds_gw_distance_tolerance", self.distance_tolerance_m)
-                self.depth_tolerance = tol_config.get("depth_tolerance", 50.0)
-                self.length_tolerance = tol_config.get("length_tolerance", 400.0)
-                self.max_total_cost = tol_config.get("max_total_cost", self.us_gw_distance_tolerance + self.depth_tolerance)
-                
                 gw_matches_final = sess.params_json.get("gwMatchesFinal", [])
                 gw_orphans = sess.params_json.get("gwOrphans", [])
             else:
@@ -415,8 +460,6 @@ class HungarianAnomalyAlignmentEngine:
         total_new = 0
         total_missing = 0
 
-        max_total_cost = self.max_total_cost
-
         for seg_id in range(num_segments):
             seg_anomalies_1 = segments_1[seg_id]
             seg_anomalies_2 = segments_2[seg_id]
@@ -443,8 +486,8 @@ class HungarianAnomalyAlignmentEngine:
             matched_2 = set()
 
             for i, j in zip(row_ind, col_ind):
-                # THRESHOLD GATE: Buang pasangan yang cost > max_total_cost
-                if cost_matrix[i][j] >= self.INF_COST or cost_matrix[i][j] > max_total_cost:
+                # THRESHOLD GATE: Buang pasangan yang cost == INF_COST
+                if cost_matrix[i][j] >= self.INF_COST:
                     continue
 
                 f1 = seg_anomalies_1[i]

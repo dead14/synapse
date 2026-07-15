@@ -6,6 +6,13 @@ const connection = new Redis({
   host: process.env.REDIS_HOST || 'localhost',
   port: process.env.REDIS_PORT || 6379,
   maxRetriesPerRequest: null,
+  retryStrategy(times) {
+    // Stop retrying after 3 times to prevent infinite reconnect loop
+    if (times >= 3) {
+      return null;
+    }
+    return Math.min(times * 50, 2000);
+  }
 });
 
 connection.on('error', (err) => {

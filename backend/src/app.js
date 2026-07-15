@@ -3,6 +3,14 @@ const cors = require('cors');
 const path = require('path');
 const app = express();
 
+app.use((req, res, next) => {
+    console.log(`[REQ] ${req.method} ${req.path}`);
+    res.on('finish', () => {
+        console.log(`[RES] ${req.method} ${req.path} -> ${res.statusCode}`);
+    });
+    next();
+});
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -26,24 +34,7 @@ require('./modules/alignment/alignmentWorker');
 // Serve static frontend in production
 const frontendDistPath = path.join(__dirname, '../../frontend/dist');
 
-// SSE Endpoint for Alignment Execution Progress
-app.get('/stream-alignment', (req, res) => {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
-    const sendMsg = (msg) => res.write(`data: ${JSON.stringify({ message: msg })}\n\n`);
-    
-    setTimeout(() => sendMsg('FASE 1: Memulai Inisiasi Data Pipeline...'), 1000);
-    setTimeout(() => sendMsg('FASE 2: Menjalankan GW Matching DTW dengan Threshold...'), 3000);
-    setTimeout(() => sendMsg('FASE 3: Algoritma Hungarian untuk Mencocokkan Anomali...'), 6000);
-    setTimeout(() => sendMsg('FASE 4: Rekonsiliasi Hasil & Kalkulasi Akurasi...'), 9000);
-    setTimeout(() => {
-        sendMsg('SELESAI: Penyelarasan Pipa Selesai!');
-        res.write(`data: ${JSON.stringify({ status: 'done' })}\n\n`);
-        res.end();
-    }, 12000);
-});
+// SSE /stream-alignment removed — real-time updates now via Socket.io
 
 app.use(express.static(frontendDistPath));
 
