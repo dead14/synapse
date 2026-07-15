@@ -611,7 +611,7 @@ exports.getJobResult = async (req, res) => {
                         progress: bullJob.progress, 
                         result: bullJob.returnvalue, 
                         failedReason: bullJob.failedReason 
-                    });
+                     });
                 }
             } catch (e) {
                 // Ignore bullmq error
@@ -631,3 +631,62 @@ exports.getJobResult = async (req, res) => {
         res.status(500).json({ error: 'Failed to get job status' });
     }
 };
+
+exports.exportExcel = async (req, res) => {
+    try {
+        const { data } = req.body;
+        if (!data || !Array.isArray(data)) {
+            return res.status(400).json({ error: 'Invalid data payload' });
+        }
+        
+        // Write the data to a temporary file
+        const uploadsDir = path.join(__dirname, '../../../../uploads');
+        if (!fs.existsSync(uploadsDir)) {
+            fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+        
+        const tempInputFile = path.join(uploadsDir, `export_input_${Date.now()}_${Math.floor(Math.random() * 1000)}.json`);
+        const tempOutputFile = path.join(uploadsDir, `export_output_${Date.now()}_${Math.floor(Math.random() * 1000)}.xlsx`);
+        
+        fs.writeFileSync(tempInputFile, JSON.stringify(data, null, 2));
+        
+        // Spawn Python process
+        const pythonProcess = spawn('python', [
+            path.join(__dirname, '../../python_engines/export_excel.py'),
+            tempInputFile,
+            tempOutputFile
+        ]);
+        
+        let errorOutput = '';
+        pythonProcess.stderr.on('data', (data) => {
+            errorOutput += data.toString();
+        });
+        
+        pythonProcess.on('close', (code) => {
+            // Clean up input file
+            if (fs.existsSync(tempInputFile)) {
+                fs.unlinkSync(tempInputFile);
+            }
+            
+            if (code === 0 && fs.existsSync(tempOutputFile)) {
+                res.download(tempOutputFile, 'synapse_alignment_report.xlsx', (err) => {
+                    // Clean up output file after download
+                    if (fs.existsSync(tempOutputFile)) {
+                        fs.unlinkSync(tempOutputFile);
+                    }
+                });
+            } else {
+                console.error("Excel export python failed with error: ", errorOutput);
+                if (fs.existsSync(tempOutputFile)) {
+                    fs.unlinkSync(tempOutputFile);
+                }
+                res.status(500).json({ error: 'Failed to generate Excel file', details: errorOutput });
+            }
+        });
+        
+    } catch (err) {
+        console.error("Failed to export Excel:", err);
+        res.status(500).json({ error: 'Failed to export Excel' });
+    }
+};
+

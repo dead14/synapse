@@ -162,6 +162,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   }, [rawData]);
 
   const navigate = useNavigate();
+  const [isExporting, setIsExporting] = useState(false);
   const [activeTab, setActiveTab] = useState('Results');
   const [radioFilter, setRadioFilter] = useState('All');
   const [unmatchedOld, setUnmatchedOld] = useState(false);
@@ -575,34 +576,40 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
     setInterventions(interventions.filter(i => i.id !== id));
   };
 
-  const exportToCSV = () => {
+  const exportToExcel = async () => {
     if (sortedData.length === 0) return;
-    
-    // Create CSV content from allColumns and sortedData
-    const headers = allColumns.join(',');
-    const csvRows = sortedData.map((row: any) => {
-      return allColumns.map(col => {
-        let val = row[col];
-        if (val === null || val === undefined) val = '';
-        // Escape quotes and commas
-        const strVal = String(val).replace(/"/g, '""');
-        if (strVal.includes(',') || strVal.includes('"') || strVal.includes('\n')) {
-          return `"${strVal}"`;
-        }
-        return strVal;
-      }).join(',');
-    });
-    
-    const csvString = [headers, ...csvRows].join('\n');
-    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', 'synapse_alignment_results.csv');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    setIsExporting(true);
+    try {
+      const token = localStorage.getItem('synapse_token') || '';
+      const response = await fetch('http://localhost:8000/api/alignment/export-excel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ data: sortedData })
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to generate Excel file');
+      }
+      
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', 'synapse_alignment_report.xlsx');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to export Excel:", err);
+      alert("Gagal mengekspor file Excel.");
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   // Footer showing total row count (replaces pagination)
@@ -697,11 +704,12 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
             To Sectional
           </button>
           <button 
-            onClick={exportToCSV}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] bg-emerald-600 text-white rounded-md shadow-sm hover:bg-emerald-700 font-medium transition-colors"
+            onClick={exportToExcel}
+            disabled={isExporting}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] bg-emerald-600 text-white rounded-md shadow-sm hover:bg-emerald-700 font-medium transition-colors disabled:opacity-50"
           >
             <FiDownload size={14} />
-            Export CSV
+            {isExporting ? 'Exporting...' : 'Export Excel'}
           </button>
           <button 
             onClick={() => setIsFullScreen(!isFullScreen)}

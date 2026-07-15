@@ -22,6 +22,7 @@ router.get('/pipeline-runs', authMiddleware, alignmentController.getPipelineRuns
 
 router.get('/ili-results', authMiddleware, alignmentController.getIliResults);
 router.get('/results/:runId', authMiddleware, alignmentController.getAlignmentResults);
+router.post('/alignment/export-excel', authMiddleware, alignmentController.exportExcel);
 // router.get('/job/:jobId/result', authMiddleware, alignmentController.getJobResult);
 router.get('/job/:jobId/result', alignmentController.getJobResult);
 
