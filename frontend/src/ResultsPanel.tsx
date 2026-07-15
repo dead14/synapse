@@ -40,7 +40,7 @@ const LazyScatterChart = lazy(() =>
 );
 
 interface ResultsPanelProps {
-  data: any[];
+  data: any;
   loading: boolean;
   onOpenAnalytics?: () => void;
   selectedRowIdx?: number | null;
@@ -128,7 +128,21 @@ const ProbabilityModal = ({ sourceRow, targetRow, onConfirm, onCancel }: { sourc
   );
 };
 
-export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedRowIdx, onSelectRowIdx, onUpdateMatch }: ResultsPanelProps) {
+export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, selectedRowIdx, onSelectRowIdx, onUpdateMatch }: ResultsPanelProps) {
+  const data = useMemo(() => {
+    if (Array.isArray(rawData)) return rawData;
+    if (rawData && typeof rawData === 'object') {
+       return [
+          ...(rawData.gw_locked || []),
+          ...(rawData.gw_unmatched || []),
+          ...(rawData.anomaly_matched || []),
+          ...(rawData.anomaly_only_old || []),
+          ...(rawData.anomaly_only_new || [])
+       ];
+    }
+    return [];
+  }, [rawData]);
+
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('Results');
   const [radioFilter, setRadioFilter] = useState('All');
@@ -310,7 +324,7 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
   
   // 1. Process data with interventions
   const processedData = useMemo(() => {
-    let baseData = (data && data.length > 1) ? data.slice(1) : [];
+    let baseData = data ? [...data] : [];
     
     // Apply interventions
     interventions.forEach(inv => {

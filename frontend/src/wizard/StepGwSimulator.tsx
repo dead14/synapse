@@ -16,7 +16,7 @@ interface StepGwSimulatorProps {
 }
 
 export default function StepGwSimulator({ initialOta, onNext, onBack, config }: StepGwSimulatorProps) {
-  const [ota, setOta] = useState(10.0);
+  const [ota, setOta] = useState(1.5); // Industry standard: odometer accuracy ~1-2%
   const [zoom, setZoom] = useState(150);
   const [selectedGWs, setSelectedGWs] = useState<number[]>([]);
   const [selectedTrack, setSelectedTrack] = useState<'old' | 'new' | null>(null);
@@ -50,6 +50,8 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
   };
 
   const [dtwOn, setDtwOn] = useState(false);
+  const [useValveAnchor, setUseValveAnchor] = useState(true);
+  const [strictPenalty, setStrictPenalty] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const tableRowRefs = useRef<{[key: string]: HTMLTableRowElement | null}>({});
   const itemsPerPage = 10;
@@ -58,6 +60,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
   const [editRun1, setEditRun1] = useState<string>('');
   const [editRun2, setEditRun2] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [valveMatches, setValveMatches] = useState<any[]>([]);
 
 
 
@@ -87,12 +90,20 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
   };
 
   const [matches, setMatches] = useState<any[]>([]);
+  const [gwMatchesFinal, setGwMatchesFinal] = useState<any[]>([]);
+  const [gwOrphans, setGwOrphans] = useState<any[]>([]);
   const [alignedFeatures, setAlignedFeatures] = useState<any[]>([]);
   const [oldGWs, setOldGWs] = useState<number[]>([]);
   const [newGWs, setNewGWs] = useState<number[]>([]);
+  const [oldValves, setOldValves] = useState<number[]>([]);
+  const [newValves, setNewValves] = useState<number[]>([]);
+  const [oldTees, setOldTees] = useState<number[]>([]);
+  const [newTees, setNewTees] = useState<number[]>([]);
   const [isCalculating, setIsCalculating] = useState(false);
 
   useEffect(() => {
+    const controller = new AbortController();
+    
     const calculateDTW = async () => {
       setIsCalculating(true);
       const token = localStorage.getItem('synapse_token') || '';
@@ -107,78 +118,127 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
 
         const payload = {
           ota,
+          strictPenalty,
+          useValveAnchor,
           oldRun: config?.summaryData?.oldRun?.rawFeatures || [],
           newRun: adjustedNewRun,
           globalOffset
         };
         
-        const res = await fetch('http://localhost:8000/api/align-dtw', {
+        const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+        const res = await fetch(`${API_BASE}/api/align-dtw`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
           body: JSON.stringify(payload)
         });
         
+        if (!res.ok) {
+          if (res.status === 401) {
+            alert("Sesi login kamu udah habis (Token Expired). Tolong Logout terus Login lagi ya!");
+          }
+          throw new Error(`Server error: ${res.status}`);
+        }
+        
         const data = await res.json();
         
         if (data.success && data.gwMatches) {
           if (data.alignedFeatures) setAlignedFeatures(data.alignedFeatures);
+          if (data.gwMatchesFinal) setGwMatchesFinal(data.gwMatchesFinal);
+          if (data.gwOrphans) setGwOrphans(data.gwOrphans);
           
           // Extract old and new distances just for the visualizer scales
-          const oldW = payload.oldRun.filter((f: any) => f.type === 'weld').map((f: any) => f.dist);
-          const newW = payload.newRun.filter((f: any) => f.type === 'weld').map((f: any) => f.dist);
+          const oldW = payload.oldRun.filter((f: any) => String(f.type || f.feature_identification || f.originalType).toLowerCase().includes('weld')).map((f: any) => f.dist);
+          const newW = payload.newRun.filter((f: any) => String(f.type || f.feature_identification || f.originalType).toLowerCase().includes('weld')).map((f: any) => f.dist);
+          const oldValves = payload.oldRun.filter((f: any) => String(f.type || f.feature_identification || f.originalType).toLowerCase().includes('valve')).map((f: any) => f.dist);
+          const newValves = payload.newRun.filter((f: any) => String(f.type || f.feature_identification || f.originalType).toLowerCase().includes('valve')).map((f: any) => f.dist);
+          const oldTees = payload.oldRun.filter((f: any) => String(f.type || f.feature_identification || f.originalType).toLowerCase().includes('tee')).map((f: any) => f.dist);
+          const newTees = payload.newRun.filter((f: any) => String(f.type || f.feature_identification || f.originalType).toLowerCase().includes('tee')).map((f: any) => f.dist);
           
           setOldGWs(oldW);
           setNewGWs(newW);
+          setOldValves(oldValves);
+          setNewValves(newValves);
+          setOldTees(oldTees);
+          setNewTees(newTees);
+          
+          if (data.valveAnchors) {
+            setValveMatches(data.valveAnchors);
+          } else {
+            setValveMatches([]);
+          }
           
           const formattedMatches = data.gwMatches.map((m: any, idx: number) => {
-            const isMatch = m.status === 'Match';
-            const rawOffset = m.newDist !== null && m.oldDist !== null ? (m.newDist - m.oldDist) : null;
-            
-            // Re-apply DTW correction visualization if enabled
-            let correctedNewVal = m.newDist;
-            let correctedOffset = rawOffset;
-            let finalVarPct = m.deviation_ratio ? m.deviation_ratio * 100 : 0;
-            
-            if (dtwOn && isMatch && rawOffset !== null && m.oldDist !== null) {
-               // Snap them perfectly so user sees a dramatic physical move!
-               correctedNewVal = m.oldDist;
-               correctedOffset = 0;
-               finalVarPct = 0;
-            }
+              const isMatch = m && m.status === 'Match';
+              const rawOffset = m.newDist !== null && m.oldDist !== null ? (m.newDist - m.oldDist) : null;
+              
+              let correctedNewVal = m.newDist;
+              let correctedOffset = rawOffset;
+              
+              const oldFeature = m.oldId ? config?.summaryData?.oldRun?.rawFeatures?.find((f: any) => f.id === m.oldId) : null;
+              const newFeature = m.newId ? config?.summaryData?.newRun?.rawFeatures?.find((f: any) => f.id === m.newId) : null;
+              const oldDesc = oldFeature ? (oldFeature.feature_identification || oldFeature.originalType || 'Weld') : '(Missing)';
+              const newDesc = newFeature ? (newFeature.feature_identification || newFeature.originalType || 'Weld') : '(Missing)';
 
-            const oldFeature = config?.summaryData?.oldRun?.rawFeatures?.find((f: any) => f.id === m.oldId);
-            const newFeature = config?.summaryData?.newRun?.rawFeatures?.find((f: any) => f.id === m.newId);
-            const oldDesc = oldFeature?.feature_identification || oldFeature?.originalType || 'Weld';
-            const newDesc = newFeature?.feature_identification || newFeature?.originalType || 'Weld';
+              const finalVarPct = isMatch && m.deviation_ratio !== undefined && m.deviation_ratio !== null 
+                  ? m.deviation_ratio * 100 
+                  : 0;
 
-            return {
-              id: `match-${idx}`,
-              oldIndex: m.oldIndex, newIndex: m.newIndex,
-              oldId: m.oldId, newId: m.newId,
-              oldDesc, newDesc,
-              oldVal: m.oldDist, newVal: correctedNewVal,
-              originalNewVal: m.newDist !== null ? m.newDist - globalOffset : null,
-              varPct: finalVarPct,
-              offset: correctedOffset,
-              status: m.status,
-              deviationRatio: m.deviation_ratio,
-              flagged: m.flagged,
-              sOld: m.L_ref, sNew: m.L_new, rawVarPct: m.deviation_ratio ? m.deviation_ratio * 100 : 0, rawOffset, dtwOn
-            };
+              return {
+                id: `match-${idx}`,
+                oldIndex: m.oldIndex, newIndex: m.newIndex,
+                oldId: m.oldId, newId: m.newId,
+                oldDesc, newDesc,
+                oldVal: m.oldDist, newVal: correctedNewVal,
+                originalNewVal: m.newDist !== null ? m.newDist - globalOffset : null,
+                varPct: finalVarPct,
+                offset: correctedOffset,
+                status: m.status,
+                deviationRatio: m.deviation_ratio,
+                flagged: m.flagged,
+                sOld: m.L_ref, sNew: m.L_new, rawVarPct: m.deviation_ratio ? m.deviation_ratio * 100 : 0, rawOffset,
+              };
           });
+
+          if (data.valveAnchors) {
+            data.valveAnchors.forEach((v: any, idx: number) => {
+              const oldFeature = config?.summaryData?.oldRun?.rawFeatures?.find((f: any) => f.id === v.old_id);
+              const newFeature = config?.summaryData?.newRun?.rawFeatures?.find((f: any) => f.id === v.new_id);
+              
+              formattedMatches.push({
+                id: `valve-match-${idx}`,
+                oldIndex: -1, newIndex: -1,
+                oldId: v.old_id, newId: v.new_id,
+                oldDesc: oldFeature ? (oldFeature.feature_identification || oldFeature.originalType || 'Valve') : 'VALVE/TEE',
+                newDesc: newFeature ? (newFeature.feature_identification || newFeature.originalType || 'Valve') : 'VALVE/TEE',
+                oldVal: v.old_dist, newVal: v.new_dist,
+                originalNewVal: v.new_dist - globalOffset,
+                varPct: 0,
+                offset: v.new_dist - v.old_dist,
+                status: 'Match',
+                deviationRatio: 0,
+                flagged: false,
+                sOld: 0, sNew: 0, rawVarPct: 0, rawOffset: v.new_dist - v.old_dist
+              });
+            });
+          }
+
           setMatches(formattedMatches);
         }
-      } catch (err) {
-        console.error("Failed to run DTW:", err);
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error("Failed to run DTW:", err);
+        }
       } finally {
         setIsCalculating(false);
       }
     };
     
-    // Add a slight debounce
-    const timeout = setTimeout(calculateDTW, 500);
-    return () => clearTimeout(timeout);
-  }, [ota, dtwOn, config]);
+    // Debounce: cancel rapid slider drags, fire only after user stops moving for 300ms
+    const timeout = setTimeout(calculateDTW, 300);
+    return () => {
+      clearTimeout(timeout);
+    };
+  }, [ota, strictPenalty, config]);
 
   const unmatchedRanges = useMemo(() => {
     const ranges: any[] = [];
@@ -284,7 +344,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
               <div className="flex items-center gap-4">
                 <div>
                   <h3 className="text-lg font-bold text-gray-800">Timeline Viewer</h3>
-                  <p className="text-xs font-medium text-gray-500 mt-1">12+ km Interactive Pipeline Alignment Map</p>
+                  <p className="text-xs font-medium text-gray-500 mt-1">{(maxDist / 1000).toFixed(1)}+ km Interactive Pipeline Alignment Map</p>
                 </div>
                 {selectedGWs.length === 2 && (
                   <div className="flex items-center gap-3 bg-yellow-400/10 px-4 py-1.5 rounded-full border border-yellow-400/30 animate-fade-in">
@@ -303,7 +363,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
               <div className="flex items-center gap-2 bg-gray-50 px-4 py-2 rounded-xl border border-gray-200 shadow-inner">
                 <span className="text-xs font-bold text-gray-500 tracking-wide uppercase">Zoom</span>
                 <input 
-                  type="range" min="100" max="15000" step="100" 
+                  type="range" min="100" max="200000" step="500" 
                   value={zoom} onChange={(e) => setZoom(parseInt(e.target.value))}
                   className="w-32 h-1.5 bg-gray-300 rounded-lg appearance-none cursor-pointer accent-blue-600"
                 />
@@ -313,21 +373,77 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
             {/* Timeline Visualizer */}
             <div className="relative h-72 bg-gradient-to-r from-gray-50 to-white rounded-xl border border-gray-200 overflow-x-auto custom-scrollbar shadow-inner">
               {isCalculating && (
-                <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] z-50 flex items-center justify-center rounded-xl">
-                  <div className="bg-white border border-blue-200 px-6 py-3 rounded-xl shadow-xl font-bold text-blue-600 animate-pulse flex items-center gap-3">
-                    <svg className="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    AI Recalculating DTW...
+                <div className="absolute top-2 right-2 z-50">
+                  <div className="bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-lg shadow-sm font-bold text-blue-600 text-xs flex items-center gap-2">
+                    <svg className="animate-spin h-3.5 w-3.5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373,0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    Updating...
                   </div>
                 </div>
               )}
               <div className="relative h-full" style={{ width: `${zoom}%`, minWidth: '100%', padding: '0 40px' }}>
                 <div className="relative w-full h-full">
-                  <div className="absolute top-4 left-0 text-[10px] font-bold text-gray-400 tracking-wider uppercase sticky">Run Old (Reference)</div>
+                  <div className="absolute top-4 left-0 text-[10px] font-bold text-gray-400 tracking-wider uppercase sticky">
+                    {config?.summaryData?.oldRun?.year ? `${config.summaryData.oldRun.year} (Reference)` : 'Run Old (Reference)'}
+                  </div>
                   <div className="absolute top-[70px] left-0 right-0 h-px bg-green-500/50"></div>
+                  
+                  {/* Dashed Lines for Matches */}
+                  <svg className="absolute inset-0 w-full h-full pointer-events-none z-0">
+                    {matches.filter(m => m.status === 'Match' && m.oldVal !== null && m.newVal !== null).map((m, i) => (
+                      <line 
+                        key={`match-line-${i}`} 
+                        x1={`${getPosPct(m.oldVal)}%`} y1="70" 
+                        x2={`${getPosPct(m.newVal)}%`} y2="200" 
+                        stroke="#22c55e" strokeWidth="1.5" strokeDasharray="4 4" className="opacity-40" 
+                      />
+                    ))}
+                    {valveMatches.map((m, i) => (
+                      <line 
+                        key={`valve-match-line-${i}`} 
+                        x1={`${getPosPct(m.old_dist)}%`} y1="70" 
+                        x2={`${getPosPct(m.new_dist)}%`} y2="200" 
+                        stroke="#22c55e" strokeWidth="2" strokeDasharray="6 4" className="opacity-60" 
+                      />
+                    ))}
+                  </svg>
+                  
+                  {/* Valves - Old Run */}
+                  {oldValves.map((pos, i) => {
+                    const isMatched = valveMatches.some(vm => vm.old_dist === pos);
+                    const isSelected = selectedGWs.includes(pos);
+                    return (
+                    <div 
+                      key={`old-valve-${i}`} 
+                      className={`absolute top-[52px] flex flex-col items-center z-10 cursor-pointer group`}
+                      style={{ left: `${getPosPct(pos)}%`, transform: 'translateX(-50%)' }}
+                      onClick={() => handleGWClick(pos, 'old')}
+                    >
+                      <div className={`text-[8px] font-bold mb-1 uppercase tracking-tighter ${isSelected && selectedTrack === 'old' ? 'text-yellow-500' : isMatched ? 'text-green-600' : 'text-purple-600'}`}>VALVE</div>
+                      <div className={`w-3 h-3 border border-white rounded-full shadow-sm transition-transform ${isSelected && selectedTrack === 'old' ? 'bg-yellow-400 scale-125' : isMatched ? 'bg-green-500 group-hover:scale-110' : 'bg-purple-500 group-hover:scale-110'}`}></div>
+                    </div>
+                  )})}
+
+                  {/* Tees - Old Run */}
+                  {oldTees.map((pos, i) => {
+                    const isMatched = valveMatches.some(vm => vm.old_dist === pos);
+                    const isSelected = selectedGWs.includes(pos);
+                    return (
+                    <div 
+                      key={`old-tee-${i}`} 
+                      className={`absolute top-[52px] flex flex-col items-center z-10 cursor-pointer group`}
+                      style={{ left: `${getPosPct(pos)}%`, transform: 'translateX(-50%)' }}
+                      onClick={() => handleGWClick(pos, 'old')}
+                    >
+                      <div className={`text-[8px] font-bold mb-1 uppercase tracking-tighter ${isSelected && selectedTrack === 'old' ? 'text-yellow-500' : isMatched ? 'text-green-600' : 'text-purple-600'}`}>TEE</div>
+                      <div className={`w-3 h-3 border border-white rounded-full shadow-sm transition-transform ${isSelected && selectedTrack === 'old' ? 'bg-yellow-400 scale-125' : isMatched ? 'bg-green-500 group-hover:scale-110' : 'bg-purple-500 group-hover:scale-110'}`}></div>
+                    </div>
+                  )})}
+                  
                   {oldGWs.map((pos, i) => {
-                    const m = matches.find(mx => mx.oldIndex === i);
-                    const isSkipped = m && m.status === 'Skipped';
-                    const isFlagged = m && m.status === 'Flagged';
+                    const m = matches.find(mx => mx.oldVal === pos);
+                    const isMatched = m && m.status === 'Match';
+                    const isSkipped = !isMatched;
+                    const isFlagged = isMatched && m.flagged;
                     const isSelected = selectedGWs.includes(pos);
                     return (
                     <div 
@@ -336,8 +452,8 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                       style={{ left: `${getPosPct(pos)}%`, transform: 'translateX(-50%)' }}
                       onClick={() => handleGWClick(pos, 'old')}
                     >
-                      <div className={`w-1.5 h-5 rounded-full transition-all shadow-sm ${isSelected && selectedTrack === 'old' ? 'bg-yellow-400 scale-125 shadow-yellow-500/50' : isSkipped ? 'bg-rose-500 group-hover:bg-rose-400' : isFlagged ? 'bg-amber-400 group-hover:bg-amber-300' : 'bg-green-500 group-hover:bg-green-400 group-hover:scale-110'}`}></div>
-                      <div className={`text-[9px] mt-1.5 font-mono font-bold ${isSelected && selectedTrack === 'old' ? 'text-yellow-500' : isSkipped ? 'text-rose-500' : isFlagged ? 'text-amber-500' : 'text-green-600/80'}`}>{pos.toFixed(2)}m</div>
+                      <div className={`w-1.5 h-5 rounded-full transition-all shadow-sm ${isSelected && selectedTrack === 'old' ? 'bg-yellow-400 scale-125 shadow-yellow-500/50' : isFlagged ? 'bg-amber-400 group-hover:bg-amber-300' : isMatched ? 'bg-green-500 group-hover:bg-green-400 group-hover:scale-110' : 'bg-red-500 group-hover:bg-red-400'}`}></div>
+                      <div className={`text-[9px] mt-1.5 font-mono font-bold ${isSelected && selectedTrack === 'old' ? 'text-yellow-500' : isFlagged ? 'text-amber-500' : isMatched ? 'text-green-600/80' : 'text-red-500'}`}>{pos.toFixed(2)}m</div>
                     </div>
                     )
                   })}
@@ -353,12 +469,51 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                     />
                   )}
 
-                  <div className="absolute top-[170px] left-0 text-[10px] font-bold text-gray-400 tracking-wider uppercase sticky">Run New (Current)</div>
+                  <div className="absolute top-[170px] left-0 text-[10px] font-bold text-gray-400 tracking-wider uppercase sticky">
+                    {config?.summaryData?.newRun?.year ? `${config.summaryData.newRun.year} (Current)` : 'Run New (Current)'}
+                  </div>
                   <div className="absolute top-[200px] left-0 right-0 h-px bg-blue-500/50"></div>
+                  
+                  {/* Valves - New Run */}
+                  {newValves.map((pos, i) => {
+                    const originalPos = pos - (config?.globalOffset || 0);
+                    // Match against original dist or adjusted pos? valveAnchors returns the adjusted pos!
+                    const isMatched = valveMatches.some(vm => vm.new_dist === pos);
+                    const isSelected = selectedGWs.includes(pos);
+                    return (
+                    <div 
+                      key={`new-valve-${i}`} 
+                      className={`absolute top-[182px] flex flex-col items-center z-10 cursor-pointer group`}
+                      style={{ left: `${getPosPct(pos)}%`, transform: 'translateX(-50%)' }}
+                      onClick={() => handleGWClick(pos, 'new')}
+                    >
+                      <div className={`text-[8px] font-bold mb-1 uppercase tracking-tighter ${isSelected && selectedTrack === 'new' ? 'text-yellow-500' : isMatched ? 'text-green-600' : 'text-purple-600'}`}>VALVE</div>
+                      <div className={`w-3 h-3 border border-white rounded-full shadow-sm transition-transform ${isSelected && selectedTrack === 'new' ? 'bg-yellow-400 scale-125' : isMatched ? 'bg-green-500 group-hover:scale-110' : 'bg-purple-500 group-hover:scale-110'}`}></div>
+                    </div>
+                  )})}
+
+                  {/* Tees - New Run */}
+                  {newTees.map((pos, i) => {
+                    const originalPos = pos - (config?.globalOffset || 0);
+                    const isMatched = valveMatches.some(vm => vm.new_dist === pos);
+                    const isSelected = selectedGWs.includes(pos);
+                    return (
+                    <div 
+                      key={`new-tee-${i}`} 
+                      className={`absolute top-[182px] flex flex-col items-center z-10 cursor-pointer group`}
+                      style={{ left: `${getPosPct(pos)}%`, transform: 'translateX(-50%)' }}
+                      onClick={() => handleGWClick(pos, 'new')}
+                    >
+                      <div className={`text-[8px] font-bold mb-1 uppercase tracking-tighter ${isSelected && selectedTrack === 'new' ? 'text-yellow-500' : isMatched ? 'text-green-600' : 'text-purple-600'}`}>TEE</div>
+                      <div className={`w-3 h-3 border border-white rounded-full shadow-sm transition-transform ${isSelected && selectedTrack === 'new' ? 'bg-yellow-400 scale-125' : isMatched ? 'bg-green-500 group-hover:scale-110' : 'bg-purple-500 group-hover:scale-110'}`}></div>
+                    </div>
+                  )})}
+                  
                   {newGWs.map((pos, i) => {
-                    const m = matches.find(mx => mx.newIndex === i);
-                    const isSkipped = m && m.status === 'Skipped';
-                    const isFlagged = m && m.status === 'Flagged';
+                    const m = matches.find(mx => mx.newVal === pos);
+                    const isMatched = m && m.status === 'Match';
+                    const isSkipped = !isMatched;
+                    const isFlagged = isMatched && m.flagged;
                     const isSelected = selectedGWs.includes(pos);
                     const originalPos = pos - (config?.globalOffset || 0);
                     return (
@@ -368,8 +523,8 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                         style={{ left: `${getPosPct(pos)}%`, transform: 'translateX(-50%)' }}
                         onClick={() => handleGWClick(pos, 'new')}
                       >
-                        <div className={`w-1.5 h-5 rounded-full transition-all shadow-sm ${isSelected && selectedTrack === 'new' ? 'bg-yellow-400 scale-125 shadow-yellow-500/50' : isSkipped ? 'bg-rose-500 group-hover:bg-rose-400' : isFlagged ? 'bg-amber-400 group-hover:bg-amber-300' : 'bg-blue-500 group-hover:bg-blue-400 group-hover:scale-110'}`}></div>
-                        <div className={`text-[9px] mt-1.5 font-mono font-bold ${isSelected && selectedTrack === 'new' ? 'text-yellow-500' : isSkipped ? 'text-rose-500' : isFlagged ? 'text-amber-500' : 'text-blue-600/80'}`}>{originalPos.toFixed(2)}m</div>
+                        <div className={`w-1.5 h-5 rounded-full transition-all shadow-sm ${isSelected && selectedTrack === 'new' ? 'bg-yellow-400 scale-125 shadow-yellow-500/50' : isFlagged ? 'bg-amber-400 group-hover:bg-amber-300' : isMatched ? 'bg-green-500 group-hover:bg-green-400 group-hover:scale-110' : 'bg-red-500 group-hover:bg-red-400'}`}></div>
+                        <div className={`text-[9px] mt-1.5 font-mono font-bold ${isSelected && selectedTrack === 'new' ? 'text-yellow-500' : isFlagged ? 'text-amber-500' : isMatched ? 'text-green-600/80' : 'text-red-500'}`}>{originalPos.toFixed(2)}m</div>
                       </div>
                     )
                   })}
@@ -620,14 +775,34 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                <h3 className="font-bold text-gray-800 text-lg mb-1">OTA Settings</h3>
                <p className="text-xs text-gray-500 mb-6 leading-relaxed">Adjust slippage tolerance and toggle DTW correction to force alignment.</p>
                
-               <div className="mb-4 bg-gray-50 p-4 rounded-xl border border-gray-100 w-full">
-                 <label className="text-sm font-bold text-gray-700 mb-3 flex justify-between items-center">
+               <div className="mt-6 space-y-4">
+                 <label className="flex items-center justify-between text-sm font-bold text-gray-700">
                    <span>Slippage Tolerance</span>
                    <span className="font-mono bg-white px-2 py-1 rounded shadow-sm border border-gray-200 text-blue-600">{ota}%</span>
                  </label>
-                 <input type="range" min="0" max="15" step="0.5" value={ota} onChange={e => setOta(parseFloat(e.target.value))} className="w-full accent-blue-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer" />
+                 <input type="range" min="0.1" max="10" step="0.1" value={ota} onChange={e => setOta(parseFloat(e.target.value))} className="w-full accent-blue-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer" />
                </div>
              </div>
+
+             <div className="flex items-center justify-between bg-blue-50/50 px-5 py-4 rounded-xl border border-blue-100 w-full mb-3">
+                <div>
+                  <span className="font-bold text-sm text-blue-900">Strict Distance & Spool Matching</span>
+                  <p className="text-[10px] text-blue-600/80 font-medium mt-0.5">Penalizes distance drift to prevent forced matches across Tie-ins</p>
+                </div>
+                <button onClick={() => setStrictPenalty(!strictPenalty)} className={`w-12 h-6 rounded-full transition-colors relative shadow-inner ${strictPenalty ? 'bg-blue-600' : 'bg-gray-300'}`}>
+                  <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-all shadow-md ${strictPenalty ? 'left-7' : 'left-1'}`} />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between bg-blue-50/50 px-5 py-4 rounded-xl border border-blue-100 w-full mb-3">
+                <div>
+                  <span className="font-bold text-sm text-blue-900">Valve-to-Valve Anchoring</span>
+                  <p className="text-[10px] text-blue-600/80 font-medium mt-0.5">Locks alignment explicitly between matched valves</p>
+                </div>
+                <button onClick={() => setUseValveAnchor(!useValveAnchor)} className={`w-12 h-6 rounded-full transition-colors relative shadow-inner ${useValveAnchor ? 'bg-blue-600' : 'bg-gray-300'}`}>
+                  <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-all shadow-md ${useValveAnchor ? 'left-7' : 'left-1'}`} />
+                </button>
+              </div>
 
              <div className="flex items-center justify-between bg-blue-50/50 px-5 py-4 rounded-xl border border-blue-100 w-full">
                <div>
@@ -701,7 +876,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
           <FiChevronLeft /> Adjust Scenarios
         </button>
         <button 
-          onClick={() => onNext({ ota, gwMatches: matches, alignedFeatures })}
+          onClick={() => onNext({ ota, strictPenalty, useValveAnchor, gwMatches: matches, gwMatchesFinal, gwOrphans, alignedFeatures })}
           className="bg-white hover:bg-gray-200 text-black px-8 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-lg shadow-white/10"
         >
           Accept Matches & Next <FiChevronRight />

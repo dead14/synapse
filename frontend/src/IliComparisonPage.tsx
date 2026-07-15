@@ -174,15 +174,27 @@ export default function IliComparisonPage() {
     <div className="min-h-screen bg-gray-50 font-sans pt-12 pb-12 text-gray-800 overflow-x-hidden w-full">
 
       {/* Main Content Area */}
-      <div className="max-w-[1600px] mx-auto px-8 flex flex-col gap-6">
+      <div className="w-full mx-auto px-4 flex flex-col gap-6">
 
-        {/* Progress Bar while job is running */}
-        {isProcessing && (
-          <div className="bg-white rounded-2xl border border-blue-100 shadow-sm">
+        {/* Content Area */}
+        {isProcessing ? (
+          <div className="bg-white rounded-2xl border border-blue-100 shadow-sm mt-4">
             <JobProgressBar progress={jobProgress} message={jobMessage} />
           </div>
+        ) : (
+          <div className="h-[calc(100vh-120px)] mt-4">
+            <ResultsPanel 
+              data={data} 
+              loading={loading} 
+              onOpenAnalytics={() => setShowAdvancedCharts(true)} 
+              selectedRowIdx={selectedRowIdx} 
+              onSelectRowIdx={setSelectedRowIdx} 
+              onUpdateMatch={handleUpdateMatch}
+            />
+          </div>
         )}
-        {data.length > 0 && (
+
+        {data.length > 0 && !isProcessing && (
           <div>
             {!showVisualizer ? (
               <button
@@ -211,17 +223,7 @@ export default function IliComparisonPage() {
           </div>
         )}
 
-        {/* Results Panel */}
-        <div className="h-[800px] mt-4">
-          <ResultsPanel 
-            data={data} 
-            loading={loading} 
-            onOpenAnalytics={() => setShowAdvancedCharts(true)} 
-            selectedRowIdx={selectedRowIdx} 
-            onSelectRowIdx={setSelectedRowIdx} 
-            onUpdateMatch={handleUpdateMatch}
-          />
-        </div>
+
       </div>
 
       {/* Advanced Analytics - lazy loaded on demand */}

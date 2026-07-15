@@ -14,12 +14,17 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
   const [manualOffset, setManualOffset] = useState<number | ''>('');
   const [useAuto, setUseAuto] = useState(true);
 
+  const [tieInMetrics, setTieInMetrics] = useState<{ confidence: number; message: string } | null>(null);
+
   useEffect(() => {
+    const controller = new AbortController();
+
     const fetchMachineGuess = async () => {
       setLoading(true);
       try {
-        const token = localStorage.getItem('token');
-        const response = await fetch('http://localhost:8000/api/estimate-tiein-offset', {
+        const token = localStorage.getItem('synapse_token'); // Fixed: was 'token'
+        const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+        const response = await fetch(`${API_BASE}/api/estimate-tiein-offset`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -28,23 +33,24 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
           body: JSON.stringify({
             oldRun: config?.summaryData?.oldRun?.rawFeatures || [],
             newRun: config?.summaryData?.newRun?.rawFeatures || []
-          })
+          }),
+          signal: controller.signal // Added: prevent stale responses
         });
         const data = await response.json();
         
         if (data.success) {
-          // Round to 3 decimal places
           const roundedOffset = Math.round(data.offset * 1000) / 1000;
           setAutoOffset(roundedOffset);
           setErrorMessage(null);
-          // Store additional metrics if needed, e.g. confidence
-          (window as any)._tieInMetrics = { confidence: data.confidence, message: data.message };
+          // Fixed: use React state instead of window global
+          setTieInMetrics({ confidence: data.confidence, message: data.message });
         } else {
           console.error("Tie-in estimation failed:", data.error);
           setErrorMessage(data.error || "Engine failed to return a valid offset.");
           setAutoOffset(0);
         }
       } catch (err: any) {
+        if (err.name === 'AbortError') return; // Ignore cancelled requests
         console.error("Failed to fetch tie-in offset:", err);
         setErrorMessage(err.message || "Network error while connecting to engine.");
         setAutoOffset(0);
@@ -54,6 +60,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
     };
 
     fetchMachineGuess();
+    return () => controller.abort(); // Cancel on unmount or config change
   }, [config]);
 
   const handleContinue = () => {
@@ -116,10 +123,10 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                         <p className="text-3xl font-black text-gray-800 mt-1">{autoOffset?.toLocaleString()} <span className="text-xl text-gray-500 font-medium">meters</span></p>
                       </div>
                       <div className="text-right">
-                        <p className={`text-sm font-bold flex items-center gap-1 justify-end ${(window as any)._tieInMetrics?.confidence > 80 ? 'text-green-600' : 'text-amber-600'}`}>
-                          <FiCheckCircle /> {(window as any)._tieInMetrics?.confidence ? `${(window as any)._tieInMetrics?.confidence.toFixed(1)}% Confidence` : 'Estimated'}
+                        <p className={`text-sm font-bold flex items-center gap-1 justify-end ${(tieInMetrics?.confidence ?? 0) > 80 ? 'text-green-600' : 'text-amber-600'}`}>
+                          <FiCheckCircle /> {tieInMetrics?.confidence ? `${tieInMetrics.confidence.toFixed(1)}% Confidence` : 'Estimated'}
                         </p>
-                        <p className="text-xs text-gray-400 mt-1">{(window as any)._tieInMetrics?.message || 'Sequence Alignment (Anchors)'}</p>
+                        <p className="text-xs text-gray-400 mt-1">{tieInMetrics?.message || 'Sequence Alignment (Anchors)'}</p>
                       </div>
                     </div>
                   )}

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { FiCheckCircle, FiAlertTriangle, FiFileText, FiDownload } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
+import { getSocket } from '../utils/socket';
 
 interface StepExecutionProps {
   onBack: () => void;
@@ -14,51 +15,72 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
   const [showValidation, setShowValidation] = useState(false);
 
   useEffect(() => {
+    let mounted = true;
+    let currentJobId: string | null = null;
     setTerminalLines(["Connecting to Alignment Server..."]);
-    
-    // Convert config to query params
-    const queryParams = new URLSearchParams({
-      clockTol: config.clockTol || '15',
-      distGwTol: config.distGwTol || '0.2',
-      depthGrowthMax: config.depthGrowthMax || '25',
-      ota: config.ota || '1.5'
-    });
 
-    const eventSource = new EventSource(`http://localhost:8000/stream-alignment?${queryParams.toString()}`);
-
-    eventSource.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.message) {
-        setTerminalLines((prev) => [...prev, data.message]);
+    const startAlignment = async () => {
+      try {
+        const token = localStorage.getItem('synapse_token') || '';
+        const userRaw = localStorage.getItem('synapse_user');
+        const userId = userRaw ? JSON.parse(userRaw)?.id : undefined;
+        const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+        const res = await fetch(`${API_BASE}/api/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({
+            runId: config.sessionId || 1,
+            algorithm: 'dtw_hungarian',
+            userId // Pass userId so worker can target the right socket room
+          })
+        });
         
-        // Pseudo progress updates based on output
-        if (data.message.includes('FASE 1:')) setProgress(20);
-        if (data.message.includes('FASE 2:')) setProgress(40);
-        if (data.message.includes('FASE 3:')) setProgress(60);
-        if (data.message.includes('FASE 4:')) setProgress(80);
-        if (data.message.includes('SELESAI:')) {
-          setProgress(100);
-          setShowValidation(true);
+        const data = await res.json();
+        if (data.success && data.jobId) {
+          if (mounted) {
+            currentJobId = data.jobId;
+            setTerminalLines(prev => [...prev, `Job queued successfully. Job ID: ${data.jobId}`]);
+          }
+        } else {
+          if (mounted) setTerminalLines(prev => [...prev, `[ERROR] Failed to queue job: ${data.error}`]);
         }
-      }
-      if (data.status === 'done') {
-        setProgress(100);
-        setShowValidation(true);
-        eventSource.close();
-      }
-      if (data.error) {
-        setTerminalLines((prev) => [...prev, `[ERROR] ${data.error}`]);
+      } catch (err: any) {
+        if (mounted) setTerminalLines(prev => [...prev, `[FATAL ERROR] Could not reach server: ${err.message}`]);
       }
     };
 
-    eventSource.onerror = (error) => {
-      console.error('EventSource failed:', error);
-      eventSource.close();
-      setTerminalLines((prev) => [...prev, "[FATAL ERROR] Disconnected from server."]);
+    startAlignment();
+
+    const socket = getSocket();
+    
+    const handleProgress = (data: any) => {
+      // if (!currentJobId || data.jobId !== currentJobId) return;
+      setTerminalLines(prev => [...prev, data.message]);
+      setProgress(data.progress);
+      if (data.progress === 100) setShowValidation(true);
     };
+
+    const handleComplete = (data: any) => {
+      // if (!currentJobId || data.jobId !== currentJobId) return;
+      setTerminalLines(prev => [...prev, '✅ All done! Results are ready.']);
+      setProgress(100);
+      setShowValidation(true);
+    };
+
+    const handleError = (data: any) => {
+      // if (!currentJobId || data.jobId !== currentJobId) return;
+      setTerminalLines(prev => [...prev, `[ERROR] Worker failed: ${data.error}`]);
+    };
+
+    socket.on('alignment_progress', handleProgress);
+    socket.on('alignment_complete', handleComplete);
+    socket.on('alignment_error', handleError);
 
     return () => {
-      eventSource.close();
+      mounted = false;
+      socket.off('alignment_progress', handleProgress);
+      socket.off('alignment_complete', handleComplete);
+      socket.off('alignment_error', handleError);
     };
   }, [config]);
 
@@ -83,7 +105,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
             if (line.startsWith('──')) textColor = 'text-gray-400';
             
             return (
-              <div key={i} className={`${textColor} mb-1 opacity-0 animate-fade-in-up`} style={{ animationFillMode: 'forwards' }}>
+              <div key={i} className={`${textColor} mb-1`} style={{ animationFillMode: 'forwards' }}>
                 <span className="text-gray-600 mr-2">$</span>{line}
               </div>
             );
