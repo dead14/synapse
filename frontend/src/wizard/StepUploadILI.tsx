@@ -80,6 +80,35 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         let runKey = '';
         if (algorithm === 'phylogenetic') {
           if (i === 0) runKey = 'ancestorRun';
+  }, [algorithm]);
+
+  const allFilesUploaded = datasets.every(ds => ds.file !== null);
+
+  const handleInitialize = async () => {
+    setIsProcessing(true);
+    try {
+      const summaryData: any = {
+        sessionName: sessionName || 'Untitled Alignment Session',
+        algorithm: algorithm,
+        enablePartialRun: enablePartialRun
+      };
+
+      if (algorithm === 'phylogenetic') {
+        summaryData.ancestorRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
+        summaryData.run1 = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
+        summaryData.run2 = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
+      } else {
+        summaryData.newRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
+        summaryData.oldRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
+      }
+
+      for (let i = 0; i < datasets.length; i++) {
+        const ds = datasets[i];
+        if (!ds.file) continue;
+        
+        let runKey = '';
+        if (algorithm === 'phylogenetic') {
+          if (i === 0) runKey = 'ancestorRun';
           else if (i === 1) runKey = 'run1';
           else if (i === 2) runKey = 'run2';
         } else {
@@ -96,7 +125,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           // Safely find the type column, avoiding "Feature ID"
           const typeKey = keys.find(k => /feature type|feature_type|^type$/i.test(k)) 
                        || keys.find(k => /type|feature/i.test(k) && !/id/i.test(k));
-          let ftype = (typeKey ? row[typeKey] : '').toString().toLowerCase();
+          let ftype = String(typeKey ? (row[typeKey] || '') : '').toLowerCase();
           
           let standardizedType = 'other';
           if (ftype.includes('metal loss') || ftype.includes('corrosion') || ftype.includes('ml')) { counts.anomalies++; standardizedType = 'anomaly'; }
