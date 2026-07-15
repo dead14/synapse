@@ -270,17 +270,17 @@ class HungarianAnomalyAlignmentEngine:
                     d1, d2 = f1.get("depth_pct"), f2.get("depth_pct")
                     if d1 is not None and d2 is not None:
                         depth_difference = abs(d1 - d2)
-                        if depth_difference > self.depth_tolerance:
-                            continue # Strict gating
-                        base_cost += w_depth * (depth_difference / self.depth_tolerance)
+                        # Depth is a ranking signal, not an eligibility gate:
+                        # the scenario depth threshold has already removed
+                        # shallow defects before segmentation.  A second hard
+                        # cutoff here incorrectly splits otherwise valid pairs.
+                        base_cost += w_depth * (depth_difference / max(self.depth_tolerance, 1.0))
                         
                     # 4. Length Penalty
                     l1, l2 = f1.get("length_mm"), f2.get("length_mm")
                     if l1 is not None and l2 is not None:
                         length_difference = abs(l1 - l2)
-                        if length_difference > self.length_tolerance:
-                            continue # Strict gating
-                        base_cost += w_length * (length_difference / self.length_tolerance)
+                        base_cost += w_length * (length_difference / max(self.length_tolerance, 1.0))
                         
                     # 5. Width Penalty
                     wid1, wid2 = f1.get("width_mm"), f2.get("width_mm")
@@ -450,6 +450,22 @@ class HungarianAnomalyAlignmentEngine:
         print("[3/5] Running Hungarian matching strictly within each segment...")
         
         results: list[AlignmentResult] = []
+        # Keep the actual source records alongside the compact database-shaped
+        # result.  Excel identifiers are not guaranteed to be populated or
+        # unique, so reconstructing an output row from feature_old_id/new_id
+        # can otherwise select a different source record.
+        result_features: dict[int, tuple[dict | None, dict | None]] = {}
+
+        def append_result(f1, f2, status, odo_diff=None):
+            result = AlignmentResult(
+                session_id=self.session_id,
+                feature_old_id=safe_int(f1["id"]) if f1 else None,
+                feature_new_id=safe_int(f2["id"]) if f2 else None,
+                match_status=status,
+                odo_diff=odo_diff,
+            )
+            results.append(result)
+            result_features[id(result)] = (f1, f2)
         total_matched = 0
         total_new = 0
         total_missing = 0
@@ -463,13 +479,13 @@ class HungarianAnomalyAlignmentEngine:
                 
             if not seg_anomalies_1:
                 for f2 in seg_anomalies_2:
-                    results.append(AlignmentResult(session_id=self.session_id, feature_old_id=None, feature_new_id=safe_int(f2["id"]), match_status="Only NEW"))
+                    append_result(None, f2, "Only NEW")
                     total_new += 1
                 continue
                 
             if not seg_anomalies_2:
                 for f1 in seg_anomalies_1:
-                    results.append(AlignmentResult(session_id=self.session_id, feature_old_id=safe_int(f1["id"]), feature_new_id=None, match_status="Only OLD"))
+                    append_result(f1, None, "Only OLD")
                     total_missing += 1
                 continue
 
@@ -492,31 +508,23 @@ class HungarianAnomalyAlignmentEngine:
                 
                 odo_diff = float(f2["abs_distance_m"] - f1["abs_distance_m"])
 
-                results.append(
-                    AlignmentResult(
-                        session_id=self.session_id,
-                        feature_old_id=safe_int(f1["id"]),
-                        feature_new_id=safe_int(f2["id"]),
-                        match_status="Matched",
-                        odo_diff=odo_diff
-                    )
-                )
+                append_result(f1, f2, "Matched", odo_diff)
 
             for i, f1 in enumerate(seg_anomalies_1):
                 if i not in matched_1:
-                    results.append(AlignmentResult(session_id=self.session_id, feature_old_id=safe_int(f1["id"]), feature_new_id=None, match_status="Only OLD"))
+                    append_result(f1, None, "Only OLD")
                     total_missing += 1
             
             for j, f2 in enumerate(seg_anomalies_2):
                 if j not in matched_2:
-                    results.append(AlignmentResult(session_id=self.session_id, feature_old_id=None, feature_new_id=safe_int(f2["id"]), match_status="Only NEW"))
+                    append_result(None, f2, "Only NEW")
                     total_new += 1
 
         # BYPASS MECHANISM: c. gwOrphans/Excluded features langsung passthrough ke output
         for f1 in excluded_old:
-            results.append(AlignmentResult(session_id=self.session_id, feature_old_id=safe_int(f1["id"]), feature_new_id=None, match_status="Bypassed OLD"))
+            append_result(f1, None, "Bypassed OLD")
         for f2 in excluded_new:
-            results.append(AlignmentResult(session_id=self.session_id, feature_old_id=None, feature_new_id=safe_int(f2["id"]), match_status="Bypassed NEW"))
+            append_result(None, f2, "Bypassed NEW")
 
         # VALIDASI WAJIB (print sebagai log sebelum return)
         print(f"\n[VALIDATION] Total Anomaly Input OLD: {len(anomalies_1)}")
@@ -528,12 +536,20 @@ class HungarianAnomalyAlignmentEngine:
         # --- Print JSON for Node.js ---
         print("\n[4/5] Outputting structured 5-key JSON for Node.js...")
         
-        a1_lookup = {str(a["id"]): a for a in anomalies_1_all}
-        a2_lookup = {str(a["id"]): a for a in anomalies_2_all}
+        def find_feature(features, feature_id, odometer=None):
+            """Find a GW source record without silently collapsing duplicate IDs."""
+            if feature_id is None:
+                return None
+            candidates = [feature for feature in features if str(feature["id"]) == str(feature_id)]
+            if not candidates:
+                return None
+            if odometer is None or len(candidates) == 1:
+                return candidates[0]
+            return min(candidates, key=lambda feature: abs(feature["abs_distance_m"] - float(odometer)))
         
-        def format_row(old_id_val, new_id_val, status, odo_diff=None):
-            f1 = a1_lookup.get(str(old_id_val)) if old_id_val else None
-            f2 = a2_lookup.get(str(new_id_val)) if new_id_val else None
+        def format_row(old_id_val, new_id_val, status, odo_diff=None, old_feature=None, new_feature=None, old_odometer=None, new_odometer=None):
+            f1 = old_feature or find_feature(anomalies_1_all, old_id_val, old_odometer)
+            f2 = new_feature or find_feature(anomalies_2_all, new_id_val, new_odometer)
             return {
                 "session_id": self.session_id,
                 "feature_old_id": safe_int(old_id_val) if old_id_val else None,
@@ -559,7 +575,10 @@ class HungarianAnomalyAlignmentEngine:
 
         gw_locked = []
         for gw in gw_matches_final:
-            gw_locked.append(format_row(gw.get("old_id"), gw.get("new_id"), "Matched"))
+            gw_locked.append(format_row(
+                gw.get("old_id"), gw.get("new_id"), "Matched",
+                old_odometer=gw.get("old_odometer"), new_odometer=gw.get("new_odometer")
+            ))
             
         gw_unmatched = []
         for gw in gw_orphans:
@@ -578,7 +597,11 @@ class HungarianAnomalyAlignmentEngine:
         bypassed_new = []
 
         for r in results:
-            row = format_row(r.feature_old_id, r.feature_new_id, r.match_status, r.odo_diff)
+            f1, f2 = result_features[id(r)]
+            row = format_row(
+                r.feature_old_id, r.feature_new_id, r.match_status, r.odo_diff,
+                old_feature=f1, new_feature=f2
+            )
             if r.match_status == "Matched":
                 anomaly_matched.append(row)
             elif r.match_status == "Only OLD":
