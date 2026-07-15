@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ChevronLeftIcon, EyeCloseIcon, EyeIcon } from "../../icons";
+import { EyeCloseIcon, EyeIcon } from "../../icons";
 import Label from "../form/Label";
 import Input from "../form/input/InputField";
 import Checkbox from "../form/input/Checkbox";
 import Button from "../ui/button/Button";
 import { useAuth } from "../../context/AuthContext";
+import { ApiError } from "../../utils/api";
 
 export default function SignUpForm() {
   const [showPassword, setShowPassword] = useState(false);
@@ -26,7 +27,12 @@ export default function SignUpForm() {
       await register(orgName, username, email, password);
       navigate("/");
     } catch (err: any) {
-      setError(err.message);
+      const message = err instanceof ApiError && err.status === 404
+        ? "Endpoint pendaftaran tidak ditemukan. Restart backend Synapse di port 8000 lalu coba lagi."
+        : err instanceof TypeError || /fetch|network/i.test(String(err?.message || ""))
+          ? "Backend Synapse tidak dapat dihubungi. Pastikan server berjalan di port 8000."
+          : err?.message || "Pendaftaran gagal. Periksa data yang dimasukkan.";
+      setError(message);
     }
   };
   return (
@@ -193,7 +199,7 @@ export default function SignUpForm() {
                 </div>
                 {/* <!-- Button --> */}
                 <div>
-                  <Button className="w-full" size="sm">
+                  <Button type="submit" className="w-full" size="sm">
                     Sign up
                   </Button>
                 </div>

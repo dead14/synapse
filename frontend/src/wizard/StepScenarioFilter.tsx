@@ -6,7 +6,7 @@ interface StepScenarioFilterProps {
   onBack: () => void;
 }
 
-export default function StepScenarioFilter({ onNext, onBack, config }: StepScenarioFilterProps & { config?: any }) {
+export default function StepScenarioFilter({ onNext, onBack, config: _config }: StepScenarioFilterProps & { config?: any }) {
   const [distThresh, setDistThresh] = useState(0.3);
   const [depthThresh, setDepthThresh] = useState(10);
   

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useRef } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Environment, ContactShadows, Text, Center } from '@react-three/drei';
+import { Canvas } from '@react-three/fiber';
+import { OrbitControls, Environment, ContactShadows, Center } from '@react-three/drei';
 import * as THREE from 'three';
 
 interface Anomaly {

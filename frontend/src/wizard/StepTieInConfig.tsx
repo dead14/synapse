@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { FiArrowRight, FiArrowLeft, FiCheckCircle, FiTarget, FiActivity } from 'react-icons/fi';
+import { apiFetch } from '../utils/api';
 
 interface StepTieInConfigProps {
   onNext: (data: any) => void;
@@ -22,23 +23,40 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
     const fetchMachineGuess = async () => {
       setLoading(true);
       try {
-        const token = localStorage.getItem('synapse_token'); // Fixed: was 'token'
-        const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-        const response = await fetch(`${API_BASE}/api/estimate-tiein-offset`, {
+        const selectAnchors = (features: any[]) => features
+          .filter((feature) => [
+            feature.type,
+            feature.feature_type,
+            feature.feature_identification,
+            feature.originalType,
+          ].filter((value) => value !== null && value !== undefined)
+            .some((value) => /weld|girth|seam|valve|tee/.test(String(value).toLowerCase())))
+          .map((feature) => {
+            const candidates = [feature.dist, feature.log_distance_m, feature.logDistance, feature.distance, feature.chainage, feature.odometer];
+            const dist = candidates.map((value) => {
+              const raw = String(value ?? '').trim();
+              return raw ? Number(raw.replace(/,/g, '')) : Number.NaN;
+            }).find(Number.isFinite);
+            return { ...feature, dist };
+          })
+          .filter((feature) => feature.dist !== undefined);
+        const oldRun = selectAnchors(config?.summaryData?.oldRun?.rawFeatures || []);
+        const newRun = selectAnchors(config?.summaryData?.newRun?.rawFeatures || []);
+        if (oldRun.length === 0 || newRun.length === 0) {
+          setAutoOffset(0);
+          setErrorMessage('Data anchor belum tersedia pada kedua file ILI.');
+          return;
+        }
+        const data = await apiFetch<any>('/api/estimate-tiein-offset', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
           body: JSON.stringify({
-            oldRun: config?.summaryData?.oldRun?.rawFeatures || [],
-            newRun: config?.summaryData?.newRun?.rawFeatures || []
+            oldRun,
+            newRun,
           }),
-          signal: controller.signal // Added: prevent stale responses
+          signal: controller.signal
         });
-        const data = await response.json();
         
-        if (data.success) {
+        if (data.success && Number.isFinite(Number(data.offset))) {
           const roundedOffset = Math.round(data.offset * 1000) / 1000;
           setAutoOffset(roundedOffset);
           setErrorMessage(null);

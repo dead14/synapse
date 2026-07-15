@@ -26,6 +26,7 @@ class User(Base):
     role = Column(String, default='engineer')  # super_admin, admin, engineer, viewer
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     # Relationships
     organization = relationship("Organization", back_populates="users")
     activity_logs = relationship("ActivityLog", back_populates="user", cascade="all, delete-orphan")
@@ -48,7 +49,7 @@ class Pipeline(Base):
     __tablename__ = 'pipelines'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String, unique=True, index=True)
+    name = Column(String, index=True)
     organization_id = Column(Integer, ForeignKey('organizations.id'), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -141,6 +142,8 @@ class AlignmentSession(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     pipeline_id = Column(Integer, ForeignKey('pipelines.id'))
+    organization_id = Column(Integer, ForeignKey('organizations.id'), index=True, nullable=True)
+    created_by = Column(Integer, ForeignKey('users.id'), index=True, nullable=True)
     run_old_id = Column(Integer, ForeignKey('survey_runs.id'))
     run_new_id = Column(Integer, ForeignKey('survey_runs.id'))
     started_at = Column(DateTime, default=datetime.utcnow)
@@ -202,9 +205,19 @@ class FeatureTypeSynonym(Base):
     known_synonym = Column(String, index=True, nullable=False)
 
 # Database Setup
-engine = create_engine('postgresql://postgres:123456789@localhost:5432/synapse', echo=False)
+DATABASE_URL = os.getenv('DATABASE_URL')
+engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True) if DATABASE_URL else None
+
+def require_engine():
+    if engine is None:
+        raise RuntimeError('DATABASE_URL must be configured before using the database engine')
+    return engine
 
 def init_db():
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(require_engine())
 
-SessionLocal = sessionmaker(bind=engine)
+if engine is not None:
+    SessionLocal = sessionmaker(bind=engine)
+else:
+    def SessionLocal(*args, **kwargs):
+        raise RuntimeError('DATABASE_URL must be configured before opening a database session')

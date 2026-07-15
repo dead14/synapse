@@ -75,8 +75,14 @@ class HungarianAnomalyAlignmentEngine:
             run_key = "oldRun" if is_old_run else "newRun"
             features = sess.params_json.get("summaryData", {}).get(run_key, {}).get("rawFeatures", [])
             
-            # Apply tieInOffset globally to ALL NEW features to match DTW space
-            tie_in_offset = float(sess.params_json.get("tieInOffset", 0.0))
+            # The wizard persists globalOffset. Keep tieInOffset as a legacy
+            # fallback so older saved sessions still map into the same space.
+            tie_in_offset = float(
+                sess.params_json.get(
+                    "globalOffset",
+                    sess.params_json.get("tieInOffset", 0.0),
+                )
+            )
             
             # Map them into the format expected by the engine (abs_distance_m, id, depth_pct, length_mm, width_mm)
             mapped = []

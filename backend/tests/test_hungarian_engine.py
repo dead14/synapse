@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "python_engines"))
@@ -49,6 +50,74 @@ class HungarianToleranceTests(unittest.TestCase):
         cost = self.engine.build_cost_matrix([old], [new], [], [])[0][0]
 
         self.assertLess(cost, self.engine.INF_COST)
+
+
+class FakeQuery:
+    def __init__(self, record):
+        self.record = record
+
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def first(self):
+        return self.record
+
+
+class FakeSession:
+    def __init__(self, record):
+        self.record = record
+
+    def query(self, *_args, **_kwargs):
+        return FakeQuery(self.record)
+
+
+class HungarianTieInOffsetTests(unittest.TestCase):
+    @staticmethod
+    def engine_with_params(params_json):
+        engine = HungarianAnomalyAlignmentEngine.__new__(HungarianAnomalyAlignmentEngine)
+        engine.session_id = 42
+        engine.session = FakeSession(SimpleNamespace(params_json=params_json))
+        return engine
+
+    @staticmethod
+    def params(offsets):
+        return {
+            **offsets,
+            "summaryData": {
+                "newRun": {
+                    "rawFeatures": [
+                        {
+                            "id": "new-anomaly",
+                            "type": "metal loss",
+                            "dist": 100.0,
+                        }
+                    ]
+                }
+            },
+        }
+
+    def test_global_offset_from_the_wizard_is_applied_to_new_run_coordinates(self):
+        engine = self.engine_with_params(self.params({"globalOffset": 12.5}))
+
+        features = engine.fetch_data(is_old_run=False)
+
+        self.assertEqual(features[0]["abs_distance_m"], 112.5)
+
+    def test_global_offset_takes_precedence_over_the_legacy_key(self):
+        engine = self.engine_with_params(
+            self.params({"globalOffset": 12.5, "tieInOffset": 99.0})
+        )
+
+        features = engine.fetch_data(is_old_run=False)
+
+        self.assertEqual(features[0]["abs_distance_m"], 112.5)
+
+    def test_legacy_tie_in_offset_remains_supported(self):
+        engine = self.engine_with_params(self.params({"tieInOffset": -5.0}))
+
+        features = engine.fetch_data(is_old_run=False)
+
+        self.assertEqual(features[0]["abs_distance_m"], 95.0)
 
 
 if __name__ == "__main__":

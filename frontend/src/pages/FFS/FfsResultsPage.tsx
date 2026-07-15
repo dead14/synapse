@@ -10,12 +10,9 @@ export default function FfsResultsPage() {
   
   const state = location.state as { results: FfsResult[], config: FfsConfig } | null;
   
-  if (!state || !state.results) {
-    return <Navigate to="/ffs" replace />;
-  }
-
-  const { results, config } = state;
-  const thresh = config.highlightYears;
+  const results = state?.results ?? [];
+  const config = state?.config;
+  const thresh = config?.highlightYears ?? 0;
 
   const [search, setSearch] = useState('');
   const [filterAccept, setFilterAccept] = useState('All');
@@ -63,6 +60,10 @@ export default function FfsResultsPage() {
     }
     setPage(1);
   };
+
+  if (!state || !config) {
+    return <Navigate to="/ffs" replace />;
+  }
 
   return (
     <div className="p-6 max-w-7xl mx-auto">

@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect } from 'react';
-import { MapContainer, TileLayer, Polyline, Tooltip, Marker, Popup, CircleMarker, useMapEvents, Circle, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Polyline, Tooltip, Marker, CircleMarker, useMapEvents, useMap } from 'react-leaflet';
 import { SectionDef } from './IliSectioningPage';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -275,7 +275,7 @@ export default function SectionMap({
               eventHandlers={{
                 click: (e) => {
                   L.DomEvent.stopPropagation(e);
-                  onGwClick && onGwClick(gw);
+                  onGwClick?.(gw);
                 }
               }}
             >

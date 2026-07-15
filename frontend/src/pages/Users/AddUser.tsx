@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { FiArrowLeft, FiCheck, FiUser } from 'react-icons/fi';
 import { Link, useNavigate } from 'react-router-dom';
 import PageMeta from '../../components/common/PageMeta';
+import { apiFetch } from '../../utils/api';
 
 interface Organization {
   id: number;
@@ -26,11 +27,7 @@ export default function AddUser() {
   useEffect(() => {
     const fetchOrgs = async () => {
       try {
-        const token = localStorage.getItem('synapse_token');
-        const res = await fetch('http://localhost:8000/api/organizations', {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        const data = await res.json();
+        const data = await apiFetch<Organization[]>('/api/organizations');
         if (Array.isArray(data)) {
           setOrganizations(data);
           if (data.length > 0) {
@@ -54,23 +51,13 @@ export default function AddUser() {
     setError('');
     
     try {
-      const token = localStorage.getItem('synapse_token');
-      const res = await fetch('http://localhost:8000/api/users', {
+      await apiFetch('/api/users', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}` 
-        },
         body: JSON.stringify({
           ...formData,
           organization_id: parseInt(formData.organization_id)
         })
       });
-      
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Failed to create user');
-      }
       
       setSuccess(true);
       setTimeout(() => {

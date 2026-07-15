@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { FiBell, FiSettings } from 'react-icons/fi';
 import StepDataSummary from './wizard/StepDataSummary';
 import StepScenarioFilter from './wizard/StepScenarioFilter';
 import StepGwSimulator from './wizard/StepGwSimulator';
@@ -7,11 +6,13 @@ import StepAnomalyTolerances from './wizard/StepAnomalyTolerances';
 import StepExecution from './wizard/StepExecution';
 import StepUploadILI from './wizard/StepUploadILI';
 import StepTieInConfig from './wizard/StepTieInConfig';
+import { apiFetch, ApiError } from './utils/api';
 
 export default function AlignmentPage() {
   const [step, setStep] = useState(0); // 0 is Upload step
   const [wizardConfig, setWizardConfig] = useState<any>({});
-  const [isResuming, setIsResuming] = useState(true);
+  const [, setIsResuming] = useState(true);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     // Start fresh every time — no resume prompt, no empty session creation
@@ -36,22 +37,32 @@ export default function AlignmentPage() {
       updatedConfig = { ...updatedConfig, ...data };
     }
     
-    const token = localStorage.getItem('synapse_token') || '';
     try {
-      const res = await fetch('http://localhost:8000/api/wizard/save', {
+      const resData = await apiFetch<{ success?: boolean; sessionId?: string | number }>('/api/wizard/save', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ config: updatedConfig, sessionId: updatedConfig.sessionId })
       });
-      const resData = await res.json();
       if (resData.success && resData.sessionId) {
         updatedConfig.sessionId = resData.sessionId;
         localStorage.setItem('synapse_last_session_id', String(resData.sessionId));
+      } else {
+        setSaveError('Server tidak mengembalikan ID sesi alignment. Periksa backend lalu coba lagi.');
+        return;
       }
     } catch (err) {
       console.error("Failed to save wizard state:", err);
+      if (err instanceof ApiError && err.status === 401) {
+        // apiFetch already notifies AuthContext; do not advance the wizard
+        // while the current session is no longer authorized.
+        return;
+      }
+      setSaveError(err instanceof ApiError
+        ? `Gagal menyimpan sesi alignment (${err.status}): ${err.message}`
+        : 'Gagal menyimpan sesi alignment. Pastikan backend dan database aktif.');
+      return;
     }
 
+    setSaveError(null);
     setWizardConfig(updatedConfig);
     setStep(s => Math.min(s + 1, stepsList.length - 1));
   };
@@ -63,6 +74,11 @@ export default function AlignmentPage() {
   return (
     <div className="min-h-screen bg-[#f8f9fc] flex flex-col items-center pt-8 pb-20">
       <div className="w-full flex flex-col gap-6">
+        {saveError && (
+          <div role="alert" className="mx-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm md:mx-6 xl:mx-8">
+            {saveError}
+          </div>
+        )}
         
         {/* Alignment Progress Bar (Matches Screenshot 2) */}
         {step > 0 && (

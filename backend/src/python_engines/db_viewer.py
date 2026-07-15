@@ -3,10 +3,12 @@ import pandas as pd
 from sqlalchemy import create_engine, inspect
 
 # Konfigurasi Koneksi ke PostgreSQL
-DB_URL = 'postgresql://postgres:123456789@localhost:5432/synapse'
+DB_URL = os.getenv('DATABASE_URL')
 EXPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'db_exports')
 
 def export_all_tables():
+    if not DB_URL:
+        raise RuntimeError('DATABASE_URL must be configured before exporting database tables')
     print("Membuka koneksi ke PostgreSQL...")
     engine = create_engine(DB_URL)
     

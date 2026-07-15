@@ -1,3 +1,4 @@
+/* oxlint-disable react(only-export-components) -- provider and its hook are a single public context API. */
 "use client";
 
 import type React from "react";
@@ -49,6 +50,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 };
 
+// oxlint-disable-next-line react(only-export-components) -- exported alongside its provider as one context API.
 export const useTheme = () => {
   const context = useContext(ThemeContext);
   if (context === undefined) {

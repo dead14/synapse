@@ -1,7 +1,8 @@
-import { useState, useMemo, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
+import { useState, useMemo, useEffect, useRef, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { FiSearch, FiFileText, FiSave, FiEdit, FiInfo, FiMaximize, FiMinimize, FiActivity, FiColumns, FiX, FiDownload, FiMap } from 'react-icons/fi';
+import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, FiX, FiDownload, FiMap } from 'react-icons/fi';
+import { apiFetch, apiUrl } from './utils/api';
 
 // Lazy load chart.js - heavy library, only load when Chart tab is selected
 const LazyScatterChart = lazy(() =>
@@ -186,13 +187,6 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
     return null;
   }, [rawData]);
 
-  // Interventions state
-  const [interventions, setInterventions] = useState<any[]>([]);
-  const [run1Defect, setRun1Defect] = useState('');
-  const [run2Defect, setRun2Defect] = useState('');
-  const [interventionAction, setInterventionAction] = useState('-');
-  const [showInterventionForm, setShowInterventionForm] = useState(false);
-
   // Drag & Drop Match State
   const [draggedRowIdx, setDraggedRowIdx] = useState<number | null>(null);
   const [modalState, setModalState] = useState<{ isOpen: boolean, sourceRow: any, targetRow: any }>({ isOpen: false, sourceRow: null, targetRow: null });
@@ -253,17 +247,9 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
       try {
         const urlParams = new URLSearchParams(window.location.search);
         const sessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
-        const token = localStorage.getItem('synapse_token') || '';
         if (sessionId) {
-          const res = await fetch(`http://localhost:8000/api/wizard/session/${sessionId}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
-          if (res.ok) {
-            const sessData = await res.json();
-            if (sessData.config && sessData.config.sections) {
-              setSections(sessData.config.sections);
-            }
-          }
+          const sessData = await apiFetch<{ config?: { sections?: any[] } }>(`/api/wizard/session/${encodeURIComponent(sessionId)}`);
+          if (sessData.config?.sections) setSections(sessData.config.sections);
         }
       } catch (err) {
         console.error("Failed to fetch sections:", err);
@@ -290,7 +276,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
       // Only include columns that actually exist in allColumns to be safe
       setVisibleColumns(defaultCols.filter(col => allColumns.includes(col)));
     }
-  }, [allColumns]);
+  }, [allColumns, visibleColumns.length]);
 
   // Debounce filter inputs - delay 300ms before applying
   useEffect(() => {
@@ -356,66 +342,9 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   };
 
   
-  // 1. Process data with interventions
+  // 1. Process alignment data
   const processedData = useMemo(() => {
-    let baseData = data ? [...data] : [];
-    
-    // Apply interventions
-    interventions.forEach(inv => {
-      if (inv.action === 'Unmatched') {
-        const idx = baseData.findIndex((row: any) => row['Identif. OLD'] === inv.run1 && row['Identif. NEW'] === inv.run2);
-        if (idx !== -1) {
-          const row = baseData[idx];
-          // Split into two unmatched
-          const oldUnmatched = { ...row };
-          const newUnmatched = { ...row };
-          
-          Object.keys(row).forEach(k => {
-            if (k.includes('NEW')) oldUnmatched[k] = null;
-            if (k.includes('OLD')) newUnmatched[k] = null;
-          });
-          
-          oldUnmatched['Identif. NEW'] = '-';
-          oldUnmatched['Feature Type NEW'] = '-';
-          oldUnmatched["O'Clock NEW"] = '-';
-          oldUnmatched['Match/Unmatch'] = 'Unmatched Old';
-          
-          newUnmatched['Identif. OLD'] = '-';
-          newUnmatched['Feature Type OLD'] = '-';
-          newUnmatched["O'Clock OLD"] = '-';
-          newUnmatched['Match/Unmatch'] = 'Unmatched New';
-          
-          baseData = [...baseData.slice(0, idx), oldUnmatched, newUnmatched, ...baseData.slice(idx + 1)];
-        }
-      } else if (inv.action === 'Matched') {
-        const oldIdx = baseData.findIndex((row: any) => row['Identif. OLD'] === inv.run1 && (!row['Identif. NEW'] || row['Identif. NEW'] === '-'));
-        const newIdx = baseData.findIndex((row: any) => row['Identif. NEW'] === inv.run2 && (!row['Identif. OLD'] || row['Identif. OLD'] === '-'));
-        
-        if (oldIdx !== -1 && newIdx !== -1) {
-          const oldRow = baseData[oldIdx];
-          const newRow = baseData[newIdx];
-          // Merge
-          const mergedRow = { ...oldRow };
-          Object.keys(newRow).forEach(k => {
-            if (k.includes('NEW')) {
-              mergedRow[k] = newRow[k];
-            }
-          });
-          mergedRow['Match/Unmatch'] = 'Match';
-          
-          const minIdx = Math.min(oldIdx, newIdx);
-          const maxIdx = Math.max(oldIdx, newIdx);
-          baseData = [
-            ...baseData.slice(0, minIdx), 
-            mergedRow, 
-            ...baseData.slice(minIdx + 1, maxIdx), 
-            ...baseData.slice(maxIdx + 1)
-          ];
-        }
-      }
-    });
-    
-    return baseData.map((row: any, idx: number) => {
+    return (data || []).map((row: any, idx: number) => {
       const d1 = parseFloat(row['Depth OLD (%WT)']);
       const d2 = parseFloat(row['Depth NEW (%WT)']);
       const cr = (!isNaN(d1) && !isNaN(d2)) ? ((d2 - d1) / 5).toFixed(2) : '-';
@@ -446,7 +375,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
         __origIdx: idx
       };
     });
-  }, [data, interventions]);
+  }, [data, sections]);
 
   // 2. Filter data for view
   const filteredData = useMemo(() => {
@@ -562,31 +491,16 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
     }
   }, [selectedRowIdx, sortedData]);
 
-  const saveIntervention = () => {
-    if (!run1Defect && !run2Defect) return;
-    if (interventionAction === '-') return;
-    setInterventions([...interventions, { id: Date.now().toString(), run1: run1Defect, run2: run2Defect, action: interventionAction }]);
-    setRun1Defect('');
-    setRun2Defect('');
-    setInterventionAction('-');
-    setShowInterventionForm(false);
-  };
-
-  const removeIntervention = (id: string) => {
-    setInterventions(interventions.filter(i => i.id !== id));
-  };
-
   const exportToExcel = async () => {
     if (sortedData.length === 0) return;
     setIsExporting(true);
     try {
-      const token = localStorage.getItem('synapse_token') || '';
-      const response = await fetch('http://localhost:8000/api/alignment/export-excel', {
+      const response = await fetch(apiUrl('/api/alignment/export-excel'), {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
+        credentials: 'include',
         body: JSON.stringify({ data: sortedData })
       });
       

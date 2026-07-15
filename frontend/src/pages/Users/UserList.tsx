@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { FiEdit, FiKey, FiTrash2, FiUserPlus, FiX } from 'react-icons/fi';
+import { FiEdit, FiKey, FiUserPlus, FiX } from 'react-icons/fi';
 import { Link } from 'react-router-dom';
 import PageMeta from '../../components/common/PageMeta';
+import { apiFetch } from '../../utils/api';
 
 interface User {
   id: number;
@@ -23,11 +24,7 @@ export default function UserList() {
 
   const fetchUsers = async () => {
     try {
-      const token = localStorage.getItem('synapse_token');
-      const res = await fetch('http://localhost:8000/api/users', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
+      const data = await apiFetch<User[]>('/api/users');
       if (Array.isArray(data)) {
         setUsers(data);
       } else {
@@ -49,21 +46,14 @@ export default function UserList() {
     e.preventDefault();
     if (!selectedUser) return;
     try {
-      const token = localStorage.getItem('synapse_token');
-      const res = await fetch(`http://localhost:8000/api/users/${selectedUser.id}/reset-password`, {
+      await apiFetch(`/api/users/${selectedUser.id}/reset-password`, {
         method: 'PUT',
-        headers: { 
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}` 
-        },
         body: JSON.stringify({ newPassword })
       });
-      if (res.ok) {
-        setActionSuccess(`Password reset for ${selectedUser.username}`);
-        setResetModalOpen(false);
-        setNewPassword('');
-        setTimeout(() => setActionSuccess(''), 3000);
-      }
+      setActionSuccess(`Password reset for ${selectedUser.username}`);
+      setResetModalOpen(false);
+      setNewPassword('');
+      setTimeout(() => setActionSuccess(''), 3000);
     } catch (err) {
       console.error(err);
     }

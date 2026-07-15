@@ -4,14 +4,21 @@ import argparse
 import pandas as pd
 import numpy as np
 
-# Add parent directory to path so we can import engine and models
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Make both backend packages and the shared parsing engine importable regardless
+# of the process working directory.
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.dirname(CURRENT_DIR)
+BACKEND_DIR = os.path.dirname(SRC_DIR)
+PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
+for module_path in (PROJECT_ROOT, SRC_DIR):
+    if module_path not in sys.path:
+        sys.path.insert(0, module_path)
 
-from backend.models import SessionLocal, Pipeline, SurveyRun, ILIFeature, init_db
+from python_engines.models import SessionLocal, Pipeline, SurveyRun, ILIFeature, init_db
 from engine.constants import UNIVERSAL_COLS, UNIVERSAL_SCHEMA
 import engine.constants as constants
 from engine.loader import find_best_col, normalize_clock, normalize_surface, normalize_feature_type
-from engine.parser_dict import auto_detect_field_map, load_feature_type_normalization
+from backend.engine.parser_dict import auto_detect_field_map, load_feature_type_normalization
 from datetime import datetime
 
 def _autodetect_header(path, field_map, max_scan=8):
@@ -31,15 +38,18 @@ def _autodetect_header(path, field_map, max_scan=8):
             continue
     return best_row, best_score
 
-def ingest_csv(file_path, pipeline_name, survey_year, vendor):
+def ingest_csv(file_path, pipeline_name, survey_year, vendor, organization_id):
     print(f"Ingesting CSV: {file_path}")
     
     session = SessionLocal()
     try:
         # Create or Get Pipeline
-        pipeline = session.query(Pipeline).filter(Pipeline.name == pipeline_name).first()
+        pipeline = session.query(Pipeline).filter(
+            Pipeline.name == pipeline_name,
+            Pipeline.organization_id == organization_id,
+        ).first()
         if not pipeline:
-            pipeline = Pipeline(name=pipeline_name)
+            pipeline = Pipeline(name=pipeline_name, organization_id=organization_id)
             session.add(pipeline)
             session.commit()
             
@@ -166,7 +176,9 @@ if __name__ == "__main__":
     parser.add_argument("--pipeline", required=True)
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--vendor", required=True)
+    parser.add_argument("--organization-id", type=int, required=True)
+    parser.add_argument("--user-id", type=int, required=True)
     args = parser.parse_args()
     
     init_db()
-    ingest_csv(args.file, args.pipeline, args.year, args.vendor)
+    ingest_csv(args.file, args.pipeline, args.year, args.vendor, args.organization_id)

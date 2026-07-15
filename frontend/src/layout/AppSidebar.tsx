@@ -1,25 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 // Assume these icons are imported from an icon library
 import {
   BoxCubeIcon,
-  CalenderIcon,
-  ChatIcon,
   ChevronDownIcon,
-  DocsIcon,
   GridIcon,
-  HorizontaLDots,
-  ListIcon,
-  MailIcon,
-  PageIcon,
   PieChartIcon,
-  PlugInIcon,
-  TableIcon,
-  TaskIcon,
   UserCircleIcon,
 } from "../icons";
-import { useSidebar } from "../context/SidebarContext";
 
 type NavItem = {
   name: string;
@@ -35,28 +24,14 @@ const navItems: NavItem[] = [
     name: "Data Management",
     subItems: [
       { name: "Data", path: "/data" },
-      { name: "ILI Alignment", path: "/alignment" },
-      { name: "Log Report", path: "/log-report" },
-      { name: "Reporting & Visualization", path: "/reports" },
-      { name: "Audit & Traceability", path: "/audit" }
+      { name: "ILI Alignment", path: "/alignment" }
     ]
   },
   { 
     icon: <PieChartIcon />, 
     name: "Integrity Analysis",
     subItems: [
-      { name: "Corrosion Analysis", path: "/corrosion" },
-      { name: "FFS: New Assessment", path: "/ffs" },
-      { name: "FFS: Assessment History", path: "/ffs/history" },
-      { name: "Remaining Life & Risk", path: "/risk" }
-    ]
-  },
-  { 
-    icon: <TaskIcon />, 
-    name: "Operations & Tracking",
-    subItems: [
-      { name: "Tool Performance Tracking", path: "/performance" },
-      { name: "Repair & Excavation Tracking", path: "/repair" }
+      { name: "FFS: New Assessment", path: "/ffs" }
     ]
   },
   { 
@@ -67,8 +42,7 @@ const navItems: NavItem[] = [
       { name: "Add User", path: "/users/add" },
       { name: "Organizations", path: "/organizations" },
       { name: "Roles & Permissions", path: "/roles" },
-      { name: "Activity Logs", path: "/activity-logs" },
-      { name: "Setting and account", path: "/settings" }
+      { name: "Activity Logs", path: "/activity-logs" }
     ]
   }
 ];

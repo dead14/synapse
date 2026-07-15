@@ -1,15 +1,13 @@
-version: '3.8'
-
 services:
   db:
     image: postgis/postgis:15-3.3
     container_name: synapse-db
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: synapse
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in your environment}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your environment}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in your environment}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped

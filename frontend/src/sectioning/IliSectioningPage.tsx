@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FiZoomIn, FiZoomOut, FiMaximize, FiX, FiDownload, FiTrash2 } from 'react-icons/fi';
 import SectionModal from './SectionModal';
 import SectioningSchematic from './SectioningSchematic';
 import SectionList from './SectionList';
 import SectionMap from './SectionMap';
+import { apiFetch } from '../utils/api';
+import { fetchAlignmentComparison } from '../utils/alignment';
 
 export interface SectionDef {
   id: string;
@@ -100,6 +101,7 @@ export default function IliSectioningPage() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any[]>([]);
   const [sections, setSections] = useState<SectionDef[]>([]);
+  const [sessionId, setSessionId] = useState('');
   
   // Interaction states
   const [viewMode, setViewMode] = useState<'schematic' | 'map'>('schematic');
@@ -108,7 +110,6 @@ export default function IliSectioningPage() {
   const [showModal, setShowModal] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   
-  const [isDrawingRoute, setIsDrawingRoute] = useState(false);
   const [pickingMode, setPickingMode] = useState<'start' | 'end' | 'route' | null>(null);
   const [routeForm, setRouteForm] = useState({ startLat: '', startLng: '', endLat: '', endLng: '' });
   
@@ -149,55 +150,36 @@ export default function IliSectioningPage() {
   }, [drawnRoute]);
 
   useEffect(() => {
+    const controller = new AbortController();
     const fetchData = async () => {
       try {
         const urlParams = new URLSearchParams(window.location.search);
-        const sessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
-        const token = localStorage.getItem('synapse_token') || '';
+        const resolvedSessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
+        if (!resolvedSessionId) throw new Error('ID sesi tidak ditemukan.');
+        setSessionId(resolvedSessionId);
+        setData(await fetchAlignmentComparison(resolvedSessionId, undefined, controller.signal));
         
-        // Fetch the same comparison data to get the GWs and features
-        const response = await fetch(`http://localhost:8000/api/ili-results?sessionId=${sessionId}`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        
-        if (!response.ok) throw new Error('Network response was not ok');
-        const resData = await response.json();
-        
-        if (resData.comparison) {
-          setData(resData.comparison);
-        }
-        
-        // Also fetch from DB if there are saved sections
         try {
-           const sessRes = await fetch(`http://localhost:8000/api/wizard/session/${sessionId}`, {
-              headers: { 'Authorization': `Bearer ${token}` }
-           });
-           if (sessRes.ok) {
-              const sessData = await sessRes.json();
-              if (sessData.config && sessData.config.sections) {
-                 setSections(sessData.config.sections);
-              }
-           }
-        } catch(e) {
-           console.warn("Could not fetch sections from DB");
+           const sessData = await apiFetch<{ config?: { sections?: SectionDef[] } }>(`/api/wizard/session/${encodeURIComponent(resolvedSessionId)}`, { signal: controller.signal });
+           if (sessData.config?.sections) setSections(sessData.config.sections);
+        } catch {
+           // A missing saved configuration must not prevent sectioning of valid data.
         }
       } catch (error) {
-        console.error("Failed to fetch ILI data:", error);
+        if ((error as Error).name !== 'AbortError') console.error('Failed to fetch ILI data:', error);
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     };
-    fetchData();
+    void fetchData();
+    return () => controller.abort();
   }, []);
 
   const saveSectionsToDb = async (newSections: SectionDef[]) => {
-    const sessionId = localStorage.getItem('synapse_last_session_id');
-    const token = localStorage.getItem('synapse_token') || '';
     if (!sessionId) return;
     try {
-      await fetch('http://localhost:8000/api/wizard/save-sections', {
+      await apiFetch('/api/wizard/save-sections', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ sessionId, sections: newSections })
       });
     } catch (e) {
@@ -221,10 +203,13 @@ export default function IliSectioningPage() {
   };
 
   const handleExport = () => {
-    // Basic CSV export for sections
+    const protectSpreadsheetValue = (value: unknown) => {
+      const text = String(value ?? '');
+      return /^[=+\-@]/.test(text) ? `'${text}` : text;
+    };
     const header = "SECTION NAME,TYPE,START GW,END GW,START (M),END (M),LENGTH (M),NOTES\n";
     const rows = sections.map(s => 
-      `"${s.name}","${s.type}","${s.startGw}","${s.endGw}",${s.startM},${s.endM},${s.length},"${s.notes || ''}"`
+      `"${protectSpreadsheetValue(s.name).replaceAll('"', '""')}","${protectSpreadsheetValue(s.type).replaceAll('"', '""')}","${protectSpreadsheetValue(s.startGw).replaceAll('"', '""')}","${protectSpreadsheetValue(s.endGw).replaceAll('"', '""')}",${s.startM},${s.endM},${s.length},"${protectSpreadsheetValue(s.notes).replaceAll('"', '""')}"`
     ).join("\n");
     const blob = new Blob([header + rows], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
@@ -372,7 +357,7 @@ export default function IliSectioningPage() {
               export ke Excel
             </button>
             
-            <button onClick={() => navigate('/ili-comparison')} className="px-4 py-1.5 ml-4 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-md text-xs font-bold transition-colors shadow-sm">
+            <button onClick={() => navigate(`/ili-comparison${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`)} className="px-4 py-1.5 ml-4 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-md text-xs font-bold transition-colors shadow-sm">
               Tutup & Kembali ke Results
             </button>
             
@@ -394,7 +379,7 @@ export default function IliSectioningPage() {
                 GW awal dipilih: <strong className="text-blue-800">{selectedGWs[0].id}</strong> ({selectedGWs[0].dist.toFixed(2)}m) - klik GW kedua untuk selesai.
               </span>
             )}
-            {viewMode === 'map' && isDrawingRoute && (
+            {viewMode === 'map' && pickingMode === 'route' && (
               <span className="text-orange-600 font-bold mt-1">
                 Mode Gambar Aktif: Klik peta untuk menggambar jalur pipa. ({drawnRoute.length} titik)
               </span>

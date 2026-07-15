@@ -5,7 +5,7 @@ import annotationPlugin from 'chartjs-plugin-annotation';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip, Legend, annotationPlugin);
 
-export default function OdometerDashboard({ matches, ota, setOta, dtwOn, setDtwOn }: any) {
+export default function OdometerDashboard({ matches, ota, setOta: _setOta, dtwOn: _dtwOn, setDtwOn: _setDtwOn }: any) {
   const lineChartData = useMemo(() => {
     return {
       labels: matches.map((_: any, i: number) => i + 1),

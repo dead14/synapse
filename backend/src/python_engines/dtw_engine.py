@@ -13,6 +13,11 @@ ANCHOR_TYPES = {'valve', 'tee'}
 # engine/constants.py LANDMARK_MATCH_TOL).
 ANCHOR_TOLERANCE_M = 200.0
 
+# The implementation allocates both a cost matrix and a path matrix. Keep the
+# allocation bounded so malformed or unexpectedly large requests fail before
+# they can exhaust the worker's memory.
+MAX_DTW_CELLS = 4_000_000
+
 
 def match_valves(old_features, new_features, tolerance=ANCHOR_TOLERANCE_M):
     """
@@ -90,6 +95,12 @@ def calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty=False):
     """
     n = len(old_gws)
     m = len(new_gws)
+
+    cell_count = n * m
+    if cell_count > MAX_DTW_CELLS:
+        raise ValueError(
+            f"DTW input requires {cell_count} cells; maximum is {MAX_DTW_CELLS}"
+        )
     
     if n == 0 or m == 0:
         return []
@@ -214,9 +225,25 @@ def calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty=False):
                     
     i, j = best_end
     
-    # If the end is unreachable entirely (e.g. strict penalty cut everything), fallback
+    # No candidate survived the physical window. Returning two independent
+    # orphan sets preserves the constraint instead of inventing a diagonal
+    # match between physically unrelated welds.
     if best_end_cost == float('inf'):
-        i, j = n, m
+        for old_index, old_gw in enumerate(old_gws):
+            matches.append({
+                'oldIndex': old_index, 'newIndex': None,
+                'oldId': old_gw['id'], 'newId': None,
+                'oldDist': old_gw['dist'], 'newDist': None,
+                'status': 'Skipped'
+            })
+        for new_index, new_gw in enumerate(new_gws):
+            matches.append({
+                'oldIndex': None, 'newIndex': new_index,
+                'oldId': None, 'newId': new_gw['id'],
+                'oldDist': None, 'newDist': new_gw['dist'],
+                'status': 'Skipped'
+            })
+        return matches
     
     # The skipped elements at the very end
     for skip_i in range(n, i, -1):
@@ -237,9 +264,11 @@ def calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty=False):
     while i > 0 and j > 0:
         prev_i, prev_j = path_matrix[i][j]
         
-        # If dead end, force diagonal fallback
+        # A finite cell should always have a predecessor. If corrupt or
+        # inconsistent state is encountered, stop matching and let the
+        # remaining entries be emitted as skips below.
         if prev_i == -1 and prev_j == -1:
-            prev_i, prev_j = i - 1, j - 1
+            break
             
         matches.append({
             'oldIndex': i-1, 'newIndex': j-1,
@@ -358,6 +387,18 @@ def process_request(data):
 
     if not old_gws or not new_gws:
         return {"error": "No GWs/Anchors found in one or both runs", "requestId": request_id}
+
+    cell_count = len(old_gws) * len(new_gws)
+    if cell_count > MAX_DTW_CELLS:
+        return {
+            "success": False,
+            "code": "DTW_INPUT_TOO_LARGE",
+            "error": (
+                f"DTW input requires {cell_count} cells; "
+                f"maximum is {MAX_DTW_CELLS}"
+            ),
+            "requestId": request_id,
+        }
 
     valve_pairs = match_valves(old_gws, new_gws) if use_valve_anchor else []
 

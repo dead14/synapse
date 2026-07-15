@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { FiSliders, FiChevronRight, FiChevronLeft, FiAward, FiAlertCircle } from 'react-icons/fi';
+import { useState } from 'react';
+import { FiSliders, FiChevronRight, FiChevronLeft, FiAward } from 'react-icons/fi';
 
 interface StepAnomalyTolerancesProps {
   onNext: (config: any) => void;

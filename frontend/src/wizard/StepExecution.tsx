@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
-import { FiCheckCircle, FiAlertTriangle, FiFileText, FiDownload } from 'react-icons/fi';
+import { FiCheckCircle, FiFileText } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
 import { getSocket } from '../utils/socket';
+import { apiFetch, ApiError } from '../utils/api';
 
 interface StepExecutionProps {
   onBack: () => void;
   config: any;
 }
 
-export default function StepExecution({ onBack, config }: StepExecutionProps) {
+export default function StepExecution({ onBack: _onBack, config }: StepExecutionProps) {
   const navigate = useNavigate();
   const [terminalLines, setTerminalLines] = useState<string[]>([]);
   const [progress, setProgress] = useState(0);
@@ -22,6 +23,8 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
     startedRef.current = true;
     let mounted = true;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let requestController: AbortController | null = null;
+    let requestTimeout: ReturnType<typeof setTimeout> | null = null;
     setTerminalLines(["Connecting to Alignment Server..."]);
 
     const finish = () => {
@@ -40,10 +43,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
     const pollJob = (jobId: string) => {
       pollTimer = setInterval(async () => {
         try {
-          const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-          const res = await fetch(`${API_BASE}/api/job/${jobId}/result`);
-          if (!res.ok) return;
-          const job = await res.json();
+          const job = await apiFetch<{ progress?: number; state?: string; failedReason?: string }>(`/api/job/${encodeURIComponent(jobId)}/result`);
           if (!mounted || jobIdRef.current !== jobId) return;
           if (typeof job.progress === 'number') setProgress(job.progress);
           if (job.state === 'completed') {
@@ -60,25 +60,24 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
 
     const startAlignment = async () => {
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15000);
-        const token = localStorage.getItem('synapse_token') || '';
-        const userRaw = localStorage.getItem('synapse_user');
-        const userId = userRaw ? JSON.parse(userRaw)?.id : undefined;
-        const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-        const res = await fetch(`${API_BASE}/api/run`, {
+        if (!config.sessionId) {
+          fail('Sesi alignment belum tersimpan. Kembali ke ringkasan dan simpan data terlebih dahulu.');
+          return;
+        }
+
+        requestController = new AbortController();
+        requestTimeout = setTimeout(() => requestController?.abort(), 15000);
+        const data = await apiFetch<{ success?: boolean; jobId?: string; error?: string }>('/api/run', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          signal: controller.signal,
+          signal: requestController.signal,
           body: JSON.stringify({
-            runId: config.sessionId || 1,
-            algorithm: 'dtw_hungarian',
-            userId // Pass userId so worker can target the right socket room
+            runId: config.sessionId,
+            algorithm: 'dtw_hungarian'
           })
         });
-        clearTimeout(timeout);
+        if (requestTimeout) clearTimeout(requestTimeout);
+        requestTimeout = null;
         
-        const data = await res.json();
         if (data.success && data.jobId) {
           if (mounted) {
             jobIdRef.current = data.jobId;
@@ -90,6 +89,11 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
           if (mounted) setTerminalLines(prev => [...prev, `[ERROR] Failed to queue job: ${data.error}`]);
         }
       } catch (err: any) {
+        if (err instanceof ApiError && err.status === 401) {
+          fail('Sesi login sudah kedaluwarsa. Silakan masuk kembali untuk menjalankan alignment.');
+          return;
+        }
+
         fail(err.name === 'AbortError'
           ? 'Server did not respond within 15 seconds. Check backend port 8000 and sign in again.'
           : `Could not reach server: ${err.message}`);
@@ -119,10 +123,18 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
     socket.on('alignment_progress', handleProgress);
     socket.on('alignment_complete', handleComplete);
     socket.on('alignment_error', handleError);
-    startAlignment();
+
+    // React Strict Mode mounts effects twice in development. Deferring the
+    // request lets the first probe clean up before it can start a job, while
+    // the real mounted effect starts exactly once.
+    const startTimer = setTimeout(startAlignment, 0);
 
     return () => {
       mounted = false;
+      startedRef.current = false;
+      clearTimeout(startTimer);
+      requestController?.abort();
+      if (requestTimeout) clearTimeout(requestTimeout);
       if (pollTimer) clearInterval(pollTimer);
       socket.off('alignment_progress', handleProgress);
       socket.off('alignment_complete', handleComplete);
@@ -196,13 +208,6 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
           </div>
           
           <div className="flex gap-4 justify-end pt-4 border-t border-gray-100">
-            <a
-              href="http://localhost:8000/download-report"
-              download
-              className="px-6 py-3 bg-white border border-gray-200 text-gray-700 rounded-xl shadow-sm hover:bg-gray-50 hover:border-gray-300 font-bold flex items-center gap-2 transition-all"
-            >
-              <FiDownload size={18} className="text-gray-400" /> Download Excel Report
-            </a>
             <button 
                 onClick={() => navigate(`/ili-comparison?sessionId=${config.sessionId || ''}`)}
                 className="bg-brand-500 hover:bg-brand-600 text-white px-8 py-3 rounded-xl font-bold transition-all shadow-theme-md hover:shadow-theme-lg flex items-center gap-2"

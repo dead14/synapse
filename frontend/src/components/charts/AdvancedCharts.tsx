@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { FiX } from 'react-icons/fi';
 import DepthVsDistanceChart from './DepthVsDistanceChart';
 import OrientationVsDistanceChart from './OrientationVsDistanceChart';

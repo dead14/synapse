@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Text } from '@react-three/drei';
 import { FiBox, FiX } from 'react-icons/fi';
+import { apiFetch } from './utils/api';
 
 interface DefectVisualizerProps {
   data: any[];
@@ -140,7 +141,7 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { 
   );
 };
 
-const DefectOverlayMeshes = ({ spoolData, renderLength, sLength, startDist, onHover, onSelect }: any) => {
+const DefectOverlayMeshes = ({ spoolData, renderLength, sLength, startDist, onSelect }: any) => {
   return (
     <group rotation={[Math.PI / 2, 0, 0]}>
       {spoolData.map((d: any, i: number) => {
@@ -195,11 +196,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
       try {
         const sessionId = new URLSearchParams(window.location.search).get('sessionId') || localStorage.getItem('synapse_last_session_id');
         if (sessionId) {
-          const token = localStorage.getItem('synapse_token') || '';
-          const res = await fetch(`http://localhost:8000/api/wizard-session/${sessionId}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
-          const data = await res.json();
+          const data = await apiFetch<{ config?: unknown }>(`/api/wizard/session/${encodeURIComponent(sessionId)}`);
           if (data.config) {
              const config = typeof data.config === 'string' ? JSON.parse(data.config) : data.config;
              const oldY = config?.summaryData?.oldRun?.year || config?.oldRun?.year;
@@ -215,7 +212,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
              }
           }
         }
-      } catch (e) {}
+      } catch {}
     };
     fetchSession();
   }, []);

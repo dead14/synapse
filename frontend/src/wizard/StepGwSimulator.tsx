@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Line } from 'react-chartjs-2';
-import { FiPlay, FiCheck, FiX, FiBox, FiChevronRight, FiChevronLeft, FiMaximize2, FiMinimize2, FiEdit, FiSave, FiDownload, FiSearch, FiPlus, FiMinus } from 'react-icons/fi';
-import * as XLSX from 'xlsx';
+import { FiX, FiBox, FiChevronRight, FiChevronLeft, FiEdit, FiDownload, FiSearch } from 'react-icons/fi';
 import Pipeline3DViewer from '../components/3d/Pipeline3DViewer';
 import OdometerDashboard from './OdometerDashboard';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Tooltip } from 'chart.js';
+import { apiFetch, ApiError } from '../utils/api';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip);
 
@@ -21,12 +21,12 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
   const [selectedGWs, setSelectedGWs] = useState<number[]>([]);
   const [selectedTrack, setSelectedTrack] = useState<'old' | 'new' | null>(null);
   const [show3DViewer, setShow3DViewer] = useState(false);
-  const [isTableExpanded, setIsTableExpanded] = useState(false);
   const [tooltipState, setTooltipState] = useState<{ x: number, y: number, row: any } | null>(null);
 
   const [activeTab, setActiveTab] = useState<'offset' | 'unmatched' | 'matched' | 'table' | 'odometer' | 'all'>('all');
 
-  const handleDownloadExcel = () => {
+  const handleDownloadExcel = async () => {
+    const { Workbook } = await import('@excel.js/exceljs');
     const dataToExport = matches.map((m: any, index: number) => ({
       'No.': index + 1,
       'Status': m.status,
@@ -37,16 +37,28 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
       'Flagged (>5%)': m.flagged ? 'Yes' : 'No'
     }));
 
-    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Girth Weld Matches');
-    
-    const colWidths = [
-      { wch: 5 }, { wch: 10 }, { wch: 22 }, { wch: 22 }, { wch: 15 }, { wch: 15 }, { wch: 15 }
+    const workbook = new Workbook();
+    const worksheet = workbook.addWorksheet('Girth Weld Matches');
+    worksheet.columns = [
+      { header: 'No.', key: 'No.', width: 5 },
+      { header: 'Status', key: 'Status', width: 12 },
+      { header: 'Baseline Odometer (m)', key: 'Baseline Odometer (m)', width: 22 },
+      { header: 'Raw Odometer (m)', key: 'Raw Odometer (m)', width: 22 },
+      { header: 'Deviation (%)', key: 'Deviation (%)', width: 15 },
+      { header: 'Offset (m)', key: 'Offset (m)', width: 15 },
+      { header: 'Flagged (>5%)', key: 'Flagged (>5%)', width: 15 },
     ];
-    worksheet['!cols'] = colWidths;
+    worksheet.addRows(dataToExport);
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.views = [{ state: 'frozen', ySplit: 1 }];
 
-    XLSX.writeFile(workbook, 'GW_Match_Report.xlsx');
+    const buffer = await workbook.xlsx.writeBuffer();
+    const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'GW_Match_Report.xlsx';
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const [dtwOn, setDtwOn] = useState(false);
@@ -100,16 +112,54 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
   const [oldTees, setOldTees] = useState<number[]>([]);
   const [newTees, setNewTees] = useState<number[]>([]);
   const [isCalculating, setIsCalculating] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
     
     const calculateDTW = async () => {
       setIsCalculating(true);
-      const token = localStorage.getItem('synapse_token') || '';
+      setLoadError(null);
       try {
         const globalOffset = config?.globalOffset || 0;
-        const rawNewRun = config?.summaryData?.newRun?.rawFeatures || [];
+        const featureTypeText = (feature: any) => [
+          feature.type,
+          feature.feature_type,
+          feature.feature_identification,
+          feature.originalType,
+        ].filter((value) => value !== null && value !== undefined)
+          .map((value) => String(value).toLowerCase())
+          .join(' ');
+        const finiteDistance = (feature: any) => {
+          const candidates = [
+            feature.dist,
+            feature.log_distance_m,
+            feature.logDistance,
+            feature.distance,
+            feature.chainage,
+            feature.odometer,
+          ];
+          for (const candidate of candidates) {
+            const raw = String(candidate ?? '').trim();
+            if (!raw) continue;
+            const parsed = Number(raw.replace(/,/g, ''));
+            if (Number.isFinite(parsed)) return parsed;
+          }
+          return null;
+        };
+        const selectAlignmentAnchors = (features: any[]) => features
+          .filter((feature) => /weld|girth|seam|valve|tee/.test(featureTypeText(feature)))
+          .map((feature) => ({ ...feature, dist: finiteDistance(feature) }))
+          .filter((feature) => feature.dist !== null);
+        const rawOldRun = selectAlignmentAnchors(config?.summaryData?.oldRun?.rawFeatures || []);
+        const rawNewRun = selectAlignmentAnchors(config?.summaryData?.newRun?.rawFeatures || []);
+
+        if (rawOldRun.length === 0 || rawNewRun.length === 0) {
+          setMatches([]);
+          setLoadError('Data anchor belum tersedia. Pastikan kedua file ILI berisi fitur Weld, Valve, atau Tee.');
+          return;
+        }
         
         // Apply global offset to new run features if partial run mode is enabled
         const adjustedNewRun = globalOffset !== 0 
@@ -120,39 +170,29 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
           ota,
           strictPenalty,
           useValveAnchor,
-          oldRun: config?.summaryData?.oldRun?.rawFeatures || [],
+          oldRun: rawOldRun,
           newRun: adjustedNewRun,
           globalOffset
         };
         
-        const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-        const res = await fetch(`${API_BASE}/api/align-dtw`, {
+        const data = await apiFetch<any>('/api/align-dtw', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          signal: controller.signal,
           body: JSON.stringify(payload)
         });
         
-        if (!res.ok) {
-          if (res.status === 401) {
-            alert("Sesi login kamu udah habis (Token Expired). Tolong Logout terus Login lagi ya!");
-          }
-          throw new Error(`Server error: ${res.status}`);
-        }
-        
-        const data = await res.json();
-        
-        if (data.success && data.gwMatches) {
+        if (data.success && Array.isArray(data.gwMatches)) {
           if (data.alignedFeatures) setAlignedFeatures(data.alignedFeatures);
           if (data.gwMatchesFinal) setGwMatchesFinal(data.gwMatchesFinal);
           if (data.gwOrphans) setGwOrphans(data.gwOrphans);
           
           // Extract old and new distances just for the visualizer scales
-          const oldW = payload.oldRun.filter((f: any) => String(f.type || f.feature_identification || f.originalType).toLowerCase().includes('weld')).map((f: any) => f.dist);
-          const newW = payload.newRun.filter((f: any) => String(f.type || f.feature_identification || f.originalType).toLowerCase().includes('weld')).map((f: any) => f.dist);
-          const oldValves = payload.oldRun.filter((f: any) => String(f.type || f.feature_identification || f.originalType).toLowerCase().includes('valve')).map((f: any) => f.dist);
-          const newValves = payload.newRun.filter((f: any) => String(f.type || f.feature_identification || f.originalType).toLowerCase().includes('valve')).map((f: any) => f.dist);
-          const oldTees = payload.oldRun.filter((f: any) => String(f.type || f.feature_identification || f.originalType).toLowerCase().includes('tee')).map((f: any) => f.dist);
-          const newTees = payload.newRun.filter((f: any) => String(f.type || f.feature_identification || f.originalType).toLowerCase().includes('tee')).map((f: any) => f.dist);
+          const oldW = payload.oldRun.filter((f: any) => /weld|girth|seam/.test(featureTypeText(f))).map((f: any) => f.dist);
+          const newW = payload.newRun.filter((f: any) => /weld|girth|seam/.test(featureTypeText(f))).map((f: any) => f.dist);
+          const oldValves = payload.oldRun.filter((f: any) => featureTypeText(f).includes('valve')).map((f: any) => f.dist);
+          const newValves = payload.newRun.filter((f: any) => featureTypeText(f).includes('valve')).map((f: any) => f.dist);
+          const oldTees = payload.oldRun.filter((f: any) => featureTypeText(f).includes('tee')).map((f: any) => f.dist);
+          const newTees = payload.newRun.filter((f: any) => featureTypeText(f).includes('tee')).map((f: any) => f.dist);
           
           setOldGWs(oldW);
           setNewGWs(newW);
@@ -223,10 +263,15 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
           }
 
           setMatches(formattedMatches);
+        } else {
+          throw new Error(data.error || 'Server tidak mengembalikan hasil GW matching.');
         }
       } catch (err: any) {
         if (err.name !== 'AbortError') {
           console.error("Failed to run DTW:", err);
+          setLoadError(err instanceof ApiError && err.status === 401
+            ? 'Sesi login sudah kedaluwarsa. Silakan masuk kembali.'
+            : `Gagal memuat hasil GW matching: ${err.message || 'periksa koneksi backend.'}`);
         }
       } finally {
         setIsCalculating(false);
@@ -238,7 +283,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
     return () => {
       clearTimeout(timeout);
     };
-  }, [ota, strictPenalty, useValveAnchor, config]);
+  }, [ota, strictPenalty, useValveAnchor, config, retryNonce]);
 
   const unmatchedRanges = useMemo(() => {
     const ranges: any[] = [];
@@ -325,11 +370,24 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
   };
 
   // Helper for visualizing Timeline UI
-  const maxDist = oldGWs[oldGWs.length - 1] + 10;
-  const getPosPct = (val: number) => (val / maxDist) * 100;
+  const finiteDistances = [...oldGWs, ...newGWs].filter(Number.isFinite);
+  const maxDist = Math.max(10, ...finiteDistances) + 10;
+  const getPosPct = (val: number) => Math.max(0, Math.min(100, (val / maxDist) * 100));
 
   return (
     <div className="bg-transparent text-gray-800 font-sans flex flex-col gap-6 animate-fade-in">
+      {loadError && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 shadow-sm">
+          <span>{loadError}</span>
+          <button
+            type="button"
+            onClick={() => setRetryNonce((value) => value + 1)}
+            className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+          >
+            Coba lagi
+          </button>
+        </div>
+      )}
       
       {/* 2-Column Dashboard Grid */}
       <div className="grid grid-cols-1 xl:grid-cols-5 gap-5 items-start">
@@ -442,7 +500,6 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                   {oldGWs.map((pos, i) => {
                     const m = matches.find(mx => mx.oldVal === pos);
                     const isMatched = m && m.status === 'Match';
-                    const isSkipped = !isMatched;
                     const isFlagged = isMatched && m.flagged;
                     const isSelected = selectedGWs.includes(pos);
                     return (
@@ -476,7 +533,6 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                   
                   {/* Valves - New Run */}
                   {newValves.map((pos, i) => {
-                    const originalPos = pos - (config?.globalOffset || 0);
                     // Match against original dist or adjusted pos? valveAnchors returns the adjusted pos!
                     const isMatched = valveMatches.some(vm => vm.new_dist === pos);
                     const isSelected = selectedGWs.includes(pos);
@@ -494,7 +550,6 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
 
                   {/* Tees - New Run */}
                   {newTees.map((pos, i) => {
-                    const originalPos = pos - (config?.globalOffset || 0);
                     const isMatched = valveMatches.some(vm => vm.new_dist === pos);
                     const isSelected = selectedGWs.includes(pos);
                     return (
@@ -512,7 +567,6 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                   {newGWs.map((pos, i) => {
                     const m = matches.find(mx => mx.newVal === pos);
                     const isMatched = m && m.status === 'Match';
-                    const isSkipped = !isMatched;
                     const isFlagged = isMatched && m.flagged;
                     const isSelected = selectedGWs.includes(pos);
                     const originalPos = pos - (config?.globalOffset || 0);
@@ -706,6 +760,13 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
+                        {!isCalculating && matches.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="px-3 py-10 text-center text-gray-500">
+                              {loadError || 'Belum ada hasil matching untuk ditampilkan.'}
+                            </td>
+                          </tr>
+                        )}
                         {matches.map((row) => (
                           <tr key={row.id} 
                             ref={(el: HTMLTableRowElement | null) => { if (el) tableRowRefs.current[row.id] = el; }}

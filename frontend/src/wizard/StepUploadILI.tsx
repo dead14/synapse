@@ -1,9 +1,26 @@
 import { useState, useEffect } from 'react';
 import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettings, FiShield, FiStar, FiPlus } from 'react-icons/fi';
-import * as XLSX from 'xlsx';
+import Papa from 'papaparse';
+import { apiUrl } from '../utils/api';
+import { readXlsxRows } from '../utils/xlsx';
 
 interface StepUploadILIProps {
   onNext: (data?: any) => void;
+}
+
+async function readUploadedRows(file: File): Promise<Record<string, unknown>[]> {
+  if (file.name.toLowerCase().endsWith('.csv')) {
+    return new Promise((resolve, reject) => {
+      Papa.parse<Record<string, unknown>>(file, {
+        header: true,
+        skipEmptyLines: 'greedy',
+        complete: (result) => resolve(result.data),
+        error: reject,
+      });
+    });
+  }
+
+  return readXlsxRows(file);
 }
 
 export default function StepUploadILI({ onNext }: StepUploadILIProps) {
@@ -23,13 +40,16 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         { id: 3, year: '2026', vendor: 'NDT Global', file: null, phyloLabel: 'ILI Alignment 2' }
       ]);
       setMasterIndex(0);
-    } else if (datasets.length === 3 && datasets[0].phyloLabel) {
-      // Revert back to 2 datasets when leaving phylogenetic
-      setDatasets([
-        { id: 1, year: '2020', vendor: 'Rosen', file: null },
-        { id: 2, year: '2023', vendor: 'Baker Hughes', file: null }
-      ]);
+    } else {
       setMasterIndex(1);
+      setDatasets((currentDatasets) => (
+        currentDatasets.length === 3 && currentDatasets[0].phyloLabel
+          ? [
+              { id: 1, year: '2020', vendor: 'Rosen', file: null },
+              { id: 2, year: '2023', vendor: 'Baker Hughes', file: null }
+            ]
+          : currentDatasets
+      ));
     }
   }, [algorithm]);
 
@@ -66,11 +86,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           runKey = i === masterIndex ? 'oldRun' : 'newRun';
         }
         
-        const data = await ds.file.arrayBuffer();
-        const workbook = XLSX.read(data, { type: 'array' });
-        const sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        const jsonData: any[] = XLSX.utils.sheet_to_json(sheet);
+        const jsonData = await readUploadedRows(ds.file);
         
         const counts = { total: jsonData.length, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
         const rawFeatures: any[] = [];
@@ -91,7 +107,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           else if (ftype.includes('bend')) { counts.bends++; standardizedType = 'bend'; }
           else { counts.others++; }
           
-          const distKey = keys.find(k => /odometer|distance|dist|log|m/i.test(k));
+          const distKey = keys.find(k => /odometer|log[ _-]?distance|^distance(?:[ _-]?m)?$|^dist(?:ance)?(?:[ _-]?m)?$|chainage/i.test(k));
           let dist = 0;
           if (distKey && row[distKey] !== undefined && row[distKey] !== null) {
             dist = parseFloat(String(row[distKey]).replace(/,/g, ''));
@@ -165,7 +181,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
       onNext({ summaryData, enablePartialRun });
     } catch (err) {
       console.error(err);
-      alert('Gagal membaca file Excel. Pastikan formatnya benar.');
+      const detail = err instanceof Error && err.message ? `\n\nDetail: ${err.message}` : '';
+      alert(`Gagal membaca file Excel. Pastikan formatnya .xlsx/.csv dan header berada di baris pertama.${detail}`);
     } finally {
       setIsProcessing(false);
     }
@@ -194,7 +211,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         </div>
         <div className="mt-4 sm:mt-0 flex gap-3">
           <a 
-            href="http://localhost:8000/api/download-template"
+            href={apiUrl('/api/download-template')}
             target="_blank"
             rel="noreferrer"
             className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-6 py-3 rounded-xl font-medium transition-colors shadow-sm flex items-center gap-2"

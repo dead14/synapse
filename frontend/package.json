@@ -13,6 +13,7 @@
     "@chakra-ui/react": "^3.36.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
+    "@excel.js/exceljs": "^0.9.0",
     "@headlessui/react": "^2.2.10",
     "@popperjs/core": "^2.11.8",
     "@react-three/drei": "^10.7.7",
@@ -24,6 +25,7 @@
     "chart.js": "^4.5.1",
     "chartjs-plugin-annotation": "^3.1.0",
     "date-fns": "^4.4.0",
+    "fflate": "^0.8.3",
     "framer-motion": "^12.42.2",
     "leaflet": "^1.9.4",
     "papaparse": "^5.5.4",
@@ -39,8 +41,7 @@
     "simplebar-react": "^3.3.2",
     "socket.io-client": "^4.8.3",
     "tailwind-merge": "^3.6.0",
-    "three": "^0.185.1",
-    "xlsx": "^0.18.5"
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",

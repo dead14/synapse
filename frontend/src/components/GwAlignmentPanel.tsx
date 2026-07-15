@@ -72,7 +72,7 @@ export default function GwAlignmentPanel({ gwData }: GwAlignmentPanelProps) {
         }
       ]
     };
-  }, [gwData]);
+  }, [matchedData]);
 
   const chartOptions = {
     responsive: true,
