@@ -15,15 +15,53 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
   const [showValidation, setShowValidation] = useState(false);
   const startedRef = useRef(false);
   const jobIdRef = useRef<string | null>(null);
+  const completedRef = useRef(false);
 
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
     let mounted = true;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
     setTerminalLines(["Connecting to Alignment Server..."]);
+
+    const finish = () => {
+      if (!mounted || completedRef.current) return;
+      completedRef.current = true;
+      setTerminalLines(prev => [...prev, '✅ All done! Results are ready.']);
+      setProgress(100);
+      setShowValidation(true);
+    };
+
+    const fail = (message: string) => {
+      if (mounted) setTerminalLines(prev => [...prev, `[ERROR] ${message}`]);
+      if (pollTimer) clearInterval(pollTimer);
+    };
+
+    const pollJob = (jobId: string) => {
+      pollTimer = setInterval(async () => {
+        try {
+          const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+          const res = await fetch(`${API_BASE}/api/job/${jobId}/result`);
+          if (!res.ok) return;
+          const job = await res.json();
+          if (!mounted || jobIdRef.current !== jobId) return;
+          if (typeof job.progress === 'number') setProgress(job.progress);
+          if (job.state === 'completed') {
+            if (pollTimer) clearInterval(pollTimer);
+            finish();
+          } else if (job.state === 'failed') {
+            fail(`Worker failed: ${job.failedReason || 'Unknown error'}`);
+          }
+        } catch {
+          // Socket.IO may still deliver progress; keep retrying the local job endpoint.
+        }
+      }, 1000);
+    };
 
     const startAlignment = async () => {
       try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
         const token = localStorage.getItem('synapse_token') || '';
         const userRaw = localStorage.getItem('synapse_user');
         const userId = userRaw ? JSON.parse(userRaw)?.id : undefined;
@@ -31,28 +69,32 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
         const res = await fetch(`${API_BASE}/api/run`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          signal: controller.signal,
           body: JSON.stringify({
             runId: config.sessionId || 1,
             algorithm: 'dtw_hungarian',
             userId // Pass userId so worker can target the right socket room
           })
         });
+        clearTimeout(timeout);
         
         const data = await res.json();
         if (data.success && data.jobId) {
           if (mounted) {
             jobIdRef.current = data.jobId;
             setTerminalLines(prev => [...prev, `Job queued successfully. Job ID: ${data.jobId}`]);
+            setProgress(1);
+            pollJob(data.jobId);
           }
         } else {
           if (mounted) setTerminalLines(prev => [...prev, `[ERROR] Failed to queue job: ${data.error}`]);
         }
       } catch (err: any) {
-        if (mounted) setTerminalLines(prev => [...prev, `[FATAL ERROR] Could not reach server: ${err.message}`]);
+        fail(err.name === 'AbortError'
+          ? 'Server did not respond within 15 seconds. Check backend port 8000 and sign in again.'
+          : `Could not reach server: ${err.message}`);
       }
     };
-
-    startAlignment();
 
     const socket = getSocket();
     
@@ -65,9 +107,8 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
 
     const handleComplete = (data: any) => {
       if (!jobIdRef.current || data.jobId !== jobIdRef.current) return;
-      setTerminalLines(prev => [...prev, '✅ All done! Results are ready.']);
-      setProgress(100);
-      setShowValidation(true);
+      if (pollTimer) clearInterval(pollTimer);
+      finish();
     };
 
     const handleError = (data: any) => {
@@ -78,9 +119,11 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
     socket.on('alignment_progress', handleProgress);
     socket.on('alignment_complete', handleComplete);
     socket.on('alignment_error', handleError);
+    startAlignment();
 
     return () => {
       mounted = false;
+      if (pollTimer) clearInterval(pollTimer);
       socket.off('alignment_progress', handleProgress);
       socket.off('alignment_complete', handleComplete);
       socket.off('alignment_error', handleError);

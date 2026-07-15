@@ -71,8 +71,23 @@ exports.runAlignment = async (req, res) => {
     const jobId = `job_${Date.now()}`;
     const room = userId ? `user_${userId}` : null;
     const io = socketConfig.getIO();
+
+    // Keep a queryable status from the moment the job is accepted.  The
+    // frontend polls this as a fallback when Socket.IO is disconnected.
+    localJobs.set(jobId, {
+        id: jobId,
+        state: 'active',
+        progress: 0,
+        returnvalue: null,
+    });
     
     const emitProgress = (progress, message) => {
+        localJobs.set(jobId, {
+            ...localJobs.get(jobId),
+            id: jobId,
+            state: 'active',
+            progress,
+        });
         if (io) {
             const payload = { jobId, progress, message };
             if (room) {
