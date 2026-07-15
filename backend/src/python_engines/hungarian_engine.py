@@ -147,11 +147,28 @@ class HungarianAnomalyAlignmentEngine:
                 return []
                 
             gw_pairs = sess.params_json.get("gwMatches", [])
+            # New sessions persist the strict Phase-1 contract separately from
+            # the legacy UI payload.  Use it as the canonical segment boundary
+            # source when the legacy list is absent.
+            if not gw_pairs:
+                gw_pairs = [
+                    {
+                        "oldVal": pair.get("old_odometer"),
+                        "newVal": pair.get("new_odometer"),
+                        "offset": (
+                            float(pair["new_odometer"]) - float(pair["old_odometer"])
+                            if pair.get("old_odometer") is not None and pair.get("new_odometer") is not None
+                            else None
+                        ),
+                        "status": "Match",
+                    }
+                    for pair in sess.params_json.get("gwMatchesFinal", [])
+                ]
             if not gw_pairs:
                 print(f"[WARN] No gwMatches found in params_json for session_id={self.session_id}")
                 return []
                 
-            valid_gw_pairs = [p for p in gw_pairs if p.get("status") == "Match"]
+            valid_gw_pairs = [p for p in gw_pairs if str(p.get("status", "Match")).upper() in {"MATCH", "MATCHED"}]
             print(f"[GW Lock] Found {len(valid_gw_pairs)} valid GW matches from DB")
             
             return sorted(
@@ -222,6 +239,10 @@ class HungarianAnomalyAlignmentEngine:
                     if signed_distance >= 0
                     else self.us_gw_distance_tolerance
                 )
+                # Keep the historical base tolerance as a floor.  The UI values
+                # refine the directional tolerance but must not make an existing
+                # valid alignment disappear merely because the default was 0.5 m.
+                distance_tolerance = max(distance_tolerance, self.distance_tolerance_m)
                 if diff <= distance_tolerance:
                     base_cost = diff
                     
@@ -234,24 +255,18 @@ class HungarianAnomalyAlignmentEngine:
                     # 2. Clock Penalty (assume 60 degrees max allowed for penalty scale)
                     cd = self._clock_diff(f1.get("clock_position"), f2.get("clock_position"))
                     if cd is not None:
-                        if cd > self.clock_tolerance:
-                            continue
                         base_cost += w_clock * min(cd / self.clock_tolerance, 1.0)
                         
                     # 3. Depth Penalty
                     d1, d2 = f1.get("depth_pct"), f2.get("depth_pct")
                     if d1 is not None and d2 is not None:
                         depth_difference = abs(d1 - d2)
-                        if depth_difference > self.depth_tolerance:
-                            continue
                         base_cost += w_depth * (depth_difference / self.depth_tolerance)
                         
                     # 4. Length Penalty
                     l1, l2 = f1.get("length_mm"), f2.get("length_mm")
                     if l1 is not None and l2 is not None:
                         length_difference = abs(l1 - l2)
-                        if length_difference > self.length_tolerance:
-                            continue
                         base_cost += w_length * (length_difference / self.length_tolerance)
                         
                     # 5. Width Penalty
