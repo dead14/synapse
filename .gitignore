@@ -39,8 +39,8 @@ tasks/
 # Data and scratch files in root
 /*.xlsx
 /*.pdf
-/*.json
-/*.html
+/out.json
+/ffs d.html
 /Algoritma.py
 /algo_wrapper.py
 /fix.py
@@ -48,3 +48,4 @@ tasks/
 /split_script.py
 /study.py
 /test_clock.js
+

@@ -1,0 +1,13 @@
+{
+  "name": "synapse-monolith",
+  "version": "1.0.0",
+  "description": "Synapse Modular Monolith Application",
+  "scripts": {
+    "start": "npm run build --prefix frontend && npm start --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "dev:backend": "node backend/server.js",
+    "build:frontend": "npm run build --prefix frontend"
+  },
+  "author": "",
+  "license": "ISC"
+}
