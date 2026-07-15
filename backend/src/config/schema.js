@@ -18,6 +18,7 @@ async function ensureBaseSchema() {
 
 async function ensureDatabaseSchema(dependencies = {}) {
     const query = dependencies.query || pool.query.bind(pool);
+    console.log("DATABASE_URL in schema.js is:", process.env.DATABASE_URL);
 
     try {
         const tableCheck = await query(`
