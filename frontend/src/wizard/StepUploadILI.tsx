@@ -104,7 +104,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           }
           
           const idKey = keys.find(k => /id|identifier|joint/i.test(k));
-          const id = idKey ? row[idKey] : `F-${idx}`;
+          const idVal = idKey ? String(row[idKey] || '').trim() : '';
+          const id = idVal !== '' ? idVal : `F-${idx + 1}`;
           
           const depthKey = keys.find(k => /depth|dpt|%wt|wt loss|kedalaman/i.test(k));
           const clockKey = keys.find(k => /clock|orientation|ori|angle|pos|jam|arah/i.test(k));

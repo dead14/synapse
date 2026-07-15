@@ -209,6 +209,13 @@ class HungarianAnomalyAlignmentEngine:
     def assign_to_segment(self, dist: float, boundaries: list[float]) -> int:
         return bisect.bisect_right(boundaries, dist)
 
+    def _apply_scenario_filter(self, features: list[dict]) -> list[dict]:
+        """Return the exact feature list used by Hungarian and result mapping."""
+        return [
+            feature for feature in features
+            if feature.get("depth_pct") is None or feature["depth_pct"] >= self.depth_thresh
+        ]
+
     def build_cost_matrix(
         self,
         anomalies_1: list[dict],
@@ -216,28 +223,6 @@ class HungarianAnomalyAlignmentEngine:
         offset_table: list[tuple[float, float]],
         offset_keys: list[float] = None
     ) -> np.ndarray:
-        # Handle hidden features and depth threshold filtering from Scenario Assessment
-        filtered_1 = []
-        for f in anomalies_1:
-            orig_type = str(f.get("originalType", "")).lower()
-            if orig_type in self.hidden_features:
-                continue
-            if f.get("depth_pct") is not None and f.get("depth_pct") < self.depth_thresh:
-                continue
-            filtered_1.append(f)
-            
-        filtered_2 = []
-        for f in anomalies_2:
-            orig_type = str(f.get("originalType", "")).lower()
-            if orig_type in self.hidden_features:
-                continue
-            if f.get("depth_pct") is not None and f.get("depth_pct") < self.depth_thresh:
-                continue
-            filtered_2.append(f)
-            
-        anomalies_1 = filtered_1
-        anomalies_2 = filtered_2
-
         n = len(anomalies_1)
         m = len(anomalies_2)
         cost = np.full((n, m), self.INF_COST, dtype=float)
@@ -324,16 +309,19 @@ class HungarianAnomalyAlignmentEngine:
         offset_table = self._build_offset_table(gw_pairs)
         offset_keys = [x[0] for x in offset_table] if offset_table else []
 
-        # Read parameters from params_json
-        params_json = {}
+        # The Node worker invokes this script with a session id only.  Its
+        # persisted params_json is therefore the authoritative configuration.
         try:
-            params_json = json.loads(sys.argv[4])
+            sess = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
         except Exception:
-            pass
+            sess = None
 
-        self.scenario_filter = params_json.get("scenario", {})
-        self.hidden_features = self.scenario_filter.get("hiddenFeatures", [])
-        self.depth_thresh = float(self.scenario_filter.get("depthThresh", 0))
+        params_json = sess.params_json if sess and sess.params_json else {}
+        self.hidden_features = [
+            name for name, is_hidden in params_json.get("hiddenFeatures", {}).items()
+            if is_hidden
+        ]
+        self.depth_thresh = float(params_json.get("depthThresh", 0) or 0)
 
         # We will map distThresh to us_gw_distance_tolerance if provided in ToleranceConfig
         tol_config = params_json.get("ToleranceConfig", {})
@@ -432,6 +420,12 @@ class HungarianAnomalyAlignmentEngine:
         # Keep only anomalies WITH depth_pct for Hungarian matcher
         anomalies_1 = [f for f in anomalies_1 if f.get("depth_pct") is not None]
         anomalies_2 = [f for f in anomalies_2 if f.get("depth_pct") is not None]
+
+        # Filter before segmenting so matrix indexes and source features always
+        # refer to the same list.  Filtering inside build_cost_matrix used to
+        # return indexes for a shorter list and could map a match to another row.
+        anomalies_1 = self._apply_scenario_filter(anomalies_1)
+        anomalies_2 = self._apply_scenario_filter(anomalies_2)
         
         print(f"      [Validation] Bypassed Anomalies (No Depth) Run1: {len(excluded_old)}", file=sys.stderr)
         print(f"      [Validation] Bypassed Anomalies (No Depth) Run2: {len(excluded_new)}", file=sys.stderr)
@@ -518,11 +512,11 @@ class HungarianAnomalyAlignmentEngine:
                     results.append(AlignmentResult(session_id=self.session_id, feature_old_id=None, feature_new_id=safe_int(f2["id"]), match_status="Only NEW"))
                     total_new += 1
 
-        # BYPASS MECHANISM: c. gwOrphans/Excluded features langsung passthrough ke output (only_old/only_new)
+        # BYPASS MECHANISM: c. gwOrphans/Excluded features langsung passthrough ke output
         for f1 in excluded_old:
-            results.append(AlignmentResult(session_id=self.session_id, feature_old_id=safe_int(f1["id"]), feature_new_id=None, match_status="Only OLD"))
+            results.append(AlignmentResult(session_id=self.session_id, feature_old_id=safe_int(f1["id"]), feature_new_id=None, match_status="Bypassed OLD"))
         for f2 in excluded_new:
-            results.append(AlignmentResult(session_id=self.session_id, feature_old_id=None, feature_new_id=safe_int(f2["id"]), match_status="Only NEW"))
+            results.append(AlignmentResult(session_id=self.session_id, feature_old_id=None, feature_new_id=safe_int(f2["id"]), match_status="Bypassed NEW"))
 
         # VALIDASI WAJIB (print sebagai log sebelum return)
         print(f"\n[VALIDATION] Total Anomaly Input OLD: {len(anomalies_1)}")
@@ -580,6 +574,8 @@ class HungarianAnomalyAlignmentEngine:
         anomaly_matched = []
         anomaly_only_old = []
         anomaly_only_new = []
+        bypassed_old = []
+        bypassed_new = []
 
         for r in results:
             row = format_row(r.feature_old_id, r.feature_new_id, r.match_status, r.odo_diff)
@@ -589,13 +585,19 @@ class HungarianAnomalyAlignmentEngine:
                 anomaly_only_old.append(row)
             elif r.match_status == "Only NEW":
                 anomaly_only_new.append(row)
+            elif r.match_status == "Bypassed OLD":
+                bypassed_old.append(row)
+            elif r.match_status == "Bypassed NEW":
+                bypassed_new.append(row)
 
         json_output = {
             "gw_locked": gw_locked,
             "gw_unmatched": gw_unmatched,
             "anomaly_matched": anomaly_matched,
             "anomaly_only_old": anomaly_only_old,
-            "anomaly_only_new": anomaly_only_new
+            "anomaly_only_new": anomaly_only_new,
+            "bypassed_old": bypassed_old,
+            "bypassed_new": bypassed_new
         }
 
         print("___RESULT_JSON_BEGIN___")

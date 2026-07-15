@@ -139,7 +139,9 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
           ...(rawData.gw_unmatched || []),
           ...(rawData.anomaly_matched || []),
           ...(rawData.anomaly_only_old || []),
-          ...(rawData.anomaly_only_new || [])
+          ...(rawData.anomaly_only_new || []),
+          ...(rawData.bypassed_old || []),
+          ...(rawData.bypassed_new || [])
        ];
     }
     // The backend keeps separate buckets for the matching phases.  The
@@ -168,6 +170,21 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   // Sections state
   const [sections, setSections] = useState<any[]>([]);
   
+  const summaryCounts = useMemo(() => {
+    if (rawData && !Array.isArray(rawData)) {
+      return {
+        gwLocked: rawData.gw_locked?.length || 0,
+        gwUnmatched: rawData.gw_unmatched?.length || 0,
+        anomalyMatched: rawData.anomaly_matched?.length || 0,
+        anomalyOnlyOld: rawData.anomaly_only_old?.length || 0,
+        anomalyOnlyNew: rawData.anomaly_only_new?.length || 0,
+        bypassedOld: rawData.bypassed_old?.length || 0,
+        bypassedNew: rawData.bypassed_new?.length || 0,
+      };
+    }
+    return null;
+  }, [rawData]);
+
   // Interventions state
   const [interventions, setInterventions] = useState<any[]>([]);
   const [run1Defect, setRun1Defect] = useState('');
@@ -450,6 +467,21 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
       }
       
       if (!typeInclude) return false;
+
+      // Radio filter for categories
+      if (radioFilter === 'GW') {
+        if (!row['Match/Unmatch']?.includes('GW') && !row['Feature Type OLD']?.toLowerCase().includes('weld') && !row['Feature Type NEW']?.toLowerCase().includes('weld')) {
+           if (!['Matched', 'Skipped', 'ONLY_OLD', 'ONLY_NEW'].includes(row['Match/Unmatch'])) return false;
+           const isGw = (row['Feature Type OLD'] || '').toLowerCase().includes('weld') || (row['Feature Type NEW'] || '').toLowerCase().includes('weld');
+           if (!isGw) return false;
+        }
+      } else if (radioFilter === 'Anomaly') {
+        if (['Bypassed OLD', 'Bypassed NEW'].includes(row['Match/Unmatch'])) return false;
+        const isGw = (row['Feature Type OLD'] || '').toLowerCase().includes('weld') || (row['Feature Type NEW'] || '').toLowerCase().includes('weld');
+        if (isGw) return false;
+      } else if (radioFilter === 'Bypassed') {
+        if (!['Bypassed OLD', 'Bypassed NEW'].includes(row['Match/Unmatch'])) return false;
+      }
       
       // Distance filter
       if (radioFilter === 'Distance') {
@@ -697,15 +729,55 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
 
       {(activeTab === 'Results' || activeTab === 'ILI Run 1' || activeTab === 'ILI Run 2' || activeTab === 'Interventions') && (
         <div className="flex flex-col h-full bg-white rounded shadow-sm border border-gray-200 overflow-hidden text-sm relative">
+          {/* Summary Dashboard Area */}
+          {summaryCounts && (
+            <div className="p-4 bg-white border-b border-gray-200 grid grid-cols-1 md:grid-cols-5 gap-4 shadow-sm z-10">
+              <div className="bg-blue-50/50 p-3 rounded-lg border border-blue-100 flex flex-col items-center justify-center text-center">
+                 <span className="text-xs font-semibold text-blue-600 uppercase tracking-wider mb-1">Total Pairs Matched</span>
+                 <span className="text-2xl font-black text-blue-800">{summaryCounts.gwLocked + summaryCounts.anomalyMatched}</span>
+                 <span className="text-[10px] text-blue-500 mt-1">({summaryCounts.gwLocked} GW + {summaryCounts.anomalyMatched} Anom)</span>
+              </div>
+              <div className="bg-gray-50/50 p-3 rounded-lg border border-gray-200 flex flex-col items-center justify-center text-center">
+                 <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Total GW Orphan</span>
+                 <span className="text-2xl font-bold text-gray-700">{summaryCounts.gwUnmatched}</span>
+              </div>
+              <div className="bg-orange-50/50 p-3 rounded-lg border border-orange-100 flex flex-col items-center justify-center text-center">
+                 <span className="text-xs font-semibold text-orange-600 uppercase tracking-wider mb-1">Only OLD (Anomaly)</span>
+                 <span className="text-2xl font-bold text-orange-800">{summaryCounts.anomalyOnlyOld}</span>
+              </div>
+              <div className="bg-emerald-50/50 p-3 rounded-lg border border-emerald-100 flex flex-col items-center justify-center text-center">
+                 <span className="text-xs font-semibold text-emerald-600 uppercase tracking-wider mb-1">Only NEW (Anomaly)</span>
+                 <span className="text-2xl font-bold text-emerald-800">{summaryCounts.anomalyOnlyNew}</span>
+              </div>
+              <div className="bg-purple-50/50 p-3 rounded-lg border border-purple-100 flex flex-col items-center justify-center text-center">
+                 <span className="text-xs font-semibold text-purple-600 uppercase tracking-wider mb-1">Bypassed Features</span>
+                 <span className="text-2xl font-bold text-purple-800">{summaryCounts.bypassedOld + summaryCounts.bypassedNew}</span>
+                 <span className="text-[10px] text-purple-500 mt-1">(Non-Anomaly / Filtered)</span>
+              </div>
+            </div>
+          )}
+
           {/* Filters Area */}
           <div className="p-4 bg-[#fffdf0] border-b border-gray-200 text-sm flex flex-row flex-wrap items-center gap-8">
             <div className="flex gap-6 items-center">
-              <label className="flex items-center gap-2 cursor-pointer">
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
                 <input type="radio" name="filter" checked={radioFilter === 'All'} onChange={() => setRadioFilter('All')} className="text-blue-500" />
                 All
               </label>
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
+                <input type="radio" name="filter" checked={radioFilter === 'GW'} onChange={() => setRadioFilter('GW')} className="text-blue-500" />
+                GWs Only
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
+                <input type="radio" name="filter" checked={radioFilter === 'Anomaly'} onChange={() => setRadioFilter('Anomaly')} className="text-blue-500" />
+                Anomalies Only
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
+                <input type="radio" name="filter" checked={radioFilter === 'Bypassed'} onChange={() => setRadioFilter('Bypassed')} className="text-blue-500" />
+                Bypassed
+              </label>
               <div className="flex items-center gap-3">
-                <label className="flex items-center gap-2 cursor-pointer">
+                <label className="flex items-center gap-2 cursor-pointer font-medium">
                   <input type="radio" name="filter" checked={radioFilter === 'Distance'} onChange={() => setRadioFilter('Distance')} className="text-blue-500" />
                   Distance
                 </label>
@@ -718,19 +790,19 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                   </div>
                 )}
               </div>
-              <label className="flex items-center gap-2 cursor-pointer">
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
                 <input type="radio" name="filter" checked={radioFilter === 'Chart'} onChange={() => setRadioFilter('Chart')} className="text-blue-500" />
                 Chart
               </label>
             </div>
-            <div className="flex gap-6 items-center">
+            <div className="flex gap-6 items-center border-l border-gray-300 pl-6">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={unmatchedOld} onChange={(e) => setUnmatchedOld(e.target.checked)} className="rounded text-blue-500" />
-                Unmatched old
+                Unmatched OLD
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={unmatchedNew} onChange={(e) => setUnmatchedNew(e.target.checked)} className="rounded text-blue-500" />
-                Unmatched new
+                Unmatched NEW
               </label>
             </div>
           </div>

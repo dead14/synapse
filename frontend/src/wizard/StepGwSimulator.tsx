@@ -16,7 +16,7 @@ interface StepGwSimulatorProps {
 }
 
 export default function StepGwSimulator({ initialOta, onNext, onBack, config }: StepGwSimulatorProps) {
-  const [ota, setOta] = useState(1.5); // Industry standard: odometer accuracy ~1-2%
+  const [ota, setOta] = useState(initialOta); // Preserve the accepted OTA when navigating back.
   const [zoom, setZoom] = useState(150);
   const [selectedGWs, setSelectedGWs] = useState<number[]>([]);
   const [selectedTrack, setSelectedTrack] = useState<'old' | 'new' | null>(null);
@@ -238,7 +238,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
     return () => {
       clearTimeout(timeout);
     };
-  }, [ota, strictPenalty, config]);
+  }, [ota, strictPenalty, useValveAnchor, config]);
 
   const unmatchedRanges = useMemo(() => {
     const ranges: any[] = [];

@@ -6,6 +6,7 @@ const socketConfig = require('../../socket');
 
 // In-memory job store to bypass Redis/BullMQ
 const localJobs = new Map();
+const resultsCache = new Map(); // sessionId -> cached result
 
 exports.uploadCsv = (req, res) => {
     const { pipelineName, surveyYear, vendor } = req.body;
@@ -486,6 +487,19 @@ exports.getIliResults = async (req, res) => {
         const resolvedSessionId = result.rows[0].id || sessionId;
         const config = result.rows[0].params_json;
         
+        // Check cache first
+        if (resultsCache.has(resolvedSessionId)) {
+            console.log("Returning cached results for session:", resolvedSessionId);
+            const jobId = `job_hungarian_cached_${Date.now()}`;
+            localJobs.set(jobId, {
+                id: jobId,
+                state: 'completed',
+                progress: 100,
+                returnvalue: { comparison: resultsCache.get(resolvedSessionId) }
+            });
+            return res.json({ jobId });
+        }
+        
         try {
             console.log("Starting run-hungarian job for session:", resolvedSessionId);
             const jobId = `job_hungarian_${Date.now()}`;
@@ -530,6 +544,9 @@ exports.getIliResults = async (req, res) => {
                                     resultData = JSON.parse(output.substring(firstBracket, lastBracket + 1));
                                 }
                             }
+                            
+                            resultsCache.set(resolvedSessionId, resultData);
+                            
                             localJobs.set(jobId, {
                                 id: jobId,
                                 state: 'completed',

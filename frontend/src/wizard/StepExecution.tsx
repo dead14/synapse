@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { FiCheckCircle, FiAlertTriangle, FiFileText, FiDownload } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
 import { getSocket } from '../utils/socket';
@@ -13,10 +13,13 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
   const [terminalLines, setTerminalLines] = useState<string[]>([]);
   const [progress, setProgress] = useState(0);
   const [showValidation, setShowValidation] = useState(false);
+  const startedRef = useRef(false);
+  const jobIdRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
     let mounted = true;
-    let currentJobId: string | null = null;
     setTerminalLines(["Connecting to Alignment Server..."]);
 
     const startAlignment = async () => {
@@ -38,7 +41,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
         const data = await res.json();
         if (data.success && data.jobId) {
           if (mounted) {
-            currentJobId = data.jobId;
+            jobIdRef.current = data.jobId;
             setTerminalLines(prev => [...prev, `Job queued successfully. Job ID: ${data.jobId}`]);
           }
         } else {
@@ -54,21 +57,21 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
     const socket = getSocket();
     
     const handleProgress = (data: any) => {
-      // if (!currentJobId || data.jobId !== currentJobId) return;
+      if (!jobIdRef.current || data.jobId !== jobIdRef.current) return;
       setTerminalLines(prev => [...prev, data.message]);
       setProgress(data.progress);
       if (data.progress === 100) setShowValidation(true);
     };
 
     const handleComplete = (data: any) => {
-      // if (!currentJobId || data.jobId !== currentJobId) return;
+      if (!jobIdRef.current || data.jobId !== jobIdRef.current) return;
       setTerminalLines(prev => [...prev, '✅ All done! Results are ready.']);
       setProgress(100);
       setShowValidation(true);
     };
 
     const handleError = (data: any) => {
-      // if (!currentJobId || data.jobId !== currentJobId) return;
+      if (!jobIdRef.current || data.jobId !== jobIdRef.current) return;
       setTerminalLines(prev => [...prev, `[ERROR] Worker failed: ${data.error}`]);
     };
 
@@ -82,7 +85,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
       socket.off('alignment_complete', handleComplete);
       socket.off('alignment_error', handleError);
     };
-  }, [config]);
+  }, [config.sessionId]);
 
   return (
     <div className="bg-white rounded-[24px] p-8 shadow-sm border border-gray-100 animate-fade-in flex flex-col gap-8">
@@ -144,8 +147,8 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
           <div className="bg-white border border-green-100 rounded-2xl p-6 shadow-sm mb-8 text-center">
             <h4 className="font-bold text-gray-800 mb-2">Alignment Process Completed Successfully</h4>
             <p className="text-sm text-gray-600">
-              The dataset has been processed by the DTW and Hungarian matching engines. 
-              You can now view the comprehensive results in the final dashboard.
+              The alignment job has completed. Open the dashboard to run and review
+              the Hungarian comparison results for this session.
             </p>
           </div>
           
