@@ -58,7 +58,16 @@ export default function PipelineRuns() {
             </h1>
             <p className="text-gray-500 mt-2">Manage your previous ILI alignment runs, view data, or initiate Fitness For Service (FFS).</p>
           </div>
-          <div className="flex gap-4">
+          <div className="flex gap-4 items-center">
+            <button 
+              onClick={() => {
+                localStorage.removeItem('synapse_alignment_wizard_progress');
+                navigate('/alignment');
+              }}
+              className="px-4 py-2 bg-[#1a2130] hover:bg-black text-white rounded-xl text-sm font-semibold transition-colors shadow-sm"
+            >
+              + New Alignment Run
+            </button>
             <button className="p-2 text-gray-400 hover:text-gray-900 bg-white border border-gray-200 rounded-full hover:bg-gray-50 transition-colors">
               <FiBell size={20} />
             </button>

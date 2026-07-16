@@ -108,7 +108,9 @@ export default function AlignmentPage() {
   const handleBack = () => {
     const previousStep = Math.max(step - 1, 0);
     setStep(previousStep);
-    if (wizardConfig.sessionId && previousStep > 0) {
+    if (previousStep === 0) {
+      localStorage.removeItem(WIZARD_PROGRESS_STORAGE_KEY);
+    } else if (wizardConfig.sessionId) {
       localStorage.setItem(WIZARD_PROGRESS_STORAGE_KEY, JSON.stringify({ sessionId: wizardConfig.sessionId, step: previousStep }));
     }
   };
@@ -130,7 +132,22 @@ export default function AlignmentPage() {
           <section className="alignment-progress" aria-label="Alignment progress">
             <div className="flex flex-col gap-4 border-b border-gray-100 pb-5 sm:flex-row sm:items-end sm:justify-between">
               <div>
-                <p className="alignment-eyebrow">Pipeline alignment</p>
+                <div className="flex items-center gap-4">
+                  <p className="alignment-eyebrow">Pipeline alignment</p>
+                  <button 
+                    onClick={() => {
+                      if (window.confirm("Are you sure you want to abandon this session and start a new run?")) {
+                        localStorage.removeItem(WIZARD_PROGRESS_STORAGE_KEY);
+                        setStep(0);
+                        setWizardConfig({});
+                      }
+                    }} 
+                    className="text-xs text-red-500 hover:text-red-700 font-semibold underline transition-colors"
+                    title="Clear current progress and start a new alignment run"
+                  >
+                    Start New Run
+                  </button>
+                </div>
                 <h1 className="mt-1 text-2xl font-semibold tracking-tight text-gray-900">{stepsList[step]?.name}</h1>
                 <p className="mt-1 text-sm text-gray-500">{stepsList[step]?.desc} · Review each decision before continuing.</p>
               </div>
