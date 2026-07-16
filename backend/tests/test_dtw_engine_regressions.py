@@ -103,6 +103,41 @@ class DtwEngineRegressionTests(unittest.TestCase):
         self.assertEqual([point["newId"] for point in trend], ["new-0", "new-12", "new-24"])
         self.assertEqual([point["offset"] for point in trend], [0.35, 0.54, 0.6])
 
+    def test_reconciliation_never_emits_the_same_gw_as_match_and_orphan(self):
+        old_gws = [
+            self.weld("old-1", 0.0),
+            self.weld("old-2", 10.0),
+        ]
+        new_gws = [
+            self.weld("new-1", 0.2),
+            self.weld("new-2", 10.2),
+        ]
+        candidates = [
+            {"oldId": "old-1", "newId": "new-1", "oldDist": 0.0, "newDist": 0.2, "status": "Match"},
+            {"oldId": None, "newId": "new-1", "oldDist": None, "newDist": 0.2, "status": "Skipped"},
+            {"oldId": None, "newId": "new-1", "oldDist": None, "newDist": 0.2, "status": "Skipped"},
+        ]
+
+        reconciled = dtw_engine.reconcile_gw_matches(candidates, old_gws, new_gws)
+
+        self.assertEqual(len(reconciled), 3)
+        self.assertEqual(sum(match.get("newId") == "new-1" for match in reconciled), 1)
+        self.assertCountEqual(
+            [(match.get("oldId"), match.get("newId")) for match in reconciled],
+            [("old-1", "new-1"), ("old-2", None), (None, "new-2")],
+        )
+
+    def test_reconciliation_restores_sources_omitted_by_partial_segments(self):
+        old_gws = [self.weld("old-outside-overlap", 100.0)]
+        new_gws = [self.weld("new-inside-overlap", 0.0)]
+
+        reconciled = dtw_engine.reconcile_gw_matches([], old_gws, new_gws)
+
+        self.assertCountEqual(
+            [(match.get("oldId"), match.get("newId")) for match in reconciled],
+            [("old-outside-overlap", None), (None, "new-inside-overlap")],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

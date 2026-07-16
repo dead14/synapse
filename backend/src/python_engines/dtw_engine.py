@@ -376,6 +376,94 @@ def linear_referencing(old_features, new_features, gw_matches):
             
     return aligned_features
 
+
+def reconcile_gw_matches(candidate_matches, old_gws, new_gws):
+    """Conserve every source GW exactly once, preferring valid matches.
+
+    Segment-based DTW can emit the same boundary from two segments or omit a
+    run tail when the opposite side has no records. Rebuilding the orphan set
+    from the authoritative source lists makes those cases deterministic.
+    """
+    def identity(feature_id, distance):
+        if feature_id is None or distance is None:
+            return None
+        return str(feature_id), round(float(distance), 6)
+
+    def build_pool(features):
+        pool = {}
+        for index, feature in enumerate(features):
+            key = identity(feature.get("id"), feature.get("dist"))
+            if key is not None:
+                pool.setdefault(key, []).append((index, feature))
+        return pool
+
+    old_pool = build_pool(old_gws)
+    new_pool = build_pool(new_gws)
+    used_old = set()
+    used_new = set()
+    reconciled = []
+
+    for candidate in candidate_matches:
+        if candidate.get("status") != "Match":
+            continue
+        old_key = identity(candidate.get("oldId"), candidate.get("oldDist"))
+        new_key = identity(candidate.get("newId"), candidate.get("newDist"))
+        old_options = old_pool.get(old_key, [])
+        new_options = new_pool.get(new_key, [])
+        old_entry = next((entry for entry in old_options if entry[0] not in used_old), None)
+        new_entry = next((entry for entry in new_options if entry[0] not in used_new), None)
+        if old_entry is None or new_entry is None:
+            continue
+
+        old_index, old_feature = old_entry
+        new_index, new_feature = new_entry
+        used_old.add(old_index)
+        used_new.add(new_index)
+        reconciled.append({
+            **candidate,
+            "oldIndex": old_index,
+            "newIndex": new_index,
+            "oldId": old_feature.get("id"),
+            "newId": new_feature.get("id"),
+            "oldDist": old_feature.get("dist"),
+            "newDist": new_feature.get("dist"),
+            "oldKey": old_feature.get("sourceKey", f"OLD:{old_index}"),
+            "newKey": new_feature.get("sourceKey", f"NEW:{new_index}"),
+            "status": "Match",
+        })
+
+    for old_index, old_feature in enumerate(old_gws):
+        if old_index in used_old:
+            continue
+        reconciled.append({
+            "oldIndex": old_index,
+            "newIndex": None,
+            "oldId": old_feature.get("id"),
+            "newId": None,
+            "oldDist": old_feature.get("dist"),
+            "newDist": None,
+            "oldKey": old_feature.get("sourceKey", f"OLD:{old_index}"),
+            "newKey": None,
+            "status": "Skipped",
+        })
+
+    for new_index, new_feature in enumerate(new_gws):
+        if new_index in used_new:
+            continue
+        reconciled.append({
+            "oldIndex": None,
+            "newIndex": new_index,
+            "oldId": None,
+            "newId": new_feature.get("id"),
+            "oldDist": None,
+            "newDist": new_feature.get("dist"),
+            "oldKey": None,
+            "newKey": new_feature.get("sourceKey", f"NEW:{new_index}"),
+            "status": "Skipped",
+        })
+
+    return reconciled
+
 def process_request(data):
     ota_threshold = data.get('ota', 1.5)
     strict_penalty = data.get('strictPenalty', False)
@@ -498,6 +586,7 @@ def process_request(data):
     else:
         gw_matches = calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty)
 
+    gw_matches = reconcile_gw_matches(gw_matches, old_gws, new_gws)
     _post_process_matches(gw_matches, ota_threshold)
     aligned_non_gw = linear_referencing(old_run, new_run, gw_matches) if apply_dtw_correction else []
 

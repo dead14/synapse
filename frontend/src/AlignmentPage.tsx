@@ -6,6 +6,7 @@ import StepAnomalyTolerances from './wizard/StepAnomalyTolerances';
 import StepExecution from './wizard/StepExecution';
 import StepUploadILI from './wizard/StepUploadILI';
 import StepTieInConfig from './wizard/StepTieInConfig';
+import StepMatchingSections from './wizard/StepMatchingSections';
 import { apiFetch, ApiError } from './utils/api';
 
 const WIZARD_PROGRESS_STORAGE_KEY = 'synapse_alignment_wizard_progress';
@@ -15,12 +16,17 @@ const baseSteps = [
   { id: 'tiein', name: 'Tie-In Config', desc: 'Offset Calc', conditional: true },
   { id: 'summary', name: 'Data Summary', desc: 'Overview' },
   { id: 'gw', name: 'GW Matching', desc: 'Simulator' },
+  { id: 'sections', name: 'Sectioning', desc: 'NEW Reference', oneDirectionOnly: true },
   { id: 'scenario', name: 'Scenario Filter', desc: 'Thresholds' },
   { id: 'anomaly', name: 'Anomaly Tolerances', desc: 'Matcher' },
   { id: 'exec', name: 'Execution', desc: 'Report Gen' },
 ];
 
-const visibleSteps = (config: any) => baseSteps.filter((item) => !item.conditional || (item.id === 'tiein' && config?.enablePartialRun));
+const visibleSteps = (config: any) => baseSteps.filter((item) => {
+  if (item.conditional && item.id === 'tiein' && !config?.enablePartialRun) return false;
+  if (item.oneDirectionOnly && config?.algorithm !== 'dtw_hungarian_onedirection') return false;
+  return true;
+});
 
 export default function AlignmentPage() {
   const [step, setStep] = useState(0); // 0 is Upload step
@@ -186,6 +192,8 @@ export default function AlignmentPage() {
           {stepsList[step]?.id === 'summary' && <StepDataSummary onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
           
           {stepsList[step]?.id === 'gw' && <StepGwSimulator initialOta={wizardConfig.ota || 1.5} onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
+
+          {stepsList[step]?.id === 'sections' && <StepMatchingSections onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 
           {stepsList[step]?.id === 'scenario' && <StepScenarioFilter onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 

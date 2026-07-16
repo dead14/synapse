@@ -63,6 +63,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         algorithm: algorithm,
         enablePartialRun: enablePartialRun
       };
+      const parsedRuns: any[] = [];
 
       if (algorithm === 'phylogenetic') {
         summaryData.ancestorRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
@@ -83,7 +84,9 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           else if (i === 1) runKey = 'run1';
           else if (i === 2) runKey = 'run2';
         } else {
-          runKey = i === masterIndex ? 'oldRun' : 'newRun';
+          // Non-phylogenetic runs are assigned after every file is parsed so
+          // additional historical uploads cannot overwrite each other.
+          runKey = '';
         }
         
         const jsonData = await readUploadedRows(ds.file);
@@ -178,7 +181,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           });
         });
 
-        summaryData[runKey] = {
+        const parsedRun = {
           name: ds.file.name,
           vendor: ds.vendor || '',
           year: ds.year || '',
@@ -186,6 +189,24 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           rawFeatures: rawFeatures,
           ...counts
         };
+        if (algorithm === 'phylogenetic') {
+          summaryData[runKey] = parsedRun;
+        } else {
+          parsedRuns[i] = parsedRun;
+        }
+      }
+
+      if (algorithm !== 'phylogenetic') {
+        const masterRun = parsedRuns[masterIndex];
+        const historicalRuns = parsedRuns
+          .filter((run, index) => run && index !== masterIndex)
+          .sort((left, right) => Number(right.year || 0) - Number(left.year || 0));
+        summaryData.masterRun = masterRun;
+        summaryData.historicalRuns = historicalRuns;
+        // Backward-compatible pair consumed by the current DTW/Hungarian
+        // engines. NEW is always the newest/master run.
+        summaryData.newRun = masterRun;
+        summaryData.oldRun = historicalRuns[0];
       }
       
       onNext({ summaryData, algorithm, enablePartialRun });

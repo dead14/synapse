@@ -22,7 +22,8 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
     if (startedRef.current) return;
     startedRef.current = true;
 
-    if (config.sessionStatus === 'completed') {
+    const configuredAlgorithm = config.algorithm || config.summaryData?.algorithm || 'dtw_hungarian';
+    if (config.sessionStatus === 'completed' && configuredAlgorithm !== 'dtw_hungarian_onedirection') {
       setTerminalLines(['Session alignment sebelumnya sudah selesai.', '✅ All done! Results are ready.']);
       setProgress(100);
       setShowValidation(true);
@@ -75,18 +76,24 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
 
         requestController = new AbortController();
         requestTimeout = setTimeout(() => requestController?.abort(), 15000);
-        const data = await apiFetch<{ success?: boolean; jobId?: string; error?: string }>('/api/run', {
-          method: 'POST',
-          signal: requestController.signal,
-          body: JSON.stringify({
-            runId: config.sessionId,
-            algorithm: 'dtw_hungarian'
-          })
-        });
+        const algorithm = config.algorithm || config.summaryData?.algorithm || 'dtw_hungarian';
+        const usesOrderedPipeline = algorithm === 'dtw_hungarian_onedirection';
+        const data = await apiFetch<{ success?: boolean; jobId?: string; error?: string }>(
+          usesOrderedPipeline
+            ? `/api/ili-results?sessionId=${encodeURIComponent(String(config.sessionId))}`
+            : '/api/run',
+          usesOrderedPipeline
+            ? { signal: requestController.signal }
+            : {
+                method: 'POST',
+                signal: requestController.signal,
+                body: JSON.stringify({ runId: config.sessionId, algorithm }),
+              },
+        );
         if (requestTimeout) clearTimeout(requestTimeout);
         requestTimeout = null;
         
-        if (data.success && data.jobId) {
+        if (data.jobId) {
           if (mounted) {
             jobIdRef.current = data.jobId;
             setTerminalLines(prev => [...prev, `Job queued successfully. Job ID: ${data.jobId}`]);
@@ -148,7 +155,7 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
       socket.off('alignment_complete', handleComplete);
       socket.off('alignment_error', handleError);
     };
-  }, [config.sessionId, config.sessionStatus]);
+  }, [config.algorithm, config.sessionId, config.sessionStatus, config.summaryData?.algorithm]);
 
   return (
     <div className="alignment-surface bg-white rounded-2xl p-6 sm:p-8 shadow-sm border border-gray-100 animate-fade-in flex flex-col gap-8">
@@ -208,8 +215,8 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
           <div className="bg-white border border-green-100 rounded-2xl p-6 shadow-sm mb-8 text-center">
             <h4 className="font-bold text-gray-800 mb-2">Alignment Process Completed Successfully</h4>
             <p className="text-sm text-gray-600">
-              The alignment job has completed. Open the dashboard to run and review
-              the Hungarian comparison results for this session.
+              GW locks, NEW-reference sections, dan ordered anomaly matching sudah
+              selesai diproses. Dashboard hanya menampilkan hasil job yang sama.
             </p>
           </div>
           

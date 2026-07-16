@@ -5,6 +5,7 @@ const {
     normalizeComparisonResult,
     summarizeComparison,
     validateDtwPayload,
+    validateMatchingSections,
 } = require('../src/modules/alignment/alignmentContract');
 
 test('normalizeComparisonResult preserves an array comparison', () => {
@@ -74,4 +75,55 @@ test('validateDtwPayload accepts bounded array datasets', () => {
         { oldRun: [{ id: 'o' }], newRun: [{ id: 'n' }] },
         { maxRecords: 2, maxCells: 4 },
     ));
+});
+
+test('validateMatchingSections accepts ordered NEW-reference boundaries', () => {
+    const locked = [
+        { old_id: 'o1', new_id: 'n1', old_odometer: 0, new_odometer: 1 },
+        { old_id: 'o2', new_id: 'n2', old_odometer: 10, new_odometer: 12 },
+    ];
+
+    assert.doesNotThrow(() => validateMatchingSections({
+        gwMatchesFinal: locked,
+        matchingSections: [{
+            id: 'main',
+            name: 'Main',
+            startGwKey: 'o1::n1::0.000000::1.000000',
+            endGwKey: 'o2::n2::10.000000::12.000000',
+            policy: 'MATCH',
+        }],
+    }));
+});
+
+test('validateMatchingSections rejects overlaps and non-locked boundaries', () => {
+    const locked = [
+        { old_id: 'o1', new_id: 'n1', old_odometer: 0, new_odometer: 1 },
+        { old_id: 'o2', new_id: 'n2', old_odometer: 10, new_odometer: 12 },
+        { old_id: 'o3', new_id: 'n3', old_odometer: 20, new_odometer: 22 },
+    ];
+
+    assert.throws(() => validateMatchingSections({
+        gwMatchesFinal: locked,
+        matchingSections: [
+            { startGwKey: 'o1::n1::0.000000::1.000000', endGwKey: 'o3::n3::20.000000::22.000000', policy: 'MATCH' },
+            { startGwKey: 'o2::n2::10.000000::12.000000', endGwKey: 'missing', policy: 'MATCH' },
+        ],
+    }), (error) => error.code === 'INVALID_MATCHING_SECTIONS');
+});
+
+test('validateMatchingSections rejects GW locks that cross between OLD and NEW', () => {
+    const locked = [
+        { old_id: 'o1', new_id: 'n1', old_odometer: 10, new_odometer: 1 },
+        { old_id: 'o2', new_id: 'n2', old_odometer: 5, new_odometer: 12 },
+    ];
+
+    assert.throws(() => validateMatchingSections({
+        gwMatchesFinal: locked,
+        matchingSections: [{
+            name: 'Main',
+            startGwKey: 'o1::n1::10.000000::1.000000',
+            endGwKey: 'o2::n2::5.000000::12.000000',
+            policy: 'MATCH',
+        }],
+    }), /increase strictly/i);
 });

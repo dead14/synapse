@@ -18,6 +18,7 @@ const {
     normalizeComparisonResult,
     summarizeComparison,
     validateDtwPayload,
+    validateMatchingSections,
 } = require('./alignmentContract');
 const { OwnedJobStore } = require('./ownedJobStore');
 
@@ -480,6 +481,14 @@ exports.saveWizardState = async (req, res) => {
         return res.status(400).json({ error: 'Config object is required' });
     }
     try {
+        validateMatchingSections(config);
+    } catch (err) {
+        return res.status(422).json({
+            error: err.message,
+            code: err.code || 'INVALID_MATCHING_SECTIONS',
+        });
+    }
+    try {
         if (sessionId) {
             const parsedSessionId = parsePositiveId(sessionId);
             if (!parsedSessionId) return res.status(400).json({ error: 'Invalid session ID' });
@@ -490,6 +499,10 @@ exports.saveWizardState = async (req, res) => {
                 config,
             );
             if (!updated) return res.status(404).json({ error: 'Session not found' });
+            // GW alignment and Hungarian tolerances are part of this config.
+            // A saved change must force a fresh Hungarian run rather than
+            // returning the previous comparison for the same session.
+            resultsCache.delete(parsedSessionId);
             res.json({ success: true, sessionId: parsedSessionId });
         } else {
             const created = await createOwnedSession(pool, config, req.user);

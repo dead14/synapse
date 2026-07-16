@@ -272,7 +272,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
     if (data && data.length > 0) {
       const keys = Object.keys(data[0]).filter(k => k !== 'Match/Unmatch' && k !== '__resultGroup');
       // Add computed columns at the end
-      keys.push('CR mm/yr', 'Lateral Growth');
+      keys.push('Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning');
       return ['Section', ...keys];
     }
     return ['Section'];
@@ -285,8 +285,11 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
         const urlParams = new URLSearchParams(window.location.search);
         const sessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
         if (sessionId) {
-          const sessData = await apiFetch<{ config?: { sections?: any[] } }>(`/api/wizard/session/${encodeURIComponent(sessionId)}`);
-          if (sessData.config?.sections) setSections(sessData.config.sections);
+          const sessData = await apiFetch<{ config?: { sections?: any[]; matchingSections?: any[] } }>(`/api/wizard/session/${encodeURIComponent(sessionId)}`);
+          const configuredSections = sessData.config?.matchingSections?.length
+            ? sessData.config.matchingSections
+            : sessData.config?.sections;
+          if (configuredSections) setSections(configuredSections);
         }
       } catch (err) {
         console.error("Failed to fetch sections:", err);
@@ -308,7 +311,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
         'Length OLD (mm)', 'Length NEW (mm)',
         'Width OLD (mm)', 'Width NEW (mm)',
         "O'Clock OLD", "O'Clock NEW",
-        'CR mm/yr', 'Lateral Growth'
+        'Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning'
       ];
       // Only include columns that actually exist in allColumns to be safe
       setVisibleColumns(defaultCols.filter(col => allColumns.includes(col)));
@@ -356,7 +359,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
       'Length OLD (mm)', 'Length NEW (mm)',
       'Width OLD (mm)', 'Width NEW (mm)',
       "O'Clock OLD", "O'Clock NEW",
-      'CR mm/yr', 'Lateral Growth'
+      'Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning'
     ];
     setVisibleColumns(defaultCols.filter(col => allColumns.includes(col)));
     setColWidths({});
@@ -384,19 +387,30 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
     return (data || []).map((row: any, idx: number) => {
       const d1 = parseFloat(row['Depth OLD (%WT)']);
       const d2 = parseFloat(row['Depth NEW (%WT)']);
-      const cr = (!isNaN(d1) && !isNaN(d2)) ? ((d2 - d1) / 5).toFixed(2) : '-';
+      const oldYear = Number(row['Run Year OLD']);
+      const newYear = Number(row['Run Year NEW']);
+      const yearSpan = Number.isFinite(oldYear) && Number.isFinite(newYear) && newYear > oldYear
+        ? newYear - oldYear
+        : null;
+      const depthGrowth = row['Depth Growth (%WT/yr)'] ?? (
+        yearSpan && !isNaN(d1) && !isNaN(d2) ? ((d2 - d1) / yearSpan).toFixed(3) : '-'
+      );
       
       const l1 = parseFloat(row['Length OLD (mm)']);
       const l2 = parseFloat(row['Length NEW (mm)']);
-      const latGrowth = (!isNaN(l1) && !isNaN(l2)) ? ((l2 - l1) / 5).toFixed(2) : '-';
+      const lengthGrowth = row['Length Growth (mm/yr)'] ?? (
+        yearSpan && !isNaN(l1) && !isNaN(l2) ? ((l2 - l1) / yearSpan).toFixed(3) : '-'
+      );
 
-      // Find section for this row (using Log Dist OLD as reference)
-      const dist = parseFloat(row['Log Dist OLD (m)']);
+      // NEW is the current/reference run for corrosion-growth analysis.
+      const dist = parseFloat(row['Log Dist NEW (m)']);
       let sectionName = '-';
       if (!isNaN(dist) && sections && sections.length > 0) {
          const matchingSec = sections.find(s => {
-            const min = Math.min(s.startM, s.endM);
-            const max = Math.max(s.startM, s.endM);
+            const start = Number(s.newStartM ?? s.startM);
+            const end = Number(s.newEndM ?? s.endM);
+            const min = Math.min(start, end);
+            const max = Math.max(start, end);
             return dist >= min && dist <= max;
          });
          if (matchingSec) {
@@ -406,8 +420,8 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
 
       return {
         ...row,
-        'CR mm/yr': cr,
-        'Lateral Growth': latGrowth,
+        'Depth Growth (%WT/yr)': depthGrowth,
+        'Length Growth (mm/yr)': lengthGrowth,
         'Section': sectionName,
         __origIdx: idx
       };
@@ -924,7 +938,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                                 }
                                 const isNewDataCol = col.includes('NEW');
                                 // Only format computed columns; leave raw data values untouched
-                                if ((col === 'CR mm/yr' || col === 'Lateral Growth') && val !== '-' && val != null && !isNaN(parseFloat(String(val)))) {
+                                if ((col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)') && val !== '-' && val != null && !isNaN(parseFloat(String(val)))) {
                                   val = parseFloat(String(val)).toFixed(3);
                                 }
                                 // Convert O'Clock Excel time serial fractions to HH:MM
@@ -934,7 +948,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                                 return (
                                   <td 
                                     key={j} 
-                                    className={`px-2 border-r border-gray-100 whitespace-nowrap overflow-hidden text-ellipsis ${col === 'CR mm/yr' || col === 'Lateral Growth' ? 'font-bold text-blue-600' : ''} ${activeTab === 'Interventions' && isNewDataCol ? 'cursor-grab active:cursor-grabbing hover:bg-blue-50/80' : ''}`}
+                                    className={`px-2 border-r border-gray-100 whitespace-nowrap overflow-hidden text-ellipsis ${col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)' ? 'font-bold text-blue-600' : ''} ${activeTab === 'Interventions' && isNewDataCol ? 'cursor-grab active:cursor-grabbing hover:bg-blue-50/80' : ''}`}
                                     draggable={activeTab === 'Interventions' && isNewDataCol && val !== '-' && val !== null && val !== undefined}
                                     onDragStart={(e) => {
                                       if (activeTab === 'Interventions' && isNewDataCol) {

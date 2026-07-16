@@ -3,8 +3,18 @@ import json
 import pandas as pd
 import numpy as np
 import bisect
-from scipy.optimize import linear_sum_assignment
+from dataclasses import dataclass
 from models import SessionLocal, ILIFeature, AlignmentResult, AlignmentSession
+
+
+@dataclass(frozen=True)
+class SectionCompilation:
+    sections: list[dict]
+    errors: list[str]
+
+    @property
+    def is_valid(self) -> bool:
+        return not self.errors
 
 def safe_int(val):
     try:
@@ -25,6 +35,191 @@ class HungarianAnomalyAlignmentEngine:
     """
 
     INF_COST = 1e9
+
+    @staticmethod
+    def _read_us_gw_distance(feature: dict):
+        aliases = (
+            "dist_to_us_gw_m",
+            "distance_to_us_gw_m",
+            "Dist. to U/S GW (m)",
+            "Distance to U/S GW (m)",
+            "U/S GW Distance (m)",
+            "US GW Distance (m)",
+        )
+        for key in aliases:
+            value = feature.get(key)
+            if value is None or str(value).strip() == "":
+                continue
+            try:
+                return float(str(value).replace(",", ""))
+            except (TypeError, ValueError):
+                continue
+
+        for key, value in feature.items():
+            normalized = "".join(
+                character.lower() if character.isalnum() else " "
+                for character in str(key)
+            )
+            tokens = normalized.split()
+            has_upstream = "upstream" in tokens or (
+                "u" in tokens and "s" in tokens
+            ) or "us" in tokens
+            if "gw" not in tokens or not has_upstream or not any(
+                token.startswith("dist") for token in tokens
+            ):
+                continue
+            try:
+                return float(str(value).replace(",", ""))
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @classmethod
+    def solve_monotonic_assignment(cls, cost_matrix: np.ndarray) -> list[tuple[int, int]]:
+        """Return the maximum-cardinality, minimum-cost ordered assignment.
+
+        Rows are historical/OLD anomalies and columns are current/NEW anomalies.
+        A valid result must increase on both axes, so the selected identity path
+        can never cross or move backwards along the pipe.
+        """
+        rows, columns = cost_matrix.shape
+        match_count = np.zeros((rows + 1, columns + 1), dtype=np.int32)
+        total_cost = np.zeros((rows + 1, columns + 1), dtype=float)
+        action = np.zeros((rows + 1, columns + 1), dtype=np.int8)
+
+        for old_index in range(1, rows + 1):
+            action[old_index, 0] = 1  # skip OLD
+        for new_index in range(1, columns + 1):
+            action[0, new_index] = 2  # skip NEW
+
+        for old_index in range(1, rows + 1):
+            for new_index in range(1, columns + 1):
+                candidates = [
+                    (
+                        int(match_count[old_index - 1, new_index]),
+                        float(total_cost[old_index - 1, new_index]),
+                        1,
+                    ),
+                    (
+                        int(match_count[old_index, new_index - 1]),
+                        float(total_cost[old_index, new_index - 1]),
+                        2,
+                    ),
+                ]
+                pair_cost = float(cost_matrix[old_index - 1, new_index - 1])
+                if np.isfinite(pair_cost) and pair_cost < cls.INF_COST:
+                    candidates.append((
+                        int(match_count[old_index - 1, new_index - 1]) + 1,
+                        float(total_cost[old_index - 1, new_index - 1]) + pair_cost,
+                        3,
+                    ))
+
+                # Match count is the primary objective. Cost breaks ties, and a
+                # real match wins exact ties so the result is deterministic.
+                best = max(candidates, key=lambda item: (item[0], -item[1], item[2]))
+                match_count[old_index, new_index] = best[0]
+                total_cost[old_index, new_index] = best[1]
+                action[old_index, new_index] = best[2]
+
+        pairs: list[tuple[int, int]] = []
+        old_index, new_index = rows, columns
+        while old_index > 0 or new_index > 0:
+            selected_action = int(action[old_index, new_index])
+            if selected_action == 3:
+                pairs.append((old_index - 1, new_index - 1))
+                old_index -= 1
+                new_index -= 1
+            elif selected_action == 1:
+                old_index -= 1
+            elif selected_action == 2:
+                new_index -= 1
+            else:
+                break
+
+        pairs.reverse()
+        return pairs
+
+    @staticmethod
+    def _gw_pair_key(pair: dict) -> str:
+        old_id = pair.get("old_id", pair.get("oldId"))
+        new_id = pair.get("new_id", pair.get("newId"))
+        old_distance = pair.get("old_odometer", pair.get("oldVal", pair.get("oldDist")))
+        new_distance = pair.get("new_odometer", pair.get("newVal", pair.get("newDist")))
+        return f"{old_id}::{new_id}::{float(old_distance):.6f}::{float(new_distance):.6f}"
+
+    @classmethod
+    def compile_sections(cls, raw_sections: list[dict], locked_gw_pairs: list[dict]) -> SectionCompilation:
+        if not raw_sections:
+            return SectionCompilation([], [])
+
+        locked_by_key = {
+            cls._gw_pair_key(pair): (index, pair)
+            for index, pair in enumerate(locked_gw_pairs)
+        }
+        compiled = []
+        errors = []
+        valid_policies = {"MATCH", "BYPASS", "REVIEW"}
+
+        for previous, current in zip(locked_gw_pairs, locked_gw_pairs[1:]):
+            if (
+                float(current["new_odometer"]) <= float(previous["new_odometer"])
+                or float(current["old_odometer"]) <= float(previous["old_odometer"])
+            ):
+                errors.append("Locked GW pairs must increase strictly on both OLD and NEW")
+                break
+
+        for section_index, section in enumerate(raw_sections):
+            label = str(section.get("name") or section.get("id") or f"Section {section_index + 1}")
+            start_entry = locked_by_key.get(str(section.get("startGwKey", "")))
+            end_entry = locked_by_key.get(str(section.get("endGwKey", "")))
+            if not start_entry or not end_entry:
+                errors.append(f"{label}: section boundary must use locked GW pairs")
+                continue
+
+            start_index, start_pair = start_entry
+            end_index, end_pair = end_entry
+            if start_index >= end_index:
+                errors.append(f"{label}: end GW must be downstream of start GW on NEW")
+                continue
+
+            policy = str(section.get("policy", "MATCH")).upper()
+            if policy not in valid_policies:
+                errors.append(f"{label}: unsupported section policy {policy}")
+                continue
+
+            tolerances = section.get("tolerances")
+            if tolerances is not None:
+                if not isinstance(tolerances, dict):
+                    errors.append(f"{label}: tolerances must be an object")
+                    continue
+                try:
+                    if any(float(value) < 0 for value in tolerances.values()):
+                        errors.append(f"{label}: tolerances must be non-negative")
+                        continue
+                except (TypeError, ValueError):
+                    errors.append(f"{label}: tolerances must contain numeric values")
+                    continue
+
+            compiled.append({
+                **section,
+                "id": str(section.get("id") or f"section-{section_index + 1}"),
+                "name": label,
+                "policy": policy,
+                "reference_run": "NEW",
+                "start_index": start_index,
+                "end_index": end_index,
+                "old_start": float(start_pair["old_odometer"]),
+                "old_end": float(end_pair["old_odometer"]),
+                "new_start": float(start_pair["new_odometer"]),
+                "new_end": float(end_pair["new_odometer"]),
+            })
+
+        compiled.sort(key=lambda item: (item["start_index"], item["end_index"]))
+        for previous, current in zip(compiled, compiled[1:]):
+            if current["start_index"] < previous["end_index"]:
+                errors.append(f"{current['name']}: section boundaries overlap {previous['name']}")
+
+        return SectionCompilation(compiled, errors)
 
     def __init__(
         self,
@@ -65,6 +260,24 @@ class HungarianAnomalyAlignmentEngine:
         if an is None or ao is None: return None
         d = abs(an - ao)
         return min(d, 360 - d)
+
+    @staticmethod
+    def _physics_warnings(old_feature, new_feature):
+        if not old_feature or not new_feature:
+            return []
+        old_depth = old_feature.get("depth_pct")
+        new_depth = new_feature.get("depth_pct")
+        if old_depth is None or new_depth is None:
+            return []
+        delta = float(new_depth) - float(old_depth)
+        if delta >= 0:
+            return []
+        return [{
+            "code": "DEPTH_DECREASE",
+            "severity": "REVIEW",
+            "deltaPctWt": round(delta, 6),
+            "message": "NEW depth is lower than OLD; review tool tolerance, repair, or identity.",
+        }]
 
     def fetch_data(self, is_old_run: bool) -> list[dict]:
         try:
@@ -113,11 +326,7 @@ class HungarianAnomalyAlignmentEngine:
                 except:
                     width = None
                     
-                dist_gw = f.get("dist_to_us_gw_m")
-                try:
-                    dist_gw = float(dist_gw) if str(dist_gw).strip() else None
-                except:
-                    dist_gw = None
+                dist_gw = self._read_us_gw_distance(f)
                     
                 # Prefer the pre-converted 'clock' field from the frontend upload,
                 # fall back to raw column values, and convert Excel time serials.
@@ -250,10 +459,67 @@ class HungarianAnomalyAlignmentEngine:
 
     def _apply_scenario_filter(self, features: list[dict]) -> list[dict]:
         """Return the exact feature list used by Hungarian and result mapping."""
-        return [
-            feature for feature in features
-            if feature.get("depth_pct") is None or feature["depth_pct"] >= self.depth_thresh
-        ]
+        eligible, _filtered = self._partition_scenario_features(features)
+        return eligible
+
+    def _partition_scenario_features(self, features: list[dict]):
+        """Partition scenario input so filtered records remain auditable."""
+        eligible = []
+        filtered = []
+        for feature in features:
+            if feature.get("depth_pct") is None or feature["depth_pct"] >= self.depth_thresh:
+                eligible.append(feature)
+            else:
+                filtered.append(feature)
+        return eligible, filtered
+
+    @staticmethod
+    def _ensure_source_keys(features: list[dict], run_label: str) -> None:
+        for index, feature in enumerate(features):
+            if feature.get("source_key"):
+                continue
+            raw = feature.get("raw", {})
+            supplied_key = raw.get("source_key") or raw.get("sourceRowKey")
+            if supplied_key:
+                feature["source_key"] = str(supplied_key)
+                continue
+            distance = float(feature.get("abs_distance_m", 0.0))
+            feature["source_key"] = (
+                f"{run_label}:{index}:{feature.get('id', '')}:{distance:.6f}"
+            )
+
+    @staticmethod
+    def _build_conservation_audit(old_features, new_features, output_rows):
+        def audit_side(features, column):
+            expected = [str(feature["source_key"]) for feature in features]
+            actual = [
+                str(row[column])
+                for row in output_rows
+                if row.get(column) not in (None, "", "-")
+            ]
+            counts = {}
+            for key in actual:
+                counts[key] = counts.get(key, 0) + 1
+            expected_set = set(expected)
+            return {
+                "inputCount": len(expected),
+                "outputReferences": len(actual),
+                "missingKeys": sorted(expected_set - set(actual)),
+                "duplicateKeys": sorted(
+                    key for key, count in counts.items()
+                    if count > 1 and key in expected_set
+                ),
+                "unknownKeys": sorted(set(actual) - expected_set),
+            }
+
+        old_audit = audit_side(old_features, "Source Key OLD")
+        new_audit = audit_side(new_features, "Source Key NEW")
+        is_conserved = all(
+            not side[problem]
+            for side in (old_audit, new_audit)
+            for problem in ("missingKeys", "duplicateKeys", "unknownKeys")
+        )
+        return {"isConserved": is_conserved, "old": old_audit, "new": new_audit}
 
     @staticmethod
     def _is_matchable_anomaly(feature: dict) -> bool:
@@ -290,7 +556,8 @@ class HungarianAnomalyAlignmentEngine:
         anomalies_1: list[dict],
         anomalies_2: list[dict],
         offset_table: list[tuple[float, float]],
-        offset_keys: list[float] = None
+        offset_keys: list[float] = None,
+        tolerance_overrides: dict | None = None,
     ) -> np.ndarray:
         n = len(anomalies_1)
         m = len(anomalies_2)
@@ -302,6 +569,16 @@ class HungarianAnomalyAlignmentEngine:
         w_depth = 1.5
         w_length = 1.0
         w_width = 0.5
+        overrides = tolerance_overrides or {}
+        clock_tolerance = float(overrides.get("clock_tolerance", self.clock_tolerance))
+        us_distance_tolerance = float(overrides.get(
+            "us_gw_distance_tolerance", self.us_gw_distance_tolerance
+        ))
+        ds_distance_tolerance = float(overrides.get(
+            "ds_gw_distance_tolerance", self.ds_gw_distance_tolerance
+        ))
+        depth_tolerance = float(overrides.get("depth_tolerance", self.depth_tolerance))
+        length_tolerance = float(overrides.get("length_tolerance", self.length_tolerance))
 
         for i, f1 in enumerate(anomalies_1):
             corrected_dist = f1["abs_distance_m"] + self._interpolate_offset(
@@ -311,9 +588,9 @@ class HungarianAnomalyAlignmentEngine:
                 signed_distance = f2["abs_distance_m"] - corrected_dist
                 diff = abs(signed_distance)
                 distance_tolerance = (
-                    self.ds_gw_distance_tolerance
+                    ds_distance_tolerance
                     if signed_distance >= 0
-                    else self.us_gw_distance_tolerance
+                    else us_distance_tolerance
                 )
                 # Keep the historical base tolerance as a floor.  The UI values
                 # refine the directional tolerance but must not make an existing
@@ -325,15 +602,22 @@ class HungarianAnomalyAlignmentEngine:
                     # 1. GW Penalty
                     gw1 = f1.get("dist_to_us_gw_m")
                     gw2 = f2.get("dist_to_us_gw_m")
+                    if getattr(self, "require_us_gw_distance", False) and (gw1 is None or gw2 is None):
+                        continue
                     if gw1 is not None and gw2 is not None:
-                        base_cost += w_gw * (min(abs(gw1 - gw2), 2.0) / 2.0)
+                        gw_distance_difference = abs(gw1 - gw2)
+                        if gw_distance_difference > us_distance_tolerance:
+                            continue
+                        base_cost += w_gw * (
+                            gw_distance_difference / max(us_distance_tolerance, 0.001)
+                        )
                         
                     # 2. Clock Penalty
                     cd = self._clock_diff(f1.get("clock_position"), f2.get("clock_position"))
                     if cd is not None:
-                        if cd > self.clock_tolerance:
+                        if cd > clock_tolerance:
                             continue # Strict gating
-                        base_cost += w_clock * (cd / self.clock_tolerance)
+                        base_cost += w_clock * (cd / max(clock_tolerance, 1.0))
                         
                     # 3. Depth Penalty
                     d1, d2 = f1.get("depth_pct"), f2.get("depth_pct")
@@ -343,13 +627,13 @@ class HungarianAnomalyAlignmentEngine:
                         # the scenario depth threshold has already removed
                         # shallow defects before segmentation.  A second hard
                         # cutoff here incorrectly splits otherwise valid pairs.
-                        base_cost += w_depth * (depth_difference / max(self.depth_tolerance, 1.0))
+                        base_cost += w_depth * (depth_difference / max(depth_tolerance, 1.0))
                         
                     # 4. Length Penalty
                     l1, l2 = f1.get("length_mm"), f2.get("length_mm")
                     if l1 is not None and l2 is not None:
                         length_difference = abs(l1 - l2)
-                        base_cost += w_length * (length_difference / max(self.length_tolerance, 1.0))
+                        base_cost += w_length * (length_difference / max(length_tolerance, 1.0))
                         
                     # 5. Width Penalty
                     wid1, wid2 = f1.get("width_mm"), f2.get("width_mm")
@@ -369,6 +653,9 @@ class HungarianAnomalyAlignmentEngine:
         anomalies_1_all = self.fetch_data(is_old_run=True)
         anomalies_2_all = self.fetch_data(is_old_run=False)
 
+        self._ensure_source_keys(anomalies_1_all, "OLD")
+        self._ensure_source_keys(anomalies_2_all, "NEW")
+
         if not anomalies_1_all or not anomalies_2_all:
             print("[ERROR] Dataset kosong, abort.")
             return []
@@ -386,6 +673,9 @@ class HungarianAnomalyAlignmentEngine:
             sess = None
 
         params_json = sess.params_json if sess and sess.params_json else {}
+        self.require_us_gw_distance = (
+            params_json.get("algorithm") == "dtw_hungarian_onedirection"
+        )
         self.hidden_features = [
             name for name, is_hidden in params_json.get("hiddenFeatures", {}).items()
             if is_hidden
@@ -444,6 +734,18 @@ class HungarianAnomalyAlignmentEngine:
         except Exception as e:
             print(f"[ERROR] Legacy fallback failed: {e}", file=sys.stderr)
 
+        locked_gw_pairs = sorted(
+            gw_matches_final,
+            key=lambda pair: float(pair.get("new_odometer", 0.0)),
+        )
+        compiled_sections = self.compile_sections(
+            params_json.get("matchingSections", []),
+            locked_gw_pairs,
+        )
+        if not compiled_sections.is_valid:
+            raise ValueError("Invalid matching sections: " + "; ".join(compiled_sections.errors))
+        has_explicit_sections = bool(params_json.get("matchingSections"))
+
         # Extract locked IDs from gwMatchesFinal ONLY
         locked_run1_str = {str(p["old_id"]) for p in gw_matches_final if p.get("old_id")}
         locked_run2_str = {str(p["new_id"]) for p in gw_matches_final if p.get("new_id")}
@@ -480,8 +782,8 @@ class HungarianAnomalyAlignmentEngine:
         # Filter before segmenting so matrix indexes and source features always
         # refer to the same list.  Filtering inside build_cost_matrix used to
         # return indexes for a shorter list and could map a match to another row.
-        anomalies_1 = self._apply_scenario_filter(anomalies_1)
-        anomalies_2 = self._apply_scenario_filter(anomalies_2)
+        anomalies_1, filtered_old = self._partition_scenario_features(anomalies_1)
+        anomalies_2, filtered_new = self._partition_scenario_features(anomalies_2)
         
         print(f"      [Validation] Bypassed Anomalies (No Depth) Run1: {len(excluded_old)}", file=sys.stderr)
         print(f"      [Validation] Bypassed Anomalies (No Depth) Run2: {len(excluded_new)}", file=sys.stderr)
@@ -530,7 +832,22 @@ class HungarianAnomalyAlignmentEngine:
             seg_anomalies_1 = segments_1[seg_id]
             seg_anomalies_2 = segments_2[seg_id]
 
+            section = next((
+                item for item in compiled_sections.sections
+                if item["start_index"] < seg_id <= item["end_index"]
+            ), None)
+            section_policy = section["policy"] if section else (
+                "UNSECTIONED" if has_explicit_sections else "MATCH"
+            )
+
             if not seg_anomalies_1 and not seg_anomalies_2:
+                continue
+
+            if section_policy != "MATCH":
+                for f1 in seg_anomalies_1:
+                    append_result(f1, None, "Bypassed OLD")
+                for f2 in seg_anomalies_2:
+                    append_result(None, f2, "Bypassed NEW")
                 continue
                 
             if not seg_anomalies_1:
@@ -545,13 +862,19 @@ class HungarianAnomalyAlignmentEngine:
                     total_missing += 1
                 continue
 
-            cost_matrix = self.build_cost_matrix(seg_anomalies_1, seg_anomalies_2, offset_table, offset_keys)
-            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            cost_matrix = self.build_cost_matrix(
+                seg_anomalies_1,
+                seg_anomalies_2,
+                offset_table,
+                offset_keys,
+                section.get("tolerances") if section else None,
+            )
+            ordered_pairs = self.solve_monotonic_assignment(cost_matrix)
 
             matched_1 = set()
             matched_2 = set()
 
-            for i, j in zip(row_ind, col_ind):
+            for i, j in ordered_pairs:
                 # THRESHOLD GATE: Buang pasangan yang cost == INF_COST
                 if cost_matrix[i][j] >= self.INF_COST:
                     continue
@@ -581,6 +904,10 @@ class HungarianAnomalyAlignmentEngine:
             append_result(f1, None, "Bypassed OLD")
         for f2 in excluded_new:
             append_result(None, f2, "Bypassed NEW")
+        for f1 in filtered_old:
+            append_result(f1, None, "Filtered OLD")
+        for f2 in filtered_new:
+            append_result(None, f2, "Filtered NEW")
 
         # VALIDASI WAJIB (print sebagai log sebelum return)
         print(f"\n[VALIDATION] Total Anomaly Input OLD: {len(anomalies_1)}")
@@ -606,6 +933,15 @@ class HungarianAnomalyAlignmentEngine:
         def format_row(old_id_val, new_id_val, status, result_group, odo_diff=None, old_feature=None, new_feature=None, old_odometer=None, new_odometer=None):
             f1 = old_feature or find_feature(anomalies_1_all, old_id_val, old_odometer)
             f2 = new_feature or find_feature(anomalies_2_all, new_id_val, new_odometer)
+            physics_warnings = self._physics_warnings(f1, f2)
+            year_span = self.run_2_year - self.run_1_year
+            depth_growth = None
+            length_growth = None
+            if year_span > 0 and f1 and f2:
+                if f1.get("depth_pct") is not None and f2.get("depth_pct") is not None:
+                    depth_growth = (float(f2["depth_pct"]) - float(f1["depth_pct"])) / year_span
+                if f1.get("length_mm") is not None and f2.get("length_mm") is not None:
+                    length_growth = (float(f2["length_mm"]) - float(f1["length_mm"])) / year_span
             return {
                 "session_id": self.session_id,
                 "feature_old_id": safe_int(old_id_val) if old_id_val else None,
@@ -613,6 +949,14 @@ class HungarianAnomalyAlignmentEngine:
                 "match_status": status,
                 "Match/Unmatch": status,
                 "Result Group": result_group,
+                "Run Year OLD": self.run_1_year,
+                "Run Year NEW": self.run_2_year,
+                "Physics Warning": ", ".join(warning["code"] for warning in physics_warnings) or "-",
+                "physics_warnings": physics_warnings,
+                "Depth Growth (%WT/yr)": depth_growth if depth_growth is not None else "-",
+                "Length Growth (mm/yr)": length_growth if length_growth is not None else "-",
+                "Source Key OLD": f1.get("source_key") if f1 else "-",
+                "Source Key NEW": f2.get("source_key") if f2 else "-",
                 "odo_diff": odo_diff,
                 "Identif. OLD": f1.get("id") if f1 else "-",
                 "Identif. NEW": f2.get("id") if f2 else "-",
@@ -652,10 +996,17 @@ class HungarianAnomalyAlignmentEngine:
         anomaly_only_new = []
         bypassed_old = []
         bypassed_new = []
+        filtered_old_rows = []
+        filtered_new_rows = []
 
         for r in results:
             f1, f2 = result_features[id(r)]
-            result_group = "BYPASSED" if r.match_status.startswith("Bypassed") else "ANOMALY"
+            if r.match_status.startswith("Bypassed"):
+                result_group = "BYPASSED"
+            elif r.match_status.startswith("Filtered"):
+                result_group = "FILTERED"
+            else:
+                result_group = "ANOMALY"
             row = format_row(
                 r.feature_old_id, r.feature_new_id, r.match_status, result_group, r.odo_diff,
                 old_feature=f1, new_feature=f2
@@ -670,7 +1021,22 @@ class HungarianAnomalyAlignmentEngine:
                 bypassed_old.append(row)
             elif r.match_status == "Bypassed NEW":
                 bypassed_new.append(row)
+            elif r.match_status == "Filtered OLD":
+                filtered_old_rows.append(row)
+            elif r.match_status == "Filtered NEW":
+                filtered_new_rows.append(row)
 
+        output_rows = [
+            *gw_locked,
+            *gw_unmatched,
+            *anomaly_matched,
+            *anomaly_only_old,
+            *anomaly_only_new,
+            *bypassed_old,
+            *bypassed_new,
+            *filtered_old_rows,
+            *filtered_new_rows,
+        ]
         json_output = {
             "gw_locked": gw_locked,
             "gw_unmatched": gw_unmatched,
@@ -678,7 +1044,14 @@ class HungarianAnomalyAlignmentEngine:
             "anomaly_only_old": anomaly_only_old,
             "anomaly_only_new": anomaly_only_new,
             "bypassed_old": bypassed_old,
-            "bypassed_new": bypassed_new
+            "bypassed_new": bypassed_new,
+            "filtered_old": filtered_old_rows,
+            "filtered_new": filtered_new_rows,
+            "audit": self._build_conservation_audit(
+                anomalies_1_all,
+                anomalies_2_all,
+                output_rows,
+            ),
         }
 
         print("___RESULT_JSON_BEGIN___")
