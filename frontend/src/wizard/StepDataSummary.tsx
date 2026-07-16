@@ -8,8 +8,8 @@ interface StepDataSummaryProps {
 
 export default function StepDataSummary({ onNext, onBack, config }: StepDataSummaryProps) {
   const dataSummary = config?.summaryData || {
-    newRun: { name: 'Waiting for data...', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 },
-    oldRun: { name: 'Waiting for data...', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 }
+    newRun: { name: 'Waiting for data...', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0, gwAnchors: 0, invalidAnchorDistances: 0 },
+    oldRun: { name: 'Waiting for data...', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0, gwAnchors: 0, invalidAnchorDistances: 0 }
   };
 
   return (
@@ -44,6 +44,8 @@ export default function StepDataSummary({ onNext, onBack, config }: StepDataSumm
               <div className="flex justify-between"><span className="text-gray-500">Metal Loss</span><span className="font-semibold">{dataSummary.newRun.anomalies}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Welds</span><span className="font-semibold">{dataSummary.newRun.welds}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Valves & Tees</span><span className="font-semibold">{dataSummary.newRun.valves + dataSummary.newRun.tees}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">GW Anchors</span><span className="font-semibold">{dataSummary.newRun.gwAnchors ?? 0}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Invalid GW distance</span><span className={`font-semibold ${(dataSummary.newRun.invalidAnchorDistances ?? 0) > 0 ? 'text-amber-600' : ''}`}>{dataSummary.newRun.invalidAnchorDistances ?? 0}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Offtakes</span><span className="font-semibold">{dataSummary.newRun.offtakes}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Bends</span><span className="font-semibold">{dataSummary.newRun.bends}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Others</span><span className="font-semibold">{dataSummary.newRun.others}</span></div>
@@ -68,6 +70,8 @@ export default function StepDataSummary({ onNext, onBack, config }: StepDataSumm
               <div className="flex justify-between"><span className="text-gray-500">Metal Loss</span><span className="font-semibold">{dataSummary.oldRun.anomalies}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Welds</span><span className="font-semibold">{dataSummary.oldRun.welds}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Valves & Tees</span><span className="font-semibold">{dataSummary.oldRun.valves + dataSummary.oldRun.tees}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">GW Anchors</span><span className="font-semibold">{dataSummary.oldRun.gwAnchors ?? 0}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Invalid GW distance</span><span className={`font-semibold ${(dataSummary.oldRun.invalidAnchorDistances ?? 0) > 0 ? 'text-amber-600' : ''}`}>{dataSummary.oldRun.invalidAnchorDistances ?? 0}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Offtakes</span><span className="font-semibold">{dataSummary.oldRun.offtakes}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Bends</span><span className="font-semibold">{dataSummary.oldRun.bends}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Others</span><span className="font-semibold">{dataSummary.oldRun.others}</span></div>

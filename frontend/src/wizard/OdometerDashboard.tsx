@@ -6,37 +6,89 @@ import annotationPlugin from 'chartjs-plugin-annotation';
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip, Legend, annotationPlugin);
 
 export default function OdometerDashboard({ matches, ota, setOta: _setOta, dtwOn: _dtwOn, setDtwOn: _setDtwOn }: any) {
-  const lineChartData = useMemo(() => {
-    return {
-      labels: matches.map((_: any, i: number) => i + 1),
-      datasets: [
-        { label: 'Baseline (Reference)', data: matches.map((m: any) => m.oldVal || m.oldDist || 0), borderColor: '#F59E0B', borderDash: [5, 5], pointRadius: 0, borderWidth: 1.5 },
-        { label: 'Raw Odometer', data: matches.map((m: any) => m.newVal || m.newDist || 0), borderColor: '#3B82F6', backgroundColor: 'rgba(59, 130, 246, 0.08)', fill: true, pointRadius: 1, borderWidth: 1.5 }
-      ]
-    };
-  }, [matches]);
+  const samples = useMemo(() => matches
+    .map((match: any) => {
+      const oldDistance = Number(match.oldVal ?? match.oldDist);
+      const newDistance = Number(match.newVal ?? match.newDist);
+      const deviationPct = Math.abs(Number(match.deviationRatio ?? 0)) * 100;
 
-  const barChartData = useMemo(() => {
-    return {
-      labels: matches.map((_: any, i: number) => i + 1),
-      datasets: [
-        { label: 'Error (%)', data: matches.map((m: any) => (m.deviationRatio || 0) * 100), backgroundColor: matches.map((m: any) => (m.deviationRatio || 0) > 0.05 ? '#EF4444' : '#10B981'), borderRadius: 2 }
-      ]
-    };
-  }, [matches]);
+      return {
+        oldDistance,
+        newDistance,
+        offset: newDistance - oldDistance,
+        deviationPct,
+        flagged: Boolean(match.flagged) || deviationPct > ota,
+      };
+    })
+    .filter((sample: any) => Number.isFinite(sample.oldDistance) && Number.isFinite(sample.newDistance))
+    .sort((left: any, right: any) => left.oldDistance - right.oldDistance), [matches, ota]);
 
-  const maxDrift = matches.length > 0 ? Math.max(...matches.map((m: any) => Math.abs((m.oldVal || m.oldDist || 0) - (m.newVal || m.newDist || 0)))) : 0;
-  const avgSlip = matches.length > 0 ? matches.reduce((acc: number, m: any) => acc + (m.deviationRatio || 0), 0) / matches.length : 0;
-  const flaggedCount = matches.filter((m: any) => m.flagged).length;
+  const lineChartData = useMemo(() => ({
+    datasets: [
+      {
+        label: 'Baseline (Reference)',
+        data: samples.map((sample: any) => ({ x: sample.oldDistance, y: sample.oldDistance })),
+        borderColor: '#F59E0B', borderDash: [5, 5], pointRadius: 0, borderWidth: 1.5, parsing: false as const,
+      },
+      {
+        label: 'Raw Odometer',
+        data: samples.map((sample: any) => ({ x: sample.oldDistance, y: sample.newDistance })),
+        borderColor: '#3B82F6', pointRadius: 0, borderWidth: 1.5, parsing: false as const,
+      },
+      {
+        label: 'Offset (New − Old)',
+        data: samples.map((sample: any) => ({ x: sample.oldDistance, y: sample.offset })),
+        borderColor: '#7C3AED', borderWidth: 1.75, pointRadius: 0, parsing: false as const, yAxisID: 'y2',
+      },
+    ],
+  }), [samples]);
 
-  const compactChartOptions = {
+  const barChartData = useMemo(() => ({
+    datasets: [{
+      label: 'Spool OTA deviation (%)',
+      data: samples.map((sample: any) => ({ x: sample.oldDistance, y: sample.deviationPct })),
+      backgroundColor: samples.map((sample: any) => sample.flagged ? '#EF4444' : '#10B981'),
+      borderRadius: 1,
+      parsing: false as const,
+    }],
+  }), [samples]);
+
+  const maxDrift = samples.length > 0 ? Math.max(...samples.map((sample: any) => Math.abs(sample.offset))) : 0;
+  const avgSlip = samples.length > 0 ? samples.reduce((total: number, sample: any) => total + sample.deviationPct, 0) / samples.length : 0;
+  const flaggedCount = samples.filter((sample: any) => sample.flagged).length;
+  const maximumDeviation = samples.length > 0 ? Math.max(...samples.map((sample: any) => sample.deviationPct)) : 0;
+  const deviationAxisMax = Math.max(5, Math.ceil((Math.max(maximumDeviation, ota) + 1) / 5) * 5);
+
+  const axisText = { font: { size: 9 }, color: '#9ca3af' };
+  const chartGrid = { color: 'rgba(0,0,0,0.04)' };
+  const positionChartOptions = {
     responsive: true,
     maintainAspectRatio: false,
+    normalized: true,
     plugins: { legend: { display: false } },
     scales: {
-      x: { display: false },
-      y: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { font: { size: 9 }, color: '#9ca3af' } }
-    }
+      x: { type: 'linear' as const, grid: chartGrid, ticks: axisText, title: { display: true, text: 'Pipeline position (m)', color: '#9ca3af', font: { size: 9 } } },
+      y: { grid: chartGrid, ticks: axisText, title: { display: true, text: 'Odometer (m)', color: '#9ca3af', font: { size: 9 } } },
+      y2: { position: 'right' as const, grid: { drawOnChartArea: false }, ticks: axisText, title: { display: true, text: 'Offset (m)', color: '#7C3AED', font: { size: 9 } } },
+    },
+  };
+
+  const deviationChartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    normalized: true,
+    plugins: {
+      legend: { display: false },
+      annotation: {
+        annotations: {
+          otaLimit: { type: 'line', yMin: ota, yMax: ota, borderColor: '#EF4444', borderWidth: 1.5, borderDash: [4, 4] },
+        },
+      } as any,
+    },
+    scales: {
+      x: { type: 'linear' as const, grid: chartGrid, ticks: axisText, title: { display: true, text: 'Pipeline position (m)', color: '#9ca3af', font: { size: 9 } } },
+      y: { beginAtZero: true, max: deviationAxisMax, grid: chartGrid, ticks: axisText, title: { display: true, text: 'OTA deviation (%)', color: '#9ca3af', font: { size: 9 } } },
+    },
   };
 
   return (
@@ -68,7 +120,7 @@ export default function OdometerDashboard({ matches, ota, setOta: _setOta, dtwOn
             <svg className={`w-4 h-4 ${flaggedCount > 0 ? 'text-red-500' : 'text-green-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" /></svg>
           </div>
           <div>
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Flagged {'>'} 5%</div>
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Flagged {'>'} {ota}%</div>
             <div className={`text-sm font-bold font-mono ${flaggedCount > 0 ? 'text-red-500' : 'text-green-600'}`}>{flaggedCount} Joints</div>
           </div>
         </div>
@@ -79,41 +131,28 @@ export default function OdometerDashboard({ matches, ota, setOta: _setOta, dtwOn
         {/* Odometer Distance Chart */}
         <div className="bg-gray-50/50 rounded-xl border border-gray-100 p-4">
           <div className="flex justify-between items-center mb-3">
-            <h4 className="text-xs font-bold text-gray-700">Odometer Deviasi (Baseline vs Raw)</h4>
+            <h4 className="text-xs font-bold text-gray-700">Odometer Position & Offset</h4>
             <div className="flex items-center gap-3 text-[9px]">
               <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-amber-500 inline-block" style={{borderTop: '2px dashed #F59E0B'}}></span> Baseline</span>
               <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-blue-500 inline-block"></span> Raw</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-violet-500 inline-block"></span> Offset</span>
             </div>
           </div>
           <div className="h-40">
-            <Line data={lineChartData} options={compactChartOptions as any} />
+            <Line data={lineChartData} options={positionChartOptions as any} />
           </div>
         </div>
 
         {/* Deviation Ratio Chart */}
         <div className="bg-gray-50/50 rounded-xl border border-gray-100 p-4">
           <div className="flex justify-between items-center mb-3">
-            <h4 className="text-xs font-bold text-gray-700">Rasio Deviasi Joint Length (%)</h4>
+            <h4 className="text-xs font-bold text-gray-700">Rasio Deviasi Spool / Joint Length (%)</h4>
             <div className="flex items-center gap-1 text-[9px] text-red-500 font-medium">
               <span className="w-6 h-0 border-t-2 border-dashed border-red-400 inline-block"></span> OTA {ota}%
             </div>
           </div>
           <div className="h-40">
-            <Bar data={barChartData} options={{
-              ...compactChartOptions,
-              scales: { 
-                ...compactChartOptions.scales, 
-                y: { ...compactChartOptions.scales.y, max: 20 } 
-              },
-              plugins: { 
-                ...compactChartOptions.plugins,
-                annotation: { 
-                  annotations: { 
-                    line1: { type: 'line', yMin: 5, yMax: 5, borderColor: 'red', borderWidth: 1.5, borderDash: [4, 4] } 
-                  } 
-                } as any 
-              } 
-            } as any} />
+            <Bar data={barChartData} options={deviationChartOptions as any} />
           </div>
         </div>
       </div>

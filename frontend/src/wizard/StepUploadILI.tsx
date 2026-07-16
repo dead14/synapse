@@ -88,7 +88,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         
         const jsonData = await readUploadedRows(ds.file);
         
-        const counts = { total: jsonData.length, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
+        const counts = { total: jsonData.length, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0, gwAnchors: 0, invalidAnchorDistances: 0 };
         const rawFeatures: any[] = [];
         
         jsonData.forEach((row: any, idx: number) => {
@@ -108,15 +108,23 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           else { counts.others++; }
           
           const distKey = keys.find(k => /odometer|log[ _-]?distance|^distance(?:[ _-]?m)?$|^dist(?:ance)?(?:[ _-]?m)?$|chainage/i.test(k));
-          let dist = 0;
+          let dist: number | null = null;
           if (distKey && row[distKey] !== undefined && row[distKey] !== null) {
-            dist = parseFloat(String(row[distKey]).replace(/,/g, ''));
+            const parsed = parseFloat(String(row[distKey]).replace(/,/g, ''));
+            if (Number.isFinite(parsed)) dist = parsed;
           } else {
             // Fallback: Find the first key that contains a valid number and is not an ID
             const numericKey = keys.find(k => !isNaN(parseFloat(String(row[k]))) && !/id|type|feature|anomaly/i.test(k));
             if (numericKey) {
-              dist = parseFloat(String(row[numericKey]).replace(/,/g, ''));
+              const parsed = parseFloat(String(row[numericKey]).replace(/,/g, ''));
+              if (Number.isFinite(parsed)) dist = parsed;
             }
+          }
+
+          const isGwAnchor = standardizedType === 'weld' || standardizedType === 'valve' || standardizedType === 'tee';
+          if (isGwAnchor) {
+            counts.gwAnchors++;
+            if (dist === null) counts.invalidAnchorDistances++;
           }
           
           const idKey = keys.find(k => /id|identifier|joint/i.test(k));
@@ -159,7 +167,9 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
             ...row,
             id: String(id),
             type: standardizedType,
-            dist: isNaN(dist) ? 0 : dist,
+            // Do not turn a missing odometer into 0 m.  A fake zero-distance
+            // anchor corrupts the DTW path and creates a false offset jump.
+            dist,
             originalType: typeKey ? row[typeKey] : 'Unknown',
             depth: isNaN(depth as number) ? null : depth,
             clock: clock,

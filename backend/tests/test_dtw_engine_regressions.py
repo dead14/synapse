@@ -69,6 +69,40 @@ class DtwEngineRegressionTests(unittest.TestCase):
         self.assertEqual(result["code"], "DTW_INPUT_TOO_LARGE")
         self.assertEqual(result["requestId"], "oversized")
 
+    def test_ota_uses_the_reference_spool_formula_and_exact_threshold(self):
+        matches = [
+            {"status": "Match", "oldDist": 0.0, "newDist": 0.0},
+            {"status": "Match", "oldDist": 100.0, "newDist": 106.0},
+        ]
+
+        dtw_engine._post_process_matches(matches, ota_threshold=5.0)
+
+        # The ILI comparison definition is |L_old / L_new - 1|.  A 5.66%
+        # spool deviation must be flagged at a 5% OTA, not accepted by an
+        # accidental "5% + OTA" threshold.
+        self.assertAlmostEqual(matches[1]["deviation_ratio"], abs(100 / 106 - 1))
+        self.assertTrue(matches[1]["flagged"])
+
+    def test_offset_trend_contains_only_ordered_matched_pairs(self):
+        result = dtw_engine.process_request(
+            {
+                "requestId": "extra-weld",
+                "ota": 5.0,
+                "oldRun": [self.weld("old-0", 0), self.weld("old-12", 12), self.weld("old-24", 24)],
+                "newRun": [
+                    self.weld("new-0", 0.35),
+                    self.weld("new-12", 12.54),
+                    self.weld("new-extra", 18.0),
+                    self.weld("new-24", 24.60),
+                ],
+            }
+        )
+
+        trend = result["offsetTrend"]
+        self.assertEqual([point["oldDistance"] for point in trend], [0, 12, 24])
+        self.assertEqual([point["newId"] for point in trend], ["new-0", "new-12", "new-24"])
+        self.assertEqual([point["offset"] for point in trend], [0.35, 0.54, 0.6])
+
 
 if __name__ == "__main__":
     unittest.main()

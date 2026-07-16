@@ -61,7 +61,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
     URL.revokeObjectURL(url);
   };
 
-  const [dtwOn, setDtwOn] = useState(false);
+  const [dtwOn, setDtwOn] = useState(true);
   const [useValveAnchor, setUseValveAnchor] = useState(true);
   const [strictPenalty, setStrictPenalty] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -170,6 +170,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
           ota,
           strictPenalty,
           useValveAnchor,
+          applyDtwCorrection: dtwOn,
           oldRun: rawOldRun,
           newRun: adjustedNewRun,
           globalOffset
@@ -239,29 +240,6 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
               };
           });
 
-          if (data.valveAnchors) {
-            data.valveAnchors.forEach((v: any, idx: number) => {
-              const oldFeature = config?.summaryData?.oldRun?.rawFeatures?.find((f: any) => f.id === v.old_id);
-              const newFeature = config?.summaryData?.newRun?.rawFeatures?.find((f: any) => f.id === v.new_id);
-              
-              formattedMatches.push({
-                id: `valve-match-${idx}`,
-                oldIndex: -1, newIndex: -1,
-                oldId: v.old_id, newId: v.new_id,
-                oldDesc: oldFeature ? (oldFeature.feature_identification || oldFeature.originalType || 'Valve') : 'VALVE/TEE',
-                newDesc: newFeature ? (newFeature.feature_identification || newFeature.originalType || 'Valve') : 'VALVE/TEE',
-                oldVal: v.old_dist, newVal: v.new_dist,
-                originalNewVal: v.new_dist - globalOffset,
-                varPct: 0,
-                offset: v.new_dist - v.old_dist,
-                status: 'Match',
-                deviationRatio: 0,
-                flagged: false,
-                sOld: 0, sNew: 0, rawVarPct: 0, rawOffset: v.new_dist - v.old_dist
-              });
-            });
-          }
-
           setMatches(formattedMatches);
         } else {
           throw new Error(data.error || 'Server tidak mengembalikan hasil GW matching.');
@@ -283,7 +261,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
     return () => {
       clearTimeout(timeout);
     };
-  }, [ota, strictPenalty, useValveAnchor, config, retryNonce]);
+  }, [ota, strictPenalty, useValveAnchor, dtwOn, config, retryNonce]);
 
   const unmatchedRanges = useMemo(() => {
     const ranges: any[] = [];
@@ -318,7 +296,10 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
     return ranges;
   }, [matches]);
 
-  const matchedOnly = matches.filter(m => m.status === 'Match');
+  const matchedOnly = useMemo(
+    () => matches.filter(m => m.status === 'Match').sort((a, b) => a.oldVal - b.oldVal),
+    [matches],
+  );
   const filteredMatched = matchedOnly.filter(m => 
     searchQuery === '' || 
     (m.oldVal !== null && m.oldVal.toString().includes(searchQuery)) ||
@@ -329,14 +310,22 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
   const totalPages = Math.ceil(filteredMatched.length / itemsPerPage);
 
 
-  // Extract matched points for the graph
-  const graphPoints = matches.filter(m => m.status === 'Match').map(m => ({
-    x: m.oldVal as number,
-    y: m.offset as number
-  }));
+  // Build the chart from the exact rows shown in the matched table.  The
+  // table and chart therefore use the same x-position and offset value,
+  // including when a long-running backend worker returns a legacy payload.
+  const chartPoints = useMemo(() => {
+    return matchedOnly
+      .map((match) => ({
+        x: match.oldVal as number,
+        y: match.offset as number,
+        match,
+      }))
+      .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  }, [matchedOnly]);
+
+  const graphPoints = chartPoints.map(({ x, y }) => ({ x, y }));
 
   const chartData = {
-    labels: oldGWs,
     datasets: [{
       label: 'Offset (New - Old) m',
       data: graphPoints,
@@ -347,7 +336,9 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
       pointRadius: 0,
       pointHoverRadius: 4,
       pointHitRadius: 10,
-      tension: 0
+      tension: 0,
+      parsing: false as const,
+      normalized: true,
     }]
   };
 
@@ -894,7 +885,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
             onClick: (e: any, elements: any[]) => {
               if (elements.length > 0) {
                 const idx = elements[0].index;
-                const match = matches[idx];
+                const match = chartPoints[idx]?.match;
                 if (match && match.oldVal !== null) {
                   setSelectedGWs(prev => {
                     const dist = match.oldVal;
@@ -926,7 +917,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
             <p className="text-xs font-medium text-gray-500 mt-1">Baseline vs. Raw odometer drift and joint deviation ratios</p>
           </div>
         </div>
-        <OdometerDashboard matches={matches.filter(m => m.status === 'Match')} ota={ota} setOta={setOta} dtwOn={dtwOn} setDtwOn={setDtwOn} />
+        <OdometerDashboard matches={matchedOnly} ota={ota} setOta={setOta} dtwOn={dtwOn} setDtwOn={setDtwOn} />
       </div>
 
       <div className="flex justify-between mt-4">
@@ -937,7 +928,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
           <FiChevronLeft /> Adjust Scenarios
         </button>
         <button 
-          onClick={() => onNext({ ota, strictPenalty, useValveAnchor, gwMatches: matches, gwMatchesFinal, gwOrphans, alignedFeatures })}
+          onClick={() => onNext({ ota, strictPenalty, useValveAnchor, dtwOn, gwMatches: matches, gwMatchesFinal, gwOrphans, alignedFeatures })}
           className="bg-white hover:bg-gray-200 text-black px-8 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-lg shadow-white/10"
         >
           Accept Matches & Next <FiChevronRight />

@@ -1,6 +1,7 @@
 import sys
 import json
 import math
+from bisect import bisect_left, bisect_right
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
@@ -17,6 +18,18 @@ ANCHOR_TOLERANCE_M = 200.0
 # allocation bounded so malformed or unexpectedly large requests fail before
 # they can exhaust the worker's memory.
 MAX_DTW_CELLS = 4_000_000
+
+
+def ota_deviation_ratio(old_spool, new_spool):
+    """Return the OTA ratio defined by the ILI comparison workflow.
+
+    OTA is evaluated per spool as ``abs(L_old / L_new - 1)``.  Keeping this
+    in one helper makes the DTW decision, the QA table, and the chart metadata
+    agree on the same physical rule.
+    """
+    if new_spool <= 0:
+        return float('inf')
+    return abs((old_spool / new_spool) - 1.0)
 
 
 def match_valves(old_features, new_features, tolerance=ANCHOR_TOLERANCE_M):
@@ -131,6 +144,9 @@ def calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty=False):
     
     gap_penalty = 2.0 + (ota_threshold / 4.0)
     K = 10 # Lookback up to 9 skips
+    new_distances = [gw['dist'] for gw in new_gws]
+    best_end_cost = float('inf')
+    best_end = (n, m)
     
     for i in range(1, n + 1):
         old_dist = old_gws[i-1]['dist']
@@ -138,16 +154,15 @@ def calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty=False):
         # Calculate Physical Window based on OTA.
         allowed_global_drift = max(old_dist, 50.0) * (ota_threshold / 100.0)
         allowed_global_drift = max(allowed_global_drift, 10.0)
-        
-        # Optimize loop since distances are monotonically increasing
-        for j in range(1, m + 1):
+
+        # Only inspect NEW welds inside the physical OTA window.  The former
+        # implementation still iterated from j=1 on every row before hitting
+        # `continue`; binary search keeps the same admissible path at a much
+        # lower cost for long pipelines.
+        first_j = max(1, bisect_left(new_distances, old_dist - allowed_global_drift) + 1)
+        last_j = bisect_right(new_distances, old_dist + allowed_global_drift)
+        for j in range(first_j, last_j + 1):
             new_dist = new_gws[j-1]['dist']
-            
-            # Physical window constraint
-            if new_dist < old_dist - allowed_global_drift:
-                continue # j is too far behind
-            if new_dist > old_dist + allowed_global_drift:
-                break # j is too far ahead, stop inner loop!
             
             best_cost = float('inf')
             best_prev = (-1, -1)
@@ -181,20 +196,21 @@ def calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty=False):
                     L_old = old_dist - old_gws[prev_i-1]['dist']
                     L_new = new_dist - new_gws[prev_j-1]['dist']
                     
-                    denom = max(L_old, L_new)
-                    deviation_pct = (abs(L_old - L_new) / denom) * 100.0 if denom > 0 else 0
+                    deviation_ratio = ota_deviation_ratio(L_old, L_new)
+                    deviation_pct = deviation_ratio * 100.0
                     actual_diff = abs(L_old - L_new)
                     abs_dist_diff = abs(old_dist - new_dist)
                     
                     if deviation_pct <= ota_threshold:
                         cost = actual_diff
                     else:
-                        excess_diff = actual_diff - (denom * (ota_threshold / 100.0))
+                        allowed_spool_difference = L_new * (ota_threshold / 100.0)
+                        excess_diff = actual_diff - allowed_spool_difference
                         cost = actual_diff + excess_diff * 100.0
                         
                     if strict_penalty:
                         cost += abs_dist_diff * 1.0
-                        if denom > 0 and deviation_pct > 50.0:
+                        if not math.isfinite(deviation_ratio) or deviation_pct > 50.0:
                             cost = float('inf')
                     else:
                         cost += abs_dist_diff * 0.001
@@ -208,21 +224,16 @@ def calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty=False):
             dtw_matrix[i][j] = best_cost
             path_matrix[i][j] = best_prev
 
+            if best_cost != float('inf'):
+                final_cost = best_cost + (n - i) * gap_penalty + (m - j) * gap_penalty
+                if final_cost < best_end_cost:
+                    best_end_cost = final_cost
+                    best_end = (i, j)
+
     # Backtrack to find the optimal path
     matches = []
     
     # Find best end node
-    best_end_cost = float('inf')
-    best_end = (n, m)
-    for i in range(1, n + 1):
-        for j in range(1, m + 1):
-            if dtw_matrix[i][j] != float('inf'):
-                # Add cost of skipping remaining nodes
-                final_cost = dtw_matrix[i][j] + (n - i) * gap_penalty + (m - j) * gap_penalty
-                if final_cost < best_end_cost:
-                    best_end_cost = final_cost
-                    best_end = (i, j)
-                    
     i, j = best_end
     
     # No candidate survived the physical window. Returning two independent
@@ -371,6 +382,7 @@ def process_request(data):
     old_run = data.get('oldRun', [])
     new_run = data.get('newRun', [])
     use_valve_anchor = data.get('useValveAnchor', False)
+    apply_dtw_correction = data.get('applyDtwCorrection', True)
     request_id = data.get('requestId')
     tie_in_offset = data.get('tieInOffset', 0.0)
 
@@ -382,8 +394,16 @@ def process_request(data):
     # 2. Extract GW candidates (strict Tier-1/Tier-2 anchors only)
     gw_types = {'weld', 'girth weld', 'valve', 'tee', 'flange'}
     
-    old_gws = [f for f in old_run if str(f.get('originalType', f.get('type'))).lower() in gw_types]
-    new_gws = [f for f in new_run if str(f.get('originalType', f.get('type'))).lower() in gw_types]
+    old_gws = sorted(
+        [f for f in old_run if str(f.get('originalType', f.get('type'))).lower() in gw_types
+         and isinstance(f.get('dist'), (int, float)) and math.isfinite(f['dist'])],
+        key=lambda feature: feature['dist'],
+    )
+    new_gws = sorted(
+        [f for f in new_run if str(f.get('originalType', f.get('type'))).lower() in gw_types
+         and isinstance(f.get('dist'), (int, float)) and math.isfinite(f['dist'])],
+        key=lambda feature: feature['dist'],
+    )
 
     if not old_gws or not new_gws:
         return {"error": "No GWs/Anchors found in one or both runs", "requestId": request_id}
@@ -479,7 +499,29 @@ def process_request(data):
         gw_matches = calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty)
 
     _post_process_matches(gw_matches, ota_threshold)
-    aligned_non_gw = linear_referencing(old_run, new_run, gw_matches)
+    aligned_non_gw = linear_referencing(old_run, new_run, gw_matches) if apply_dtw_correction else []
+
+    # The offset trend is deliberately produced by the engine from the final
+    # DTW path.  Consumers must not reconstruct it from a mixed list of
+    # matches, valve anchors, and skipped welds: duplicate x-values create
+    # vertical chart artifacts and can point a chart click at the wrong row.
+    offset_trend = [
+        {
+            'oldId': match.get('oldId'),
+            'newId': match.get('newId'),
+            'oldDistance': match.get('oldDist'),
+            'newDistance': match.get('newDist'),
+            'offset': round(match['newDist'] - match['oldDist'], 6),
+            'oldSpool': match.get('L_ref', 0.0),
+            'newSpool': match.get('L_new', 0.0),
+            'otaPercent': round(match.get('deviation_ratio', 0.0) * 100.0, 6),
+            'flagged': bool(match.get('flagged')),
+        }
+        for match in gw_matches
+        if match.get('status') == 'Match'
+        and match.get('oldDist') is not None
+        and match.get('newDist') is not None
+    ]
 
     gwMatchesFinal = []
     gwOrphans = []
@@ -512,8 +554,10 @@ def process_request(data):
         "gwMatches": gw_matches, # legacy compat
         "gwMatchesFinal": gwMatchesFinal,
         "gwOrphans": gwOrphans,
+        "offsetTrend": offset_trend,
         "valveAnchors": valve_pairs if use_valve_anchor else [],
         "alignedFeatures": aligned_non_gw,
+        "dtwCorrectionApplied": apply_dtw_correction,
         "valveSegmented": use_valve_anchor and len(valve_pairs) >= 2,
         "requestId": request_id,
         "stats": {
@@ -581,10 +625,10 @@ def _post_process_matches(gw_matches, ota_threshold):
         curr['L_new'] = L_new
 
         if L_ref > 0:
-            deviation_ratio = abs(L_new - L_ref) / L_ref
+            deviation_ratio = ota_deviation_ratio(L_ref, L_new)
             curr['deviation_ratio'] = deviation_ratio
 
-            flag_threshold = 0.05 + (ota_threshold / 100.0)
+            flag_threshold = ota_threshold / 100.0
             if deviation_ratio > flag_threshold:
                 curr['flagged'] = True
                 curr['scaling_factor'] = 1.0
