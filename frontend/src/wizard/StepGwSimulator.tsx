@@ -645,8 +645,8 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                       <tbody className="divide-y divide-gray-100">
                         {unmatchedRanges.map((r, idx) => (
                           <tr key={idx} className="hover:bg-rose-50/50 transition-colors group">
-                            <td className="px-3 py-2 font-mono text-gray-700">{r.oldFrom !== null ? r.oldFrom.toFixed(3) : ''}</td>
-                            <td className="px-3 py-2 font-mono text-gray-700">{r.newFrom !== null ? r.newFrom.toFixed(3) : ''}</td>
+                            <td className="px-3 py-2 font-mono text-gray-700">{r.oldFrom !== null ? r.oldFrom : ''}</td>
+                            <td className="px-3 py-2 font-mono text-gray-700">{r.newFrom !== null ? r.newFrom : ''}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -691,9 +691,9 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                                   <button onClick={() => { setEditingId(row.id); setEditRun1(row.oldVal?.toFixed(3) || ''); setEditRun2(row.originalNewVal?.toFixed(3) || ''); }} className="text-gray-400 hover:text-blue-600 transition-colors"><FiEdit size={12} /></button>
                                 )}
                               </td>
-                              <td className="px-3 py-2 font-mono text-gray-700">{row.oldVal !== null ? row.oldVal.toFixed(3) : '-'}</td>
+                              <td className="px-3 py-2 font-mono text-gray-700">{row.oldVal !== null ? row.oldVal : '-'}</td>
                               <td className="px-3 py-2 text-gray-500 truncate max-w-[100px]" title={row.oldDesc}>{row.oldDesc}</td>
-                              <td className="px-3 py-2 font-mono text-gray-700">{row.originalNewVal !== undefined && row.originalNewVal !== null ? row.originalNewVal.toFixed(3) : '-'}</td>
+                              <td className="px-3 py-2 font-mono text-gray-700">{row.originalNewVal !== undefined && row.originalNewVal !== null ? row.originalNewVal : '-'}</td>
                               <td className="px-3 py-2 text-gray-500 truncate max-w-[100px]" title={row.newDesc}>{row.newDesc}</td>
                             </tr>
                             {editingId === row.id && (
@@ -779,11 +779,11 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                             <td className="px-3 py-2.5">
                               <div className={`w-1.5 h-1.5 rounded-full ${row.status === 'Match' ? 'bg-blue-500' : 'bg-rose-500'}`}></div>
                             </td>
-                            <td className="px-3 py-2.5 font-mono text-gray-700">{row.oldVal !== null ? row.oldVal.toFixed(2) : '-'}</td>
+                            <td className="px-3 py-2.5 font-mono text-gray-700">{row.oldVal !== null ? row.oldVal : '-'}</td>
                             <td className="px-3 py-2.5 text-gray-500 hidden md:table-cell truncate max-w-[100px]" title={row.oldDesc}>{row.oldDesc}</td>
-                            <td className="px-3 py-2.5 font-mono text-gray-700">{row.originalNewVal !== undefined && row.originalNewVal !== null ? row.originalNewVal.toFixed(2) : '-'}</td>
+                            <td className="px-3 py-2.5 font-mono text-gray-700">{row.originalNewVal !== undefined && row.originalNewVal !== null ? row.originalNewVal : '-'}</td>
                             <td className="px-3 py-2.5 text-gray-500 hidden md:table-cell truncate max-w-[100px]" title={row.newDesc}>{row.newDesc}</td>
-                            <td className="px-3 py-2.5 font-mono font-bold text-right text-gray-800">{row.offset !== null ? row.offset.toFixed(2) : '-'}</td>
+                            <td className="px-3 py-2.5 font-mono font-bold text-right text-gray-800">{row.offset !== null ? row.offset : '-'}</td>
                           </tr>
                         ))}
                       </tbody>

@@ -133,16 +133,19 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   const data = useMemo(() => {
     let flattened: any[] = [];
     if (Array.isArray(rawData)) {
-       flattened = rawData;
+       flattened = rawData.map((row: any) => ({
+         ...row,
+         __resultGroup: String(row['Result Group'] || '').toUpperCase(),
+       }));
     } else if (rawData && typeof rawData === 'object') {
        flattened = [
-          ...(rawData.gw_locked || []),
-          ...(rawData.gw_unmatched || []),
-          ...(rawData.anomaly_matched || []),
-          ...(rawData.anomaly_only_old || []),
-          ...(rawData.anomaly_only_new || []),
-          ...(rawData.bypassed_old || []),
-          ...(rawData.bypassed_new || [])
+          ...(rawData.gw_locked || []).map((row: any) => ({ ...row, __resultGroup: 'GW' })),
+          ...(rawData.gw_unmatched || []).map((row: any) => ({ ...row, __resultGroup: 'GW' })),
+          ...(rawData.anomaly_matched || []).map((row: any) => ({ ...row, __resultGroup: 'ANOMALY' })),
+          ...(rawData.anomaly_only_old || []).map((row: any) => ({ ...row, __resultGroup: 'ANOMALY' })),
+          ...(rawData.anomaly_only_new || []).map((row: any) => ({ ...row, __resultGroup: 'ANOMALY' })),
+          ...(rawData.bypassed_old || []).map((row: any) => ({ ...row, __resultGroup: 'BYPASSED' })),
+          ...(rawData.bypassed_new || []).map((row: any) => ({ ...row, __resultGroup: 'BYPASSED' }))
        ];
     }
     // The backend keeps separate buckets for the matching phases.  The
@@ -233,7 +236,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   // Extract all columns
   const allColumns = useMemo(() => {
     if (data && data.length > 0) {
-      const keys = Object.keys(data[0]).filter(k => k !== 'Match/Unmatch');
+      const keys = Object.keys(data[0]).filter(k => k !== 'Match/Unmatch' && k !== '__resultGroup');
       // Add computed columns at the end
       keys.push('CR mm/yr', 'Lateral Growth');
       return ['Section', ...keys];
@@ -399,18 +402,20 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
       if (!typeInclude) return false;
 
       // Radio filter for categories
+      const resultGroup = String(row.__resultGroup || row['Result Group'] || '').toUpperCase();
+      const oldFeatureType = String(row['Feature Type OLD'] || '').toLowerCase();
+      const newFeatureType = String(row['Feature Type NEW'] || '').toLowerCase();
+      const legacyGw = !resultGroup && [oldFeatureType, newFeatureType]
+        .some((featureType) => ['weld', 'valve', 'tee', 'flange'].some((type) => featureType.includes(type)));
+      const isGw = resultGroup === 'GW' || legacyGw;
+      const isBypassed = resultGroup === 'BYPASSED' || ['Bypassed OLD', 'Bypassed NEW'].includes(row['Match/Unmatch']);
+
       if (radioFilter === 'GW') {
-        if (!row['Match/Unmatch']?.includes('GW') && !row['Feature Type OLD']?.toLowerCase().includes('weld') && !row['Feature Type NEW']?.toLowerCase().includes('weld')) {
-           if (!['Matched', 'Skipped', 'ONLY_OLD', 'ONLY_NEW'].includes(row['Match/Unmatch'])) return false;
-           const isGw = (row['Feature Type OLD'] || '').toLowerCase().includes('weld') || (row['Feature Type NEW'] || '').toLowerCase().includes('weld');
-           if (!isGw) return false;
-        }
+        if (!isGw) return false;
       } else if (radioFilter === 'Anomaly') {
-        if (['Bypassed OLD', 'Bypassed NEW'].includes(row['Match/Unmatch'])) return false;
-        const isGw = (row['Feature Type OLD'] || '').toLowerCase().includes('weld') || (row['Feature Type NEW'] || '').toLowerCase().includes('weld');
-        if (isGw) return false;
+        if (resultGroup ? resultGroup !== 'ANOMALY' : isGw || isBypassed) return false;
       } else if (radioFilter === 'Bypassed') {
-        if (!['Bypassed OLD', 'Bypassed NEW'].includes(row['Match/Unmatch'])) return false;
+        if (!isBypassed) return false;
       }
       
       // Distance filter
@@ -881,8 +886,10 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                               {visibleColumns.filter(c => allColumns.includes(c)).map((col, j) => {
                                 let val = row[col];
                                 const isNewDataCol = col.includes('NEW');
-                                if (typeof val === 'number') val = val.toFixed(3);
-                                if (col === 'CR mm/yr' && val !== '-' && !isNaN(parseFloat(val))) val = parseFloat(val).toFixed(3);
+                                // Only format computed columns; leave raw data values untouched
+                                if ((col === 'CR mm/yr' || col === 'Lateral Growth') && val !== '-' && !isNaN(parseFloat(val))) {
+                                  val = parseFloat(val).toFixed(3);
+                                }
                                 return (
                                   <td 
                                     key={j} 
