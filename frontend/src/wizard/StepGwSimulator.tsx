@@ -26,7 +26,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
   const [activeTab, setActiveTab] = useState<'offset' | 'unmatched' | 'matched' | 'table' | 'odometer' | 'all'>('all');
 
   const handleDownloadExcel = async () => {
-    const Papa = (await import('papaparse')).default;
+    const XLSX = await import('xlsx');
     const dataToExport = matches.map((m: any, index: number) => ({
       'No.': index + 1,
       'Status': m.status,
@@ -37,17 +37,22 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
       'Flagged (>5%)': m.flagged ? 'Yes' : 'No'
     }));
 
-    const csv = Papa.unparse(dataToExport);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'GW_Match_Report.csv';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Girth Weld Matches");
+
+    // Adjust column widths
+    worksheet['!cols'] = [
+      {wch: 5},
+      {wch: 12},
+      {wch: 22},
+      {wch: 22},
+      {wch: 15},
+      {wch: 15},
+      {wch: 15}
+    ];
+
+    XLSX.writeFile(workbook, 'GW_Match_Report.xlsx');
   };
 
   const [dtwOn, setDtwOn] = useState(true);
