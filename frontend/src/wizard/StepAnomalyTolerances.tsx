@@ -35,9 +35,9 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
   };
 
   return (
-    <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 animate-fade-in">
+    <div className="alignment-surface bg-white rounded-2xl p-6 sm:p-8 shadow-sm border border-gray-100 animate-fade-in">
       <div className="flex items-center gap-3 mb-6">
-        <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
+        <div className="p-3 bg-brand-50 text-brand-600 rounded-xl">
           <FiSliders size={24} />
         </div>
         <div>
@@ -140,7 +140,7 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
         </button>
         <button 
           onClick={handleNext}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-md shadow-blue-600/20"
+          className="bg-gray-900 hover:bg-gray-800 text-white px-8 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-theme-md"
         >
           Execute Hungarian Matcher <FiChevronRight />
         </button>

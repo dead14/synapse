@@ -35,11 +35,6 @@ export default function OdometerDashboard({ matches, ota, setOta: _setOta, dtwOn
         data: samples.map((sample: any) => ({ x: sample.oldDistance, y: sample.newDistance })),
         borderColor: '#3B82F6', pointRadius: 0, borderWidth: 1.5, parsing: false as const,
       },
-      {
-        label: 'Offset (New − Old)',
-        data: samples.map((sample: any) => ({ x: sample.oldDistance, y: sample.offset })),
-        borderColor: '#7C3AED', borderWidth: 1.75, pointRadius: 0, parsing: false as const, yAxisID: 'y2',
-      },
     ],
   }), [samples]);
 
@@ -69,7 +64,6 @@ export default function OdometerDashboard({ matches, ota, setOta: _setOta, dtwOn
     scales: {
       x: { type: 'linear' as const, grid: chartGrid, ticks: axisText, title: { display: true, text: 'Pipeline position (m)', color: '#9ca3af', font: { size: 9 } } },
       y: { grid: chartGrid, ticks: axisText, title: { display: true, text: 'Odometer (m)', color: '#9ca3af', font: { size: 9 } } },
-      y2: { position: 'right' as const, grid: { drawOnChartArea: false }, ticks: axisText, title: { display: true, text: 'Offset (m)', color: '#7C3AED', font: { size: 9 } } },
     },
   };
 
@@ -92,10 +86,9 @@ export default function OdometerDashboard({ matches, ota, setOta: _setOta, dtwOn
   };
 
   return (
-    <div className="w-full flex flex-col gap-4">
-      {/* Compact Metrics Row */}
-      <div className="flex items-center gap-6">
-        <div className="flex items-center gap-2">
+    <div className="w-full flex flex-col gap-5">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3">
           <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
             <svg className="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
           </div>
@@ -104,18 +97,16 @@ export default function OdometerDashboard({ matches, ota, setOta: _setOta, dtwOn
             <div className="text-sm font-bold font-mono text-gray-800">+{maxDrift.toFixed(2)}m</div>
           </div>
         </div>
-        <div className="h-8 w-px bg-gray-200"></div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3">
           <div className="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center">
             <svg className="w-4 h-4 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
           </div>
           <div>
             <div className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Avg Slippage</div>
-            <div className="text-sm font-bold font-mono text-gray-800">{(avgSlip * 100).toFixed(1)}%</div>
+            <div className="text-sm font-bold font-mono text-gray-800">{avgSlip.toFixed(2)}%</div>
           </div>
         </div>
-        <div className="h-8 w-px bg-gray-200"></div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3">
           <div className={`w-8 h-8 rounded-lg ${flaggedCount > 0 ? 'bg-red-50' : 'bg-green-50'} flex items-center justify-center`}>
             <svg className={`w-4 h-4 ${flaggedCount > 0 ? 'text-red-500' : 'text-green-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" /></svg>
           </div>
@@ -129,29 +120,28 @@ export default function OdometerDashboard({ matches, ota, setOta: _setOta, dtwOn
       {/* Side-by-side Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Odometer Distance Chart */}
-        <div className="bg-gray-50/50 rounded-xl border border-gray-100 p-4">
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-theme-xs">
           <div className="flex justify-between items-center mb-3">
-            <h4 className="text-xs font-bold text-gray-700">Odometer Position & Offset</h4>
+            <h4 className="text-sm font-semibold text-gray-800">Odometer comparison</h4>
             <div className="flex items-center gap-3 text-[9px]">
               <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-amber-500 inline-block" style={{borderTop: '2px dashed #F59E0B'}}></span> Baseline</span>
               <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-blue-500 inline-block"></span> Raw</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-violet-500 inline-block"></span> Offset</span>
             </div>
           </div>
-          <div className="h-40">
+          <div className="h-52" aria-label="Reference and raw odometer comparison chart">
             <Line data={lineChartData} options={positionChartOptions as any} />
           </div>
         </div>
 
         {/* Deviation Ratio Chart */}
-        <div className="bg-gray-50/50 rounded-xl border border-gray-100 p-4">
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-theme-xs">
           <div className="flex justify-between items-center mb-3">
-            <h4 className="text-xs font-bold text-gray-700">Rasio Deviasi Spool / Joint Length (%)</h4>
+            <h4 className="text-sm font-semibold text-gray-800">Spool / joint OTA deviation</h4>
             <div className="flex items-center gap-1 text-[9px] text-red-500 font-medium">
               <span className="w-6 h-0 border-t-2 border-dashed border-red-400 inline-block"></span> OTA {ota}%
             </div>
           </div>
-          <div className="h-40">
+          <div className="h-52" aria-label="Spool and joint OTA deviation chart">
             <Bar data={barChartData} options={deviationChartOptions as any} />
           </div>
         </div>

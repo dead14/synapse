@@ -8,28 +8,64 @@ import StepUploadILI from './wizard/StepUploadILI';
 import StepTieInConfig from './wizard/StepTieInConfig';
 import { apiFetch, ApiError } from './utils/api';
 
+const WIZARD_PROGRESS_STORAGE_KEY = 'synapse_alignment_wizard_progress';
+
+const baseSteps = [
+  { id: 'upload', name: 'Upload', desc: 'Validate' },
+  { id: 'tiein', name: 'Tie-In Config', desc: 'Offset Calc', conditional: true },
+  { id: 'summary', name: 'Data Summary', desc: 'Overview' },
+  { id: 'gw', name: 'GW Matching', desc: 'Simulator' },
+  { id: 'scenario', name: 'Scenario Filter', desc: 'Thresholds' },
+  { id: 'anomaly', name: 'Anomaly Tolerances', desc: 'Matcher' },
+  { id: 'exec', name: 'Execution', desc: 'Report Gen' },
+];
+
+const visibleSteps = (config: any) => baseSteps.filter((item) => !item.conditional || (item.id === 'tiein' && config?.enablePartialRun));
+
 export default function AlignmentPage() {
   const [step, setStep] = useState(0); // 0 is Upload step
   const [wizardConfig, setWizardConfig] = useState<any>({});
-  const [, setIsResuming] = useState(true);
+  const [isResuming, setIsResuming] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     // Start fresh every time — no resume prompt, no empty session creation
-    setIsResuming(false);
+    let active = true;
+
+    const restoreWizardProgress = async () => {
+      try {
+        const storedProgress = localStorage.getItem(WIZARD_PROGRESS_STORAGE_KEY);
+        if (!storedProgress) return;
+
+        const parsed = JSON.parse(storedProgress) as { sessionId?: string | number; step?: number };
+        if (!parsed.sessionId || !Number.isInteger(parsed.step) || parsed.step < 1) {
+          localStorage.removeItem(WIZARD_PROGRESS_STORAGE_KEY);
+          return;
+        }
+
+        const session = await apiFetch<{ config?: any; sessionId?: string | number; status?: string }>(
+          `/api/wizard/session/${encodeURIComponent(String(parsed.sessionId))}`,
+        );
+        if (!active || !session.config || !session.sessionId) return;
+
+        const restoredConfig = { ...session.config, sessionId: session.sessionId, sessionStatus: session.status };
+        setWizardConfig(restoredConfig);
+        setStep(Math.min(parsed.step, visibleSteps(restoredConfig).length - 1));
+        localStorage.setItem('synapse_last_session_id', String(session.sessionId));
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          localStorage.removeItem(WIZARD_PROGRESS_STORAGE_KEY);
+        }
+      } finally {
+        if (active) setIsResuming(false);
+      }
+    };
+
+    void restoreWizardProgress();
+    return () => { active = false; };
   }, []);
 
-  const baseSteps = [
-    { id: 'upload', name: 'Upload', desc: 'Validate' },
-    { id: 'tiein', name: 'Tie-In Config', desc: 'Offset Calc', conditional: true },
-    { id: 'summary', name: 'Data Summary', desc: 'Overview' },
-    { id: 'gw', name: 'GW Matching', desc: 'Simulator' },
-    { id: 'scenario', name: 'Scenario Filter', desc: 'Thresholds' },
-    { id: 'anomaly', name: 'Anomaly Tolerances', desc: 'Matcher' },
-    { id: 'exec', name: 'Execution', desc: 'Report Gen' }
-  ];
-
-  const stepsList = baseSteps.filter(s => !s.conditional || (s.id === 'tiein' && wizardConfig.enablePartialRun));
+  const stepsList = visibleSteps(wizardConfig);
   
   const handleNext = async (data?: any) => {
     let updatedConfig = { ...wizardConfig };
@@ -64,60 +100,66 @@ export default function AlignmentPage() {
 
     setSaveError(null);
     setWizardConfig(updatedConfig);
-    setStep(s => Math.min(s + 1, stepsList.length - 1));
+    const nextStep = Math.min(step + 1, visibleSteps(updatedConfig).length - 1);
+    setStep(nextStep);
+    localStorage.setItem(WIZARD_PROGRESS_STORAGE_KEY, JSON.stringify({ sessionId: updatedConfig.sessionId, step: nextStep }));
   };
 
   const handleBack = () => {
-    setStep(s => Math.max(s - 1, 0));
+    const previousStep = Math.max(step - 1, 0);
+    setStep(previousStep);
+    if (wizardConfig.sessionId && previousStep > 0) {
+      localStorage.setItem(WIZARD_PROGRESS_STORAGE_KEY, JSON.stringify({ sessionId: wizardConfig.sessionId, step: previousStep }));
+    }
   };
 
+  if (isResuming) {
+    return <div className="alignment-workspace flex min-h-[60vh] items-center justify-center"><p className="text-sm font-medium text-gray-500">Memulihkan alignment terakhir...</p></div>;
+  }
+
   return (
-    <div className="min-h-screen bg-[#f8f9fc] flex flex-col items-center pt-8 pb-20">
-      <div className="w-full flex flex-col gap-6">
+    <div className="alignment-workspace">
+      <div className="alignment-shell flex flex-col gap-5">
         {saveError && (
           <div role="alert" className="mx-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm md:mx-6 xl:mx-8">
             {saveError}
           </div>
         )}
         
-        {/* Alignment Progress Bar (Matches Screenshot 2) */}
         {step > 0 && (
-        <div className="bg-white p-8 shadow-sm border-y border-gray-100 flex justify-between items-center relative overflow-hidden">
-          <div className="relative z-10 w-full">
-            <div className="flex justify-between items-end mb-8">
-               <div>
-                 <h2 className="text-2xl font-bold text-gray-800 mb-1">Alignment Progress</h2>
-                 <p className="text-gray-500 text-sm">Executing multi-step sequential matching algorithm</p>
-               </div>
-               <div className="text-5xl font-black text-brand-500 tracking-tighter">
-                  {Math.round((step / (stepsList.length - 1)) * 100)}%
-               </div>
+          <section className="alignment-progress" aria-label="Alignment progress">
+            <div className="flex flex-col gap-4 border-b border-gray-100 pb-5 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="alignment-eyebrow">Pipeline alignment</p>
+                <h1 className="mt-1 text-2xl font-semibold tracking-tight text-gray-900">{stepsList[step]?.name}</h1>
+                <p className="mt-1 text-sm text-gray-500">{stepsList[step]?.desc} · Review each decision before continuing.</p>
+              </div>
+              <div className="alignment-progress-value">
+                <span>Step {step + 1} of {stepsList.length}</span>
+                <strong>{Math.round((step / (stepsList.length - 1)) * 100)}%</strong>
+              </div>
             </div>
 
-            {/* Stepper Line */}
-            <div className="relative flex justify-between items-start w-full px-6 mt-4">
-              <div className="absolute top-[6px] left-6 right-6 h-[1px] bg-gray-200 -z-10"></div>
-              
-              {stepsList.map((s, index) => (
-                <div key={s.id} className="flex flex-col items-center gap-3 w-32">
-                  <div className={`w-3 h-3 rounded-full transition-all duration-300 shrink-0 ${
-                    step >= index ? 'bg-brand-500 shadow-[0_0_15px_rgba(59,130,246,0.5)]' : 'bg-gray-300'
-                  }`} />
-                  <div className="text-center mt-1">
-                    <p className={`text-xs font-semibold whitespace-nowrap transition-colors ${step >= index ? 'text-gray-800' : 'text-gray-500'}`}>
-                      {s.name}
-                    </p>
-                    <p className="text-[10px] text-gray-500">{s.desc}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+            <ol className="alignment-stepper">
+              {stepsList.map((s, index) => {
+                const isComplete = index < step;
+                const isCurrent = index === step;
+                return (
+                  <li key={s.id} className={isCurrent ? 'is-current' : isComplete ? 'is-complete' : ''}>
+                    <span className="alignment-stepper-index">{isComplete ? '✓' : index + 1}</span>
+                    <span className="alignment-stepper-copy">
+                      <strong>{s.name}</strong>
+                      <small>{s.desc}</small>
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
         )}
 
         {/* Wizard Steps Rendering */}
-        <div className="w-full mt-4">
+        <div className="alignment-content w-full">
           {stepsList[step]?.id === 'upload' && (
             <StepUploadILI onNext={handleNext} />
           )}

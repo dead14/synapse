@@ -21,6 +21,14 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
+
+    if (config.sessionStatus === 'completed') {
+      setTerminalLines(['Session alignment sebelumnya sudah selesai.', '✅ All done! Results are ready.']);
+      setProgress(100);
+      setShowValidation(true);
+      return () => { startedRef.current = false; };
+    }
+
     let mounted = true;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let requestController: AbortController | null = null;
@@ -140,37 +148,37 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
       socket.off('alignment_complete', handleComplete);
       socket.off('alignment_error', handleError);
     };
-  }, [config.sessionId]);
+  }, [config.sessionId, config.sessionStatus]);
 
   return (
-    <div className="bg-white rounded-[24px] p-8 shadow-sm border border-gray-100 animate-fade-in flex flex-col gap-8">
+    <div className="alignment-surface bg-white rounded-2xl p-6 sm:p-8 shadow-sm border border-gray-100 animate-fade-in flex flex-col gap-8">
       
-      {/* Terminal View with MacOS-like header */}
-      <div className="flex flex-col bg-[#0f172a] rounded-2xl shadow-xl overflow-hidden border border-gray-800">
-        <div className="h-10 bg-[#1e293b] flex items-center px-4 border-b border-gray-700/50">
+      {/* Execution log */}
+      <div className="flex flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.06)]">
+        <div className="flex h-11 items-center border-b border-gray-200 bg-gray-50 px-4">
           <div className="flex gap-2">
             <div className="w-3 h-3 rounded-full bg-red-500/80"></div>
             <div className="w-3 h-3 rounded-full bg-yellow-500/80"></div>
             <div className="w-3 h-3 rounded-full bg-green-500/80"></div>
           </div>
-          <div className="mx-auto text-xs font-mono text-gray-400">alignment-server-v8.1</div>
+          <div className="mx-auto text-xs font-mono text-gray-500">alignment-server-v8.1</div>
         </div>
-        <div className="min-h-[280px] max-h-[350px] p-6 overflow-y-auto font-mono text-[13px] leading-relaxed relative">
+        <div className="relative min-h-[280px] max-h-[350px] overflow-y-auto bg-slate-50/70 p-6 font-mono text-[13px] leading-relaxed">
           {terminalLines.map((line, i) => {
-            let textColor = 'text-green-400';
-            if (line.includes('ERROR') || line.includes('anomali depth berkurang') || line.includes('clock-shift')) textColor = 'text-orange-400';
-            if (line.includes('SELESAI')) textColor = 'text-blue-400 font-bold';
+            let textColor = 'text-green-700';
+            if (line.includes('ERROR') || line.includes('anomali depth berkurang') || line.includes('clock-shift')) textColor = 'text-orange-700';
+            if (line.includes('SELESAI')) textColor = 'text-brand-700 font-bold';
             if (line.startsWith('──')) textColor = 'text-gray-400';
             
             return (
               <div key={i} className={`${textColor} mb-1`} style={{ animationFillMode: 'forwards' }}>
-                <span className="text-gray-600 mr-2">$</span>{line}
+                <span className="mr-2 text-gray-400">$</span>{line}
               </div>
             );
           })}
           {progress < 100 && (
-            <div className="text-gray-500 mt-2 animate-pulse">
-              <span className="text-gray-600 mr-2">$</span>_
+            <div className="mt-2 animate-pulse text-gray-400">
+              <span className="mr-2 text-gray-400">$</span>_
             </div>
           )}
         </div>
@@ -178,13 +186,11 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
         {/* Integrated Progress Bar inside terminal block */}
         <div className="px-6 pb-6 pt-2">
           <div className="flex justify-between items-center mb-2">
-            <span className="text-xs font-mono text-gray-400">Execution Progress</span>
-            <span className="text-xs font-mono font-bold text-blue-400">{progress}%</span>
+            <span className="text-xs font-mono text-gray-500">Execution Progress</span>
+            <span className="text-xs font-mono font-bold text-brand-600">{progress}%</span>
           </div>
-          <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
-            <div className="bg-gradient-to-r from-blue-500 to-cyan-400 h-1.5 rounded-full transition-all duration-700 ease-out relative" style={{ width: `${progress}%` }}>
-              <div className="absolute top-0 right-0 bottom-0 left-0 bg-[linear-gradient(45deg,transparent_25%,rgba(255,255,255,0.2)_25%,rgba(255,255,255,0.2)_50%,transparent_50%,transparent_75%,rgba(255,255,255,0.2)_75%,rgba(255,255,255,0.2)_100%)] bg-[length:20px_20px] animate-[stripes_1s_linear_infinite]" />
-            </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
+            <div className="h-1.5 rounded-full bg-brand-500 transition-all duration-700 ease-out" style={{ width: `${progress}%` }} />
           </div>
         </div>
       </div>

@@ -209,44 +209,48 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   const isExpanded = (section: string) => expandedSection === 'all' || expandedSection === section;
 
   return (
-    <div className="w-full flex flex-col gap-6 animate-fade-in">
+    <div className="alignment-surface w-full flex flex-col gap-6 animate-fade-in">
       
       {/* Page Title */}
-      <div className="bg-white rounded-none p-8 shadow-sm border border-gray-100 flex flex-col sm:flex-row justify-between items-start sm:items-center">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-            <FiDatabase className="text-brand-500" /> Inspection Intake Form
-          </h2>
-          <p className="text-gray-500 mt-1">Define pipeline parameters and upload ILI data for alignment processing.</p>
-        </div>
-        <div className="mt-4 sm:mt-0 flex gap-3">
+      <section className="rounded-2xl border border-slate-200 bg-white px-6 py-6 shadow-[0_12px_30px_rgba(15,23,42,0.06)] sm:px-8 sm:py-7">
+        <div className="flex flex-col items-start justify-between gap-6 lg:flex-row lg:items-center">
+          <div className="max-w-2xl">
+            <div className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-brand-50 text-brand-600"><FiDatabase size={14} /></span>
+              01 — New alignment run
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Inspection intake</h1>
+            <p className="mt-2 text-sm leading-6 text-slate-500 sm:text-base">Add the inspection runs that will be compared, then provide the pipeline context for a traceable alignment.</p>
+          </div>
+          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
           <a 
             href={apiUrl('/api/download-template')}
             target="_blank"
             rel="noreferrer"
-            className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-6 py-3 rounded-xl font-medium transition-colors shadow-sm flex items-center gap-2"
+            className="inline-flex justify-center rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
           >
             Download Excel Template
           </a>
           <button 
             onClick={handleInitialize}
             disabled={!allFilesUploaded || isProcessing}
-            className={`px-8 py-3 rounded-xl font-medium transition-colors shadow-md flex items-center gap-2 ${allFilesUploaded && !isProcessing ? 'bg-brand-500 hover:bg-brand-600 text-white shadow-brand-500/20' : 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'}`}
+            className={`inline-flex justify-center rounded-xl px-5 py-3 text-sm font-semibold transition-colors ${allFilesUploaded && !isProcessing ? 'bg-brand-600 text-white shadow-md shadow-brand-500/20 hover:bg-brand-700' : 'cursor-not-allowed bg-slate-100 text-slate-400'}`}
           >
             {isProcessing ? 'Reading Data...' : 'Initialize Alignment'}
           </button>
+          </div>
         </div>
-      </div>
+      </section>
 
       <div className="flex flex-col-reverse gap-6">
         {/* Left Column (Now Bottom): Asset & Specs */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           
           {/* Section 1: Asset Identification */}
-          <div className="bg-white rounded-none shadow-sm border border-gray-100 overflow-hidden">
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <button 
               onClick={() => toggleSection('asset')}
-              className="w-full px-6 py-4 flex justify-between items-center bg-gray-50/50 hover:bg-gray-50 transition-colors border-b border-gray-100"
+              className="w-full border-b border-slate-100 bg-slate-50 px-6 py-4 flex justify-between items-center transition-colors hover:bg-slate-100/70"
             >
               <h3 className="font-semibold text-gray-800 flex items-center gap-2">
                 <FiInfo className="text-gray-500" /> Asset & Operations
@@ -296,10 +300,10 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           </div>
 
           {/* Section 2: Physical Specs & Protection */}
-          <div className="bg-white rounded-none shadow-sm border border-gray-100 overflow-hidden">
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <button 
               onClick={() => toggleSection('specs')}
-              className="w-full px-6 py-4 flex justify-between items-center bg-gray-50/50 hover:bg-gray-50 transition-colors border-b border-gray-100"
+              className="w-full border-b border-slate-100 bg-slate-50 px-6 py-4 flex justify-between items-center transition-colors hover:bg-slate-100/70"
             >
               <h3 className="font-semibold text-gray-800 flex items-center gap-2">
                 <FiSettings className="text-gray-500" /> Physical Specs & Protection
@@ -370,25 +374,28 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
 
         {/* Right Column: ILI Uploads */}
         <div className="flex flex-col gap-6">
-          <div className="bg-white rounded-none shadow-sm border border-gray-100 overflow-hidden h-full flex flex-col">
-            <div className="px-6 py-4 bg-gray-50/50 border-b border-gray-100 flex justify-between items-center flex-wrap gap-4">
+          <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 bg-white px-6 py-5">
               <div className="flex items-center gap-4">
-                <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-                  <FiShield className="text-gray-500" /> ILI Data Configuration
-                </h3>
+                <div>
+                  <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">Run pair setup</p>
+                  <h3 className="font-semibold text-slate-900 flex items-center gap-2">
+                    <FiShield className="text-brand-600" /> ILI data configuration
+                  </h3>
+                </div>
                 {algorithm !== 'phylogenetic' && datasets.length < 5 && (
                   <button 
                     onClick={() => setDatasets([...datasets, { id: Date.now(), year: '', vendor: 'Rosen', file: null }])}
-                    className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-dashed border-gray-300 text-xs font-medium text-gray-500 hover:border-brand-500 hover:text-brand-500 hover:bg-brand-50 transition-all bg-white shadow-sm"
+                    className="flex items-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 transition-all hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700"
                   >
                     <FiPlus size={14} /> Add another ILI data
                   </button>
                 )}
               </div>
               <div className="flex items-center gap-3">
-                <label className="text-sm font-medium text-gray-700">Algorithm Strategy:</label>
+                <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Strategy</label>
                 <select 
-                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none bg-white font-medium text-brand-600 shadow-sm"
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-brand-700 outline-none focus:border-brand-400"
                   value={algorithm}
                   onChange={(e) => setAlgorithm(e.target.value)}
                 >
@@ -400,7 +407,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
               </div>
               {algorithm !== 'phylogenetic' && (
                 <div className="flex items-center gap-2">
-                  <label className="text-sm font-medium text-gray-700 flex items-center gap-2 cursor-pointer">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-600">
                     <input 
                       type="checkbox" 
                       className="w-4 h-4 rounded text-brand-600 focus:ring-brand-500" 
@@ -413,29 +420,32 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
               )}
             </div>
             
-            <div className="p-6 flex-1 flex gap-6 overflow-x-auto snap-x pb-4 no-scrollbar">
+             <div className="flex flex-1 gap-5 overflow-x-auto bg-slate-50/70 p-5 pb-6 snap-x no-scrollbar sm:p-6">
               
               {datasets.map((ds, index) => {
                 const isMaster = index === masterIndex;
                 return (
-                  <div key={ds.id} className={`flex-1 min-w-[400px] max-w-[600px] p-5 rounded-xl border snap-start ${isMaster ? 'border-brand-500 bg-brand-50/30 ring-2 ring-brand-500/20' : 'border-gray-200 bg-gray-50/30'}`}>
+                  <div key={ds.id} className={`flex-1 min-w-[400px] max-w-[600px] rounded-2xl border p-5 shadow-sm snap-start ${isMaster ? 'border-brand-300 bg-brand-50/50 ring-1 ring-brand-100' : 'border-slate-200 bg-white'}`}>
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-2">
-                        <div className={`w-2 h-6 rounded-full ${isMaster ? 'bg-brand-500' : 'bg-gray-400'}`}></div>
-                        <h4 className={`font-bold ${isMaster ? 'text-brand-700' : 'text-gray-700'}`}>
-                          {algorithm === 'phylogenetic' ? ds.phyloLabel : `Dataset ${ds.year ? ds.year : ''}`}
-                        </h4>
+                        <div className={`h-9 w-1 rounded-full ${isMaster ? 'bg-brand-500' : 'bg-slate-300'}`}></div>
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{isMaster ? 'Alignment anchor' : 'Comparison source'}</p>
+                          <h4 className={`font-bold ${isMaster ? 'text-brand-800' : 'text-slate-800'}`}>
+                            {algorithm === 'phylogenetic' ? ds.phyloLabel : isMaster ? 'Master dataset' : `Dataset ${index + 1}`}
+                          </h4>
+                        </div>
                       </div>
                       {algorithm !== 'phylogenetic' ? (
                         <button 
                           onClick={() => setMasterIndex(index)}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${isMaster ? 'bg-brand-500 text-white shadow-md' : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${isMaster ? 'bg-brand-600 text-white shadow-md shadow-brand-500/20' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
                         >
                           <FiStar className={isMaster ? "fill-white" : ""} size={14} /> {isMaster ? 'Master Data' : 'Set as Master'}
                         </button>
                       ) : (
                         isMaster && (
-                          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-brand-500 text-white shadow-md">
+                          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-brand-600 text-white shadow-md shadow-brand-500/20">
                             <FiStar className="fill-white" size={14} /> Master Data
                           </div>
                         )
@@ -485,7 +495,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                       </div>
                     </div>
 
-                    <div className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center bg-white transition-colors cursor-pointer group relative ${isMaster ? 'border-brand-300 hover:border-brand-500 hover:bg-brand-50' : 'border-gray-300 hover:border-brand-400 hover:bg-gray-50'}`}>
+                    <div className={`relative flex min-h-[172px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 transition-colors group ${isMaster ? 'border-brand-300 bg-white hover:border-brand-500 hover:bg-brand-50' : 'border-slate-300 bg-slate-50/80 hover:border-brand-400 hover:bg-white'}`}>
                       <input 
                         type="file" 
                         accept=".csv,.xlsx" 

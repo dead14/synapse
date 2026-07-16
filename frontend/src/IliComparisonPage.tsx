@@ -99,8 +99,8 @@ export default function IliComparisonPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 font-sans pt-12 pb-12 text-gray-800 overflow-x-hidden w-full">
-      <div className="w-full mx-auto px-4 flex flex-col gap-6">
+    <div className="results-workspace font-outfit py-6 text-gray-800 overflow-x-hidden w-full">
+      <div className="app-page-shell flex flex-col gap-5">
         {error && (
           <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
@@ -108,11 +108,11 @@ export default function IliComparisonPage() {
         )}
 
         {isProcessing ? (
-          <div className="bg-white rounded-2xl border border-blue-100 shadow-sm mt-4">
+          <div className="mt-2 rounded-2xl border border-blue-100 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.06)]">
             <JobProgressBar progress={jobProgress} message={jobMessage} />
           </div>
         ) : (
-          <div className="h-[calc(100vh-120px)] mt-4">
+          <div className="mt-2 h-[calc(100vh-120px)]">
             <ResultsPanel
               data={data}
               loading={loading}

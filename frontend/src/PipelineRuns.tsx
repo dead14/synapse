@@ -47,10 +47,10 @@ export default function PipelineRuns() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f8f9fc] flex flex-col items-center pb-12">
+    <div className="app-light-page font-outfit flex flex-col items-center pb-12">
       {/* Header Area */}
-      <div className="w-full bg-white shadow-sm pb-6 pt-8 px-8 flex justify-center border-b border-gray-100">
-        <div className="w-full flex justify-between items-start">
+      <div className="w-full border-b border-gray-200 bg-white py-6">
+        <div className="app-page-shell flex justify-between items-start">
           <div>
             <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
               <span className="bg-[#1a2130] text-white p-2 rounded-xl"><FiActivity size={24} /></span>
@@ -70,11 +70,11 @@ export default function PipelineRuns() {
       </div>
 
       {/* Main Content Area */}
-      <div className="w-full mt-8 flex flex-col gap-6">
+      <div className="app-page-shell mt-6 flex flex-col gap-5">
         {error && <p role="alert" className="mx-6 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
         
         {/* Table Container */}
-        <div className="bg-white shadow-sm border-y border-gray-100 overflow-hidden">
+        <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.06)]">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>

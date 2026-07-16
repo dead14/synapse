@@ -324,16 +324,16 @@ export default function IliSectioningPage() {
   }, [data, drawnRoute]);
 
   if (loading) {
-    return <div className="min-h-screen bg-gray-50 flex items-center justify-center text-blue-600 font-medium">Loading Schematic...</div>;
+    return <div className="sectioning-workspace flex items-center justify-center text-brand-600 font-medium">Loading Schematic...</div>;
   }
 
   return (
-    <div className="min-h-screen bg-white font-sans text-gray-800 flex flex-col">
+    <div className="sectioning-workspace font-outfit flex flex-col">
       {/* Header */}
-      <header className="p-4 border-b border-gray-200 bg-white shadow-sm flex justify-between items-start z-10">
+      <header className="p-5 bg-white flex justify-between items-start z-10">
         <div className="flex flex-col gap-4">
-          <div className="flex items-center gap-2 text-blue-700 font-bold tracking-widest text-sm">
-            <div className="w-2 h-2 bg-blue-600 rotate-45"></div>
+          <div className="flex items-center gap-2 text-brand-700 font-bold tracking-widest text-sm">
+            <div className="w-2 h-2 bg-brand-500 rotate-45"></div>
             ILI SECTIONING <span className="text-gray-500 font-medium">JOINT & FEATURE SCHEMATIC</span>
           </div>
           

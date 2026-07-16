@@ -13,9 +13,9 @@ export default function StepDataSummary({ onNext, onBack, config }: StepDataSumm
   };
 
   return (
-    <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 animate-fade-in">
+    <div className="alignment-surface bg-white rounded-2xl p-6 sm:p-8 shadow-sm border border-gray-100 animate-fade-in">
       <div className="flex items-center gap-3 mb-6">
-        <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
+        <div className="p-3 bg-brand-50 text-brand-600 rounded-xl">
           <FiPieChart size={24} />
         </div>
         <div>
@@ -28,7 +28,7 @@ export default function StepDataSummary({ onNext, onBack, config }: StepDataSumm
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
         {/* NEW Run Card */}
-        <div className="border border-gray-100 rounded-2xl p-6 bg-gradient-to-br from-white to-gray-50">
+        <div className="border border-gray-200 rounded-2xl p-5 sm:p-6 bg-gray-50/70">
           <div className="flex justify-between items-center mb-4">
              <h3 className="font-bold text-gray-800">Current Run</h3>
              <span className="text-xs font-bold px-2 py-1 bg-green-100 text-green-700 rounded-md">NEW</span>
@@ -54,7 +54,7 @@ export default function StepDataSummary({ onNext, onBack, config }: StepDataSumm
         </div>
 
         {/* OLD Run Card */}
-        <div className="border border-gray-100 rounded-2xl p-6 bg-gradient-to-br from-white to-gray-50">
+        <div className="border border-gray-200 rounded-2xl p-5 sm:p-6 bg-gray-50/70">
           <div className="flex justify-between items-center mb-4">
              <h3 className="font-bold text-gray-800">Reference Run</h3>
              <span className="text-xs font-bold px-2 py-1 bg-blue-100 text-blue-700 rounded-md">OLD</span>

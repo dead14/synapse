@@ -87,7 +87,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
   };
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden flex flex-col h-full animate-fade-in">
+    <div className="alignment-surface bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex flex-col h-full animate-fade-in">
       <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gradient-to-r from-blue-50 to-white">
         <div>
           <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">

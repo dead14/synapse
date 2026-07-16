@@ -23,9 +23,9 @@ export default function StepScenarioFilter({ onNext, onBack, config: _config }: 
   };
 
   return (
-    <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 animate-fade-in">
+    <div className="alignment-surface bg-white rounded-2xl p-6 sm:p-8 shadow-sm border border-gray-100 animate-fade-in">
       <div className="flex items-center gap-3 mb-6">
-        <div className="p-3 bg-purple-50 text-purple-600 rounded-xl">
+        <div className="p-3 bg-brand-50 text-brand-600 rounded-xl">
           <FiSettings size={24} />
         </div>
         <div>
@@ -45,24 +45,24 @@ export default function StepScenarioFilter({ onNext, onBack, config: _config }: 
             <div>
               <div className="flex justify-between mb-2">
                 <label className="text-sm font-medium text-gray-700">Distance Matching Threshold (m)</label>
-                <span className="text-sm font-mono text-purple-600">{distThresh}m</span>
+                <span className="text-sm font-mono text-brand-600">{distThresh}m</span>
               </div>
               <input 
                 type="range" min="0.1" max="2.0" step="0.1" 
                 value={distThresh} onChange={(e) => setDistThresh(parseFloat(e.target.value))}
-                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-brand-600"
               />
             </div>
 
             <div>
               <div className="flex justify-between mb-2">
                 <label className="text-sm font-medium text-gray-700">Depth Matching Threshold (%)</label>
-                <span className="text-sm font-mono text-purple-600">{depthThresh}%</span>
+                <span className="text-sm font-mono text-brand-600">{depthThresh}%</span>
               </div>
               <input 
                 type="range" min="0" max="50" step="1" 
                 value={depthThresh} onChange={(e) => setDepthThresh(parseInt(e.target.value))}
-                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-brand-600"
               />
               <p className="text-xs text-gray-500 mt-1">Ignore metal loss below this depth.</p>
             </div>
@@ -119,7 +119,7 @@ export default function StepScenarioFilter({ onNext, onBack, config: _config }: 
         </button>
           <button 
             onClick={() => onNext({ distThresh, depthThresh, hiddenFeatures })}
-            className="px-6 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold rounded-xl flex items-center gap-2 transition-colors"
+            className="px-6 py-3 bg-gray-900 hover:bg-gray-800 text-white font-semibold rounded-xl flex items-center gap-2 transition-colors shadow-theme-md"
           >
             Next <FiChevronRight />
           </button>

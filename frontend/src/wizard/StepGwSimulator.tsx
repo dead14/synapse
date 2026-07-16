@@ -26,7 +26,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
   const [activeTab, setActiveTab] = useState<'offset' | 'unmatched' | 'matched' | 'table' | 'odometer' | 'all'>('all');
 
   const handleDownloadExcel = async () => {
-    const { Workbook } = await import('@excel.js/exceljs');
+    const Papa = (await import('papaparse')).default;
     const dataToExport = matches.map((m: any, index: number) => ({
       'No.': index + 1,
       'Status': m.status,
@@ -37,27 +37,16 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
       'Flagged (>5%)': m.flagged ? 'Yes' : 'No'
     }));
 
-    const workbook = new Workbook();
-    const worksheet = workbook.addWorksheet('Girth Weld Matches');
-    worksheet.columns = [
-      { header: 'No.', key: 'No.', width: 5 },
-      { header: 'Status', key: 'Status', width: 12 },
-      { header: 'Baseline Odometer (m)', key: 'Baseline Odometer (m)', width: 22 },
-      { header: 'Raw Odometer (m)', key: 'Raw Odometer (m)', width: 22 },
-      { header: 'Deviation (%)', key: 'Deviation (%)', width: 15 },
-      { header: 'Offset (m)', key: 'Offset (m)', width: 15 },
-      { header: 'Flagged (>5%)', key: 'Flagged (>5%)', width: 15 },
-    ];
-    worksheet.addRows(dataToExport);
-    worksheet.getRow(1).font = { bold: true };
-    worksheet.views = [{ state: 'frozen', ySplit: 1 }];
-
-    const buffer = await workbook.xlsx.writeBuffer();
-    const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    const csv = Papa.unparse(dataToExport);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'GW_Match_Report.xlsx';
+    link.download = 'GW_Match_Report.csv';
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
 
