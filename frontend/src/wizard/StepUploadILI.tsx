@@ -27,7 +27,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   const [expandedSection, setExpandedSection] = useState<string | null>('all');
   const [datasets, setDatasets] = useState<any[]>([{ id: 1, year: '', vendor: '', file: null }, { id: 2, year: '', vendor: '', file: null }]);
   const [masterIndex, setMasterIndex] = useState(1);
-  const [algorithm, setAlgorithm] = useState('dtw_hungarian');
+  const [algorithm, setAlgorithm] = useState('dtw_hungarian_onedirection');
   const [enablePartialRun, setEnablePartialRun] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [sessionName, setSessionName] = useState('');
@@ -138,7 +138,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           
           let depth = depthKey && row[depthKey] !== undefined ? parseFloat(String(row[depthKey]).replace(/,/g, '')) : null;
           
-          let clockVal = clockKey && row[clockKey] !== undefined ? row[clockKey] : '-';
+          let clockVal = clockKey && row[clockKey] != null ? row[clockKey] : '-';
           let clock = '-';
           if (clockVal !== '-') {
             let clockStr = String(clockVal);
@@ -188,7 +188,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         };
       }
       
-      onNext({ summaryData, enablePartialRun });
+      onNext({ summaryData, algorithm, enablePartialRun });
     } catch (err) {
       console.error(err);
       const detail = err instanceof Error && err.message ? `\n\nDetail: ${err.message}` : '';
@@ -399,7 +399,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                   value={algorithm}
                   onChange={(e) => setAlgorithm(e.target.value)}
                 >
-                  <option value="dtw_hungarian">DTW + Hungarian Match</option>
+                  <option value="dtw_hungarian_onedirection">DTW + Ordered Match (OneDirection)</option>
+                  <option value="dtw_hungarian">DTW + Hungarian Match (Legacy)</option>
                   <option value="traditional_hungarian">Traditional Hungarian</option>
                   <option value="manual">Manual Algorithm</option>
                   <option value="phylogenetic">Phylogenetic Algorithm</option>

@@ -66,8 +66,9 @@ function parseClockHours(val: unknown): number {
 
 /** Format a clock value for display — convert Excel time serials to HH:MM. */
 function formatClockDisplay(val: unknown): string {
-  if (val == null || val === '-' || val === '') return String(val ?? '-');
+  if (val == null || val === '-' || val === '') return '-';
   const s = String(val).trim();
+  if (s.toLowerCase() === 'null' || s.toLowerCase() === 'nan' || s.toLowerCase() === 'undefined' || s === '-') return '-';
   if (s.includes(':')) return s; // already formatted
   const n = typeof val === 'number' ? val : parseFloat(s);
   if (isNaN(n)) return s;
@@ -918,10 +919,13 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                             >
                               {visibleColumns.filter(c => allColumns.includes(c)).map((col, j) => {
                                 let val = row[col];
+                                if (typeof val === 'string' && (val.toLowerCase() === 'null' || val.toLowerCase() === 'nan' || val.toLowerCase() === 'undefined')) {
+                                  val = null;
+                                }
                                 const isNewDataCol = col.includes('NEW');
                                 // Only format computed columns; leave raw data values untouched
-                                if ((col === 'CR mm/yr' || col === 'Lateral Growth') && val !== '-' && !isNaN(parseFloat(val))) {
-                                  val = parseFloat(val).toFixed(3);
+                                if ((col === 'CR mm/yr' || col === 'Lateral Growth') && val !== '-' && val != null && !isNaN(parseFloat(String(val)))) {
+                                  val = parseFloat(String(val)).toFixed(3);
                                 }
                                 // Convert O'Clock Excel time serial fractions to HH:MM
                                 if (col.includes("O'Clock")) {
