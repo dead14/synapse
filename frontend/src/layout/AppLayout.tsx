@@ -1,26 +1,42 @@
-import { SidebarProvider } from "../context/SidebarContext";
-import { Outlet } from "react-router-dom";
-import AppHeader from "./AppHeader";
+import { Outlet } from 'react-router-dom';
 
-const LayoutContent: React.FC = () => {
+import { SidebarProvider, useSidebar } from '../context/SidebarContext';
+import AppHeader from './AppHeader';
+import AppSidebar from './AppSidebar';
+import Backdrop from './Backdrop';
+
+function LayoutContent() {
+  const { isExpanded, isHovered, isMobileOpen } = useSidebar();
+
   return (
-    <div className="min-h-screen flex flex-col bg-white dark:bg-gray-900 overflow-hidden">
-      <AppHeader />
-      <div className="flex-1 overflow-auto transition-all duration-300 ease-in-out">
-        <div className="w-full">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 xl:flex">
+      <a href="#main-content" className="syn-action syn-action--signal syn-skip-link">
+        Skip to main content
+      </a>
+      <AppSidebar />
+      <Backdrop />
+      <div
+        className={`min-w-0 flex-1 transition-[margin] duration-300 ease-in-out ${
+          isExpanded || isHovered ? 'lg:ml-[290px]' : 'lg:ml-[90px]'
+        } ${isMobileOpen ? 'ml-0' : ''}`}
+      >
+        <AppHeader />
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="mx-auto min-h-[calc(100vh-73px)] max-w-(--breakpoint-2xl)"
+        >
           <Outlet />
-        </div>
+        </main>
       </div>
     </div>
   );
-};
+}
 
-const AppLayout: React.FC = () => {
+export default function AppLayout() {
   return (
     <SidebarProvider>
       <LayoutContent />
     </SidebarProvider>
   );
-};
-
-export default AppLayout;
+}

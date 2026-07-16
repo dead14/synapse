@@ -1,176 +1,159 @@
-import { useCallback, useEffect, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
-
-// Assume these icons are imported from an icon library
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BoxCubeIcon,
-  ChevronDownIcon,
-  GridIcon,
-  PieChartIcon,
-  UserCircleIcon,
-} from "../icons";
+  FiActivity,
+  FiBarChart2,
+  FiChevronDown,
+  FiDatabase,
+  FiGrid,
+  FiLayers,
+  FiMoreHorizontal,
+  FiShield,
+  FiUsers,
+} from 'react-icons/fi';
+import { Link, useLocation } from 'react-router-dom';
 
-type NavItem = {
-  name: string;
-  icon: React.ReactNode;
-  path?: string;
-  subItems?: { name: string; path: string; pro?: boolean; new?: boolean }[];
-};
+import { useAuth } from '../context/AuthContext';
+import { useSidebar } from '../context/SidebarContext';
+import { navigationForRole } from './navigation';
 
-const navItems: NavItem[] = [
-  { icon: <GridIcon />, name: "Dashboard", path: "/" },
-  { 
-    icon: <BoxCubeIcon />, 
-    name: "Data Management",
-    subItems: [
-      { name: "Data", path: "/data" },
-      { name: "ILI Alignment", path: "/alignment" }
-    ]
-  },
-  { 
-    icon: <PieChartIcon />, 
-    name: "Integrity Analysis",
-    subItems: [
-      { name: "FFS: New Assessment", path: "/ffs" }
-    ]
-  },
-  { 
-    icon: <UserCircleIcon />, 
-    name: "Administration",
-    subItems: [
-      { name: "User List", path: "/users" },
-      { name: "Add User", path: "/users/add" },
-      { name: "Organizations", path: "/organizations" },
-      { name: "Roles & Permissions", path: "/roles" },
-      { name: "Activity Logs", path: "/activity-logs" }
-    ]
-  }
-];
+const groupIcons = {
+  Portfolio: FiGrid,
+  'Data & alignment': FiDatabase,
+  Assessment: FiBarChart2,
+  Administration: FiUsers,
+} as const;
 
-const AppSidebar: React.FC = () => {
+export default function AppSidebar() {
+  const { user } = useAuth();
+  const { isExpanded, isHovered, isMobileOpen, setIsHovered, toggleMobileSidebar } = useSidebar();
   const location = useLocation();
+  const groups = useMemo(() => navigationForRole(user?.role), [user?.role]);
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const submenuRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [submenuHeights, setSubmenuHeights] = useState<Record<string, number>>({});
+  const showsText = isExpanded || isHovered || isMobileOpen;
 
-  const [openSubmenu, setOpenSubmenu] = useState<{
-    index: number;
-  } | null>(null);
+  const pathIsActive = useCallback((path: string) => {
+    if (path === '/') return location.pathname === '/';
+    if (path === '/ffs') return location.pathname === '/ffs' || location.pathname.startsWith('/ffs/');
+    return location.pathname === path;
+  }, [location.pathname]);
 
-  const isActive = useCallback(
-    (path: string) => location.pathname === path,
-    [location.pathname]
-  );
-
-  // Close dropdown when clicking outside
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (!(event.target as Element).closest('.nav-dropdown-container')) {
-        setOpenSubmenu(null);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+    const active = groups.find((group) => group.items.some((item) => pathIsActive(item.path)));
+    setOpenGroup(active && active.items.length > 1 ? active.label : null);
+  }, [groups, pathIsActive]);
 
-  const handleSubmenuToggle = (index: number) => {
-    setOpenSubmenu((prevOpenSubmenu) => {
-      if (prevOpenSubmenu && prevOpenSubmenu.index === index) {
-        return null;
-      }
-      return { index };
-    });
+  useEffect(() => {
+    if (!openGroup) return;
+    const element = submenuRefs.current[openGroup];
+    setSubmenuHeights((current) => ({ ...current, [openGroup]: element?.scrollHeight ?? 0 }));
+  }, [openGroup, showsText]);
+
+  const closeMobile = () => {
+    if (isMobileOpen) toggleMobileSidebar();
   };
 
-  const renderMenuItems = (items: NavItem[]) => (
-    <ul className="flex flex-row items-center gap-1 flex-wrap w-full px-2">
-      {items.map((nav, index) => (
-        <li key={nav.name} className="relative nav-dropdown-container shrink-0">
-          {nav.subItems ? (
-            <button
-              onClick={() => handleSubmenuToggle(index)}
-              className={`menu-item group ${
-                openSubmenu?.index === index
-                  ? "menu-item-active"
-                  : "menu-item-inactive"
-              } cursor-pointer flex flex-row items-center gap-2 px-3 py-2 rounded-lg`}
-            >
-              <span
-                className={`menu-item-icon-size ${
-                  openSubmenu?.index === index
-                    ? "menu-item-icon-active"
-                    : "menu-item-icon-inactive"
-                }`}
-              >
-                {nav.icon}
-              </span>
-              <span className="menu-item-text whitespace-nowrap">{nav.name}</span>
-              <ChevronDownIcon
-                className={`ml-1 w-3.5 h-3.5 transition-transform duration-200 ${
-                  openSubmenu?.index === index
-                    ? "rotate-180 text-brand-500"
-                    : ""
-                }`}
-              />
-            </button>
-          ) : (
-            nav.path && (
-              <Link
-                to={nav.path}
-                className={`menu-item group flex flex-row items-center gap-2 px-3 py-2 rounded-lg ${
-                  isActive(nav.path) ? "menu-item-active" : "menu-item-inactive"
-                }`}
-              >
-                <span
-                  className={`menu-item-icon-size ${
-                    isActive(nav.path)
-                      ? "menu-item-icon-active"
-                      : "menu-item-icon-inactive"
-                  }`}
-                >
-                  {nav.icon}
-                </span>
-                <span className="menu-item-text whitespace-nowrap">{nav.name}</span>
-              </Link>
-            )
-          )}
-          
-          {/* Dropdown Menu */}
-          {nav.subItems && (
-            <div
-              className={`absolute top-full left-0 mt-1 min-w-[200px] bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-100 dark:border-gray-700 transition-all duration-200 z-50 ${
-                openSubmenu?.index === index
-                  ? "opacity-100 visible translate-y-0"
-                  : "opacity-0 invisible -translate-y-2 pointer-events-none"
-              }`}
-            >
-              <ul className="py-2 flex flex-col">
-                {nav.subItems.map((subItem) => (
-                  <li key={subItem.name}>
-                    <Link
-                      to={subItem.path}
-                      onClick={() => setOpenSubmenu(null)}
-                      className={`block px-4 py-2 text-sm transition-colors ${
-                        isActive(subItem.path)
-                          ? "bg-brand-50 text-brand-600 font-medium dark:bg-gray-700 dark:text-brand-400"
-                          : "text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
-                      }`}
-                    >
-                      {subItem.name}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-
   return (
-    <nav className="w-full flex items-center h-full shrink-0 z-40 relative">
-      {/* Hide the old logo here since it will be in AppHeader, or keep it if needed. For now, it's a pure nav bar. */}
-      {renderMenuItems(navItems)}
-    </nav>
-  );
-};
+    <aside
+      className={`fixed left-0 top-0 z-50 mt-16 flex h-screen flex-col border-r border-gray-200 bg-white px-5 text-gray-900 transition-all duration-300 ease-in-out dark:border-gray-800 dark:bg-gray-900 lg:mt-0 ${
+        isExpanded || isMobileOpen || isHovered ? 'w-[290px]' : 'w-[90px]'
+      } ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}
+      onMouseEnter={() => !isExpanded && setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      <div className={`flex py-8 ${showsText ? 'justify-start' : 'lg:justify-center'}`}>
+        <Link to="/" onClick={closeMobile} className="flex items-center gap-3" aria-label="Synapse dashboard">
+          <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-brand-500 text-lg font-bold text-white shadow-theme-xs">S</span>
+          {showsText && (
+            <span className="leading-none">
+              <strong className="block text-xl font-semibold tracking-tight text-gray-900 dark:text-white">Synapse</strong>
+              <small className="mt-1.5 block text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Pipeline Integrity</small>
+            </span>
+          )}
+        </Link>
+      </div>
 
-export default AppSidebar;
+      <div className="no-scrollbar flex flex-col overflow-y-auto pb-24">
+        <nav className="mb-6" aria-label="Primary navigation">
+          <h2 className={`mb-4 flex text-xs uppercase leading-5 text-gray-400 ${showsText ? 'justify-start' : 'lg:justify-center'}`}>
+            {showsText ? 'Menu' : <FiMoreHorizontal className="size-6" />}
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {groups.map((group) => {
+              const Icon = groupIcons[group.label as keyof typeof groupIcons] ?? FiLayers;
+              const active = group.items.some((item) => pathIsActive(item.path));
+              const open = openGroup === group.label;
+              const singleItem = group.items.length === 1 ? group.items[0] : null;
+
+              return (
+                <li key={group.label}>
+                  {singleItem ? (
+                    <Link
+                      to={singleItem.path}
+                      onClick={closeMobile}
+                      className={`menu-item group ${active ? 'menu-item-active' : 'menu-item-inactive'} ${!showsText ? 'lg:justify-center' : ''}`}
+                      title={!showsText ? singleItem.label : undefined}
+                    >
+                      <Icon className={`size-5 ${active ? 'menu-item-icon-active' : 'menu-item-icon-inactive'}`} />
+                      {showsText && <span>{singleItem.label}</span>}
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setOpenGroup(open ? null : group.label)}
+                      className={`menu-item group ${active || open ? 'menu-item-active' : 'menu-item-inactive'} ${!showsText ? 'lg:justify-center' : ''}`}
+                      aria-expanded={open}
+                      title={!showsText ? group.label : undefined}
+                    >
+                      <Icon className={`size-5 ${active || open ? 'menu-item-icon-active' : 'menu-item-icon-inactive'}`} />
+                      {showsText && <span>{group.label}</span>}
+                      {showsText && <FiChevronDown className={`ml-auto size-5 transition-transform ${open ? 'rotate-180' : ''}`} />}
+                    </button>
+                  )}
+
+                  {!singleItem && showsText && (
+                    <div
+                      ref={(element) => { submenuRefs.current[group.label] = element; }}
+                      className="overflow-hidden transition-[height] duration-300"
+                      style={{ height: open ? `${submenuHeights[group.label] ?? 0}px` : 0 }}
+                    >
+                      <ul className="ml-9 mt-2 space-y-1">
+                        {group.items.map((item) => (
+                          <li key={item.path}>
+                            <Link
+                              to={item.path}
+                              onClick={closeMobile}
+                              className={`menu-dropdown-item ${pathIsActive(item.path) ? 'menu-dropdown-item-active' : 'menu-dropdown-item-inactive'}`}
+                            >
+                              <span>{item.label}</span>
+                            </Link>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+
+        {showsText && (
+          <div className="mt-auto rounded-2xl bg-gray-50 p-4 dark:bg-white/[0.03]">
+            <div className="mb-3 flex items-center gap-2 text-brand-500">
+              <FiShield className="size-5" />
+              <strong className="text-sm">Engineering workspace</strong>
+            </div>
+            <p className="text-xs leading-5 text-gray-500 dark:text-gray-400">
+              Evidence-backed pipeline integrity analysis and decision support.
+            </p>
+            <div className="mt-3 flex items-center gap-2 text-xs font-medium text-success-700 dark:text-success-400">
+              <FiActivity className="size-4" /> System connected
+            </div>
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
