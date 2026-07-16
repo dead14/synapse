@@ -62,6 +62,17 @@ def normalize_clock(val):
         except: pass
     try:
         h = float(s)
+        # Excel stores time as a fraction of a 24-hour day (0 < h < 1)
+        if 0 < h < 1:
+            total_hours = h * 24
+            hours = int(total_hours)
+            minutes = round((total_hours - hours) * 60)
+            if minutes == 60:
+                hours += 1
+                minutes = 0
+            if hours == 0:
+                hours = 12
+            return f"{hours:02d}:{minutes:02d}"
         return f"{int(h):02d}:00"
     except: pass
     return s

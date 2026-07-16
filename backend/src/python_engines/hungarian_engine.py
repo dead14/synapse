@@ -119,7 +119,25 @@ class HungarianAnomalyAlignmentEngine:
                 except:
                     dist_gw = None
                     
-                clock = f.get("clock_position") or f.get("orientation")
+                # Prefer the pre-converted 'clock' field from the frontend upload,
+                # fall back to raw column values, and convert Excel time serials.
+                clock = f.get("clock") or f.get("clock_position") or f.get("orientation")
+                if clock is not None and clock != '-':
+                    try:
+                        cv = float(clock)
+                        # Excel stores time as fraction of a 24-hour day (0..1)
+                        if 0 < cv < 1:
+                            total_hours = cv * 24
+                            h = int(total_hours)
+                            m = round((total_hours - h) * 60)
+                            if m == 60:
+                                h += 1
+                                m = 0
+                            if h == 0:
+                                h = 12
+                            clock = f"{h}:{m:02d}"
+                    except (ValueError, TypeError):
+                        pass
                 
                 mapped.append({
                     "id": str(f.get("feature_id") or f.get("id")),
@@ -140,7 +158,11 @@ class HungarianAnomalyAlignmentEngine:
 
     def get_gw_matches(self) -> list[dict]:
         """
-        Returns list of locked GW matches from DB, sorted by oldVal.
+        Return the locked GW pairs produced by the GW-alignment step.
+
+        Hungarian must never derive a new GW pairing.  The canonical
+        ``gwMatchesFinal`` payload is therefore used first and normalized into
+        the legacy boundary shape consumed by the anomaly segmenter.
         """
         try:
             if not self.session_id:
@@ -152,11 +174,8 @@ class HungarianAnomalyAlignmentEngine:
                 print(f"[WARN] No AlignmentSession found for id={self.session_id}")
                 return []
                 
-            gw_pairs = sess.params_json.get("gwMatches", [])
-            # New sessions persist the strict Phase-1 contract separately from
-            # the legacy UI payload.  Use it as the canonical segment boundary
-            # source when the legacy list is absent.
-            if not gw_pairs:
+            gw_pairs_final = sess.params_json.get("gwMatchesFinal", [])
+            if gw_pairs_final:
                 gw_pairs = [
                     {
                         "oldVal": pair.get("old_odometer"),
@@ -168,7 +187,21 @@ class HungarianAnomalyAlignmentEngine:
                         ),
                         "status": "Match",
                     }
-                    for pair in sess.params_json.get("gwMatchesFinal", [])
+                    for pair in gw_pairs_final
+                    if str(pair.get("status", "MATCHED")).upper() in {"MATCH", "MATCHED"}
+                ]
+            else:
+                # Backward compatibility for sessions saved before
+                # gwMatchesFinal existed.  DTW used oldDist/newDist whereas
+                # the earlier UI used oldVal/newVal, so accept either shape.
+                gw_pairs = [
+                    {
+                        "oldVal": pair.get("oldVal", pair.get("oldDist")),
+                        "newVal": pair.get("newVal", pair.get("newDist")),
+                        "offset": pair.get("offset"),
+                        "status": pair.get("status", "Match"),
+                    }
+                    for pair in sess.params_json.get("gwMatches", [])
                 ]
             if not gw_pairs:
                 print(f"[WARN] No gwMatches found in params_json for session_id={self.session_id}")
@@ -221,6 +254,36 @@ class HungarianAnomalyAlignmentEngine:
             feature for feature in features
             if feature.get("depth_pct") is None or feature["depth_pct"] >= self.depth_thresh
         ]
+
+    @staticmethod
+    def _is_matchable_anomaly(feature: dict) -> bool:
+        """Only anomaly / metal-loss records are eligible for Hungarian."""
+        feature_type = str(feature.get("originalType", "")).strip().lower()
+        raw_type = str(feature.get("raw", {}).get("type", "")).strip().lower()
+        return feature_type in {"anomaly", "metal loss", "metal_loss"} or raw_type == "anomaly"
+
+    @staticmethod
+    def _is_gw_feature(feature: dict) -> bool:
+        """Return whether Phase 1 owns this feature as a physical GW/anchor."""
+        raw = feature.get("raw", {})
+        feature_types = {
+            str(feature.get("originalType", "")).strip().lower(),
+            str(raw.get("type", "")).strip().lower(),
+            str(raw.get("feature_type", "")).strip().lower(),
+            str(raw.get("originalType", "")).strip().lower(),
+        }
+        return bool(feature_types & {"weld", "girth weld", "valve", "tee", "flange"})
+
+    @classmethod
+    def _partition_hungarian_features(cls, features: list[dict], locked_ids: set[str]):
+        """Split Phase-2 input without re-emitting any Phase-1 GW feature."""
+        remaining = [feature for feature in features if str(feature["id"]) not in locked_ids]
+        anomalies = [feature for feature in remaining if cls._is_matchable_anomaly(feature)]
+        bypassed = [
+            feature for feature in remaining
+            if not cls._is_matchable_anomaly(feature) and not cls._is_gw_feature(feature)
+        ]
+        return anomalies, bypassed
 
     def build_cost_matrix(
         self,
@@ -388,29 +451,16 @@ class HungarianAnomalyAlignmentEngine:
         print(f"      [Validation] Locked GWs (MatchesFinal): {len(gw_matches_final)}", file=sys.stderr)
         print(f"      [Validation] Orphans GWs: {len(gw_orphans)}", file=sys.stderr)
 
-        # HANYA fitur yang BELUM MATCH (termasuk Anomaly) yang lanjut ke langkah 4-6
-        # DAN KITA FILTER HANYA ANOMALY (Buang weld, valve, tee, flange, bend)
-        non_anomaly_types = {'weld', 'girth weld', 'valve', 'tee', 'flange', 'bend'}
-        
-        non_anomaly_old = [
-            f for f in anomalies_1_all
-            if str(f["id"]) not in locked_run1_str and str(f.get("originalType", "")).lower() in non_anomaly_types
-        ]
-        
-        non_anomaly_new = [
-            f for f in anomalies_2_all
-            if str(f["id"]) not in locked_run2_str and str(f.get("originalType", "")).lower() in non_anomaly_types
-        ]
-
-        anomalies_1 = [
-            f for f in anomalies_1_all 
-            if str(f["id"]) not in locked_run1_str and str(f.get("originalType", "")).lower() not in non_anomaly_types
-        ]
-        
-        anomalies_2 = [
-            f for f in anomalies_2_all
-            if str(f["id"]) not in locked_run2_str and str(f.get("originalType", "")).lower() not in non_anomaly_types
-        ]
+        # Phase 1 owns every GW/anchor row.  Hungarian receives only anomaly /
+        # metal-loss rows, while genuine non-GW features may remain visible in
+        # the bypass buckets.  This prevents unmatched GWs from appearing once
+        # in gw_unmatched and a second time as Bypassed OLD/NEW.
+        anomalies_1, non_anomaly_old = self._partition_hungarian_features(
+            anomalies_1_all, locked_run1_str
+        )
+        anomalies_2, non_anomaly_new = self._partition_hungarian_features(
+            anomalies_2_all, locked_run2_str
+        )
 
         print(f"      [Validation] Valid Anomaly Candidates Run1: {len(anomalies_1)} (Out of {len(anomalies_1_all)})", file=sys.stderr)
         print(f"      [Validation] Valid Anomaly Candidates Run2: {len(anomalies_2)} (Out of {len(anomalies_2_all)})", file=sys.stderr)
@@ -553,7 +603,7 @@ class HungarianAnomalyAlignmentEngine:
                 return candidates[0]
             return min(candidates, key=lambda feature: abs(feature["abs_distance_m"] - float(odometer)))
         
-        def format_row(old_id_val, new_id_val, status, odo_diff=None, old_feature=None, new_feature=None, old_odometer=None, new_odometer=None):
+        def format_row(old_id_val, new_id_val, status, result_group, odo_diff=None, old_feature=None, new_feature=None, old_odometer=None, new_odometer=None):
             f1 = old_feature or find_feature(anomalies_1_all, old_id_val, old_odometer)
             f2 = new_feature or find_feature(anomalies_2_all, new_id_val, new_odometer)
             return {
@@ -562,6 +612,7 @@ class HungarianAnomalyAlignmentEngine:
                 "feature_new_id": safe_int(new_id_val) if new_id_val else None,
                 "match_status": status,
                 "Match/Unmatch": status,
+                "Result Group": result_group,
                 "odo_diff": odo_diff,
                 "Identif. OLD": f1.get("id") if f1 else "-",
                 "Identif. NEW": f2.get("id") if f2 else "-",
@@ -582,7 +633,7 @@ class HungarianAnomalyAlignmentEngine:
         gw_locked = []
         for gw in gw_matches_final:
             gw_locked.append(format_row(
-                gw.get("old_id"), gw.get("new_id"), "Matched",
+                gw.get("old_id"), gw.get("new_id"), "Matched", "GW",
                 old_odometer=gw.get("old_odometer"), new_odometer=gw.get("new_odometer")
             ))
             
@@ -590,11 +641,11 @@ class HungarianAnomalyAlignmentEngine:
         for gw in gw_orphans:
             status = gw.get("status", "Skipped")
             if status == "ONLY_OLD":
-                gw_unmatched.append(format_row(gw.get("old_id") or gw.get("id"), None, status))
+                gw_unmatched.append(format_row(gw.get("old_id") or gw.get("id"), None, status, "GW"))
             elif status == "ONLY_NEW":
-                gw_unmatched.append(format_row(None, gw.get("new_id") or gw.get("id"), status))
+                gw_unmatched.append(format_row(None, gw.get("new_id") or gw.get("id"), status, "GW"))
             else:
-                gw_unmatched.append(format_row(gw.get("old_id") or gw.get("id"), gw.get("new_id") or gw.get("id"), status))
+                gw_unmatched.append(format_row(gw.get("old_id") or gw.get("id"), gw.get("new_id") or gw.get("id"), status, "GW"))
 
         anomaly_matched = []
         anomaly_only_old = []
@@ -604,8 +655,9 @@ class HungarianAnomalyAlignmentEngine:
 
         for r in results:
             f1, f2 = result_features[id(r)]
+            result_group = "BYPASSED" if r.match_status.startswith("Bypassed") else "ANOMALY"
             row = format_row(
-                r.feature_old_id, r.feature_new_id, r.match_status, r.odo_diff,
+                r.feature_old_id, r.feature_new_id, r.match_status, result_group, r.odo_diff,
                 old_feature=f1, new_feature=f2
             )
             if r.match_status == "Matched":

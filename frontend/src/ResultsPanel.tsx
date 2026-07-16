@@ -49,6 +49,39 @@ interface ResultsPanelProps {
   onUpdateMatch?: (sourceIdx: number, targetIdx: number) => void;
 }
 
+/** Parse a clock value to hours (0..12) regardless of format ("HH:MM" or Excel serial fraction). */
+function parseClockHours(val: unknown): number {
+  if (val == null || val === '-') return 0;
+  const s = String(val).trim();
+  if (s.includes(':')) {
+    const [h, m] = s.split(':').map(Number);
+    return (h % 12) + (m || 0) / 60;
+  }
+  const n = parseFloat(s);
+  if (isNaN(n)) return 0;
+  // Excel time serial: fraction of 24-hour day
+  if (n > 0 && n < 1) return (n * 24) % 12;
+  return n % 12;
+}
+
+/** Format a clock value for display — convert Excel time serials to HH:MM. */
+function formatClockDisplay(val: unknown): string {
+  if (val == null || val === '-' || val === '') return String(val ?? '-');
+  const s = String(val).trim();
+  if (s.includes(':')) return s; // already formatted
+  const n = typeof val === 'number' ? val : parseFloat(s);
+  if (isNaN(n)) return s;
+  if (n > 0 && n < 1) {
+    const totalHours = n * 24;
+    let h = Math.floor(totalHours);
+    let m = Math.round((totalHours - h) * 60);
+    if (m === 60) { h += 1; m = 0; }
+    if (h === 0) h = 12;
+    return `${h}:${String(m).padStart(2, '0')}`;
+  }
+  return s;
+}
+
 const ProbabilityModal = ({ sourceRow, targetRow, onConfirm, onCancel }: { sourceRow: any, targetRow: any, onConfirm: () => void, onCancel: () => void }) => {
   if (!sourceRow || !targetRow) return null;
   
@@ -56,8 +89,8 @@ const ProbabilityModal = ({ sourceRow, targetRow, onConfirm, onCancel }: { sourc
   const dDepth = Math.abs((parseFloat(targetRow['Depth OLD (%WT)']) || 0) - (parseFloat(sourceRow['Depth NEW (%WT)']) || 0));
   const dLength = Math.abs((parseFloat(targetRow['Length OLD (mm)']) || 0) - (parseFloat(sourceRow['Length NEW (mm)']) || 0));
   const dWidth = Math.abs((parseFloat(targetRow['Width OLD (mm)']) || 0) - (parseFloat(sourceRow['Width NEW (mm)']) || 0));
-  const oClockOld = parseFloat(targetRow["O'Clock OLD"]) || 0;
-  const oClockNew = parseFloat(sourceRow["O'Clock NEW"]) || 0;
+  const oClockOld = parseClockHours(targetRow["O'Clock OLD"]);
+  const oClockNew = parseClockHours(sourceRow["O'Clock NEW"]);
   let dClock = Math.abs(oClockOld - oClockNew);
   if (dClock > 6) dClock = 12 - dClock;
   
@@ -889,6 +922,10 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                                 // Only format computed columns; leave raw data values untouched
                                 if ((col === 'CR mm/yr' || col === 'Lateral Growth') && val !== '-' && !isNaN(parseFloat(val))) {
                                   val = parseFloat(val).toFixed(3);
+                                }
+                                // Convert O'Clock Excel time serial fractions to HH:MM
+                                if (col.includes("O'Clock")) {
+                                  val = formatClockDisplay(val);
                                 }
                                 return (
                                   <td 
