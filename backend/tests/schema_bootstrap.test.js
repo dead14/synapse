@@ -14,7 +14,13 @@ test('creates the base schema before applying tenant migrations', async () => {
             calls.push('read');
             return 'SELECT 1;';
         },
-        query: async (sql) => calls.push(sql),
+        query: async (sql) => {
+            if (sql.includes('information_schema.tables')) {
+                return { rows: [{ exists: false }] };
+            }
+            calls.push(sql);
+            return { rows: [] };
+        },
     });
 
     assert.deepEqual(calls, ['base', 'read', 'SELECT 1;']);

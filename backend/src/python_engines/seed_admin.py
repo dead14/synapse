@@ -14,8 +14,8 @@ def seed_admin():
     username = required_env('SYNAPSE_ADMIN_USERNAME')
     email = required_env('SYNAPSE_ADMIN_EMAIL').lower()
     password = required_env('SYNAPSE_ADMIN_PASSWORD')
-    if len(password) < 12 or len(password) > 128:
-        raise RuntimeError('SYNAPSE_ADMIN_PASSWORD must be between 12 and 128 characters')
+    if len(password) < 6 or len(password) > 128:
+        raise RuntimeError('SYNAPSE_ADMIN_PASSWORD must be between 6 and 128 characters')
 
     db = SessionLocal()
     try:

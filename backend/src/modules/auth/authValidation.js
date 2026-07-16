@@ -32,8 +32,8 @@ function validateRegistrationInput(input = {}) {
     if (!validateEmail(email)) {
         return { ok: false, error: 'A valid email address is required' };
     }
-    if (password.length < 12 || password.length > 128) {
-        return { ok: false, error: 'Password must be between 12 and 128 characters' };
+    if (password.length < 6 || password.length > 128) {
+        return { ok: false, error: 'Password must be between 6 and 128 characters' };
     }
 
     return {

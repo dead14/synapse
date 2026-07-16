@@ -50,8 +50,8 @@ exports.createUser = async (req, res) => {
     if (username.length < 2 || username.length > 80 || !validateEmail(email)) {
         return res.status(400).json({ error: 'A valid username and email are required' });
     }
-    if (password.length < 12 || password.length > 128) {
-        return res.status(400).json({ error: 'Password must be between 12 and 128 characters' });
+    if (password.length < 6 || password.length > 128) {
+        return res.status(400).json({ error: 'Password must be between 6 and 128 characters' });
     }
     if (!canAssignRole(req.user, role)) {
         return res.status(403).json({ error: 'The requested role cannot be assigned' });
@@ -89,8 +89,8 @@ exports.resetPassword = async (req, res) => {
     if (!id) {
         return res.status(400).json({ error: 'Invalid user id' });
     }
-    if (typeof newPassword !== 'string' || newPassword.length < 12 || newPassword.length > 128) {
-        return res.status(400).json({ error: 'New password must be between 12 and 128 characters' });
+    if (typeof newPassword !== 'string' || newPassword.length < 6 || newPassword.length > 128) {
+        return res.status(400).json({ error: 'New password must be between 6 and 128 characters' });
     }
     try {
         const passwordHash = await bcrypt.hash(newPassword, 12);

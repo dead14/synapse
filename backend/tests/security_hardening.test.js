@@ -191,7 +191,7 @@ test('registration validation normalizes identity fields and enforces a strong p
             email: 'operator@example.test',
             password: 'short',
         }).error,
-        'Password must be between 12 and 128 characters',
+        'Password must be between 6 and 128 characters',
     );
 });
 
