@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettings, FiShield, FiStar, FiPlus } from 'react-icons/fi';
+import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettings, FiShield, FiPlus } from 'react-icons/fi';
 import Papa from 'papaparse';
 import { apiUrl } from '../utils/api';
+import { summarizeIliRows } from '../utils/iliRowParser';
 import { readXlsxRows } from '../utils/xlsx';
 
 interface StepUploadILIProps {
@@ -91,95 +92,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         
         const jsonData = await readUploadedRows(ds.file);
         
-        const counts = { total: jsonData.length, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0, gwAnchors: 0, invalidAnchorDistances: 0 };
-        const rawFeatures: any[] = [];
-        
-        jsonData.forEach((row: any, idx: number) => {
-          const keys = Object.keys(row);
-          // Safely find the type column, avoiding "Feature ID"
-          const typeKey = keys.find(k => /feature type|feature_type|^type$/i.test(k)) 
-                       || keys.find(k => /type|feature/i.test(k) && !/id/i.test(k));
-          let ftype = String(typeKey ? (row[typeKey] || '') : '').toLowerCase();
-          
-          let standardizedType = 'other';
-          if (ftype.includes('metal loss') || ftype.includes('corrosion') || ftype.includes('ml')) { counts.anomalies++; standardizedType = 'anomaly'; }
-          else if (ftype.includes('weld') || ftype === 'gw' || ftype.includes('girth') || ftype.includes('seam')) { counts.welds++; standardizedType = 'weld'; }
-          else if (ftype.includes('valve')) { counts.valves++; standardizedType = 'valve'; }
-          else if (ftype.includes('tee')) { counts.tees++; standardizedType = 'tee'; }
-          else if (ftype.includes('tap') || ftype.includes('offtake')) { counts.offtakes++; standardizedType = 'offtake'; }
-          else if (ftype.includes('bend')) { counts.bends++; standardizedType = 'bend'; }
-          else { counts.others++; }
-          
-          const distKey = keys.find(k => /odometer|log[ _-]?distance|^distance(?:[ _-]?m)?$|^dist(?:ance)?(?:[ _-]?m)?$|chainage/i.test(k));
-          let dist: number | null = null;
-          if (distKey && row[distKey] !== undefined && row[distKey] !== null) {
-            const parsed = parseFloat(String(row[distKey]).replace(/,/g, ''));
-            if (Number.isFinite(parsed)) dist = parsed;
-          } else {
-            // Fallback: Find the first key that contains a valid number and is not an ID
-            const numericKey = keys.find(k => !isNaN(parseFloat(String(row[k]))) && !/id|type|feature|anomaly/i.test(k));
-            if (numericKey) {
-              const parsed = parseFloat(String(row[numericKey]).replace(/,/g, ''));
-              if (Number.isFinite(parsed)) dist = parsed;
-            }
-          }
-
-          const isGwAnchor = standardizedType === 'weld' || standardizedType === 'valve' || standardizedType === 'tee';
-          if (isGwAnchor) {
-            counts.gwAnchors++;
-            if (dist === null) counts.invalidAnchorDistances++;
-          }
-          
-          const idKey = keys.find(k => /id|identifier|joint/i.test(k));
-          const idVal = idKey ? String(row[idKey] || '').trim() : '';
-          const id = idVal !== '' ? idVal : `F-${idx + 1}`;
-          
-          const depthKey = keys.find(k => /depth|dpt|%wt|wt loss|kedalaman/i.test(k));
-          const clockKey = keys.find(k => /clock|orientation|ori|angle|pos|jam|arah/i.test(k));
-          const lengthKey = keys.find(k => /length|len|panjang/i.test(k));
-          const widthKey = keys.find(k => /width|wid|lebar/i.test(k));
-          
-          let depth = depthKey && row[depthKey] !== undefined ? parseFloat(String(row[depthKey]).replace(/,/g, '')) : null;
-          
-          let clockVal = clockKey && row[clockKey] != null ? row[clockKey] : '-';
-          let clock = '-';
-          if (clockVal !== '-') {
-            let clockStr = String(clockVal);
-            if (!clockStr.includes(':') && !isNaN(parseFloat(clockStr.replace(/,/g, '.')))) {
-              let clockNum = parseFloat(clockStr.replace(/,/g, '.'));
-              // Excel stores time as a fraction of a 24-hour day
-              if (clockNum >= 0 && clockNum <= 1) {
-                let totalHours = clockNum * 24;
-                let h = Math.floor(totalHours);
-                let m = Math.round((totalHours - h) * 60);
-                if (m === 60) { h += 1; m = 0; }
-                if (h === 0) h = 12; // Pipe top is usually 12:00
-                clock = `${h}:${m.toString().padStart(2, '0')}`;
-              } else {
-                clock = clockStr;
-              }
-            } else {
-              clock = clockStr;
-            }
-          }
-          
-          let length = lengthKey && row[lengthKey] !== undefined ? parseFloat(String(row[lengthKey]).replace(/,/g, '')) : null;
-          let width = widthKey && row[widthKey] !== undefined ? parseFloat(String(row[widthKey]).replace(/,/g, '')) : null;
-          
-          rawFeatures.push({
-            ...row,
-            id: String(id),
-            type: standardizedType,
-            // Do not turn a missing odometer into 0 m.  A fake zero-distance
-            // anchor corrupts the DTW path and creates a false offset jump.
-            dist,
-            originalType: typeKey ? row[typeKey] : 'Unknown',
-            depth: isNaN(depth as number) ? null : depth,
-            clock: clock,
-            length: isNaN(length as number) ? null : length,
-            width: isNaN(width as number) ? null : width
-          });
-        });
+        const { rawFeatures, counts } = summarizeIliRows(jsonData);
 
         const parsedRun = {
           name: ds.file.name,
@@ -230,10 +143,10 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   const isExpanded = (section: string) => expandedSection === 'all' || expandedSection === section;
 
   return (
-    <div className="alignment-surface w-full flex flex-col gap-6 animate-fade-in">
+    <div className="alignment-surface alignment-intake w-full flex flex-col gap-4 animate-fade-in">
       
       {/* Page Title */}
-      <section className="rounded-2xl border border-slate-200 bg-white px-6 py-6 shadow-[0_12px_30px_rgba(15,23,42,0.06)] sm:px-8 sm:py-7">
+      <section className="alignment-intake__header">
         <div className="flex flex-col items-start justify-between gap-6 lg:flex-row lg:items-center">
           <div className="max-w-2xl">
             <div className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
@@ -248,30 +161,35 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
             href={apiUrl('/api/download-template')}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex justify-center rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+            className="alignment-intake__action alignment-intake__action--secondary"
           >
             Download Excel Template
           </a>
           <button 
             onClick={handleInitialize}
             disabled={!allFilesUploaded || isProcessing}
-            className={`inline-flex justify-center rounded-xl px-5 py-3 text-sm font-semibold transition-colors ${allFilesUploaded && !isProcessing ? 'bg-brand-600 text-white shadow-md shadow-brand-500/20 hover:bg-brand-700' : 'cursor-not-allowed bg-slate-100 text-slate-400'}`}
+            className={`alignment-intake__action alignment-intake__action--primary group ${allFilesUploaded && !isProcessing ? '' : 'is-disabled'}`}
           >
             {isProcessing ? 'Reading Data...' : 'Initialize Alignment'}
+            {allFilesUploaded && !isProcessing && (
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/20 transition-transform group-hover:translate-x-1">
+                →
+              </span>
+            )}
           </button>
           </div>
         </div>
       </section>
 
-      <div className="flex flex-col-reverse gap-6">
+      <div className="flex flex-col-reverse gap-4">
         {/* Left Column (Now Bottom): Asset & Specs */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           
           {/* Section 1: Asset Identification */}
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="alignment-config-panel">
             <button 
               onClick={() => toggleSection('asset')}
-              className="w-full border-b border-slate-100 bg-slate-50 px-6 py-4 flex justify-between items-center transition-colors hover:bg-slate-100/70"
+              className="alignment-config-panel__trigger"
             >
               <h3 className="font-semibold text-gray-800 flex items-center gap-2">
                 <FiInfo className="text-gray-500" /> Asset & Operations
@@ -280,18 +198,18 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
             </button>
             
             {isExpanded('asset') && (
-              <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <div className="alignment-config-panel__body grid grid-cols-1 sm:grid-cols-2">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Pipeline Name (Session Name)</label>
-                  <input type="text" value={sessionName} onChange={(e) => setSessionName(e.target.value)} className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none"   placeholder="e.g. SMR-SBY Gas Line" />
+                  <input type="text" value={sessionName} onChange={(e) => setSessionName(e.target.value)} className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none transition-all"   placeholder="e.g. SMR-SBY Gas Line" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Segment Route</label>
-                  <input type="text" className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none"   placeholder="e.g. Station A - Station B" />
+                  <input type="text" className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none transition-all"   placeholder="e.g. Station A - Station B" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Environment</label>
-                  <select className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white"  >
+                  <select className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white transition-all"  >
                     <option>Onshore</option>
                     <option>Offshore</option>
                     <option>Subsea</option>
@@ -300,11 +218,11 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Length (km)</label>
-                  <input type="number" className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none"   placeholder="150" />
+                  <input type="number" className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none transition-all"   placeholder="150" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Product Medium</label>
-                  <select className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white"  >
+                  <select className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white transition-all"  >
                     <option>Natural Gas (Dry)</option>
                     <option>Natural Gas (Wet)</option>
                     <option>Crude Oil</option>
@@ -314,17 +232,17 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">MAOP (psi)</label>
-                  <input type="number" className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none"   placeholder="e.g. 1200" />
+                  <input type="number" className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none transition-all"   placeholder="e.g. 1200" />
                 </div>
               </div>
             )}
           </div>
 
           {/* Section 2: Physical Specs & Protection */}
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="alignment-config-panel">
             <button 
               onClick={() => toggleSection('specs')}
-              className="w-full border-b border-slate-100 bg-slate-50 px-6 py-4 flex justify-between items-center transition-colors hover:bg-slate-100/70"
+              className="alignment-config-panel__trigger"
             >
               <h3 className="font-semibold text-gray-800 flex items-center gap-2">
                 <FiSettings className="text-gray-500" /> Physical Specs & Protection
@@ -333,10 +251,10 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
             </button>
             
             {isExpanded('specs') && (
-              <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <div className="alignment-config-panel__body grid grid-cols-1 sm:grid-cols-2">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Outer Diameter (OD)</label>
-                  <select className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white"  >
+                  <select className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white transition-all"  >
                     <option>10 inch</option>
                     <option>12 inch</option>
                     <option>24 inch</option>
@@ -345,11 +263,11 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Nominal WT (mm)</label>
-                  <input type="number" step="0.01" className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none"   placeholder="e.g. 12.7" />
+                  <input type="number" step="0.01" className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none transition-all"   placeholder="e.g. 12.7" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Material Grade</label>
-                  <select className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white"  >
+                  <select className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white transition-all"  >
                     <option>API 5L X42</option>
                     <option>API 5L X52</option>
                     <option>API 5L X60</option>
@@ -359,7 +277,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Seam Type</label>
-                  <select className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white"  >
+                  <select className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white transition-all"  >
                     <option>SMLS (Seamless)</option>
                     <option>ERW</option>
                     <option>DSAW</option>
@@ -368,7 +286,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">External Coating</label>
-                  <select className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white"  >
+                  <select className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white transition-all"  >
                     <option>3LPE</option>
                     <option>FBE</option>
                     <option>Coal Tar Enamel (CTE)</option>
@@ -378,8 +296,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Inst. Year / Loc Class</label>
                   <div className="flex gap-2">
-                    <input type="text" className="w-1/2 rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 outline-none"   placeholder="Year" />
-                    <select className="w-1/2 rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-brand-500 outline-none bg-white"  >
+                    <input type="text" className="w-1/2 rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 outline-none transition-all"   placeholder="Year" />
+                    <select className="w-1/2 rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 outline-none bg-white transition-all"  >
                       <option>Class 1</option>
                       <option>Class 2</option>
                       <option>Class 3</option>
@@ -394,9 +312,9 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         </div>
 
         {/* Right Column: ILI Uploads */}
-        <div className="flex flex-col gap-6">
-          <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
-            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 bg-white px-6 py-5">
+        <div className="flex flex-col gap-4">
+          <div className="alignment-run-panel">
+            <div className="alignment-run-panel__toolbar">
               <div className="flex items-center gap-4">
                 <div>
                   <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">Run pair setup</p>
@@ -407,7 +325,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                 {algorithm !== 'phylogenetic' && datasets.length < 5 && (
                   <button 
                     onClick={() => setDatasets([...datasets, { id: Date.now(), year: '', vendor: 'Rosen', file: null }])}
-                    className="flex items-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 transition-all hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700"
+                    className="alignment-add-run"
                   >
                     <FiPlus size={14} /> Add another ILI data
                   </button>
@@ -416,7 +334,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
               <div className="flex items-center gap-3">
                 <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Strategy</label>
                 <select 
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-brand-700 outline-none focus:border-brand-400"
+                  className="alignment-strategy-select"
                   value={algorithm}
                   onChange={(e) => setAlgorithm(e.target.value)}
                 >
@@ -442,12 +360,12 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
               )}
             </div>
             
-             <div className="flex flex-1 gap-5 overflow-x-auto bg-slate-50/70 p-5 pb-6 snap-x no-scrollbar sm:p-6">
+             <div className="alignment-dataset-grid no-scrollbar">
               
               {datasets.map((ds, index) => {
                 const isMaster = index === masterIndex;
                 return (
-                  <div key={ds.id} className={`flex-1 min-w-[400px] max-w-[600px] rounded-2xl border p-5 shadow-sm snap-start ${isMaster ? 'border-brand-300 bg-brand-50/50 ring-1 ring-brand-100' : 'border-slate-200 bg-white'}`}>
+                  <div key={ds.id} className={`alignment-dataset-card${isMaster ? ' is-master' : ''}`}>
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-2">
                         <div className={`h-9 w-1 rounded-full ${isMaster ? 'bg-brand-500' : 'bg-slate-300'}`}></div>
@@ -458,66 +376,9 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                           </h4>
                         </div>
                       </div>
-                      {algorithm !== 'phylogenetic' ? (
-                        <button 
-                          onClick={() => setMasterIndex(index)}
-                           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${isMaster ? 'bg-brand-600 text-white shadow-md shadow-brand-500/20' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-                        >
-                          <FiStar className={isMaster ? "fill-white" : ""} size={14} /> {isMaster ? 'Master Data' : 'Set as Master'}
-                        </button>
-                      ) : (
-                        isMaster && (
-                          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-brand-600 text-white shadow-md shadow-brand-500/20">
-                            <FiStar className="fill-white" size={14} /> Master Data
-                          </div>
-                        )
-                      )}
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-4 mb-4">
-                      <div>
-                        <label className="block text-xs font-medium text-gray-500 mb-1">Vendor</label>
-                        <select 
-                          className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none bg-white"
-                          value={ds.vendor}
-                          onChange={(e) => {
-                            const newDs = [...datasets];
-                            newDs[index].vendor = e.target.value;
-                            setDatasets(newDs);
-                          }}
-                        >
-                          <option>Rosen</option>
-                          <option>Baker Hughes</option>
-                          <option>NDT Global</option>
-                          <option>TDW</option>
-                          <option>Other</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-500 mb-1">Year & Tool</label>
-                        <div className="flex gap-2">
-                          <input 
-                            type="text" 
-                            className="w-1/3 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none" 
-                            placeholder="YYYY" 
-                            value={ds.year}
-                            onChange={(e) => {
-                              const newDs = [...datasets];
-                              newDs[index].year = e.target.value;
-                              setDatasets(newDs);
-                            }}
-                          />
-                          <select className="w-2/3 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 outline-none bg-white">
-                            <option>MFL-A</option>
-                            <option>MFL-C</option>
-                            <option>UT-WM</option>
-                            <option>Combo</option>
-                          </select>
-                        </div>
-                      </div>
                     </div>
 
-                    <div className={`relative flex min-h-[172px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 transition-colors group ${isMaster ? 'border-brand-300 bg-white hover:border-brand-500 hover:bg-brand-50' : 'border-slate-300 bg-slate-50/80 hover:border-brand-400 hover:bg-white'}`}>
+                    <div className="alignment-dropzone group">
                       <input 
                         type="file" 
                         accept=".csv,.xlsx" 
