@@ -899,17 +899,17 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                           const isSelected = selectedRowIdx !== null && selectedRowIdx !== undefined && row.__origIdx === selectedRowIdx;
                           const isDragTarget = activeTab === 'Interventions' && draggedRowIdx !== null && draggedRowIdx !== row.__origIdx;
                           
-                          const isMatch = row['Match/Unmatch'] === 'Match';
+                          const isMatch = row['Match/Unmatch'] === 'Matched' || row['Match/Unmatch'] === 'Match';
                           const featType = String(row['Feature Type OLD'] || row['Feature Type NEW'] || '').toLowerCase();
                           let bgClass = 'hover:bg-blue-50/50';
                           if (isMatch) {
-                            if (featType.includes('valve')) bgClass = 'bg-purple-200 hover:bg-purple-300';
-                            else if (featType.includes('weld')) bgClass = 'bg-blue-200 hover:bg-blue-300';
-                            else if (featType.includes('bend')) bgClass = 'bg-yellow-200 hover:bg-yellow-300';
-                            else if (featType.includes('anomaly') || featType.includes('metal') || featType.includes('dent') || featType.includes('corrosion')) bgClass = 'bg-red-200 hover:bg-red-300';
-                            else bgClass = 'bg-gray-200 hover:bg-gray-300';
+                            if (featType.includes('valve')) bgClass = 'bg-purple-100 hover:bg-purple-200 text-purple-950';
+                            else if (featType.includes('weld')) bgClass = 'bg-blue-100 hover:bg-blue-200 text-blue-950';
+                            else if (featType.includes('bend')) bgClass = 'bg-yellow-100 hover:bg-yellow-200 text-yellow-950';
+                            else if (featType.includes('anomaly') || featType.includes('metal') || featType.includes('dent') || featType.includes('corrosion')) bgClass = 'bg-red-100 hover:bg-red-200 text-red-950';
+                            else bgClass = 'bg-gray-100 hover:bg-gray-200 text-gray-950';
                           }
-                          if (isSelected) bgClass = 'bg-indigo-300 hover:bg-indigo-400 font-semibold';
+                          if (isSelected) bgClass = 'bg-indigo-200 hover:bg-indigo-300 text-indigo-950 font-semibold';
                           
                           return (
                             <tr 
@@ -948,7 +948,15 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                                 return (
                                   <td 
                                     key={j} 
-                                    className={`px-2 border-r border-gray-100 whitespace-nowrap overflow-hidden text-ellipsis ${col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)' ? 'font-bold text-blue-600' : ''} ${activeTab === 'Interventions' && isNewDataCol ? 'cursor-grab active:cursor-grabbing hover:bg-blue-50/80' : ''}`}
+                                    className={`px-2 border-r border-gray-100 whitespace-nowrap overflow-hidden text-ellipsis ${
+                                      j === 0 && isMatch ? (
+                                        featType.includes('valve') ? 'border-l-4 border-purple-500' :
+                                        featType.includes('weld') ? 'border-l-4 border-blue-500' :
+                                        featType.includes('bend') ? 'border-l-4 border-yellow-500' :
+                                        (featType.includes('anomaly') || featType.includes('metal') || featType.includes('dent') || featType.includes('corrosion')) ? 'border-l-4 border-red-500' :
+                                        'border-l-4 border-gray-500'
+                                      ) : ''
+                                    } ${col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)' ? 'font-bold text-blue-600' : ''} ${activeTab === 'Interventions' && isNewDataCol ? 'cursor-grab active:cursor-grabbing hover:bg-blue-50/80' : ''}`}
                                     draggable={activeTab === 'Interventions' && isNewDataCol && val !== '-' && val !== null && val !== undefined}
                                     onDragStart={(e) => {
                                       if (activeTab === 'Interventions' && isNewDataCol) {
@@ -963,6 +971,14 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                                         <span className={getFeatureColor(val, row['Identif. OLD'] !== '-' && row['Identif. NEW'] !== '-')}>{val}</span>
                                       ) : col === 'Section' && val !== '-' ? (
                                         <span className="bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wider">{val}</span>
+                                      ) : col === 'Match/Unmatch' ? (
+                                        val === 'Matched' || val === 'Match' ? (
+                                          <span className="bg-green-600 text-white font-extrabold px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider shadow-sm">Match</span>
+                                        ) : val === 'Unmatch' || val === 'Only NEW' || val === 'Only OLD' ? (
+                                          <span className="bg-red-600 text-white font-extrabold px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider shadow-sm">{val}</span>
+                                        ) : val !== '-' ? (
+                                          <span className="bg-gray-500 text-white font-semibold px-1.5 py-0.5 rounded text-[10px] tracking-wider shadow-sm">{val}</span>
+                                        ) : '-'
                                       ) : val
                                     ) : ''}
                                   </td>
