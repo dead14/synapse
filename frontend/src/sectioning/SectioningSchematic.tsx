@@ -160,6 +160,121 @@ export default function SectioningSchematic({
       <div className="relative min-h-0 flex-1 overflow-auto custom-scrollbar" ref={containerRef}>
         <div className="relative" style={{ width: geometry.width, height: totalHeight }}>
           <svg width={geometry.width} height={totalHeight} className="absolute inset-0" aria-label="Calculated master pipeline geometry">
+            
+            {/* KP Axis */}
+            <g className="kp-axis" transform="translate(0, 40)">
+              <text x="24" y="0" fontSize="11" fontWeight="bold" fill="#64748b">KP (km)</text>
+              <line x1={geometry.positionAt(0).x} y1="15" x2={geometry.positionAt(features.stats.totalLength).x} y2="15" stroke="#cbd5e1" strokeWidth="1" />
+              {Array.from({ length: Math.floor(features.stats.totalLength / markerStep) + 1 }).map((_, index) => {
+                const distance = index * markerStep;
+                const x = geometry.positionAt(distance).x;
+                const isMajor = distance % 2000 === 0 || distance === 0;
+                if (!isMajor && zoom < 1.5) return null; // hide minor ticks when zoomed out
+                return (
+                  <g key={`kp-${distance}`}>
+                    <line x1={x} y1={isMajor ? 10 : 13} x2={x} y2="15" stroke="#94a3b8" strokeWidth="1" />
+                    {isMajor && <text x={x} y="-2" textAnchor="middle" fontSize="10" fill="#64748b">{(distance / 1000).toFixed(0)} km</text>}
+                  </g>
+                );
+              })}
+            </g>
+
+            {/* Sections (Blue Backgrounds) */}
+            {sections.map((section) => {
+              const startX = geometry.positionAt(section.startM).x;
+              const endX = geometry.positionAt(section.endM).x;
+              return (
+                <g key={`section-path-${section.id}`}>
+                  <rect
+                    x={Math.min(startX, endX)}
+                    y={60}
+                    width={Math.abs(endX - startX)}
+                    height={historyStartY - 60 + 40}
+                    fill="#3b82f6"
+                    fillOpacity="0.08"
+                    stroke="#3b82f6"
+                    strokeWidth="1"
+                    strokeOpacity="0.5"
+                  />
+                  {/* Boundary Dots on Master */}
+                  <circle cx={startX} cy={125} r="4" fill="#3b82f6" stroke="#fff" strokeWidth="1.5" />
+                  <circle cx={endX} cy={125} r="4" fill="#3b82f6" stroke="#fff" strokeWidth="1.5" />
+                  {/* Section Label */}
+                  <text x={(startX + endX) / 2} y={55} textAnchor="middle" fontSize="10" fontWeight="bold" fill="#1e3a8a">{section.name}</text>
+                </g>
+              );
+            })}
+
+            {/* Distance Measurement Tool */}
+            {selectedGWs.length === 2 && (() => {
+              const middleDist = (selectedGWs[0].dist + selectedGWs[1].dist) / 2;
+              const middlePos = geometry.positionAt(middleDist);
+              const distanceDiff = Math.abs(selectedGWs[1].dist - selectedGWs[0].dist);
+              return (
+                <g>
+                  <path d={geometry.rangePath(selectedGWs[0].dist, selectedGWs[1].dist)} fill="none" stroke="#2563eb" strokeWidth="6" strokeOpacity="0.3" strokeLinecap="round" strokeLinejoin="round" />
+                  <rect x={middlePos.x - 40} y={middlePos.y - 32} width="80" height="22" rx="4" fill="#eff6ff" stroke="#3b82f6" strokeWidth="1.5" />
+                  <text x={middlePos.x} y={middlePos.y - 17} textAnchor="middle" fontSize="11" fontWeight="bold" fill="#1d4ed8">{distanceDiff.toFixed(3)} m</text>
+                </g>
+              );
+            })()}
+
+            {/* Master Pipeline Base Line */}
+            <path d={geometry.path} fill="none" stroke="#22c55e" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            <text x="24" y={118} fontSize="10" fontWeight="bold" fill="#15803d">MASTER NEW</text>
+            <text x="24" y={132} fontSize="9" fill="#166534">- longitudinal GW line</text>
+
+            {/* Bends (Floating Boxes) */}
+            {geometry.bends.map((bend, index) => (
+              <g key={`bend-${bend.feature.id}-${index}`}>
+                <rect x={bend.point.x - 42} y={bend.point.y - 70} width="84" height="32" rx="4" fill="#fff7ed" stroke="#f59e0b" strokeWidth="1" />
+                <text x={bend.point.x} y={bend.point.y - 56} textAnchor="middle" fontSize="9" fontWeight="bold" fill="#b45309">BEND {String(index + 1).padStart(2, '0')}</text>
+                <text x={bend.point.x} y={bend.point.y - 45} textAnchor="middle" fontSize="9" fill="#b45309">{(bend.feature.dist / 1000).toFixed(2)} km / {bend.angleDeg.toFixed(0)}°</text>
+                <line x1={bend.point.x} y1={bend.point.y - 38} x2={bend.point.x} y2={bend.point.y - 12} stroke="#f59e0b" strokeWidth="1" />
+                <path d={`M ${bend.point.x} ${bend.point.y - 12} l 4 4 l -4 4 l -4 -4 z`} fill="#f59e0b" />
+                <title>{`Bend ${index + 1} · ${bend.feature.dist.toFixed(3)} m · ${bend.angleDeg.toFixed(0)}°${bend.inferred ? ' · inferred' : ''}`}</title>
+              </g>
+            ))}
+
+            {/* Master Features (GWs, Valves, etc) */}
+            {features.allFeatures.map((feature, index) => {
+              if (feature.type.toLowerCase().includes('bend')) return null;
+              const position = geometry.positionAt(feature.dist);
+              const isGw = /weld|girth|seam|gw/.test(feature.type.toLowerCase());
+              const isValve = feature.type.toLowerCase().includes('valve') || feature.type.toLowerCase().includes('tee');
+              const isUnmatched = isGw && feature.status !== 'MATCHED';
+              const isSelected = selectedGWs.some((gw) => gw.id === feature.id && Math.abs(gw.dist - feature.dist) < 0.001);
+              
+              // Hide clutter at low zoom, but always show anomalies/selections
+              if (isGw && !isUnmatched && !isSelected && !isValve && zoom < 1.5) {
+                // Return a very thin tick to form a continuous line without looking bulky
+                return <line key={`${feature.id}-${index}`} x1={position.x} y1={position.y - 3} x2={position.x} y2={position.y + 3} stroke="#22c55e" strokeWidth="1" strokeOpacity="0.5" />;
+              }
+              
+              const color = isSelected ? '#2563eb' : isUnmatched ? '#ef4444' : isValve ? '#8b5cf6' : '#22c55e';
+              const strokeW = isSelected || isUnmatched || isValve ? 3 : 2;
+              const halfLen = isSelected || isUnmatched || isValve ? 7 : 4;
+              
+              return (
+                <g
+                  key={`${feature.id}-${index}`}
+                  role={isGw ? 'button' : undefined}
+                  tabIndex={isGw ? 0 : undefined}
+                  className={isGw ? 'cursor-pointer outline-none' : ''}
+                  onClick={() => {
+                    if (!isGw) return;
+                    onInspectGw?.(feature);
+                    if (selectionEnabled) onGwClick(feature);
+                  }}
+                >
+                  <title>{`${feature.type} · ${feature.id} · abs ${feature.dist.toFixed(3)} m · ${isUnmatched ? 'ONLY NEW / unmatched' : feature.status}`}</title>
+                  <line x1={position.x} y1={position.y - halfLen} x2={position.x} y2={position.y + halfLen} stroke={color} strokeWidth={strokeW} strokeLinecap="round" />
+                  {isGw && <rect x={position.x - 14} y={position.y - 14} width="28" height="28" fill="transparent" pointerEvents="all" />}
+                </g>
+              );
+            })}
+
+            {/* Pair Links (Dashed connectors) */}
             {features.historicalLanes.flatMap((lane, laneIndex) => lane.gws.map((gw, gwIndex) => {
               const masterDistance = Number(gw.rawData.masterDistance);
               if (gw.status !== 'MATCHED' || !Number.isFinite(masterDistance)) return null;
@@ -170,12 +285,12 @@ export default function SectioningSchematic({
                 <line
                   key={`connector-${lane.id}-${gw.id}-${gwIndex}`}
                   x1={master.x}
-                  y1={master.y + 9}
+                  y1={master.y + 10}
                   x2={historical.x}
-                  y2={historicalY - 7}
-                  stroke="#00c853"
-                  strokeWidth="1.5"
-                  strokeOpacity="0.45"
+                  y2={historicalY - 10}
+                  stroke="#22c55e"
+                  strokeWidth="1"
+                  strokeOpacity="0.4"
                   strokeDasharray="4 4"
                 >
                   <title>{`${gw.id} (${gw.dist.toFixed(3)} m) matched to ${gw.rawData.matchedMasterId} (${masterDistance.toFixed(3)} m)`}</title>
@@ -183,173 +298,42 @@ export default function SectioningSchematic({
               );
             }))}
 
-            {sections.map((section) => (
-              <path
-                key={`section-path-${section.id}`}
-                d={geometry.rangePath(section.startM, section.endM)}
-                fill="none"
-                stroke={sectionColor(section.type)}
-                strokeWidth="18"
-                strokeOpacity="0.7"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            ))}
-
-            {selectedGWs.length === 2 && (() => {
-              const middleDist = (selectedGWs[0].dist + selectedGWs[1].dist) / 2;
-              const middlePos = geometry.positionAt(middleDist);
-              const distanceDiff = Math.abs(selectedGWs[1].dist - selectedGWs[0].dist);
-              return (
-                <g>
-                  <path d={geometry.rangePath(selectedGWs[0].dist, selectedGWs[1].dist)} fill="none" stroke="#2563eb" strokeWidth="25" strokeOpacity="0.22" strokeLinecap="round" strokeLinejoin="round" />
-                  <rect x={middlePos.x - 40} y={middlePos.y - 32} width="80" height="22" rx="4" fill="#eff6ff" stroke="#3b82f6" strokeWidth="1.5" />
-                  <text x={middlePos.x} y={middlePos.y - 17} textAnchor="middle" fontSize="11" fontWeight="bold" fill="#1d4ed8">{distanceDiff.toFixed(3)} m</text>
-                </g>
-              );
-            })()}
-
-            <path d={geometry.path} fill="none" stroke="#00c853" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-
-            {Array.from({ length: Math.floor(features.stats.totalLength / markerStep) + 1 }).map((_, index) => {
-              const distance = index * markerStep;
-              const position = geometry.positionAt(distance);
-              const normal = { x: -position.unit.y, y: position.unit.x };
-              return (
-                <g key={`distance-${distance}`}>
-                  <line x1={position.x - normal.x * 7} y1={position.y - normal.y * 7} x2={position.x + normal.x * 7} y2={position.y + normal.y * 7} stroke="#64748b" strokeWidth="1" />
-                  <text x={position.x + normal.x * 18} y={position.y + normal.y * 18} textAnchor="middle" fontSize="9" fill="#64748b">{distance} m</text>
-                </g>
-              );
-            })}
-
-            {geometry.bends.map((bend, index) => (
-              <g key={`bend-${bend.feature.id}-${index}`} className="sectioning-bend-marker">
-                <line x1={bend.point.x} y1={bend.point.y - 7} x2={bend.point.x} y2={bend.point.y - 34} stroke="#d97706" strokeWidth="2" strokeDasharray="3 2" />
-                <rect x={bend.point.x - 31} y={bend.point.y - 64} width="62" height="25" rx="4" fill="#fff7ed" stroke="#f59e0b" strokeWidth="1.5" />
-                <path d={`M ${bend.point.x - 6} ${bend.point.y - 39} L ${bend.point.x} ${bend.point.y - 33} L ${bend.point.x + 6} ${bend.point.y - 39}`} fill="#fff7ed" stroke="#f59e0b" strokeWidth="1.5" />
-                <path d={`M ${bend.point.x} ${bend.point.y - 30} l 7 7 l -7 7 l -7 -7 z`} fill="#f59e0b" stroke="#fff" strokeWidth="2" />
-                <text x={bend.point.x} y={bend.point.y - 53} textAnchor="middle" fontSize="8" fontWeight="700" fill="#9a3412">BEND {String(index + 1).padStart(2, '0')}</text>
-                <text x={bend.point.x} y={bend.point.y - 44} textAnchor="middle" fontSize="7" fill="#c2410c">{bend.feature.dist.toFixed(3)} m / {bend.angleDeg.toFixed(0)} deg</text>
-                <title>{`Bend ${index + 1} · ${bend.feature.dist.toFixed(3)} m · ${bend.angleDeg.toFixed(0)}°${bend.inferred ? ' · inferred' : ''}`}</title>
-              </g>
-            ))}
-
-            {features.allFeatures.map((feature, index) => {
-              if (feature.type.toLowerCase().includes('bend')) return null;
-              const color = featureColor(feature.type);
-              if (color === 'transparent') return null;
-              const position = geometry.positionAt(feature.dist);
-              const normal = { x: -position.unit.y, y: position.unit.x };
-              const isGw = /weld|girth|seam|gw/.test(feature.type.toLowerCase());
-              const isUnmatched = isGw && feature.status !== 'MATCHED';
-              const isSelectable = isGw && selectionEnabled;
-              const isSelected = selectedGWs.some((gw) => gw.id === feature.id && Math.abs(gw.dist - feature.dist) < 0.001);
-              const halfLength = isSelected ? 12 : isGw ? 7 : 5;
-              const wallLabel = isGw ? formatWallThickness(feature) : null;
-              const thicknessChange = isGw && wallLabel && isThicknessChange(feature, features.allFeatures[index - 1], features.allFeatures[index + 1]);
-              return (
-                <g
-                  key={`${feature.id}-${index}`}
-                  role={isGw ? 'button' : undefined}
-                  tabIndex={isGw ? 0 : undefined}
-                  className={isGw ? 'cursor-pointer outline-none' : ''}
-                  onClick={() => {
-                    if (!isGw) return;
-                    onInspectGw?.(feature);
-                    if (isSelectable) onGwClick(feature);
-                  }}
-                  onKeyDown={(event) => {
-                    if (!isGw || (event.key !== 'Enter' && event.key !== ' ')) return;
-                    onInspectGw?.(feature);
-                    if (isSelectable) onGwClick(feature);
-                  }}
-                >
-                  <title>{`${feature.type} · ${feature.id} · abs ${feature.dist.toFixed(3)} m · ${isUnmatched ? 'ONLY NEW / unmatched' : feature.status}`}</title>
-                  <line
-                    x1={position.x - normal.x * halfLength}
-                    y1={position.y - normal.y * halfLength}
-                    x2={position.x + normal.x * halfLength}
-                    y2={position.y + normal.y * halfLength}
-                    stroke={isSelected ? '#2563eb' : isUnmatched ? '#e11d48' : color}
-                    strokeWidth={isSelected ? 5 : isUnmatched ? 5 : isGw ? 4 : 3}
-                    strokeLinecap="round"
-                  />
-                  {isGw && (
-                    <rect
-                      x={position.x - 14}
-                      y={position.y - 14}
-                      width="28"
-                      height="28"
-                      fill="transparent"
-                      pointerEvents="all"
-                    />
-                  )}
-                  {thicknessChange && (
-                    <g pointerEvents="none">
-                      <rect x={position.x - 36} y={position.y - 58} width="72" height="18" rx="4" fill="#fff7ed" stroke="#fdba74" strokeWidth="1" />
-                      <text x={position.x} y={position.y - 45} textAnchor="middle" fontSize="7.5" fontWeight="700" fill="#b45309">WT {wallLabel}</text>
-                    </g>
-                  )}
-                  {isGw && <circle cx={position.x} cy={position.y} r="8" fill="transparent" />}
-                </g>
-              );
-            })}
-
-            {sections.map((section) => {
-              const middle = geometry.positionAt((section.startM + section.endM) / 2);
-              return <text key={`section-label-${section.id}`} x={middle.x} y={middle.y - 15} textAnchor="middle" fontSize="10" fontWeight="700" fill="#0f172a">{section.name}</text>;
-            })}
-
-            <text x="24" y={historyStartY - 28} fontSize="10" fontWeight="700" fill="#00a844">MASTER NEW · longitudinal GW line</text>
+            {/* Historical Lanes */}
             {features.historicalLanes.map((lane, laneIndex) => {
               const y = historyStartY + laneIndex * 48;
               return (
                 <g key={lane.id}>
-                  <text x="24" y={y + 3} fontSize="10" fontWeight="700" fill="#475569">OLD {lane.year || laneIndex + 1}</text>
-                  <line x1={geometry.positionAt(0).x} y1={y} x2={geometry.positionAt(features.stats.totalLength).x} y2={y} stroke="#00c853" strokeOpacity=".35" strokeWidth="1.5" />
-                  {(lane.bends || []).map((bend, bendIndex) => {
-                    const x = geometry.positionAt(bend.dist).x;
-                    const angle = bendDefinition(bend).angleDeg;
-                    return (
-                      <g key={`${lane.id}-bend-${bend.id}-${bendIndex}`}>
-                        <line x1={x} y1={y - 2} x2={x} y2={y - 15} stroke="#d97706" strokeWidth="1.5" strokeDasharray="2 2" />
-                        <path d={`M ${x} ${y - 23} l 5 5 l -5 5 l -5 -5 z`} fill="#f59e0b" stroke="#fff" strokeWidth="1.5" />
-                        <text x={x + 8} y={y - 17} fontSize="7" fontWeight="700" fill="#c2410c">B{bendIndex + 1} / {angle.toFixed(0)} deg</text>
-                        <title>{`OLD ${lane.year || laneIndex + 1} bend ${bendIndex + 1} · ${bend.dist.toFixed(3)} m · ${angle.toFixed(0)}°`}</title>
-                      </g>
-                    );
-                  })}
+                  <text x="24" y={y + 4} fontSize="10" fontWeight="bold" fill="#475569">OLD {lane.year || laneIndex + 1}</text>
+                  <line x1={geometry.positionAt(0).x} y1={y} x2={geometry.positionAt(features.stats.totalLength).x} y2={y} stroke="#64748b" strokeOpacity=".3" strokeWidth="1.5" />
+                  
+                  {/* Historical GWs */}
                   {(lane.gws || []).map((gw, gwIndex) => {
                     const x = geometry.positionAt(gw.dist).x;
                     const unmatched = gw.status !== 'MATCHED';
+                    const isSelected = selectedGWs.some((s) => s.id === gw.id && s.runRole === 'HISTORICAL');
+                    
+                    if (!unmatched && !isSelected && zoom < 1.5) {
+                      return <line key={`${gw.id}-${gwIndex}`} x1={x} y1={y - 2} x2={x} y2={y + 2} stroke="#22c55e" strokeWidth="1" strokeOpacity="0.5" />;
+                    }
+
+                    const color = unmatched ? '#ef4444' : isSelected ? '#2563eb' : '#22c55e';
+                    const strokeW = unmatched || isSelected ? 3 : 2;
+                    const halfLen = unmatched || isSelected ? 7 : 4;
+                    
                     return (
                       <g
                         key={`${gw.id}-${gwIndex}`}
                         role="button"
-                        tabIndex={0}
                         className="cursor-pointer outline-none"
                         onClick={() => {
                           onInspectGw?.(gw);
                           if (selectionEnabled) onGwClick(gw);
                         }}
-                        onKeyDown={(event) => {
-                          if (event.key !== 'Enter' && event.key !== ' ') return;
-                          onInspectGw?.(gw);
-                          if (selectionEnabled) onGwClick(gw);
-                        }}
                       >
-                        <line x1={x} y1={y - (unmatched ? 8 : 4)} x2={x} y2={y + (unmatched ? 8 : 4)} stroke={unmatched ? '#ff1744' : '#00c853'} strokeWidth={unmatched ? 5 : 3} strokeLinecap="round">
+                        <line x1={x} y1={y - halfLen} x2={x} y2={y + halfLen} stroke={color} strokeWidth={strokeW} strokeLinecap="round">
                           <title>{`${gw.id} · abs ${gw.dist.toFixed(3)} m · ${gw.status}`}</title>
                         </line>
-                        <rect
-                          x={x - 16}
-                          y={y - 16}
-                          width="32"
-                          height="32"
-                          fill="transparent"
-                          pointerEvents="all"
-                        />
+                        <rect x={x - 16} y={y - 16} width="32" height="32" fill="transparent" pointerEvents="all" />
                       </g>
                     );
                   })}
@@ -357,69 +341,15 @@ export default function SectioningSchematic({
               );
             })}
 
-            {/* Keep selection targets above every visual layer, including overlapping red markers. */}
-            <g aria-label="GW selection targets">
-              {features.allFeatures.filter((feature) => /weld|girth|seam|gw/i.test(feature.type)).map((feature, index) => {
-                const position = geometry.positionAt(feature.dist);
-                return (
-                  <rect
-                    key={`master-gw-hit-${feature.id}-${index}`}
-                    x={position.x - 18}
-                    y={position.y - 18}
-                    width="36"
-                    height="36"
-                    fill="transparent"
-                    pointerEvents="all"
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`Pilih ${feature.id}`}
-                    onClick={() => {
-                      onInspectGw?.(feature);
-                      if (selectionEnabled) onGwClick(feature);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== 'Enter' && event.key !== ' ') return;
-                      onInspectGw?.(feature);
-                      if (selectionEnabled) onGwClick(feature);
-                    }}
-                  />
-                );
-              })}
-              {features.historicalLanes.flatMap((lane, laneIndex) => (lane.gws || []).map((gw, gwIndex) => {
-                const x = geometry.positionAt(gw.dist).x;
-                const y = historyStartY + laneIndex * 48;
-                return (
-                  <rect
-                    key={`historical-gw-hit-${gw.id}-${gwIndex}`}
-                    x={x - 18}
-                    y={y - 18}
-                    width="36"
-                    height="36"
-                    fill="transparent"
-                    pointerEvents="all"
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`Pilih ${gw.id}`}
-                    onClick={() => {
-                      onInspectGw?.(gw);
-                      if (selectionEnabled) onGwClick(gw);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== 'Enter' && event.key !== ' ') return;
-                      onInspectGw?.(gw);
-                      if (selectionEnabled) onGwClick(gw);
-                    }}
-                  />
-                );
-              }))}
-            </g>
           </svg>
-          <div className="sectioning-legend" aria-label="GW status legend">
-            <span><i className="sectioning-legend__dot sectioning-legend__dot--matched" />Matched</span>
-            <span><i className="sectioning-legend__dot sectioning-legend__dot--missing" />Missing</span>
-            <span><i className="sectioning-legend__dot sectioning-legend__dot--review" />Review</span>
-            <span><i className="sectioning-legend__dot sectioning-legend__dot--valve" />Valve/Tee</span>
-            <span><i className="sectioning-legend__line" />Pair link</span>
+          
+          {/* Legend */}
+          <div className="absolute bottom-6 left-6 flex gap-4 items-center text-[11px] font-medium text-gray-600 bg-white/80 px-4 py-2 rounded-lg border border-gray-200 shadow-sm backdrop-blur">
+            <span className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 bg-[#22c55e] rounded-[2px]" />Matched</span>
+            <span className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 bg-[#ef4444] rounded-[2px]" />Missing</span>
+            <span className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 bg-[#eab308] rounded-[2px]" />Review</span>
+            <span className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 bg-[#8b5cf6] rounded-full" />Valve/Tee</span>
+            <span className="flex items-center gap-1.5"><div className="w-4 h-0 border-t border-dashed border-[#22c55e]" />Pair link</span>
           </div>
         </div>
       </div>
