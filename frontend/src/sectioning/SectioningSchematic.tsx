@@ -220,9 +220,9 @@ export default function SectioningSchematic({
             })()}
 
             {/* Master Pipeline Base Line */}
-            <path d={geometry.path} fill="none" stroke="#22c55e" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            <text x="24" y={118} fontSize="10" fontWeight="bold" fill="#15803d">MASTER NEW</text>
-            <text x="24" y={132} fontSize="9" fill="#166534">- longitudinal GW line</text>
+            <path d={geometry.path} fill="none" stroke="#22c55e" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            <text x="24" y={114} fontSize="12" fontWeight="bold" fill="#15803d">MASTER NEW</text>
+            <text x="24" y={129} fontSize="11" fill="#166534">- longitudinal GW line</text>
 
             {/* Bends (Floating Boxes) */}
             {geometry.bends.map((bend, index) => (
@@ -248,12 +248,12 @@ export default function SectioningSchematic({
               // Hide clutter at low zoom, but always show anomalies/selections
               if (isGw && !isUnmatched && !isSelected && !isValve && zoom < 1.5) {
                 // Return a very thin tick to form a continuous line without looking bulky
-                return <line key={`${feature.id}-${index}`} x1={position.x} y1={position.y - 3} x2={position.x} y2={position.y + 3} stroke="#22c55e" strokeWidth="1" strokeOpacity="0.5" />;
+                return <line key={`${feature.id}-${index}`} x1={position.x} y1={position.y - 5} x2={position.x} y2={position.y + 5} stroke="#22c55e" strokeWidth="1.5" strokeOpacity="0.7" />;
               }
               
               const color = isSelected ? '#2563eb' : isUnmatched ? '#ef4444' : isValve ? '#8b5cf6' : '#22c55e';
-              const strokeW = isSelected || isUnmatched || isValve ? 3 : 2;
-              const halfLen = isSelected || isUnmatched || isValve ? 7 : 4;
+              const strokeW = isSelected || isUnmatched || isValve ? 4 : 2;
+              const halfLen = isSelected || isUnmatched || isValve ? 9 : 6;
               
               return (
                 <g
@@ -303,8 +303,8 @@ export default function SectioningSchematic({
               const y = historyStartY + laneIndex * 48;
               return (
                 <g key={lane.id}>
-                  <text x="24" y={y + 4} fontSize="10" fontWeight="bold" fill="#475569">OLD {lane.year || laneIndex + 1}</text>
-                  <line x1={geometry.positionAt(0).x} y1={y} x2={geometry.positionAt(features.stats.totalLength).x} y2={y} stroke="#64748b" strokeOpacity=".3" strokeWidth="1.5" />
+                  <text x="24" y={y + 4} fontSize="12" fontWeight="bold" fill="#475569">OLD {lane.year || laneIndex + 1}</text>
+                  <line x1={geometry.positionAt(0).x} y1={y} x2={geometry.positionAt(features.stats.totalLength).x} y2={y} stroke="#64748b" strokeOpacity=".3" strokeWidth="2" />
                   
                   {/* Historical GWs */}
                   {(lane.gws || []).map((gw, gwIndex) => {
@@ -313,12 +313,12 @@ export default function SectioningSchematic({
                     const isSelected = selectedGWs.some((s) => s.id === gw.id && s.runRole === 'HISTORICAL');
                     
                     if (!unmatched && !isSelected && zoom < 1.5) {
-                      return <line key={`${gw.id}-${gwIndex}`} x1={x} y1={y - 2} x2={x} y2={y + 2} stroke="#22c55e" strokeWidth="1" strokeOpacity="0.5" />;
+                      return <line key={`${gw.id}-${gwIndex}`} x1={x} y1={y - 5} x2={x} y2={y + 5} stroke="#22c55e" strokeWidth="1.5" strokeOpacity="0.7" />;
                     }
 
                     const color = unmatched ? '#ef4444' : isSelected ? '#2563eb' : '#22c55e';
-                    const strokeW = unmatched || isSelected ? 3 : 2;
-                    const halfLen = unmatched || isSelected ? 7 : 4;
+                    const strokeW = unmatched || isSelected ? 4 : 2;
+                    const halfLen = unmatched || isSelected ? 9 : 6;
                     
                     return (
                       <g
@@ -344,12 +344,12 @@ export default function SectioningSchematic({
           </svg>
           
           {/* Legend */}
-          <div className="absolute bottom-6 left-6 flex gap-4 items-center text-[11px] font-medium text-gray-600 bg-white/80 px-4 py-2 rounded-lg border border-gray-200 shadow-sm backdrop-blur">
-            <span className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 bg-[#22c55e] rounded-[2px]" />Matched</span>
-            <span className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 bg-[#ef4444] rounded-[2px]" />Missing</span>
-            <span className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 bg-[#eab308] rounded-[2px]" />Review</span>
-            <span className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 bg-[#8b5cf6] rounded-full" />Valve/Tee</span>
-            <span className="flex items-center gap-1.5"><div className="w-4 h-0 border-t border-dashed border-[#22c55e]" />Pair link</span>
+          <div className="absolute bottom-6 left-6 flex gap-4 items-center text-xs font-medium text-gray-700 bg-white/90 px-5 py-3 rounded-xl border border-gray-200 shadow-md backdrop-blur-sm">
+            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#22c55e] rounded-[2px]" />Matched</span>
+            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#ef4444] rounded-[2px]" />Missing</span>
+            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#eab308] rounded-[2px]" />Review</span>
+            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#8b5cf6] rounded-full" />Valve/Tee</span>
+            <span className="flex items-center gap-2"><div className="w-5 h-0 border-t-[1.5px] border-dashed border-[#22c55e]" />Pair link</span>
           </div>
         </div>
       </div>
