@@ -1,0 +1,55 @@
+:root {
+  --color-gw-canvas: oklch(97% 0.009 265);
+  --color-gw-canvas-raised: oklch(99% 0.004 265);
+  --color-gw-paper: oklch(100% 0 0);
+  --color-gw-paper-raised: oklch(98% 0.006 265);
+  --color-gw-paper-strong: oklch(94% 0.012 265);
+  --color-gw-rule: oklch(88% 0.018 265);
+  --color-gw-rule-strong: oklch(76% 0.028 265);
+  --color-gw-neutral: oklch(49% 0.028 265);
+  --color-gw-muted: oklch(42% 0.028 265);
+  --color-gw-ink: oklch(22% 0.028 265);
+  --color-gw-ink-soft: oklch(32% 0.028 265);
+  --color-gw-accent: oklch(55% 0.21 268);
+  --color-gw-accent-soft: oklch(94% 0.035 268);
+  --color-gw-accent-ink: oklch(99% 0.004 265);
+  --color-gw-focus: oklch(54% 0.16 250);
+  --color-gw-success: oklch(55% 0.10 160);
+  --color-gw-success-soft: oklch(96% 0.02 160);
+  --color-gw-warning: oklch(65% 0.12 75);
+  --color-gw-warning-soft: oklch(96% 0.02 75);
+  --color-gw-danger: oklch(55% 0.13 20);
+  --color-gw-danger-soft: oklch(96% 0.02 20);
+  --color-gw-violet: oklch(55% 0.18 305);
+  --color-gw-track: oklch(74% 0.035 265);
+
+  --font-gw-display: var(--syn-font-sans);
+  --font-gw-body: var(--syn-font-sans);
+  --font-gw-data: var(--syn-font-data);
+
+  --space-gw-2xs: 0.25rem;
+  --space-gw-xs: 0.5rem;
+  --space-gw-sm: 0.75rem;
+  --space-gw-md: 1rem;
+  --space-gw-lg: 1.5rem;
+  --space-gw-xl: 2.5rem;
+
+  --text-gw-xs: 0.64rem;
+  --text-gw-sm: 0.8rem;
+  --text-gw-base: 1rem;
+  --text-gw-md: 1.25rem;
+  --text-gw-lg: 1.5625rem;
+
+  --ease-gw-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-gw-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-gw-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-gw-micro: 120ms;
+  --dur-gw-short: 220ms;
+  --dur-gw-long: 420ms;
+
+  --rule-gw-hairline: 1px;
+  --rule-gw-focus: 2px;
+  --size-gw-fine: 0.125rem;
+  --radius-gw-control: 0.5rem;
+  --radius-gw-panel: 0.75rem;
+}
