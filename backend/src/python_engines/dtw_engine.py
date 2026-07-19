@@ -118,17 +118,21 @@ def calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty=False):
     if n == 0 or m == 0:
         return []
 
+    # Pre-extract arrays for faster lookup and avoid dictionary access in tight loops
+    old_dists = [gw['dist'] for gw in old_gws]
+    new_dists = [gw['dist'] for gw in new_gws]
+
     # Precalculate spool lengths (distance from previous GW)
     for i in range(n):
-        old_gws[i]['spool'] = old_gws[i]['dist'] - old_gws[i-1]['dist'] if i > 0 else old_gws[i]['dist']
+        old_gws[i]['spool'] = old_dists[i] - old_dists[i-1] if i > 0 else old_dists[i]
     for j in range(m):
-        new_gws[j]['spool'] = new_gws[j]['dist'] - new_gws[j-1]['dist'] if j > 0 else new_gws[j]['dist']
-
-    # We no longer need base_window based on index.
+        new_gws[j]['spool'] = new_dists[j] - new_dists[j-1] if j > 0 else new_dists[j]
+    
+    inf = float('inf')
     
     # Initialize DTW matrix with infinity
-    dtw_matrix = [[float('inf')] * (m + 1) for _ in range(n + 1)]
-    dtw_matrix[0][0] = 0
+    dtw_matrix = [[inf] * (m + 1) for _ in range(n + 1)]
+    dtw_matrix[0][0] = 0.0
     
     # Path tracking matrix
     path_matrix = [[(-1, -1)] * (m + 1) for _ in range(n + 1)]
@@ -142,81 +146,88 @@ def calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty=False):
         dtw_matrix[0][j] = dtw_matrix[0][j-1] + 5.0
         path_matrix[0][j] = (0, j-1)
     
+    ota_factor = ota_threshold / 100.0
     gap_penalty = 2.0 + (ota_threshold / 4.0)
     K = 10 # Lookback up to 9 skips
-    new_distances = [gw['dist'] for gw in new_gws]
-    best_end_cost = float('inf')
+    best_end_cost = inf
     best_end = (n, m)
     
+    # Local variable caching for performance
+    strict_mult = 1.0 if strict_penalty else 0.001
+
     for i in range(1, n + 1):
-        old_dist = old_gws[i-1]['dist']
+        old_dist = old_dists[i-1]
         
         # Calculate Physical Window based on OTA.
-        allowed_global_drift = max(old_dist, 50.0) * (ota_threshold / 100.0)
-        allowed_global_drift = max(allowed_global_drift, 10.0)
+        allowed_global_drift = max(old_dist, 50.0) * ota_factor
+        if allowed_global_drift < 10.0:
+            allowed_global_drift = 10.0
 
-        # Only inspect NEW welds inside the physical OTA window.  The former
-        # implementation still iterated from j=1 on every row before hitting
-        # `continue`; binary search keeps the same admissible path at a much
-        # lower cost for long pipelines.
-        first_j = max(1, bisect_left(new_distances, old_dist - allowed_global_drift) + 1)
-        last_j = bisect_right(new_distances, old_dist + allowed_global_drift)
+        # Binary search for window bounds
+        first_j = max(1, bisect_left(new_dists, old_dist - allowed_global_drift) + 1)
+        last_j = bisect_right(new_dists, old_dist + allowed_global_drift)
+        
         for j in range(first_j, last_j + 1):
-            new_dist = new_gws[j-1]['dist']
+            new_dist = new_dists[j-1]
+            abs_dist_diff = abs(old_dist - new_dist)
             
-            best_cost = float('inf')
+            best_cost = inf
             best_prev = (-1, -1)
             
             # Allow skipping INITIAL nodes: if i <= K and j <= K, we can jump from (0,0) to (i,j)
             if i <= K and j <= K:
-                prev_i, prev_j = 0, 0
-                abs_dist_diff = abs(old_dist - new_dist)
-                
-                cost = 0
-                if strict_penalty:
-                    cost += abs_dist_diff * 1.0
-                else:
-                    cost += abs_dist_diff * 0.001
-                    
-                total_cost = dtw_matrix[prev_i][prev_j] + cost + (i - 1) * gap_penalty + (j - 1) * gap_penalty
+                cost = abs_dist_diff * strict_mult
+                total_cost = dtw_matrix[0][0] + cost + (i - 1) * gap_penalty + (j - 1) * gap_penalty
                 if total_cost < best_cost:
                     best_cost = total_cost
-                    best_prev = (prev_i, prev_j)
+                    best_prev = (0, 0)
             
             # Dynamic Spool Length Lookback
-            for k in range(1, min(i, K) + 1):
-                for l in range(1, min(j, K) + 1):
-                    prev_i, prev_j = i - k, j - l
+            limit_i = i if i < K else K
+            limit_j = j if j < K else K
+            
+            for k in range(1, limit_i + 1):
+                prev_i = i - k
+                L_old = old_dist - old_dists[prev_i-1] if prev_i > 0 else old_dist
+                k_penalty = (k - 1) * gap_penalty
+                
+                dtw_row = dtw_matrix[prev_i]
+                
+                for l in range(1, limit_j + 1):
+                    prev_j = j - l
                     if prev_i == 0 and prev_j == 0:
-                        continue # Already handled above
+                        continue
                     
-                    if dtw_matrix[prev_i][prev_j] == float('inf'):
+                    base_cost = dtw_row[prev_j]
+                    if base_cost == inf:
                         continue
                         
-                    L_old = old_dist - old_gws[prev_i-1]['dist']
-                    L_new = new_dist - new_gws[prev_j-1]['dist']
+                    L_new = new_dist - new_dists[prev_j-1] if prev_j > 0 else new_dist
                     
-                    deviation_ratio = ota_deviation_ratio(L_old, L_new)
-                    deviation_pct = deviation_ratio * 100.0
-                    actual_diff = abs(L_old - L_new)
-                    abs_dist_diff = abs(old_dist - new_dist)
+                    if L_new <= 0:
+                        deviation_pct = inf
+                        actual_diff = abs(L_old - L_new)
+                    else:
+                        deviation_ratio = abs((L_old / L_new) - 1.0)
+                        deviation_pct = deviation_ratio * 100.0
+                        actual_diff = abs(L_old - L_new)
                     
                     if deviation_pct <= ota_threshold:
                         cost = actual_diff
                     else:
-                        allowed_spool_difference = L_new * (ota_threshold / 100.0)
+                        allowed_spool_difference = L_new * ota_factor
                         excess_diff = actual_diff - allowed_spool_difference
                         cost = actual_diff + excess_diff * 100.0
                         
                     if strict_penalty:
-                        cost += abs_dist_diff * 1.0
-                        if not math.isfinite(deviation_ratio) or deviation_pct > 50.0:
-                            cost = float('inf')
+                        cost += abs_dist_diff
+                        if deviation_pct > 50.0:
+                            cost = inf
                     else:
                         cost += abs_dist_diff * 0.001
                         
-                    if cost != float('inf'):
-                        total_cost = dtw_matrix[prev_i][prev_j] + cost + (k - 1) * gap_penalty + (l - 1) * gap_penalty
+                    if cost != inf:
+                        total_cost = base_cost + cost + k_penalty + (l - 1) * gap_penalty
                         if total_cost < best_cost:
                             best_cost = total_cost
                             best_prev = (prev_i, prev_j)
@@ -224,7 +235,7 @@ def calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty=False):
             dtw_matrix[i][j] = best_cost
             path_matrix[i][j] = best_prev
 
-            if best_cost != float('inf'):
+            if best_cost != inf:
                 final_cost = best_cost + (n - i) * gap_penalty + (m - j) * gap_penalty
                 if final_cost < best_end_cost:
                     best_end_cost = final_cost
@@ -483,12 +494,12 @@ def process_request(data):
     gw_types = {'weld', 'girth weld', 'valve', 'tee', 'flange'}
     
     old_gws = sorted(
-        [f for f in old_run if str(f.get('originalType', f.get('type'))).lower() in gw_types
+        [f for f in old_run if str(f.get('type', f.get('originalType'))).lower() in gw_types
          and isinstance(f.get('dist'), (int, float)) and math.isfinite(f['dist'])],
         key=lambda feature: feature['dist'],
     )
     new_gws = sorted(
-        [f for f in new_run if str(f.get('originalType', f.get('type'))).lower() in gw_types
+        [f for f in new_run if str(f.get('type', f.get('originalType'))).lower() in gw_types
          and isinstance(f.get('dist'), (int, float)) and math.isfinite(f['dist'])],
         key=lambda feature: feature['dist'],
     )
