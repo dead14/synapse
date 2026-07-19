@@ -598,18 +598,73 @@ export default function IliSectioningPage() {
           {/* Canvas & Sidebar Grid */}
           <div className="flex-1 flex overflow-hidden bg-white relative">
             <main className="flex-1 relative border-r border-gray-200 flex flex-col">
-              {viewMode === 'schematic' ? (
-                  <SectioningSchematic
-                    features={features}
-                    sections={sections}
-                    zoom={zoom}
-                    onZoomChange={setZoom}
-                    selectUnmatched
-                    selectedGWs={selectedGWs}
-                    onGwClick={handleGwClick}
-                    inspectedGw={inspectedGw}
-                    onInspectGw={handleInspectGw}
-                  />
+                  <div className="flex-1 min-h-0 relative">
+                    <SectioningSchematic
+                      features={features}
+                      sections={sections}
+                      zoom={zoom}
+                      onZoomChange={setZoom}
+                      selectUnmatched
+                      selectedGWs={selectedGWs}
+                      onGwClick={handleGwClick}
+                      inspectedGw={inspectedGw}
+                      onInspectGw={handleInspectGw}
+                    />
+                  </div>
+                  
+                  {/* Bends Carousel (Bottom Panel 1) */}
+                  <div className="h-44 border-t border-gray-200 bg-white p-4 flex flex-col shrink-0">
+                    <div className="flex justify-between items-center mb-3">
+                      <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
+                        Bends & References
+                      </h3>
+                      <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded-md">{features?.stats?.bendCount || 0} Total Bends</span>
+                    </div>
+                    <div className="flex gap-3 overflow-x-auto pb-2 custom-scrollbar flex-1 items-start">
+                      {features?.allFeatures?.filter(f => f.type.includes('bend')).map((bend, i) => (
+                        <div key={i} className="min-w-[200px] border border-orange-100 rounded-lg p-3 bg-orange-50/30 hover:bg-orange-50 hover:border-orange-200 cursor-pointer transition-colors shadow-sm">
+                          <div className="flex justify-between items-start mb-2">
+                            <span className="text-xs font-bold text-orange-700 tracking-wide">BEND {String(i+1).padStart(2,'0')}</span>
+                            <span className="text-[10px] font-bold bg-orange-100 text-orange-800 px-2 py-0.5 rounded-full">{bend.status}</span>
+                          </div>
+                          <div className="text-sm font-mono font-semibold text-gray-900 mb-1">{bend.dist.toFixed(3)} m</div>
+                          <div className="flex items-center text-xs text-gray-500 gap-3 mt-2">
+                            <span className="flex items-center gap-1" title="Angle"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg> {bend.rawData.angleDeg ? Number(bend.rawData.angleDeg).toFixed(1) : 'N/A'}°</span>
+                            <span className="flex items-center gap-1" title="Clock Pos"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> {bend.rawData.clockPos || '-'}</span>
+                          </div>
+                        </div>
+                      ))}
+                      {(!features?.allFeatures?.some(f => f.type.includes('bend'))) && (
+                        <div className="text-sm text-gray-400 italic flex items-center justify-center w-full h-full">No bends detected in this run.</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Minimap Overview (Bottom Panel 2) */}
+                  <div className="h-14 border-t border-gray-200 bg-gray-50 flex items-center px-6 relative shrink-0">
+                    <span className="text-xs font-bold text-gray-400 mr-4 tracking-wider">OVERVIEW</span>
+                    <div className="flex-1 h-3 bg-gray-200 rounded-full relative overflow-hidden shadow-inner border border-gray-300">
+                      {/* Sections overlay */}
+                      {sections.map((s, i) => {
+                        const total = features?.stats?.totalLength || 1;
+                        const left = (s.startM / total) * 100;
+                        const width = ((s.endM - s.startM) / total) * 100;
+                        const colors = ['bg-blue-500', 'bg-indigo-500', 'bg-violet-500', 'bg-fuchsia-500'];
+                        return (
+                          <div 
+                            key={s.id} 
+                            className={`absolute h-full ${colors[i % colors.length]} opacity-70 border-r border-white/50`} 
+                            style={{ left: `${left}%`, width: `${width}%` }} 
+                            title={s.name}
+                          />
+                        );
+                      })}
+                      {/* Current viewport indicator (simulated) */}
+                      <div className="absolute top-0 bottom-0 border-2 border-gray-800 bg-gray-800/10 rounded-sm cursor-grab active:cursor-grabbing" style={{ left: '0%', width: '10%' }}></div>
+                    </div>
+                    <span className="text-xs font-mono font-semibold text-gray-500 ml-4">{(features?.stats?.totalLength / 1000).toFixed(2) || 0} km</span>
+                  </div>
               ) : (
                 <>
                   <SectionMap 
