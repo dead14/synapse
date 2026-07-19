@@ -577,10 +577,15 @@ export default function IliSectioningPage() {
               <div className="flex items-center gap-2">
                 <button onClick={() => setZoom(1)} className="px-3 py-1.5 bg-white border border-gray-200 rounded-md text-sm text-gray-600 hover:bg-gray-50 flex items-center gap-2"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg> Fit</button>
                 <div className="flex items-center border border-gray-200 rounded-md overflow-hidden bg-white ml-2">
+                  <button onClick={() => setZoom(Math.max(0.5, zoom - 0.5))} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">−</button>
+                  <div className="w-px h-4 bg-gray-200"></div>
                   <button onClick={() => setZoom(1)} className={`px-3 py-1.5 text-sm ${zoom === 1 ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>100%</button>
                   <div className="w-px h-4 bg-gray-200"></div>
-                  <button onClick={() => setZoom(2)} className={`px-3 py-1.5 text-sm ${zoom === 2 ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>200%</button>
+                  <button onClick={() => setZoom(Math.min(100, zoom + 0.5))} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">+</button>
+                  <div className="w-px h-4 bg-gray-200"></div>
+                  <button onClick={() => setZoom(100)} className={`px-3 py-1.5 text-sm ${zoom === 100 ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>10000%</button>
                 </div>
+                <input type="range" min="0.5" max="100" step="0.5" value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-24 ml-2 accent-blue-600" />
                 <div className="flex items-center border border-gray-200 rounded-md overflow-hidden bg-white ml-2">
                   <button className="p-1.5 text-gray-600 hover:bg-gray-50" title="Undo"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>
                   <div className="w-px h-4 bg-gray-200"></div>
