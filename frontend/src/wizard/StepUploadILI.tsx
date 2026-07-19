@@ -1,27 +1,67 @@
 import { useState, useEffect } from 'react';
 import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettings, FiShield, FiPlus } from 'react-icons/fi';
-import Papa from 'papaparse';
-import { apiUrl } from '../utils/api';
-import { summarizeIliRows } from '../utils/iliRowParser';
+import { apiFetch, apiUrl } from '../utils/api';
+import {
+  buildPersistedIliRun,
+  type IngestionResponse,
+} from '../domain/alignmentIntake';
 import { readXlsxRows } from '../utils/xlsx';
+import { summarizeIliRows } from '../utils/iliRowParser';
 
 interface StepUploadILIProps {
   onNext: (data?: any) => void;
 }
 
-async function readUploadedRows(file: File): Promise<Record<string, unknown>[]> {
-  if (file.name.toLowerCase().endsWith('.csv')) {
-    return new Promise((resolve, reject) => {
-      Papa.parse<Record<string, unknown>>(file, {
-        header: true,
-        skipEmptyLines: 'greedy',
-        complete: (result) => resolve(result.data),
-        error: reject,
-      });
-    });
-  }
+function fileStem(fileName: string): string {
+  const stem = fileName.replace(/\.[^.]+$/, '').trim();
+  return stem || 'ILI Alignment';
+}
 
-  return readXlsxRows(file);
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+async function parseBrowserRun(file: File, vendor: string, year: string) {
+  const rows = await readXlsxRows(file);
+  const parsed = summarizeIliRows(rows);
+  return {
+    runId: 0,
+    name: file.name,
+    vendor,
+    year,
+    tool: '',
+    total: parsed.counts.total,
+    anomalies: parsed.counts.anomalies,
+    welds: parsed.counts.welds,
+    valves: parsed.counts.valves,
+    tees: parsed.counts.tees,
+    offtakes: parsed.counts.offtakes,
+    bends: parsed.counts.bends,
+    others: parsed.counts.others,
+    gwAnchors: parsed.counts.gwAnchors,
+    invalidAnchorDistances: parsed.counts.invalidAnchorDistances,
+    rawFeatures: parsed.rawFeatures,
+  };
+}
+
+async function waitForIngestion(jobId: string, fileName: string, setLabel: (value: string) => void) {
+  for (let attempt = 0; attempt < 900; attempt += 1) {
+    const job = await apiFetch<IngestionResponse>(`/api/ingestion-jobs/${encodeURIComponent(jobId)}`);
+    setLabel(`Processing ${fileName}: ${Number(job.progress || 0)}%`);
+    if (job.state === 'completed') {
+      return {
+        ...job,
+        pipeline_run_id: job.result?.pipelineRunId,
+        run_summary: job.result?.summary,
+        audit: job.result?.audit,
+      } satisfies IngestionResponse;
+    }
+    if (job.state === 'failed') {
+      throw new Error(job.errorMessage || 'Ingestion failed.');
+    }
+    await wait(1_000);
+  }
+  throw new Error('Ingestion job timed out. Reopen the session to check its status.');
 }
 
 export default function StepUploadILI({ onNext }: StepUploadILIProps) {
@@ -31,6 +71,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   const [algorithm, setAlgorithm] = useState('dtw_hungarian_onedirection');
   const [enablePartialRun, setEnablePartialRun] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processingLabel, setProcessingLabel] = useState('');
   const [sessionName, setSessionName] = useState('');
 
   useEffect(() => {
@@ -54,13 +95,17 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
     }
   }, [algorithm]);
 
-  const allFilesUploaded = datasets.every(ds => ds.file !== null);
+  const allFilesUploaded = datasets.every((ds) => (
+    ds.file !== null && /^\d{4}$/.test(String(ds.year || '').trim()) && String(ds.vendor || '').trim().length > 0
+  ));
 
   const handleInitialize = async () => {
     setIsProcessing(true);
     try {
+      const masterFile = datasets[masterIndex]?.file as File | null;
+      const pipelineName = sessionName.trim() || fileStem(masterFile?.name || 'ILI Alignment');
       const summaryData: any = {
-        sessionName: sessionName || 'Untitled Alignment Session',
+        sessionName: sessionName || pipelineName,
         algorithm: algorithm,
         enablePartialRun: enablePartialRun
       };
@@ -75,10 +120,33 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         summaryData.oldRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
       }
 
-      for (let i = 0; i < datasets.length; i++) {
+      // Fast path: parse the workbook in the browser and keep the canonical
+      // rows in memory. This avoids the slow ingestion queue/Python process;
+      // StepGwSimulator sends these anchors directly to the DTW endpoint.
+      if (algorithm !== 'phylogenetic') {
+        for (let i = 0; i < datasets.length; i += 1) {
+          const ds = datasets[i];
+          if (!ds.file) continue;
+          setProcessingLabel(`Reading ${i + 1} of ${datasets.length}: ${ds.file.name}`);
+          parsedRuns[i] = await parseBrowserRun(ds.file, String(ds.vendor || ''), String(ds.year || ''));
+        }
+        const masterRun = parsedRuns[masterIndex];
+        const historicalRuns = parsedRuns
+          .filter((run, index) => run && index !== masterIndex)
+          .sort((left, right) => Number(right.year || 0) - Number(left.year || 0));
+        summaryData.masterRun = masterRun;
+        summaryData.historicalRuns = historicalRuns;
+        summaryData.newRun = masterRun;
+        summaryData.oldRun = historicalRuns[0];
+        onNext({ summaryData, algorithm, enablePartialRun });
+        return;
+      }
+
+      // Phylogenetic mode still uses the persisted ingestion contract.
+      for (let i = 0; i < datasets.length; i += 1) {
         const ds = datasets[i];
         if (!ds.file) continue;
-        
+        setProcessingLabel(`Importing ${i + 1} of ${datasets.length}: ${ds.file.name}`);
         let runKey = '';
         if (algorithm === 'phylogenetic') {
           if (i === 0) runKey = 'ancestorRun';
@@ -89,24 +157,27 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           // additional historical uploads cannot overwrite each other.
           runKey = '';
         }
-        
-        const jsonData = await readUploadedRows(ds.file);
-        
-        const { rawFeatures, counts } = summarizeIliRows(jsonData);
 
-        const parsedRun = {
+        const formData = new FormData();
+        formData.append('file', ds.file);
+        formData.append('pipelineName', pipelineName);
+        formData.append('surveyYear', String(ds.year || ''));
+        formData.append('vendor', String(ds.vendor || ''));
+        const queued = await apiFetch<IngestionResponse>('/api/upload-csv', {
+          method: 'POST',
+          body: formData,
+        });
+        const response = queued.jobId
+          ? await waitForIngestion(String(queued.jobId), ds.file.name, setProcessingLabel)
+          : queued;
+        const parsedRun = buildPersistedIliRun(response, {
           name: ds.file.name,
-          vendor: ds.vendor || '',
-          year: ds.year || '',
-          tool: ds.tool || '',
-          rawFeatures: rawFeatures,
-          ...counts
-        };
-        if (algorithm === 'phylogenetic') {
-          summaryData[runKey] = parsedRun;
-        } else {
-          parsedRuns[i] = parsedRun;
-        }
+          vendor: String(ds.vendor || ''),
+          year: String(ds.year || ''),
+          tool: String(ds.tool || ''),
+        });
+        if (algorithm === 'phylogenetic') summaryData[runKey] = parsedRun;
+        else parsedRuns[i] = parsedRun;
       }
 
       if (algorithm !== 'phylogenetic') {
@@ -126,9 +197,10 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
     } catch (err) {
       console.error(err);
       const detail = err instanceof Error && err.message ? `\n\nDetail: ${err.message}` : '';
-      alert(`Gagal membaca file Excel. Pastikan formatnya .xlsx/.csv dan header berada di baris pertama.${detail}`);
+      alert(`Gagal mengimpor file ILI. Pastikan format, tahun, vendor, dan header valid.${detail}`);
     } finally {
       setIsProcessing(false);
+      setProcessingLabel('');
     }
   };
 
@@ -170,7 +242,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
             disabled={!allFilesUploaded || isProcessing}
             className={`alignment-intake__action alignment-intake__action--primary group ${allFilesUploaded && !isProcessing ? '' : 'is-disabled'}`}
           >
-            {isProcessing ? 'Reading Data...' : 'Initialize Alignment'}
+            {isProcessing ? processingLabel || 'Importing data...' : 'Initialize Alignment'}
             {allFilesUploaded && !isProcessing && (
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/20 transition-transform group-hover:translate-x-1">
                 →
@@ -414,6 +486,36 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                           <p className="text-xs text-gray-500 mt-1">Drag & drop or click to browse</p>
                         </>
                       )}
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-3">
+                      <label className="text-xs font-semibold text-slate-600">
+                        Survey year
+                        <input
+                          type="number"
+                          min="1900"
+                          max="2100"
+                          required
+                          value={ds.year || ''}
+                          onChange={(event) => setDatasets((current) => current.map((item, itemIndex) => (
+                            itemIndex === index ? { ...item, year: event.target.value } : item
+                          )))}
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-brand-500"
+                          placeholder="2026"
+                        />
+                      </label>
+                      <label className="text-xs font-semibold text-slate-600">
+                        Vendor
+                        <input
+                          type="text"
+                          required
+                          value={ds.vendor || ''}
+                          onChange={(event) => setDatasets((current) => current.map((item, itemIndex) => (
+                            itemIndex === index ? { ...item, vendor: event.target.value } : item
+                          )))}
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-brand-500"
+                          placeholder="e.g. ROSEN"
+                        />
+                      </label>
                     </div>
                   </div>
                 );
