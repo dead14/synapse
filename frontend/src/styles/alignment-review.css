@@ -737,7 +737,7 @@ body:has(.alignment-workspace--gw) {
 .gw-pipeline-marker {
   position: absolute;
   z-index: 6;
-  inset-block-start: 0.625rem;
+  inset-block-start: 0.5rem;
   display: grid;
   width: 2.75rem;
   height: 3.5rem;
@@ -751,12 +751,10 @@ body:has(.alignment-workspace--gw) {
 .gw-pipeline-marker > span {
   width: var(--space-gw-xs);
   height: var(--space-gw-lg);
+  align-self: center;
   border-radius: var(--radius-gw-control);
   background: currentColor;
 }
-
-.gw-pipeline-row.is-new .gw-pipeline-marker > span { align-self: end; }
-.gw-pipeline-row.is-old .gw-pipeline-marker > span { align-self: start; }
 
 .gw-pipeline-marker > small {
   position: absolute;
@@ -780,8 +778,8 @@ body:has(.alignment-workspace--gw) {
 .gw-pipeline-marker.is-selected > span { outline: var(--rule-gw-focus) solid var(--color-gw-focus); outline-offset: var(--rule-gw-focus); }
 .gw-pipeline-marker:is(.is-selected, .is-review, .is-missing) > small,
 .gw-pipeline-marker:focus-visible > small { opacity: 1; }
-.gw-pipeline-row.is-new .gw-pipeline-marker > small { inset-block-start: 3rem; }
-.gw-pipeline-row.is-old .gw-pipeline-marker > small { inset-block-start: -1rem; }
+.gw-pipeline-row.is-new .gw-pipeline-marker > small { inset-block-start: -0.5rem; }
+.gw-pipeline-row.is-old .gw-pipeline-marker > small { inset-block-start: 2.5rem; }
 .gw-pipeline-marker:disabled { cursor: not-allowed; opacity: 0.55; }
 
 .gw-pipeline-feature {
