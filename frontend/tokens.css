@@ -14,13 +14,13 @@
   --color-gw-accent-soft: oklch(94% 0.035 268);
   --color-gw-accent-ink: oklch(99% 0.004 265);
   --color-gw-focus: oklch(54% 0.16 250);
-  --color-gw-success: oklch(55% 0.10 160);
-  --color-gw-success-soft: oklch(96% 0.02 160);
-  --color-gw-warning: oklch(65% 0.12 75);
-  --color-gw-warning-soft: oklch(96% 0.02 75);
-  --color-gw-danger: oklch(55% 0.13 20);
-  --color-gw-danger-soft: oklch(96% 0.02 20);
-  --color-gw-violet: oklch(55% 0.18 305);
+  --color-gw-success: #00d26a;
+  --color-gw-success-soft: #e6fbf0;
+  --color-gw-warning: #f0b400;
+  --color-gw-warning-soft: #fef8e6;
+  --color-gw-danger: #f03050;
+  --color-gw-danger-soft: #fdeaea;
+  --color-gw-violet: #a050f0;
   --color-gw-track: oklch(74% 0.035 265);
 
   --font-gw-display: var(--syn-font-sans);
