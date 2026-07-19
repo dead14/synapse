@@ -389,7 +389,8 @@ export default function IliSectioningPage() {
       const gws = rows
         .filter((row: any) => /weld|girth|seam|gw/.test(String(row.type ?? row.originalType ?? '').toLowerCase()))
         .map((row: any, rowIndex: number): SpatialFeature | null => {
-          const dist = Number(row.dist);
+          const distRaw = row.dist ?? row.odometer ?? row.distance ?? row.val;
+          const dist = Number(distRaw);
           if (!Number.isFinite(dist)) return null;
           const id = String(row.id ?? `OLD-${runIndex + 1}-${rowIndex + 1}`);
           const matched = matchByOld.get(masterPairKey(id, dist)) as any;
@@ -418,7 +419,8 @@ export default function IliSectioningPage() {
       const bends = rows
         .filter((row: any) => String(row.type ?? row.originalType ?? '').toLowerCase().includes('bend'))
         .map((row: any, rowIndex: number): SpatialFeature | null => {
-          const dist = Number(row.dist);
+          const distRaw = row.dist ?? row.odometer ?? row.distance ?? row.val;
+          const dist = Number(distRaw);
           if (!Number.isFinite(dist)) return null;
           return {
             id: String(row.id ?? `OLD-BEND-${runIndex + 1}-${rowIndex + 1}`),
@@ -581,11 +583,11 @@ export default function IliSectioningPage() {
                   <div className="w-px h-4 bg-gray-200"></div>
                   <button onClick={() => setZoom(1)} className={`px-3 py-1.5 text-sm ${zoom === 1 ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>100%</button>
                   <div className="w-px h-4 bg-gray-200"></div>
-                  <button onClick={() => setZoom(Math.min(100, zoom + 0.5))} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">+</button>
+                  <button onClick={() => setZoom(Math.min(1000, zoom + 0.5))} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">+</button>
                   <div className="w-px h-4 bg-gray-200"></div>
-                  <button onClick={() => setZoom(100)} className={`px-3 py-1.5 text-sm ${zoom === 100 ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>10000%</button>
+                  <button onClick={() => setZoom(1000)} className={`px-3 py-1.5 text-sm ${zoom === 1000 ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>100000%</button>
                 </div>
-                <input type="range" min="0.5" max="100" step="0.5" value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-24 ml-2 accent-blue-600" />
+                <input type="range" min="0.5" max="1000" step="0.5" value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-24 ml-2 accent-blue-600" />
                 <div className="flex items-center border border-gray-200 rounded-md overflow-hidden bg-white ml-2">
                   <button className="p-1.5 text-gray-600 hover:bg-gray-50" title="Undo"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>
                   <div className="w-px h-4 bg-gray-200"></div>
