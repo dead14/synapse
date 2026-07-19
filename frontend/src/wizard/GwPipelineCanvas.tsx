@@ -27,7 +27,7 @@ type Props = {
 };
 
 const distanceLabel = (distance: number) => (
-  Math.abs(distance) >= 1_000 ? `${(distance / 1_000).toFixed(2)} km` : `${distance.toFixed(0)} m`
+  Math.abs(distance) >= 1_000 ? `${(distance / 1_000).toFixed(2)} km` : `${distance.toFixed(2)} m`
 );
 
 const sameDistance = (left: unknown, right: number) => (
@@ -101,6 +101,9 @@ export default function GwPipelineCanvas({
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState<ViewportWindow>({ leftPercent: 0, widthPercent: 100 });
+  const [previousSelectedId, setPreviousSelectedId] = useState<string>('');
+  const [currentSelectedId, setCurrentSelectedId] = useState<string>('');
+
   const safeMaximum = Math.max(1, maxDistance);
   const axisTicks = useMemo(() => Array.from({ length: 7 }, (_, index) => (safeMaximum / 6) * index), [safeMaximum]);
 
@@ -132,8 +135,43 @@ export default function GwPipelineCanvas({
   const selectedId = selectedMatchId === undefined ? '' : String(selectedMatchId);
   const contentWidth = `${Math.max(100, Math.min(10000, zoom))}%`;
 
+  useEffect(() => {
+    if (selectedId && selectedId !== currentSelectedId) {
+      setPreviousSelectedId(currentSelectedId);
+      setCurrentSelectedId(selectedId);
+    }
+  }, [selectedId, currentSelectedId]);
+
+  const prevMatch = matches.find(m => String(m.id) === previousSelectedId);
+  const currMatch = matches.find(m => String(m.id) === currentSelectedId);
+  const isMeasuring = prevMatch && currMatch && prevMatch.id !== currMatch.id;
+
   return (
-    <div className="gw-pipeline">
+    <div className="gw-pipeline" style={{ position: 'relative' }}>
+      {isMeasuring && (
+        <div style={{
+          position: 'absolute',
+          insetBlockStart: '0.5rem',
+          insetInlineStart: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 30,
+          background: 'var(--color-gw-paper-strong, #fff)',
+          padding: '0.5rem 1rem',
+          borderRadius: '0.5rem',
+          boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+          border: '1px solid var(--color-gw-accent)',
+          display: 'flex',
+          gap: '1.5rem',
+          alignItems: 'center'
+        }}>
+          <strong style={{color: 'var(--color-gw-accent)', fontSize: '0.875rem'}}>Joint Length</strong>
+          <div style={{fontSize: '0.875rem', display: 'flex', gap: '1.5rem', fontWeight: 600}}>
+            <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>OLD:</span> {distanceLabel(Math.abs(Number(currMatch.oldVal) - Number(prevMatch.oldVal)))}</div>
+            <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>NEW:</span> {distanceLabel(Math.abs(Number(currMatch.newVal) - Number(prevMatch.newVal)))}</div>
+          </div>
+          <button onClick={() => setPreviousSelectedId('')} style={{background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5, padding: 0, fontSize: '1.2rem'}} aria-label="Close measurement">✕</button>
+        </div>
+      )}
       <div className="gw-pipeline-overview">
         <div className="gw-pipeline-overview__track" aria-hidden="true">
           {matches.map((match, index) => {
