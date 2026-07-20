@@ -313,9 +313,9 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                   {transformDomain && !errorMessage && (
                     <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs text-blue-900">
                       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-                        <span>Domain transform OLD<br/><strong>{transformDomain.oldStartM.toFixed(3)}–{transformDomain.oldEndM.toFixed(3)} m</strong></span>
-                        <span>Domain transform NEW<br/><strong>{transformDomain.newStartM.toFixed(3)}–{transformDomain.newEndM.toFixed(3)} m</strong></span>
-                        <span>Knot weld terkunci<br/><strong>{tieInMetrics.transform.knotCount ?? tieInMetrics.transform.knots.length}</strong></span>
+                        <span>Domain transform OLD<br/><strong>{transformDomain.oldStartM?.toFixed(3) ?? '?'}–{transformDomain.oldEndM?.toFixed(3) ?? '?'} m</strong></span>
+                        <span>Domain transform NEW<br/><strong>{transformDomain.newStartM?.toFixed(3) ?? '?'}–{transformDomain.newEndM?.toFixed(3) ?? '?'} m</strong></span>
+                        <span>Knot weld terkunci<br/><strong>{tieInMetrics.transform?.knotCount ?? tieInMetrics.transform?.knots?.length ?? '?'}</strong></span>
                         <span>Anchor aligned<br/><strong>{tieInMetrics.alignedPairCount ?? tieInMetrics.inlierPairCount}</strong></span>
                         <span>Anchor unaligned<br/><strong>{tieInMetrics.unalignedPairCount ?? Math.max(0, tieInMetrics.matchedPairCount - tieInMetrics.inlierPairCount)}</strong></span>
                         <span>Span residual P95<br/><strong>{tieInMetrics.spanResidual ? `${tieInMetrics.spanResidual.p95AbsM.toFixed(3)} m` : 'Tidak tersedia'}</strong></span>

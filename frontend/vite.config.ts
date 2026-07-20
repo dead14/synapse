@@ -25,6 +25,11 @@ export default defineConfig({
     })
   ],
   server: {
+    // Bind on both IPv4 and IPv6 loopback interfaces. Some Chrome/Windows
+    // configurations resolve `localhost` to 127.0.0.1 while Vite's default
+    // hostname resolution can bind only to ::1, which presents as a blank
+    // error page even though the dev server is running.
+    host: true,
     proxy: {
       '/api': backendProxy,
       '/socket.io': {
@@ -34,6 +39,7 @@ export default defineConfig({
     },
   },
   preview: {
+    host: true,
     proxy: {
       '/api': backendProxy,
       '/socket.io': {
