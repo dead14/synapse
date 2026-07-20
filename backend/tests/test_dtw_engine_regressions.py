@@ -424,6 +424,28 @@ class DtwEngineRegressionTests(unittest.TestCase):
             ["new-lookalike-0", "new-lookalike-12", "new-lookalike-24"],
         )
         self.assertEqual(result["gwOrphans"], [])
+        self.assertEqual(result["timeline"]["coordinateSystem"], "NEW_MASTER")
+        self.assertEqual(
+            result["timeline"]["domain"],
+            {"startM": 1850.0, "endM": 2024.0},
+        )
+        self.assertEqual(
+            result["timeline"]["oldCoverage"],
+            {
+                "startM": 2000.0,
+                "endM": 2024.0,
+                "sourceStartM": 0.0,
+                "sourceEndM": 24.0,
+            },
+        )
+        self.assertEqual(
+            [feature["displayDistanceM"] for feature in result["timeline"]["newFeatures"]],
+            [1850.0, 1862.0, 1874.0, 2000.0, 2012.0, 2024.0],
+        )
+        self.assertEqual(
+            [feature["displayDistanceM"] for feature in result["timeline"]["oldFeatures"]],
+            [2000.0, 2012.0, 2024.0],
+        )
 
     def test_ota_uses_raw_source_spool_lengths_after_tiein_mapping(self):
         matches = [

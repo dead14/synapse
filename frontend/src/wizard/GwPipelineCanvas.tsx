@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   calculateViewportWindow,
   type GwTimelineMatch,
+  type TimelineFeatureEvidence,
+  type TimelineGeometry,
   type TimelineStatus,
 } from '../domain/gwTimeline';
 
@@ -10,13 +12,7 @@ type ViewportWindow = ReturnType<typeof calculateViewportWindow>;
 
 type Props = {
   matches: GwTimelineMatch[];
-  oldGWs: number[];
-  newGWs: number[];
-  oldValves: number[];
-  newValves: number[];
-  oldTees: number[];
-  newTees: number[];
-  maxDistance: number;
+  timeline: TimelineGeometry;
   zoom: number;
   oldRunLabel: string;
   newRunLabel: string;
@@ -33,6 +29,30 @@ const distanceLabel = (distance: number) => (
 const sameDistance = (left: unknown, right: number) => (
   Number.isFinite(Number(left)) && Math.abs(Number(left) - right) < 0.0005
 );
+
+const distancePercent = (distance: number, domain: TimelineGeometry['domain']) => {
+  const span = Math.max(1e-9, domain.endM - domain.startM);
+  return Math.min(100, Math.max(0, ((distance - domain.startM) / span) * 100));
+};
+
+const featureKind = (feature: TimelineFeatureEvidence) => {
+  const value = String(feature.type ?? '').trim().toLowerCase();
+  if (/\bvalve\b/.test(value)) return 'valve';
+  if (/\b(?:tee|offtake|branch)\b/.test(value)) return 'tee';
+  return 'weld';
+};
+
+const matchForFeature = (
+  matches: GwTimelineMatch[],
+  feature: TimelineFeatureEvidence & { displayDistanceM: number },
+  side: 'old' | 'new',
+) => matches.find((candidate) => {
+  const candidateId = side === 'old' ? candidate.oldId : candidate.newId;
+  if (feature.id !== null && feature.id !== undefined && candidateId !== null && candidateId !== undefined) {
+    return String(feature.id) === String(candidateId);
+  }
+  return sameDistance(side === 'old' ? candidate.oldVal : candidate.newVal, feature.displayDistanceM);
+});
 
 const sourceDistance = (match: GwTimelineMatch, side: 'old' | 'new') => {
   const preferred = side === 'old' ? match.originalOldVal : match.originalNewVal;
@@ -51,29 +71,33 @@ const spacingBetween = (left: GwTimelineMatch, right: GwTimelineMatch, side: 'ol
 
 function TrackMarker({
   position,
-  maxDistance,
+  sourcePosition,
+  domain,
   match,
   status,
   selected,
-  displayPosition,
   onSelect,
 }: {
   position: number;
-  maxDistance: number;
+  sourcePosition?: number | null;
+  domain: TimelineGeometry['domain'];
   match?: GwTimelineMatch;
   status: TimelineStatus;
   selected: boolean;
-  displayPosition?: number | null;
   onSelect: (match: GwTimelineMatch) => void;
 }) {
-  const label = distanceLabel(Number.isFinite(Number(displayPosition)) ? Number(displayPosition) : position);
-  const markerLabel = `${label} · ${status}${match ? ' pair' : ' feature'}`;
+  const label = distanceLabel(position);
+  const rawSource = Number(sourcePosition);
+  const rawSourceLabel = Number.isFinite(rawSource) && !sameDistance(rawSource, position)
+    ? `; source raw ${distanceLabel(rawSource)}`
+    : '';
+  const markerLabel = `${label} · ${status}${match ? ' pair' : ' feature'}${rawSourceLabel}`;
 
   return (
     <button
       type="button"
       className={`gw-pipeline-marker is-${status}${selected ? ' is-selected' : ''}`}
-      style={{ insetInlineStart: `${Math.min(100, Math.max(0, (position / maxDistance) * 100))}%` }}
+      style={{ insetInlineStart: `${distancePercent(position, domain)}%` }}
       disabled={!match}
       aria-label={markerLabel}
       aria-pressed={selected}
@@ -85,12 +109,12 @@ function TrackMarker({
   );
 }
 
-function FeatureMarkers({ values, type, maxDistance }: { values: number[]; type: 'valve' | 'tee'; maxDistance: number }) {
+function FeatureMarkers({ values, type, domain }: { values: number[]; type: 'valve' | 'tee'; domain: TimelineGeometry['domain'] }) {
   return values.filter(Number.isFinite).map((position, index) => (
     <span
       key={`${type}-${position}-${index}`}
       className={`gw-pipeline-feature is-${type}`}
-      style={{ insetInlineStart: `${Math.min(100, Math.max(0, (position / maxDistance) * 100))}%` }}
+      style={{ insetInlineStart: `${distancePercent(position, domain)}%` }}
       title={`${type === 'valve' ? 'Valve' : 'Tee'} · ${distanceLabel(position)}`}
       aria-hidden="true"
     />
@@ -99,13 +123,7 @@ function FeatureMarkers({ values, type, maxDistance }: { values: number[]; type:
 
 export default function GwPipelineCanvas({
   matches,
-  oldGWs,
-  newGWs,
-  oldValves,
-  newValves,
-  oldTees,
-  newTees,
-  maxDistance,
+  timeline,
   zoom,
   oldRunLabel,
   newRunLabel,
@@ -119,8 +137,23 @@ export default function GwPipelineCanvas({
   const [previousSelectedId, setPreviousSelectedId] = useState<string>('');
   const [currentSelectedId, setCurrentSelectedId] = useState<string>('');
 
-  const safeMaximum = Math.max(1, maxDistance);
-  const axisTicks = useMemo(() => Array.from({ length: 7 }, (_, index) => (safeMaximum / 6) * index), [safeMaximum]);
+  const domain = timeline.domain;
+  const domainSpan = Math.max(1, domain.endM - domain.startM);
+  const axisTicks = useMemo(
+    () => Array.from({ length: 7 }, (_, index) => domain.startM + (domainSpan / 6) * index),
+    [domain.startM, domainSpan],
+  );
+  const oldGwFeatures = timeline.oldFeatures.filter((feature) => featureKind(feature) === 'weld');
+  const newGwFeatures = timeline.newFeatures.filter((feature) => featureKind(feature) === 'weld');
+  const coverageStyle = (coverage: TimelineGeometry['oldCoverage']) => {
+    if (!coverage) return { display: 'none' };
+    const startPercent = distancePercent(coverage.startM, domain);
+    const endPercent = distancePercent(coverage.endM, domain);
+    return {
+      insetInlineStart: `${startPercent}%`,
+      width: `${Math.max(0, endPercent - startPercent)}%`,
+    };
+  };
 
   const updateViewport = () => {
     const element = scrollRef.current;
@@ -198,9 +231,9 @@ export default function GwPipelineCanvas({
       <div className="gw-pipeline-overview">
         <div className="gw-pipeline-overview__track" aria-hidden="true">
           {matches.map((match, index) => {
-            const position = Number(match.oldVal ?? match.newVal);
+            const position = Number(match.newVal ?? match.oldVal);
             if (!Number.isFinite(position)) return null;
-            return <i key={String(match.id ?? index)} className={`is-${statusFor(match)}`} style={{ insetInlineStart: `${(position / safeMaximum) * 100}%` }} />;
+            return <i key={String(match.id ?? index)} className={`is-${statusFor(match)}`} style={{ insetInlineStart: `${distancePercent(position, domain)}%` }} />;
           })}
           <span className="gw-pipeline-overview__window" style={{ insetInlineStart: `${viewport.leftPercent}%`, width: `${viewport.widthPercent}%` }} />
         </div>
@@ -219,18 +252,19 @@ export default function GwPipelineCanvas({
       <div ref={scrollRef} className="gw-pipeline-scroll" onScroll={updateViewport}>
         <div className="gw-pipeline-canvas" style={{ width: contentWidth }}>
           <div className="gw-pipeline-axis" aria-hidden="true">
-            {axisTicks.map((tick) => <span key={tick} style={{ insetInlineStart: `${(tick / safeMaximum) * 100}%` }}>{distanceLabel(tick)}</span>)}
+            {axisTicks.map((tick) => <span key={tick} style={{ insetInlineStart: `${distancePercent(tick, domain)}%` }}>{distanceLabel(tick)}</span>)}
           </div>
 
-          <div className="gw-pipeline-row is-old" aria-label={oldRunLabel}>
-            <strong>{oldRunLabel}</strong>
-            <div className="gw-pipeline-track" aria-hidden="true" />
-            <FeatureMarkers values={oldValves} type="valve" maxDistance={safeMaximum} />
-            <FeatureMarkers values={oldTees} type="tee" maxDistance={safeMaximum} />
-            {oldGWs.filter(Number.isFinite).map((position, index) => {
-              const match = matches.find((candidate) => sameDistance(candidate.oldVal, position));
+          <div className="gw-pipeline-row is-new" aria-label={newRunLabel}>
+            <strong>{newRunLabel}</strong>
+            <div className="gw-pipeline-track" style={coverageStyle(timeline.newCoverage)} aria-hidden="true" />
+            <FeatureMarkers values={timeline.newValves} type="valve" domain={domain} />
+            <FeatureMarkers values={timeline.newTees} type="tee" domain={domain} />
+            {newGwFeatures.map((feature, index) => {
+              const position = feature.displayDistanceM;
+              const match = matchForFeature(matches, feature, 'new');
               const status = match ? statusFor(match) : 'missing';
-              return <TrackMarker key={`old-${position}-${index}`} position={position} maxDistance={safeMaximum} match={match} status={status} selected={Boolean(match && String(match.id) === selectedId)} onSelect={onSelectMatch} />;
+              return <TrackMarker key={`new-${String(feature.id ?? position)}-${index}`} position={position} sourcePosition={feature.sourceDistanceM} domain={domain} match={match} status={status} selected={Boolean(match && String(match.id) === selectedId)} onSelect={onSelectMatch} />;
             })}
           </div>
 
@@ -242,19 +276,20 @@ export default function GwPipelineCanvas({
               const status = statusFor(match);
               if (status === 'missing') return null;
               const isSelected = String(match.id) === selectedId;
-              return <line key={String(match.id ?? index)} className={`is-${status}${isSelected ? ' is-selected' : ''}`} x1={(oldPosition / safeMaximum) * 1000} y1="105" x2={(newPosition / safeMaximum) * 1000} y2="228" />;
+              return <line key={String(match.id ?? index)} className={`is-${status}${isSelected ? ' is-selected' : ''}`} x1={distancePercent(newPosition, domain) * 10} y1="105" x2={distancePercent(oldPosition, domain) * 10} y2="228" />;
             })}
           </svg>
 
-          <div className="gw-pipeline-row is-new" aria-label={newRunLabel}>
-            <strong>{newRunLabel}</strong>
-            <div className="gw-pipeline-track" aria-hidden="true" />
-            <FeatureMarkers values={newValves} type="valve" maxDistance={safeMaximum} />
-            <FeatureMarkers values={newTees} type="tee" maxDistance={safeMaximum} />
-            {newGWs.filter(Number.isFinite).map((position, index) => {
-              const match = matches.find((candidate) => sameDistance(candidate.newVal, position));
+          <div className="gw-pipeline-row is-old" aria-label={oldRunLabel}>
+            <strong>{oldRunLabel}</strong>
+            <div className="gw-pipeline-track" style={coverageStyle(timeline.oldCoverage)} aria-hidden="true" />
+            <FeatureMarkers values={timeline.oldValves} type="valve" domain={domain} />
+            <FeatureMarkers values={timeline.oldTees} type="tee" domain={domain} />
+            {oldGwFeatures.map((feature, index) => {
+              const position = feature.displayDistanceM;
+              const match = matchForFeature(matches, feature, 'old');
               const status = match ? statusFor(match) : 'missing';
-              return <TrackMarker key={`new-${position}-${index}`} position={position} maxDistance={safeMaximum} displayPosition={match?.originalNewVal} match={match} status={status} selected={Boolean(match && String(match.id) === selectedId)} onSelect={onSelectMatch} />;
+              return <TrackMarker key={`old-${String(feature.id ?? position)}-${index}`} position={position} sourcePosition={feature.sourceDistanceM} domain={domain} match={match} status={status} selected={Boolean(match && String(match.id) === selectedId)} onSelect={onSelectMatch} />;
             })}
           </div>
 

@@ -7,6 +7,7 @@ import {
   buildTimelineSummary,
   classifyTimelineMatch,
   type GwTimelineMatch,
+  type TimelineGeometry,
   type TimelineStatus,
 } from '../domain/gwTimeline';
 import GwMatchHealthRail from './GwMatchHealthRail';
@@ -16,13 +17,7 @@ import GwReviewPanel from './GwReviewPanel';
 type Props = {
   matches: GwTimelineMatch[];
   dispositionsById: Record<string, GwReviewDisposition>;
-  oldGWs: number[];
-  newGWs: number[];
-  oldValves: number[];
-  newValves: number[];
-  oldTees: number[];
-  newTees: number[];
-  maxDistance: number;
+  timeline: TimelineGeometry;
   zoom: number;
   oldRunLabel: string;
   newRunLabel: string;
@@ -42,13 +37,7 @@ const clampZoom = (value: number) => Math.min(10000, Math.max(100, value));
 export default function GwTimelineViewer({
   matches,
   dispositionsById,
-  oldGWs,
-  newGWs,
-  oldValves,
-  newValves,
-  oldTees,
-  newTees,
-  maxDistance,
+  timeline,
   zoom,
   oldRunLabel,
   newRunLabel,
@@ -62,6 +51,7 @@ export default function GwTimelineViewer({
   onDisposition,
   onNote,
 }: Props) {
+  const masterLength = Math.max(0, timeline.domain.endM - timeline.domain.startM);
   const summary = useMemo(
     () => buildTimelineSummary(matches, dispositionsById),
     [dispositionsById, matches],
@@ -88,7 +78,7 @@ export default function GwTimelineViewer({
       <header className="gw-timeline-viewer__header">
         <div className="gw-timeline-viewer__title">
           <h2 id="gw-timeline-title"><span>SYS /</span> Timeline Viewer</h2>
-          <p>{(maxDistance / 1_000).toFixed(1)}+ km interactive pipeline alignment map</p>
+          <p>{(masterLength / 1_000).toFixed(2)} km NEW-master domain · OLD coverage remains partial</p>
         </div>
         <div className="gw-timeline-viewer__stats" aria-label="Match summary">
           <span className="is-matched">{summary.matched} matched</span>
@@ -109,13 +99,7 @@ export default function GwTimelineViewer({
         <div className="gw-timeline-viewer__main">
           <GwPipelineCanvas
             matches={matches}
-            oldGWs={oldGWs}
-            newGWs={newGWs}
-            oldValves={oldValves}
-            newValves={newValves}
-            oldTees={oldTees}
-            newTees={newTees}
-            maxDistance={maxDistance}
+            timeline={timeline}
             zoom={zoom}
             oldRunLabel={oldRunLabel}
             newRunLabel={newRunLabel}

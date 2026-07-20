@@ -727,6 +727,115 @@ def _prepare_runs_in_master_space(data):
     return old_run, new_run, transform_applied, excluded_old, excluded_new
 
 
+def _timeline_feature(feature, display_distance, *, in_overlap=True, reason=None):
+    source_distance = feature.get('sourceDist', feature.get('dist'))
+    item = {
+        'id': feature.get('id'),
+        'type': _alignment_feature_kind(feature),
+        'displayDistanceM': float(display_distance),
+        'sourceDistanceM': float(source_distance),
+        'inOverlap': bool(in_overlap),
+    }
+    if reason:
+        item['reason'] = reason
+    return item
+
+
+def _build_timeline_evidence(data, mapped_old_run, knots):
+    """Describe both physical run coverages on the NEW-master coordinate.
+
+    Matching is intentionally limited to the accepted TIE IN overlap, but the
+    review timeline must retain the complete NEW inspection. Otherwise a
+    partial OLD run appears to have the same length as the full master run and
+    NEW-only girth welds disappear from the missing-evidence count.
+    """
+    timeline_kinds = {'weld', 'valve', 'tee'}
+
+    def finite_features(features):
+        return sorted(
+            [
+                feature for feature in features
+                if _alignment_feature_kind(feature) in timeline_kinds
+                and isinstance(feature.get('dist'), (int, float))
+                and math.isfinite(feature['dist'])
+            ],
+            key=lambda feature: float(feature['dist']),
+        )
+
+    raw_old = finite_features([dict(feature) for feature in data.get('oldRun', [])])
+    raw_new = finite_features([dict(feature) for feature in data.get('newRun', [])])
+    mapped_old = finite_features(mapped_old_run)
+
+    if knots:
+        old_source_start, new_target_start = knots[0]
+        old_source_end, new_target_end = knots[-1]
+        old_features = [
+            _timeline_feature(feature, feature['dist'])
+            for feature in mapped_old
+        ]
+        new_features = [
+            _timeline_feature(
+                feature,
+                feature['dist'],
+                in_overlap=new_target_start <= float(feature['dist']) <= new_target_end,
+                reason=(
+                    None
+                    if new_target_start <= float(feature['dist']) <= new_target_end
+                    else 'OUTSIDE_ACCEPTED_TIEIN_TARGET_DOMAIN'
+                ),
+            )
+            for feature in raw_new
+        ]
+        old_coverage = {
+            'startM': float(new_target_start),
+            'endM': float(new_target_end),
+            'sourceStartM': float(old_source_start),
+            'sourceEndM': float(old_source_end),
+        }
+    else:
+        old_features = [
+            _timeline_feature(feature, feature['dist'])
+            for feature in raw_old
+        ]
+        new_features = [
+            _timeline_feature(feature, feature['dist'])
+            for feature in raw_new
+        ]
+        old_coverage = (
+            {
+                'startM': old_features[0]['displayDistanceM'],
+                'endM': old_features[-1]['displayDistanceM'],
+                'sourceStartM': old_features[0]['sourceDistanceM'],
+                'sourceEndM': old_features[-1]['sourceDistanceM'],
+            }
+            if old_features else None
+        )
+
+    all_display_distances = [
+        feature['displayDistanceM']
+        for feature in [*old_features, *new_features]
+    ]
+    domain = (
+        {'startM': min(all_display_distances), 'endM': max(all_display_distances)}
+        if all_display_distances else {'startM': 0.0, 'endM': 1.0}
+    )
+    new_coverage = (
+        {
+            'startM': new_features[0]['displayDistanceM'],
+            'endM': new_features[-1]['displayDistanceM'],
+        }
+        if new_features else None
+    )
+    return {
+        'coordinateSystem': 'NEW_MASTER' if knots else 'COMMON_DISPLAY',
+        'domain': domain,
+        'oldCoverage': old_coverage,
+        'newCoverage': new_coverage,
+        'oldFeatures': old_features,
+        'newFeatures': new_features,
+    }
+
+
 def process_request(data):
     ota_threshold = data.get('ota', 1.5)
     strict_penalty = data.get('strictPenalty', False)
@@ -746,6 +855,7 @@ def process_request(data):
         }
     tie_in_knot_records = validated_tiein_knot_records(data)
     old_run, new_run, tie_in_transform_applied, tie_in_excluded_old, tie_in_excluded_new = _prepare_runs_in_master_space(data)
+    timeline = _build_timeline_evidence(data, old_run, validated_tiein_knots(data))
     use_valve_anchor = data.get('useValveAnchor', False)
     apply_dtw_correction = data.get('applyDtwCorrection', True)
     request_id = data.get('requestId')
@@ -923,6 +1033,7 @@ def process_request(data):
         "tieInTransformApplied": tie_in_transform_applied,
         "tieInExcludedOld": tie_in_excluded_old,
         "tieInExcludedNew": tie_in_excluded_new,
+        "timeline": timeline,
         "dtwCorrectionApplied": apply_dtw_correction,
         "matchingMode": matching_mode,
         "valveSegmented": use_valve_anchor and len(valve_pairs) >= 2,

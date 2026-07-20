@@ -24,6 +24,48 @@ export type GwTimelineMatch = TimelineMatchLike & {
   rawVarPct?: number | null;
   sOld?: number | null;
   sNew?: number | null;
+  timelineOnly?: boolean;
+  timelineReason?: string | null;
+};
+
+export type TimelineFeatureEvidence = {
+  id?: string | number | null;
+  type?: string | null;
+  displayDistanceM?: number | null;
+  sourceDistanceM?: number | null;
+  inOverlap?: boolean;
+  reason?: string | null;
+};
+
+export type TimelineCoverage = {
+  startM?: number | null;
+  endM?: number | null;
+  sourceStartM?: number | null;
+  sourceEndM?: number | null;
+};
+
+export type TimelineEvidence = {
+  coordinateSystem?: string;
+  domain?: TimelineCoverage | null;
+  oldCoverage?: TimelineCoverage | null;
+  newCoverage?: TimelineCoverage | null;
+  oldFeatures?: TimelineFeatureEvidence[] | null;
+  newFeatures?: TimelineFeatureEvidence[] | null;
+};
+
+export type TimelineGeometry = {
+  domain: { startM: number; endM: number };
+  oldCoverage: { startM: number; endM: number } | null;
+  newCoverage: { startM: number; endM: number } | null;
+  oldGWs: number[];
+  newGWs: number[];
+  oldValves: number[];
+  newValves: number[];
+  oldTees: number[];
+  newTees: number[];
+  oldFeatures: Array<TimelineFeatureEvidence & { displayDistanceM: number }>;
+  newFeatures: Array<TimelineFeatureEvidence & { displayDistanceM: number }>;
+  matches: GwTimelineMatch[];
 };
 
 export type TimelineSummary = {
@@ -49,6 +91,135 @@ const clamp = (value: number, minimum: number, maximum: number) => (
 const hasSide = (id: unknown, distance: unknown) => (
   (id !== null && id !== undefined && String(id).trim() !== '') || Number.isFinite(Number(distance))
 );
+
+const finiteDistance = (value: unknown): number | null => {
+  const distance = Number(value);
+  return Number.isFinite(distance) ? distance : null;
+};
+
+const normalizedCoverage = (coverage: TimelineCoverage | null | undefined) => {
+  const startM = finiteDistance(coverage?.startM);
+  const endM = finiteDistance(coverage?.endM);
+  return startM !== null && endM !== null && endM >= startM ? { startM, endM } : null;
+};
+
+const featureKind = (feature: TimelineFeatureEvidence) => {
+  const value = String(feature.type ?? '').trim().toLowerCase();
+  if (/\bvalve\b/.test(value)) return 'valve';
+  if (/\b(?:tee|offtake|branch)\b/.test(value)) return 'tee';
+  if (/\b(?:weld|girth|seam)\b/.test(value)) return 'weld';
+  return value;
+};
+
+type NormalizedTimelineFeature = TimelineFeatureEvidence & {
+  displayDistanceM: number;
+  sourceDistanceM: number | null;
+};
+
+const normalizedFeatures = (
+  features: TimelineFeatureEvidence[] | null | undefined,
+): NormalizedTimelineFeature[] => (
+  (Array.isArray(features) ? features : [])
+    .flatMap((feature): NormalizedTimelineFeature[] => {
+      const displayDistanceM = finiteDistance(feature.displayDistanceM);
+      if (displayDistanceM === null) return [];
+      return [{
+        ...feature,
+        displayDistanceM,
+        sourceDistanceM: finiteDistance(feature.sourceDistanceM),
+      }];
+    })
+    .sort((left, right) => left.displayDistanceM - right.displayDistanceM)
+);
+
+const representedOnSide = (
+  matches: GwTimelineMatch[],
+  feature: TimelineFeatureEvidence & { displayDistanceM: number },
+  side: 'old' | 'new',
+) => matches.some((match) => {
+  const matchId = side === 'old' ? match.oldId : match.newId;
+  const matchDistance = finiteDistance(side === 'old' ? match.oldVal : match.newVal);
+  if (feature.id !== null && feature.id !== undefined && matchId !== null && matchId !== undefined) {
+    return String(feature.id) === String(matchId);
+  }
+  return matchDistance !== null && Math.abs(matchDistance - feature.displayDistanceM) < 0.0005;
+});
+
+export function buildTimelineModel(
+  matches: GwTimelineMatch[],
+  evidence?: TimelineEvidence | null,
+): TimelineGeometry {
+  const oldFeatures = normalizedFeatures(evidence?.oldFeatures);
+  const newFeatures = normalizedFeatures(evidence?.newFeatures);
+  const baseMatches = Array.isArray(matches) ? matches : [];
+  const timelineMatches = [...baseMatches];
+
+  oldFeatures.forEach((feature, index) => {
+    if (representedOnSide(baseMatches, feature, 'old')) return;
+    timelineMatches.push({
+      id: `timeline-old-${String(feature.id ?? index)}-${feature.displayDistanceM}`,
+      status: 'Skipped',
+      oldId: feature.id,
+      newId: null,
+      oldVal: feature.displayDistanceM,
+      newVal: null,
+      originalOldVal: feature.sourceDistanceM,
+      originalNewVal: null,
+      offset: null,
+      timelineOnly: true,
+      timelineReason: feature.reason ?? null,
+    });
+  });
+  newFeatures.forEach((feature, index) => {
+    if (representedOnSide(baseMatches, feature, 'new')) return;
+    timelineMatches.push({
+      id: `timeline-new-${String(feature.id ?? index)}-${feature.displayDistanceM}`,
+      status: 'Skipped',
+      oldId: null,
+      newId: feature.id,
+      oldVal: null,
+      newVal: feature.displayDistanceM,
+      originalOldVal: null,
+      originalNewVal: feature.sourceDistanceM,
+      offset: null,
+      timelineOnly: true,
+      timelineReason: feature.reason ?? null,
+    });
+  });
+
+  const evidenceDomain = normalizedCoverage(evidence?.domain);
+  const knownDistances = [
+    ...oldFeatures.map((feature) => feature.displayDistanceM),
+    ...newFeatures.map((feature) => feature.displayDistanceM),
+    ...baseMatches.flatMap((match) => [finiteDistance(match.oldVal), finiteDistance(match.newVal)])
+      .filter((distance): distance is number => distance !== null),
+  ];
+  const derivedStart = knownDistances.length ? Math.min(...knownDistances) : 0;
+  const derivedEnd = knownDistances.length ? Math.max(...knownDistances) : 1;
+  const domain = evidenceDomain ?? {
+    startM: derivedStart,
+    endM: derivedEnd > derivedStart ? derivedEnd : derivedStart + 1,
+  };
+
+  const distancesFor = (kind: 'weld' | 'valve' | 'tee', features: typeof oldFeatures) => (
+    features.filter((feature) => featureKind(feature) === kind).map((feature) => feature.displayDistanceM)
+  );
+
+  return {
+    domain,
+    oldCoverage: normalizedCoverage(evidence?.oldCoverage),
+    newCoverage: normalizedCoverage(evidence?.newCoverage),
+    oldGWs: distancesFor('weld', oldFeatures),
+    newGWs: distancesFor('weld', newFeatures),
+    oldValves: distancesFor('valve', oldFeatures),
+    newValves: distancesFor('valve', newFeatures),
+    oldTees: distancesFor('tee', oldFeatures),
+    newTees: distancesFor('tee', newFeatures),
+    oldFeatures,
+    newFeatures,
+    matches: timelineMatches,
+  };
+}
 
 export function classifyTimelineMatch(
   match: TimelineMatchLike,

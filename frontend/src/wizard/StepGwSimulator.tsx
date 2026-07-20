@@ -7,6 +7,7 @@ import GwTimelineViewer from './GwTimelineViewer';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Tooltip } from 'chart.js';
 import { apiFetch, ApiError } from '../utils/api';
 import { gwReviewKey, normalizeGwReview, selectReviewedGwLocks, type GwReviewDisposition, type GwReviewState } from '../domain/alignmentReview';
+import { buildTimelineModel, type TimelineEvidence, type TimelineGeometry } from '../domain/gwTimeline';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip);
 
@@ -103,12 +104,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
   const [gwMatchesFinal, setGwMatchesFinal] = useState<any[]>([]);
   const [gwOrphans, setGwOrphans] = useState<any[]>([]);
   const [alignedFeatures, setAlignedFeatures] = useState<any[]>([]);
-  const [oldGWs, setOldGWs] = useState<number[]>([]);
-  const [newGWs, setNewGWs] = useState<number[]>([]);
-  const [oldValves, setOldValves] = useState<number[]>([]);
-  const [newValves, setNewValves] = useState<number[]>([]);
-  const [oldTees, setOldTees] = useState<number[]>([]);
-  const [newTees, setNewTees] = useState<number[]>([]);
+  const [timelineGeometry, setTimelineGeometry] = useState<TimelineGeometry>(() => buildTimelineModel([], null));
   const [isCalculating, setIsCalculating] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
@@ -135,6 +131,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
       setGwMatchesFinal([]);
       setGwOrphans([]);
       setAlignedFeatures([]);
+      setTimelineGeometry(buildTimelineModel([], null));
       if (reviewSignature.current !== null && reviewSignature.current !== currentReviewSignature) {
         setGwReview({});
       }
@@ -255,13 +252,6 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
           const oldTees = hasPersistedRuns ? [] : rawOldRun.filter((f: any) => featureTypeText(f).includes('tee')).map((f: any) => f.dist);
           const newTees = hasPersistedRuns ? [] : adjustedNewRun.filter((f: any) => featureTypeText(f).includes('tee')).map((f: any) => f.dist);
           
-          setOldGWs(oldW);
-          setNewGWs(newW);
-          setOldValves(oldValves);
-          setNewValves(newValves);
-          setOldTees(oldTees);
-          setNewTees(newTees);
-          
           const formattedMatches = data.gwMatches.map((m: any, idx: number) => {
               const isMatch = m && m.status === 'Match';
               const rawOffset = m.newDist !== null && m.oldDist !== null ? (m.newDist - m.oldDist) : null;
@@ -298,8 +288,34 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                 sOld: m.L_ref, sNew: m.L_new, rawVarPct: m.deviation_ratio ? m.deviation_ratio * 100 : 0, rawOffset,
               };
           });
-
-          setMatches(formattedMatches);
+          const fallbackDistances = [...oldW, ...newW, ...oldValves, ...newValves, ...oldTees, ...newTees]
+            .map(Number)
+            .filter(Number.isFinite);
+          const fallbackEvidence: TimelineEvidence = {
+            coordinateSystem: hasCanonicalTieIn ? 'NEW_MASTER' : 'COMMON_DISPLAY',
+            domain: {
+              startM: fallbackDistances.length ? Math.min(...fallbackDistances) : 0,
+              endM: fallbackDistances.length ? Math.max(...fallbackDistances) : 1,
+            },
+            oldCoverage: oldW.length ? { startM: Math.min(...oldW), endM: Math.max(...oldW) } : null,
+            newCoverage: newW.length ? { startM: Math.min(...newW), endM: Math.max(...newW) } : null,
+            oldFeatures: [
+              ...oldW.map((distance) => ({ type: 'weld', displayDistanceM: distance, sourceDistanceM: distance })),
+              ...oldValves.map((distance) => ({ type: 'valve', displayDistanceM: distance, sourceDistanceM: distance })),
+              ...oldTees.map((distance) => ({ type: 'tee', displayDistanceM: distance, sourceDistanceM: distance })),
+            ],
+            newFeatures: [
+              ...newW.map((distance) => ({ type: 'weld', displayDistanceM: distance, sourceDistanceM: distance })),
+              ...newValves.map((distance) => ({ type: 'valve', displayDistanceM: distance, sourceDistanceM: distance })),
+              ...newTees.map((distance) => ({ type: 'tee', displayDistanceM: distance, sourceDistanceM: distance })),
+            ],
+          };
+          const nextTimeline = buildTimelineModel(
+            formattedMatches,
+            (data.timeline as TimelineEvidence | undefined) ?? fallbackEvidence,
+          );
+          setTimelineGeometry(nextTimeline);
+          setMatches(nextTimeline.matches);
         } else {
           throw new Error(data.error || 'Server tidak mengembalikan hasil GW matching.');
         }
@@ -465,9 +481,6 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
     }
   };
 
-  const finiteTimelineDistances = [...oldGWs, ...newGWs].filter(Number.isFinite);
-  const maxDist = Math.max(10, ...finiteTimelineDistances) + 10;
-
   return (
     <div className="gw-matching-workspace bg-transparent text-gray-800 font-sans flex flex-col gap-6 animate-fade-in">
       {loadError && (
@@ -491,13 +504,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
           <GwTimelineViewer
             matches={timelineMatches}
             dispositionsById={timelineDispositions}
-            oldGWs={oldGWs}
-            newGWs={newGWs}
-            oldValves={oldValves}
-            newValves={newValves}
-            oldTees={oldTees}
-            newTees={newTees}
-            maxDistance={maxDist}
+            timeline={timelineGeometry}
             zoom={zoom}
             oldRunLabel={config?.summaryData?.oldRun?.year ? `${config.summaryData.oldRun.year} (Historical OLD)` : 'Historical OLD'}
             newRunLabel={config?.summaryData?.newRun?.year ? `${config.summaryData.newRun.year} (Master NEW)` : 'Master NEW'}

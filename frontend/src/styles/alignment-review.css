@@ -705,8 +705,8 @@ body:has(.alignment-workspace--gw) {
   height: 4.5rem;
 }
 
-.gw-pipeline-row.is-old { inset-block-start: 4.25rem; }
-.gw-pipeline-row.is-new { inset-block-start: 12rem; }
+.gw-pipeline-row.is-new { inset-block-start: 4.25rem; }
+.gw-pipeline-row.is-old { inset-block-start: 12rem; }
 
 .gw-pipeline-row > strong {
   position: sticky;
@@ -726,7 +726,8 @@ body:has(.alignment-workspace--gw) {
 .gw-pipeline-track {
   position: absolute;
   inset-block-start: 2.25rem;
-  inset-inline: 0;
+  inset-inline-start: 0;
+  width: 100%;
   height: var(--rule-gw-hairline);
   background: var(--color-gw-track);
 }
@@ -755,8 +756,8 @@ body:has(.alignment-workspace--gw) {
   background: currentColor;
 }
 
-.gw-pipeline-row.is-new .gw-pipeline-marker > span { align-self: end; }
-.gw-pipeline-row.is-old .gw-pipeline-marker > span { align-self: start; }
+.gw-pipeline-row.is-new .gw-pipeline-marker > span { align-self: start; }
+.gw-pipeline-row.is-old .gw-pipeline-marker > span { align-self: end; }
 
 .gw-pipeline-marker > small {
   position: absolute;
@@ -780,8 +781,8 @@ body:has(.alignment-workspace--gw) {
 .gw-pipeline-marker.is-selected > span { outline: var(--rule-gw-focus) solid var(--color-gw-focus); outline-offset: var(--rule-gw-focus); }
 .gw-pipeline-marker:is(.is-selected, .is-review, .is-missing) > small,
 .gw-pipeline-marker:focus-visible > small { opacity: 1; }
-.gw-pipeline-row.is-new .gw-pipeline-marker > small { inset-block-start: 3rem; }
-.gw-pipeline-row.is-old .gw-pipeline-marker > small { inset-block-start: -1rem; }
+.gw-pipeline-row.is-new .gw-pipeline-marker > small { inset-block-start: -1rem; }
+.gw-pipeline-row.is-old .gw-pipeline-marker > small { inset-block-start: 3rem; }
 .gw-pipeline-marker:disabled { cursor: not-allowed; opacity: 0.55; }
 
 .gw-pipeline-feature {

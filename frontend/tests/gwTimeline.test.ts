@@ -2,12 +2,69 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildTimelineModel,
   buildOffsetHistogram,
   buildTimelineSummary,
   calculateViewportWindow,
   classifyTimelineMatch,
   readMatchConfidence,
 } from '../src/domain/gwTimeline.ts';
+
+test('buildTimelineModel keeps a full NEW master domain and a partial mapped OLD coverage', () => {
+  const model = buildTimelineModel(
+    [
+      {
+        id: 'pair-1',
+        status: 'Match',
+        oldId: 'old-1',
+        newId: 'new-1',
+        oldVal: 1_868.81,
+        newVal: 1_868.81,
+        originalOldVal: 4.243,
+        originalNewVal: 1_868.81,
+      },
+      {
+        id: 'pair-2',
+        status: 'Match',
+        oldId: 'old-2',
+        newId: 'new-locked-end',
+        oldVal: 3_946.498,
+        newVal: 3_946.498,
+        originalOldVal: 2_095.565,
+        originalNewVal: 3_946.498,
+      },
+    ],
+    {
+      coordinateSystem: 'NEW_MASTER',
+      domain: { startM: 0, endM: 3_947.278 },
+      oldCoverage: {
+        startM: 1_868.81,
+        endM: 3_946.498,
+        sourceStartM: 4.243,
+        sourceEndM: 2_095.565,
+      },
+      newCoverage: { startM: 0, endM: 3_947.278 },
+      oldFeatures: [
+        { id: 'old-1', type: 'weld', displayDistanceM: 1_868.81, sourceDistanceM: 4.243 },
+        { id: 'old-2', type: 'weld', displayDistanceM: 3_946.498, sourceDistanceM: 2_095.565 },
+      ],
+      newFeatures: [
+        { id: 'new-0', type: 'weld', displayDistanceM: 0, sourceDistanceM: 0, inOverlap: false },
+        { id: 'new-1', type: 'weld', displayDistanceM: 1_868.81, sourceDistanceM: 1_868.81, inOverlap: true },
+        { id: 'new-locked-end', type: 'weld', displayDistanceM: 3_946.498, sourceDistanceM: 3_946.498, inOverlap: true },
+        { id: 'new-2', type: 'weld', displayDistanceM: 3_947.278, sourceDistanceM: 3_947.278, inOverlap: false },
+      ],
+    },
+  );
+
+  assert.deepEqual(model.domain, { startM: 0, endM: 3_947.278 });
+  assert.deepEqual(model.oldCoverage, { startM: 1_868.81, endM: 3_946.498 });
+  assert.deepEqual(model.oldGWs, [1_868.81, 3_946.498]);
+  assert.deepEqual(model.newGWs, [0, 1_868.81, 3_946.498, 3_947.278]);
+  assert.equal(model.matches.filter((match) => match.status === 'Skipped').length, 2);
+  assert.equal(model.matches.some((match) => match.oldVal === 0), false);
+  assert.equal(model.matches.some((match) => match.newVal === 0 && match.status === 'Skipped'), true);
+});
 
 test('classifyTimelineMatch preserves review decisions and missing sides', () => {
   const matched = { status: 'Match', oldId: 'old-1', newId: 'new-1', flagged: false };
