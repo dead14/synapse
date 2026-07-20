@@ -118,12 +118,16 @@ export function buildHistoricalLanes(
       })
       .filter((feature): feature is SpatialFeature => feature !== null)
       .sort((left, right) => left.dist - right.dist);
-    const gws = gwsFromRows.length > 0 || runIndex > 0
+    const lockedGws = matches
+      .map((match) => lockedOldGw(match, run))
+      .filter((feature): feature is SpatialFeature => feature !== null);
+    const lockedKeys = new Set(lockedGws.map((feature) => pairKey(feature.id, feature.dist)));
+    const gws = runIndex > 0
       ? gwsFromRows
-      : matches
-        .map((match) => lockedOldGw(match, run))
-        .filter((feature): feature is SpatialFeature => feature !== null)
-        .sort((left, right) => left.dist - right.dist);
+      : [
+        ...lockedGws,
+        ...gwsFromRows.filter((feature) => !lockedKeys.has(pairKey(feature.id, feature.dist))),
+      ].sort((left, right) => left.dist - right.dist);
 
     const bends = rows
       .filter((row) => historicalType(row).includes('bend'))
