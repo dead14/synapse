@@ -1,5 +1,6 @@
 import sys
 import unittest
+from datetime import time
 from pathlib import Path
 
 
@@ -27,6 +28,7 @@ class TieInEngineTests(unittest.TestCase):
             self.feature("o-launcher-w4", "weld", 2.327),
             self.feature("o-launcher-w5", "weld", 3.808, joint_length_m=0.110, feature_identification="Seamless pipe"),
             self.feature("o-launcher-w6", "weld", 3.918, wall_thickness_mm=12.7, joint_length_m=0.325, feature_identification="Seamless pipe"),
+            self.feature("o-flange", "joint flange", 4.079, wall_thickness_mm=12.7),
             self.feature("o-common-1", "weld", 4.243, wall_thickness_mm=9.3, joint_length_m=1.594, feature_identification="Seamless pipe"),
             self.feature("o-tap", "offtake tap", 5.463, clock_position="12:00"),
             self.feature("o-common-2", "weld", 5.837, wall_thickness_mm=9.3),
@@ -65,6 +67,53 @@ class TieInEngineTests(unittest.TestCase):
         self.assertEqual(result["transform"]["direction"], "OLD_TO_NEW")
         self.assertEqual(result["transform"]["model"], "MONOTONIC_PIECEWISE_LINEAR")
         self.assertFalse(result["transform"]["allowExtrapolation"])
+        self.assertEqual(result["transform"]["knotCount"], len(result["transform"]["knots"]))
+
+    def test_anchor_normalization_preserves_weld_role_and_normalizes_flange_and_clock(self):
+        features = [
+            self.feature(
+                "valve-pipe-weld",
+                "weld",
+                0.0,
+                feature_identification="Valve pipe",
+                clock_position=time(11, 24),
+            ),
+            self.feature("joint-flange", "joint flange", 0.5),
+            self.feature(
+                "flanged-record",
+                "weld",
+                1.0,
+                feature_identification="Flanged",
+                clock_position=0.475,
+            ),
+            self.feature(
+                "seamless-pipe-is-not-a-weld",
+                "",
+                1.5,
+                feature_identification="Seamless Pipe",
+            ),
+        ]
+
+        anchors = tiein_engine.extract_anchors(features)
+
+        self.assertEqual([anchor.type for anchor in anchors], ["weld", "flange", "flange"])
+        self.assertAlmostEqual(anchors[0].clock_position, 11.4, places=6)
+        self.assertAlmostEqual(anchors[2].clock_position, 11.4, places=6)
+
+    def test_facility_boundary_without_two_downstream_welds_is_rejected(self):
+        old = [
+            self.feature("old-flange", "flange", 0.0),
+            self.feature("old-weld", "weld", 1.0),
+        ]
+        new = [
+            self.feature("new-flange", "flange", 100.0),
+            self.feature("new-weld", "weld", 101.0),
+        ]
+
+        result = tiein_engine.calculate_tiein_offset(old, new)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["code"], "INSUFFICIENT_STABLE_TIEIN_KNOTS")
 
     def test_piecewise_transform_tracks_local_odometer_drift(self):
         old_distances = [100.0, 112.0, 124.4, 136.1, 148.8, 161.0, 173.6, 185.5]
@@ -259,14 +308,14 @@ class TieInEngineTests(unittest.TestCase):
         self.assertEqual(result["alignedPairCount"], 30)
         self.assertGreaterEqual(result["confidence"], 85.0)
 
-    def test_ransac_outlier_is_reported_as_unaligned_gw(self):
+    def test_robust_affine_outlier_is_reported_as_unaligned_gw(self):
         old = [
             self.feature(f"o-{index}", "weld", distance)
             for index, distance in enumerate([1000, 1012, 1024, 1036, 1048, 1060])
         ]
         new = [
             self.feature(f"n-{index}", "weld", distance)
-            for index, distance in enumerate([0, 12, 24, 40, 48, 60])
+            for index, distance in enumerate([0, 12, 24, 38.5, 48, 60])
         ]
 
         result = tiein_engine.calculate_tiein_offset(old, new)
@@ -278,6 +327,35 @@ class TieInEngineTests(unittest.TestCase):
         self.assertNotIn("o-3", {pair["oldId"] for pair in result["pairs"]})
         self.assertEqual(result["unalignedPairs"][0]["oldId"], "o-3")
         self.assertEqual(result["unalignedPairs"][0]["newId"], "n-3")
+        self.assertEqual(result["robustFit"]["method"], "DETERMINISTIC_THEIL_SEN_IRLS")
+        self.assertTrue(result["robustFit"]["dependencyFree"])
+
+    def test_reported_overlap_never_exceeds_piecewise_transform_domain(self):
+        old = [
+            self.feature("o-1", "weld", 0.0),
+            self.feature("o-2", "weld", 12.0),
+            self.feature("o-3", "weld", 24.0),
+            self.feature("o-bend", "bend", 25.0),
+        ]
+        new = [
+            self.feature("n-1", "weld", 100.0),
+            self.feature("n-2", "weld", 112.1),
+            self.feature("n-3", "weld", 124.2),
+            self.feature("n-bend", "bend", 125.2),
+        ]
+
+        result = tiein_engine.calculate_tiein_offset(old, new)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["overlap"], {
+            "oldStartM": result["transform"]["domain"]["oldStartM"],
+            "oldEndM": result["transform"]["domain"]["oldEndM"],
+            "newStartM": result["transform"]["domain"]["newStartM"],
+            "newEndM": result["transform"]["domain"]["newEndM"],
+        })
+        self.assertEqual(result["evidenceOverlap"]["oldEndM"], 25.0)
+        self.assertEqual(result["evidenceOverlap"]["newEndM"], 125.2)
+        self.assertLessEqual(result["overlap"]["oldEndM"], result["evidenceOverlap"]["oldEndM"])
 
 
 if __name__ == "__main__":

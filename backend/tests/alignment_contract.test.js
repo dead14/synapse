@@ -154,6 +154,21 @@ test('validateTieInTransform accepts only bounded accepted monotonic evidence', 
         }),
         (error) => error.code === 'INVALID_TIEIN_TRANSFORM',
     );
+    assert.throws(
+        () => validateTieInTransform({
+            ...valid,
+            tieInTransform: {
+                ...valid.tieInTransform,
+                domain: {
+                    oldStartM: 4,
+                    oldEndM: 28,
+                    newStartM: 100,
+                    newEndM: 999,
+                },
+            },
+        }),
+        (error) => error.code === 'INVALID_TIEIN_TRANSFORM',
+    );
 });
 
 test('validateMatchingSections accepts an optional partial section', () => {

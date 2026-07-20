@@ -9,6 +9,9 @@ const {
 test('persisted parser labels are recognized as canonical alignment anchors', () => {
     assert.equal(canonicalAlignmentAnchorType('Girth Weld'), 'Weld');
     assert.equal(canonicalAlignmentAnchorType('Weld'), 'Weld');
+    assert.equal(canonicalAlignmentAnchorType('Joint Flange'), 'Flange');
+    assert.equal(canonicalAlignmentAnchorType('Weld', 'Flanged'), 'Flange');
+    assert.equal(canonicalAlignmentAnchorType('Weld', 'Valve pipe'), 'Weld');
     assert.equal(canonicalAlignmentAnchorType('Valve'), 'Valve');
     assert.equal(canonicalAlignmentAnchorType('Tee / Branch Connection'), 'Tee');
     assert.equal(canonicalAlignmentAnchorType('Tee'), 'Tee');
@@ -30,6 +33,8 @@ test('database anchor filter contains every persisted parser label', () => {
     assert.deepEqual(ALIGNMENT_ANCHOR_FEATURE_TYPES, [
         'Weld',
         'Girth Weld',
+        'Flange',
+        'Joint Flange',
         'Valve',
         'Tee',
         'Tee / Branch Connection',

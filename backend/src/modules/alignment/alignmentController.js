@@ -47,10 +47,16 @@ const localJobs = new OwnedJobStore({
 const resultsCache = new Map(); // sessionId -> cached result
 // Bump whenever result semantics change so a hot backend process cannot keep
 // serving rows produced by an older Python engine implementation.
-const ALIGNMENT_ENGINE_VERSION = '2026-07-16-physics-softcost-v4';
+const ALIGNMENT_ENGINE_VERSION = '2026-07-20-tiein-locked-v5';
 
 const MAX_EXPORT_ROWS = Number(process.env.MAX_EXPORT_ROWS) || 100_000;
 const MAX_DTW_ANCHORS = Number(process.env.MAX_DTW_RECORDS) || 25_000;
+const CONTROLLED_ALIGNMENT_ERROR_CODES = new Set([
+    'INVALID_TIEIN_TRANSFORM',
+    'PARTIAL_RUN_TIEIN_REQUIRED',
+    'TIEIN_LOCK_RESOLUTION_FAILED',
+    'NO_ALIGNMENT_ANCHORS',
+]);
 
 function parsePositiveId(value) {
     const parsed = Number(value);
@@ -511,7 +517,16 @@ exports.runDtwAlignment = async (req, res) => {
             res.json(result);
         } else {
             console.error(`[DTW] Request ${requestId} failed:`, result.error);
-            res.status(500).json({ error: result.error, raw: result });
+            const status = result.code === 'DTW_INPUT_TOO_LARGE'
+                ? 413
+                : CONTROLLED_ALIGNMENT_ERROR_CODES.has(result.code) ? 422 : 500;
+            res.status(status).json({
+                error: result.error,
+                code: result.code || 'ALIGNMENT_ENGINE_FAILED',
+                ...(Array.isArray(result.unresolvedKnotIndexes)
+                    ? { unresolvedKnotIndexes: result.unresolvedKnotIndexes }
+                    : {}),
+            });
         }
     } catch (err) {
         console.error(`[DTW] Request ${requestId} exception:`, err);

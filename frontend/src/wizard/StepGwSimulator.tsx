@@ -177,7 +177,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
           return null;
         };
         const selectAlignmentAnchors = (features: any[]) => features
-          .filter((feature) => /weld|girth|seam|valve|tee|offtake|branch|bend|elbow|launcher|receiver/.test(featureTypeText(feature)))
+          .filter((feature) => /\b(?:weld|girth|flange|valve|tee|offtake|branch|bend|elbow|launcher|receiver)\b/.test(featureTypeText(feature)))
           .map((feature) => ({ ...feature, dist: finiteDistance(feature) }))
           .filter((feature) => feature.dist !== null);
         const rawOldRun = selectAlignmentAnchors(config?.summaryData?.oldRun?.rawFeatures || []);

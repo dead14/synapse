@@ -86,6 +86,15 @@ function validateTieInTransform(payload, { maxKnots = 10_000 } = {}) {
         || Math.abs(domainEnd - Number(last.oldDistanceM)) > 1e-6) {
         throw validationError('INVALID_TIEIN_TRANSFORM', 'Tie-in domain must equal the piecewise knot domain');
     }
+    const hasNewDomain = transform.domain.newStartM !== undefined
+        || transform.domain.newEndM !== undefined;
+    const newDomainStart = Number(transform.domain.newStartM);
+    const newDomainEnd = Number(transform.domain.newEndM);
+    if (hasNewDomain && (!Number.isFinite(newDomainStart) || !Number.isFinite(newDomainEnd)
+        || Math.abs(newDomainStart - Number(first.newDistanceM)) > 1e-6
+        || Math.abs(newDomainEnd - Number(last.newDistanceM)) > 1e-6)) {
+        throw validationError('INVALID_TIEIN_TRANSFORM', 'Tie-in NEW domain must equal the piecewise knot domain');
+    }
 }
 
 function gwPairKey(pair) {

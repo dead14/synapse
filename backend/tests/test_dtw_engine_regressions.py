@@ -155,6 +155,124 @@ class DtwEngineRegressionTests(unittest.TestCase):
         )
         self.assertEqual(strict["gwMatchesFinal"], loose["gwMatchesFinal"])
 
+    def test_canonical_tiein_fails_closed_when_a_knot_weld_is_missing(self):
+        result = dtw_engine.process_request(
+            {
+                "requestId": "missing-lock",
+                "partialRunEnabled": True,
+                "oldRun": [
+                    self.weld("old-1", 10.0),
+                    self.weld("old-2", 22.0),
+                ],
+                "newRun": [
+                    self.weld("new-1", 1010.0),
+                    # The accepted transform names this knot, but the source
+                    # run no longer contains its physical weld.
+                ],
+                "tieInDecision": {"status": "AUTO_ACCEPTED"},
+                "tieInTransform": {
+                    "direction": "OLD_TO_NEW",
+                    "model": "MONOTONIC_PIECEWISE_LINEAR",
+                    "allowExtrapolation": False,
+                    "domain": {
+                        "oldStartM": 10.0,
+                        "oldEndM": 22.0,
+                        "newStartM": 1010.0,
+                        "newEndM": 1022.0,
+                    },
+                    "knots": [
+                        {"oldId": "old-1", "newId": "new-1", "oldDistanceM": 10.0, "newDistanceM": 1010.0},
+                        {"oldId": "old-2", "newId": "new-2", "oldDistanceM": 22.0, "newDistanceM": 1022.0},
+                    ],
+                },
+            }
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["code"], "TIEIN_LOCK_RESOLUTION_FAILED")
+        self.assertEqual(result["unresolvedKnotIndexes"], [1])
+
+    def test_canonical_tiein_can_lock_vendor_rows_without_ids_by_distance(self):
+        result = dtw_engine.process_request(
+            {
+                "requestId": "idless-locks",
+                "oldRun": [self.weld(None, 10.0), self.weld(None, 22.0)],
+                "newRun": [self.weld(None, 1010.0), self.weld(None, 1022.0)],
+                "tieInDecision": {"status": "AUTO_ACCEPTED"},
+                "tieInTransform": {
+                    "direction": "OLD_TO_NEW",
+                    "model": "MONOTONIC_PIECEWISE_LINEAR",
+                    "allowExtrapolation": False,
+                    "domain": {
+                        "oldStartM": 10.0,
+                        "oldEndM": 22.0,
+                        "newStartM": 1010.0,
+                        "newEndM": 1022.0,
+                    },
+                    "knots": [
+                        {"oldDistanceM": 10.0, "newDistanceM": 1010.0},
+                        {"oldDistanceM": 22.0, "newDistanceM": 1022.0},
+                    ],
+                },
+            }
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["matchingMode"], "TIEIN_LOCKED")
+        self.assertEqual(result["stats"]["matchedGws"], 2)
+
+    def test_canonical_tiein_rejects_a_stale_non_null_vendor_id(self):
+        result = dtw_engine.process_request(
+            {
+                "requestId": "stale-lock-id",
+                "oldRun": [
+                    self.weld("different-old-1", 10.0),
+                    self.weld("old-2", 22.0),
+                ],
+                "newRun": [
+                    self.weld("new-1", 1010.0),
+                    self.weld("new-2", 1022.0),
+                ],
+                "tieInDecision": {"status": "AUTO_ACCEPTED"},
+                "tieInTransform": {
+                    "direction": "OLD_TO_NEW",
+                    "model": "MONOTONIC_PIECEWISE_LINEAR",
+                    "allowExtrapolation": False,
+                    "domain": {"oldStartM": 10.0, "oldEndM": 22.0},
+                    "knots": [
+                        {"oldId": "expected-old-1", "newId": "new-1", "oldDistanceM": 10.0, "newDistanceM": 1010.0},
+                        {"oldId": "old-2", "newId": "new-2", "oldDistanceM": 22.0, "newDistanceM": 1022.0},
+                    ],
+                },
+            }
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["code"], "TIEIN_LOCK_RESOLUTION_FAILED")
+        self.assertEqual(result["unresolvedKnotIndexes"], [0])
+
+    def test_partial_new_domain_metadata_must_be_complete(self):
+        result = dtw_engine.process_request(
+            {
+                "oldRun": [self.weld("old-1", 10.0), self.weld("old-2", 22.0)],
+                "newRun": [self.weld("new-1", 1010.0), self.weld("new-2", 1022.0)],
+                "tieInDecision": {"status": "AUTO_ACCEPTED"},
+                "tieInTransform": {
+                    "direction": "OLD_TO_NEW",
+                    "model": "MONOTONIC_PIECEWISE_LINEAR",
+                    "allowExtrapolation": False,
+                    "domain": {"oldStartM": 10.0, "oldEndM": 22.0, "newStartM": 1010.0},
+                    "knots": [
+                        {"oldDistanceM": 10.0, "newDistanceM": 1010.0},
+                        {"oldDistanceM": 22.0, "newDistanceM": 1022.0},
+                    ],
+                },
+            }
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["code"], "INVALID_TIEIN_TRANSFORM")
+
     def test_piecewise_transform_without_acceptance_decision_is_not_applied(self):
         result = dtw_engine.process_request(
             {
@@ -412,6 +530,20 @@ class DtwEngineRegressionTests(unittest.TestCase):
 
         self.assertEqual(len(fallback_pairs), 1)
         self.assertEqual(false_tee_pairs, [])
+        self.assertEqual(
+            dtw_engine._alignment_feature_kind({
+                "type": "weld",
+                "feature_identification": "Flanged",
+            }),
+            "flange",
+        )
+        self.assertEqual(
+            dtw_engine._alignment_feature_kind({
+                "type": "weld",
+                "feature_identification": "Valve pipe",
+            }),
+            "weld",
+        )
 
     def test_dtw_does_not_match_a_weld_to_a_valve(self):
         matches = dtw_engine.calculate_dtw(

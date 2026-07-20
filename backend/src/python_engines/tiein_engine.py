@@ -7,25 +7,27 @@ the explicit piecewise transform.
 
 import json
 import math
+import re
 import sys
 from dataclasses import dataclass
+from datetime import time as time_value
 
 import numpy as np
 
 
-METHOD_VERSION = "ordered-local-spans-v2"
+METHOD_VERSION = "ordered-drift-spans-v3"
 COMPARISON_COORDINATE_VERSION = "temporary-offset-normalization-v1"
-RANSAC_RESIDUAL_THRESHOLD_M = 2.0
+ROBUST_FIT_METHOD = "DETERMINISTIC_THEIL_SEN_IRLS"
+ROBUST_RESIDUAL_THRESHOLD_M = 2.0
 ILI_SCALE_TOLERANCE = 0.02
 MAX_SKIP_ANCHORS = 4
 MAX_OVERLAP_CELLS = 1_000_000
 MIN_AUTO_PAIRS = 3
 AMBIGUITY_SCORE_RATIO = 0.95
-
-try:
-    from sklearn.linear_model import RANSACRegressor
-except ImportError:
-    RANSACRegressor = None
+FACILITY_BOUNDARY_TYPES = {"flange", "launcher", "receiver"}
+FACILITY_BOUNDARY_MAX_DISTANCE_M = 10.0
+MAX_THEIL_SEN_PAIRS = 100_000
+SPAN_P95_REVIEW_THRESHOLD_M = 1.5
 
 
 @dataclass
@@ -36,7 +38,7 @@ class Anchor:
     feature_id: object = None
     wall_thickness_mm: float | None = None
     joint_length_m: float | None = None
-    clock_position: str | None = None
+    clock_position: float | None = None
     identification: str = ""
 
 
@@ -56,8 +58,12 @@ def _finite_float(value):
     return parsed if math.isfinite(parsed) else None
 
 
-def _normalize_anchor_type(value):
-    label = str(value or "").strip().lower()
+def _normalize_anchor_type(primary_value, identification_value=None):
+    primary = str(primary_value or "").strip().lower()
+    identification = str(identification_value or "").strip().lower()
+    if "flang" in primary or "flang" in identification:
+        return "flange"
+    label = primary or identification
     if "valve" in label:
         return "valve"
     if "tee" in label or "offtake" in label or "branch" in label:
@@ -68,9 +74,42 @@ def _normalize_anchor_type(value):
         return "launcher"
     if "receiver" in label:
         return "receiver"
-    if "weld" in label or "girth" in label or "seam" in label:
+    if re.search(r"\b(?:weld|girth)\b", label):
         return "weld"
     return label
+
+
+def _normalize_clock_position(value):
+    if value is None:
+        return None
+    if isinstance(value, time_value):
+        hours = value.hour + value.minute / 60.0 + value.second / 3600.0
+        return hours % 12.0
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return None
+        hours = numeric * 24.0 if 0.0 <= numeric <= 1.0 else numeric
+        return hours % 12.0 if 0.0 <= hours <= 24.0 else None
+
+    text = str(value).strip().lower()
+    if not text or text in {"n/a", "na", "none", "null", "-"}:
+        return None
+    if ":" in text:
+        parts = text.split(":")
+        try:
+            hours = float(parts[0])
+            minutes = float(parts[1]) if len(parts) > 1 else 0.0
+            seconds = float(parts[2]) if len(parts) > 2 else 0.0
+        except ValueError:
+            return None
+        return (hours + minutes / 60.0 + seconds / 3600.0) % 12.0
+    try:
+        numeric = float(text)
+    except ValueError:
+        return None
+    hours = numeric * 24.0 if 0.0 <= numeric <= 1.0 else numeric
+    return hours % 12.0 if 0.0 <= hours <= 24.0 else None
 
 
 def _is_excluded(distance, run_label, excluded_ranges):
@@ -85,20 +124,23 @@ def _is_excluded(distance, run_label, excluded_ranges):
 
 
 def extract_anchors(features, run_label="OLD", excluded_ranges=None):
-    allowed_types = {"weld", "valve", "tee", "bend", "launcher", "receiver"}
+    allowed_types = {"weld", "flange", "valve", "tee", "bend", "launcher", "receiver"}
     anchors = []
     for index, feature in enumerate(features):
-        labels = " ".join(
-            str(value)
-            for value in (
-                feature.get("type"),
-                feature.get("feature_type"),
-                feature.get("feature_identification"),
-                feature.get("originalType"),
-            )
-            if value is not None
+        primary_type = _first_present(
+            feature,
+            "type",
+            "feature_type",
+            "originalType",
+            default="",
         )
-        anchor_type = _normalize_anchor_type(labels)
+        identification = _first_present(
+            feature,
+            "feature_identification",
+            "identification",
+            default="",
+        )
+        anchor_type = _normalize_anchor_type(primary_type, identification)
         distance = _finite_float(
             _first_present(
                 feature,
@@ -126,13 +168,10 @@ def extract_anchors(features, run_label="OLD", excluded_ranges=None):
                 joint_length_m=_finite_float(
                     _first_present(feature, "joint_length_m", "jointLength", "spool")
                 ),
-                clock_position=str(
-                    _first_present(feature, "clock_position", "clock", default="")
-                ).strip()
-                or None,
-                identification=str(
-                    _first_present(feature, "feature_identification", "identification", default="")
-                ).strip().lower(),
+                clock_position=_normalize_clock_position(
+                    _first_present(feature, "clock_position", "clock")
+                ),
+                identification=str(identification).strip().lower(),
             )
         )
     return sorted(anchors, key=lambda anchor: (anchor.dist, anchor.idx))
@@ -141,7 +180,7 @@ def extract_anchors(features, run_label="OLD", excluded_ranges=None):
 def _node_score(old_anchor, new_anchor):
     if old_anchor.type != new_anchor.type:
         return float("-inf")
-    score = 2.0 if old_anchor.type == "weld" else 4.0
+    score = 2.0 if old_anchor.type == "weld" else (5.0 if old_anchor.type == "flange" else 4.0)
     old_wall = old_anchor.wall_thickness_mm
     new_wall = new_anchor.wall_thickness_mm
     if old_wall is not None and new_wall is not None:
@@ -158,12 +197,13 @@ def _node_score(old_anchor, new_anchor):
             score += 2.5
         elif joint_difference > max(0.5, 0.20 * max(old_joint, new_joint)):
             score -= 1.5
-    old_is_fitting_weld = "flang" in old_anchor.identification
-    new_is_fitting_weld = "flang" in new_anchor.identification
-    if old_is_fitting_weld != new_is_fitting_weld:
-        score -= 6.0
-    if old_anchor.clock_position and new_anchor.clock_position:
-        score += 1.0 if old_anchor.clock_position == new_anchor.clock_position else -0.5
+    if old_anchor.clock_position is not None and new_anchor.clock_position is not None:
+        clock_difference = abs(old_anchor.clock_position - new_anchor.clock_position)
+        clock_difference = min(clock_difference, 12.0 - clock_difference)
+        if clock_difference <= 0.5:
+            score += 1.0
+        elif clock_difference > 1.5:
+            score -= 0.5
     return score
 
 
@@ -171,6 +211,9 @@ def _span_score(old_span, new_span, skipped_count):
     if old_span <= 0.0 or new_span <= 0.0:
         return float("-inf")
     absolute_error = abs(old_span - new_span)
+    gross_error_limit = max(3.0, 0.25 * max(old_span, new_span))
+    if absolute_error > gross_error_limit:
+        return float("-inf")
     # A percentage-only tolerance is unstable on short spools.  The absolute
     # floor lets sub-metre odometer noise remain evidence while the robust cap
     # prevents one repaired spool from destroying an otherwise long path.
@@ -289,29 +332,121 @@ def align_anchors(anchors_a, anchors_b, gap_penalty=-5.0):
     return [(anchors_a[i], anchors_b[j]) for i, j in candidates[0]["path"]]
 
 
+def _sample_pair_slopes(source_array, target_array):
+    left, right = np.triu_indices(len(source_array), k=1)
+    differences = source_array[right] - source_array[left]
+    valid = np.abs(differences) > 1e-9
+    left = left[valid]
+    right = right[valid]
+    differences = differences[valid]
+    if len(differences) > MAX_THEIL_SEN_PAIRS:
+        selected = np.linspace(0, len(differences) - 1, MAX_THEIL_SEN_PAIRS, dtype=int)
+        left = left[selected]
+        right = right[selected]
+        differences = differences[selected]
+    return (target_array[right] - target_array[left]) / differences
+
+
+def _least_squares_affine(source_array, target_array):
+    design = np.column_stack((source_array, np.ones(len(source_array))))
+    coefficients, *_ = np.linalg.lstsq(design, target_array, rcond=None)
+    return float(coefficients[0]), float(coefficients[1])
+
+
 def _fit_affine(source, target):
-    source_array = np.asarray(source, dtype=float).reshape(-1, 1)
+    """Fit a deterministic robust affine diagnostic without optional packages."""
+    source_array = np.asarray(source, dtype=float)
     target_array = np.asarray(target, dtype=float)
-    if RANSACRegressor is not None and len(target_array) >= 3:
-        model = RANSACRegressor(
-            residual_threshold=RANSAC_RESIDUAL_THRESHOLD_M,
-            random_state=42,
-        )
-        model.fit(source_array, target_array)
-        scale = float(model.estimator_.coef_[0])
-        offset = float(model.estimator_.intercept_)
-        inliers = np.asarray(model.inlier_mask_, dtype=bool)
-        predicted = model.predict(source_array)
-    else:
+    if len(target_array) < 2:
         scale = 1.0
-        offset = float(np.median(target_array - source_array.flatten()))
-        predicted = source_array.flatten() * scale + offset
+        offset = float(np.median(target_array - source_array))
+        residuals = target_array - (scale * source_array + offset)
         inliers = np.ones(len(target_array), dtype=bool)
-    if not np.any(inliers):
+        rmse = float(np.sqrt(np.mean(np.square(residuals)))) if len(residuals) else 0.0
+        return scale, offset, inliers, residuals, rmse
+
+    slopes = _sample_pair_slopes(source_array, target_array)
+    scale = float(np.median(slopes)) if len(slopes) else 1.0
+    offset = float(np.median(target_array - scale * source_array))
+    inliers = np.ones(len(target_array), dtype=bool)
+
+    for _ in range(5):
+        residuals = target_array - (scale * source_array + offset)
+        next_inliers = np.abs(residuals) <= ROBUST_RESIDUAL_THRESHOLD_M
+        if np.count_nonzero(next_inliers) < 2:
+            break
+        next_scale, next_offset = _least_squares_affine(
+            source_array[next_inliers], target_array[next_inliers]
+        )
+        stable = np.array_equal(next_inliers, inliers)
+        scale, offset, inliers = next_scale, next_offset, next_inliers
+        if stable:
+            break
+
+    residuals = target_array - (scale * source_array + offset)
+    if np.count_nonzero(inliers) < 2:
         inliers = np.ones(len(target_array), dtype=bool)
-    residuals = target_array - predicted
+        scale, offset = _least_squares_affine(source_array, target_array)
+        residuals = target_array - (scale * source_array + offset)
     rmse = float(np.sqrt(np.mean(np.square(residuals[inliers]))))
     return scale, offset, inliers, residuals, rmse
+
+
+def _stable_common_start_index(selected_path, old_anchors, new_anchors):
+    """Start after an initial matched facility boundary, not after arbitrary gaps."""
+    if not selected_path:
+        return 0
+    start_old = old_anchors[selected_path[0][0]].dist
+    start_new = new_anchors[selected_path[0][1]].dist
+    boundary_index = None
+    for pair_index, (old_index, new_index) in enumerate(selected_path[:8]):
+        old_anchor = old_anchors[old_index]
+        new_anchor = new_anchors[new_index]
+        within_boundary_cluster = (
+            old_anchor.dist - start_old <= FACILITY_BOUNDARY_MAX_DISTANCE_M
+            and new_anchor.dist - start_new <= FACILITY_BOUNDARY_MAX_DISTANCE_M
+        )
+        if not within_boundary_cluster:
+            break
+        if old_anchor.type in FACILITY_BOUNDARY_TYPES and new_anchor.type in FACILITY_BOUNDARY_TYPES:
+            boundary_index = pair_index
+    if boundary_index is None:
+        return 0
+    for pair_index in range(boundary_index + 1, len(selected_path)):
+        old_index, new_index = selected_path[pair_index]
+        if old_anchors[old_index].type == "weld" and new_anchors[new_index].type == "weld":
+            return pair_index
+    return 0
+
+
+def _span_residual_quality(pairs):
+    residuals = np.asarray(
+        [
+            (right_new.dist - left_new.dist) - (right_old.dist - left_old.dist)
+            for (left_old, left_new), (right_old, right_new) in zip(pairs, pairs[1:])
+        ],
+        dtype=float,
+    )
+    absolute = np.abs(residuals)
+    if not len(residuals):
+        return {
+            "count": 0,
+            "medianM": 0.0,
+            "medianAbsM": 0.0,
+            "meanAbsM": 0.0,
+            "p95AbsM": 0.0,
+            "maximumAbsM": 0.0,
+            "rmseM": 0.0,
+        }
+    return {
+        "count": int(len(residuals)),
+        "medianM": float(np.median(residuals)),
+        "medianAbsM": float(np.median(absolute)),
+        "meanAbsM": float(np.mean(absolute)),
+        "p95AbsM": float(np.percentile(absolute, 95)),
+        "maximumAbsM": float(np.max(absolute)),
+        "rmseM": float(np.sqrt(np.mean(np.square(residuals)))),
+    }
 
 
 def _piecewise_knots(pairs):
@@ -392,7 +527,7 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
     if not old_anchors or not new_anchors:
         return {
             "success": False,
-            "error": "Not enough physical anchors (GW/valve/tee/bend) in both runs.",
+            "error": "Not enough physical anchors (GW/flange/valve/tee/bend/facility) in both runs.",
         }
     if len(old_anchors) * len(new_anchors) > MAX_OVERLAP_CELLS:
         return {
@@ -413,32 +548,17 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
 
     best = candidates[0]
     selected_path = best["path"]
-    # A short fitting cluster at a launcher can differ in weld reporting while
-    # the permanent pipe immediately downstream is identical.  Treat the first
-    # endpoint after such an early skip as the stable physical common knot;
-    # keep the preceding pair only as candidate-ranking evidence.
-    stable_start_index = 0
-    for pair_index, (old_index, new_index) in enumerate(selected_path[:3]):
-        fitting_class_changed = (
-            ("flang" in old_anchors[old_index].identification)
-            != ("flang" in new_anchors[new_index].identification)
-        )
-        if fitting_class_changed and pair_index + 1 < len(selected_path):
-            stable_start_index = pair_index + 1
-    for pair_index in range(1, min(4, len(selected_path))):
-        previous_old, previous_new = selected_path[pair_index - 1]
-        current_old, current_new = selected_path[pair_index]
-        near_candidate_start = (
-            old_anchors[current_old].dist - old_anchors[selected_path[0][0]].dist <= 5.0
-            and new_anchors[current_new].dist - new_anchors[selected_path[0][1]].dist <= 5.0
-        )
-        old_span = old_anchors[current_old].dist - old_anchors[previous_old].dist
-        new_span = new_anchors[current_new].dist - new_anchors[previous_new].dist
-        if near_candidate_start and (
-            current_old - previous_old > 1 or current_new - previous_new > 1
-        ):
-            stable_start_index = pair_index
+    # Facility fittings may be part of the overlap evidence while still being
+    # an unsafe boundary for permanent-pipe interpolation.  Keep them for
+    # candidate ranking, then begin the transform at the first downstream GW.
+    stable_start_index = _stable_common_start_index(selected_path, old_anchors, new_anchors)
     selected_path = selected_path[stable_start_index:]
+    if len(selected_path) < 2:
+        return {
+            "success": False,
+            "code": "INSUFFICIENT_STABLE_TIEIN_KNOTS",
+            "error": "The physical overlap does not contain two stable downstream TIE IN knots.",
+        }
     matched = [(old_anchors[i], new_anchors[j]) for i, j in selected_path]
     selected_old_indexes = {old_index for old_index, _ in selected_path}
     selected_new_indexes = {new_index for _, new_index in selected_path}
@@ -475,6 +595,7 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
     provisional_offset = comparison_coordinates["provisionalOffsetM"]
 
     knots = _piecewise_knots(inlier_pairs)
+    span_quality = _span_residual_quality(inlier_pairs)
     scale_range = _local_scale_range(knots)
     maximum_offset_step = _maximum_offset_step(knots)
     overlap_length = min(
@@ -503,9 +624,13 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
         reasons.append("LOCAL_SCALE_OUTSIDE_ENGINEERING_GATE")
     if maximum_offset_step > 1.5:
         reasons.append("ABRUPT_OFFSET_CHANGE")
+    if span_quality["p95AbsM"] > SPAN_P95_REVIEW_THRESHOLD_M:
+        reasons.append("HIGH_SPAN_RESIDUAL")
 
     inlier_ratio = len(inlier_pairs) / len(matched)
-    residual_score = math.exp(-0.5 * (canonical_rmse / RANSAC_RESIDUAL_THRESHOLD_M) ** 2)
+    residual_score = math.exp(
+        -0.5 * (span_quality["p95AbsM"] / ROBUST_RESIDUAL_THRESHOLD_M) ** 2
+    )
     coverage_score = min(1.0, len(inlier_pairs) / 8.0)
     uniqueness_score = 0.0 if ambiguous else (
         1.0 if runner_up is None else max(0.0, min(1.0, 1.0 - runner_up["score"] / best["score"]))
@@ -572,6 +697,8 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
             "domain": {
                 "oldStartM": knots[0]["oldDistanceM"],
                 "oldEndM": knots[-1]["oldDistanceM"],
+                "newStartM": knots[0]["newDistanceM"],
+                "newEndM": knots[-1]["newDistanceM"],
             },
             "affineFallback": {
                 "scale": canonical_scale,
@@ -580,9 +707,16 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
             },
             "localScaleRange": scale_range,
             "maximumOffsetStepM": maximum_offset_step,
+            "knotCount": len(knots),
             "knots": knots,
         },
         "comparisonCoordinates": comparison_coordinates,
+        "robustFit": {
+            "method": ROBUST_FIT_METHOD,
+            "dependencyFree": True,
+            "residualThresholdM": ROBUST_RESIDUAL_THRESHOLD_M,
+        },
+        "spanResidual": span_quality,
         # Legacy contract: add offset to NEW to express it approximately on OLD.
         "offset": float(legacy_offset),
         "scale": float(legacy_scale),
@@ -599,6 +733,12 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
         "legacyResidualRmseM": legacy_rmse,
         "excludedAnchorCount": excluded_anchor_count,
         "overlap": {
+            "oldStartM": knots[0]["oldDistanceM"],
+            "oldEndM": knots[-1]["oldDistanceM"],
+            "newStartM": knots[0]["newDistanceM"],
+            "newEndM": knots[-1]["newDistanceM"],
+        },
+        "evidenceOverlap": {
             "oldStartM": inlier_pairs[0][0].dist,
             "oldEndM": inlier_pairs[-1][0].dist,
             "newStartM": inlier_pairs[0][1].dist,

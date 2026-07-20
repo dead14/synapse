@@ -3,7 +3,11 @@ import json
 import math
 import re
 from bisect import bisect_left, bisect_right
-from tiein_transform import map_old_to_new, validated_tiein_knots
+from tiein_transform import (
+    map_old_to_new,
+    validated_tiein_knot_records,
+    validated_tiein_knots,
+)
 
 # Feature types that serve as absolute anchors (Tier-1 in ILI alignment).
 # Valves and Tees are sparse, physical fixtures whose odometer positions are
@@ -14,6 +18,7 @@ ANCHOR_TYPES = {'valve', 'tee'}
 # engine/constants.py LANDMARK_MATCH_TOL).
 ANCHOR_TOLERANCE_M = 200.0
 TIEIN_ANCHOR_TOLERANCE_M = 10.0
+TIEIN_KNOT_DISTANCE_TOLERANCE_M = 1e-6
 
 # The implementation allocates both a cost matrix and a path matrix. Keep the
 # allocation bounded so malformed or unexpectedly large requests fail before
@@ -57,6 +62,7 @@ def _distance_intervals(previous, current):
 def _alignment_feature_kind(feature):
     primary = feature.get('type')
     primary_label = str(primary or '').strip()
+    identification_label = str(feature.get('feature_identification') or '').strip().lower()
     if not primary_label or primary_label.lower() in {'other', 'unknown', 'unclassified'}:
         primary_label = str(
             feature.get('originalType')
@@ -65,11 +71,13 @@ def _alignment_feature_kind(feature):
             or ''
         ).strip()
     label = primary_label.lower()
+    if re.search(r'\bflang(?:e|ed)\b', label) or re.search(r'\bflang(?:e|ed)\b', identification_label):
+        return 'flange'
     if re.search(r'\bvalve\b', label):
         return 'valve'
     if re.search(r'\b(?:tee|offtake|branch(?:\s+connection)?)\b', label):
         return 'tee'
-    if re.search(r'\b(?:weld|girth|seam|flange)\b', label):
+    if re.search(r'\b(?:weld|girth|seam)\b', label):
         return 'weld'
     return label
 
@@ -473,9 +481,12 @@ def reconcile_gw_matches(candidate_matches, old_gws, new_gws):
     from the authoritative source lists makes those cases deterministic.
     """
     def identity(feature_id, distance):
-        if feature_id is None or distance is None:
+        if distance is None:
             return None
-        return str(feature_id), round(float(distance), 6)
+        # A null vendor ID is valid. Distance and ordered occurrence keep such
+        # rows distinct enough for reconciliation; same-chainage duplicates
+        # are consumed from the source pool exactly once.
+        return str(feature_id) if feature_id is not None else None, round(float(distance), 6)
 
     def build_pool(features):
         pool = {}
@@ -562,6 +573,103 @@ def reconcile_gw_matches(candidate_matches, old_gws, new_gws):
     return reconciled
 
 
+def _tiein_locked_matches(knot_records, old_gws, new_gws):
+    """Resolve every accepted transform knot back to its physical weld rows.
+
+    Accepted knots are authoritative. They must never be fed through DTW a
+    second time because OTA and unrelated anchors could reassign them. The
+    resolver is intentionally strict and returns unresolved indexes instead
+    of silently falling back to heuristic matching.
+    """
+    used_old = set()
+    used_new = set()
+    matches = []
+    unresolved = []
+
+    def source_distance(feature):
+        return feature.get("sourceDist", feature.get("dist"))
+
+    def build_pool(features):
+        pool = {}
+        for index, feature in enumerate(features):
+            if _alignment_feature_kind(feature) != "weld":
+                continue
+            distance = source_distance(feature)
+            if not isinstance(distance, (int, float)) or not math.isfinite(distance):
+                continue
+            pool.setdefault(round(float(distance), 6), []).append((index, feature))
+        return pool
+
+    old_pool = build_pool(old_gws)
+    new_pool = build_pool(new_gws)
+
+    def resolve(pool, target_distance, expected_id, used_indexes):
+        candidates = []
+        for index, feature in pool.get(round(float(target_distance), 6), []):
+            if index in used_indexes:
+                continue
+            distance = source_distance(feature)
+            if not math.isclose(
+                float(distance),
+                float(target_distance),
+                abs_tol=TIEIN_KNOT_DISTANCE_TOLERANCE_M,
+            ):
+                continue
+            candidates.append((index, feature))
+
+        if expected_id is not None:
+            id_matches = [
+                candidate for candidate in candidates
+                if candidate[1].get("id") is not None
+                and str(candidate[1].get("id")) == str(expected_id)
+            ]
+            if len(id_matches) == 1:
+                return id_matches[0]
+            if len(id_matches) > 1:
+                return None
+            # When both sides carry an ID, a mismatch is stale evidence, not
+            # permission to substitute a different weld at the same chainage.
+            if any(candidate[1].get("id") is not None for candidate in candidates):
+                return None
+
+        # Distance-only resolution is supported for vendor rows without IDs,
+        # but ambiguity at an identical chainage must be reviewed upstream.
+        return candidates[0] if len(candidates) == 1 else None
+
+    for knot_index, knot in enumerate(knot_records):
+        old_entry = resolve(
+            old_pool,
+            knot["oldDistanceM"],
+            knot.get("oldId"),
+            used_old,
+        )
+        new_entry = resolve(
+            new_pool,
+            knot["newDistanceM"],
+            knot.get("newId"),
+            used_new,
+        )
+        if old_entry is None or new_entry is None:
+            unresolved.append(knot_index)
+            continue
+
+        old_index, old_feature = old_entry
+        new_index, new_feature = new_entry
+        used_old.add(old_index)
+        used_new.add(new_index)
+        matches.append({
+            "oldIndex": old_index,
+            "newIndex": new_index,
+            "oldId": old_feature.get("id"),
+            "newId": new_feature.get("id"),
+            "oldDist": old_feature.get("dist"),
+            "newDist": new_feature.get("dist"),
+            "status": "Match",
+        })
+
+    return matches, unresolved
+
+
 def _prepare_runs_in_master_space(data):
     """Copy input rows and apply only an accepted OLD-to-NEW transform."""
     old_run = [dict(feature) for feature in data.get('oldRun', [])]
@@ -636,6 +744,7 @@ def process_request(data):
             "error": "Tie-in transform is invalid or lacks server-accepted evidence.",
             "requestId": data.get('requestId'),
         }
+    tie_in_knot_records = validated_tiein_knot_records(data)
     old_run, new_run, tie_in_transform_applied, tie_in_excluded_old, tie_in_excluded_new = _prepare_runs_in_master_space(data)
     use_valve_anchor = data.get('useValveAnchor', False)
     apply_dtw_correction = data.get('applyDtwCorrection', True)
@@ -666,7 +775,7 @@ def process_request(data):
         }
 
     cell_count = len(old_gws) * len(new_gws)
-    if cell_count > MAX_DTW_CELLS:
+    if not tie_in_transform_applied and cell_count > MAX_DTW_CELLS:
         return {
             "success": False,
             "code": "DTW_INPUT_TOO_LARGE",
@@ -684,8 +793,27 @@ def process_request(data):
     ) if use_valve_anchor else []
 
     all_gw_matches = []
-    
-    if use_valve_anchor and len(valve_pairs) >= 2:
+    matching_mode = "DTW"
+
+    if tie_in_transform_applied:
+        gw_matches, unresolved_knot_indexes = _tiein_locked_matches(
+            tie_in_knot_records,
+            old_gws,
+            new_gws,
+        )
+        if unresolved_knot_indexes:
+            return {
+                "success": False,
+                "code": "TIEIN_LOCK_RESOLUTION_FAILED",
+                "error": "One or more accepted TIE IN weld knots cannot be resolved uniquely in both runs.",
+                "requestId": request_id,
+                "tieInTransformApplied": True,
+                "unresolvedKnotIndexes": unresolved_knot_indexes,
+                "tieInExcludedOld": tie_in_excluded_old,
+                "tieInExcludedNew": tie_in_excluded_new,
+            }
+        matching_mode = "TIEIN_LOCKED"
+    elif use_valve_anchor and len(valve_pairs) >= 2:
         for i in range(len(old_gws)):
             old_gws[i]['spool'] = old_gws[i]['dist'] - old_gws[i-1]['dist'] if i > 0 else old_gws[i]['dist']
         for j in range(len(new_gws)):
@@ -796,6 +924,7 @@ def process_request(data):
         "tieInExcludedOld": tie_in_excluded_old,
         "tieInExcludedNew": tie_in_excluded_new,
         "dtwCorrectionApplied": apply_dtw_correction,
+        "matchingMode": matching_mode,
         "valveSegmented": use_valve_anchor and len(valve_pairs) >= 2,
         "requestId": request_id,
         "stats": {
