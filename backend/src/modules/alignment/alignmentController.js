@@ -38,6 +38,10 @@ const {
     ALIGNMENT_ANCHOR_FEATURE_TYPE_SQL,
     canonicalAlignmentAnchorType,
 } = require('./alignmentAnchorTypes');
+const {
+    canonicalSignature,
+    canonicalSignatureForConfig,
+} = require('./alignmentSignature');
 
 // Local execution remains intentionally bounded and owner-scoped. A shared
 // queue can replace this store later without changing the public job contract.
@@ -102,38 +106,6 @@ async function countOwnedRunFeatures({ oldRunId, newRunId }, orgId) {
 
 function hasReviewEvidence(config) {
     return config?.dataReview !== undefined || config?.gwReview !== undefined;
-}
-
-function canonicalSignature(payload, { oldRunId, newRunId }) {
-    return JSON.stringify({
-        oldRunId,
-        newRunId,
-        ota: Number(payload?.ota) || 0,
-        strictPenalty: Boolean(payload?.strictPenalty),
-        useValveAnchor: Boolean(payload?.useValveAnchor),
-        applyDtwCorrection: Boolean(payload?.applyDtwCorrection),
-        tieInOffset: Number(payload?.tieInOffset) || 0,
-        tieInTransform: payload?.tieInTransform || null,
-        tieInDecisionStatus: payload?.tieInDecision?.status || null,
-        tieInEvidenceToken: payload?.tieInEvidenceToken || null,
-        tieInMethodVersion: payload?.tieInMethodVersion || null,
-        tieInExcludedRanges: payload?.excludedRanges || payload?.tieInExcludedRanges || [],
-    });
-}
-
-function canonicalSignatureForConfig(config, references) {
-    return canonicalSignature({
-        ota: config?.ota,
-        strictPenalty: config?.strictPenalty,
-        useValveAnchor: config?.useValveAnchor,
-        applyDtwCorrection: config?.dtwOn,
-        tieInOffset: config?.globalOffset,
-        tieInTransform: config?.tieInTransform,
-        tieInDecision: config?.tieInDecision,
-        tieInEvidenceToken: config?.tieInEvidenceToken,
-        tieInMethodVersion: config?.tieInMethodVersion,
-        tieInExcludedRanges: config?.tieInExcludedRanges,
-    }, references);
 }
 
 function requireServerTieInEvidence(payload, organizationId) {
