@@ -6,7 +6,8 @@ import SectionList from './SectionList';
 import SectionMap from './SectionMap';
 import { apiFetch } from '../utils/api';
 import { fetchAlignmentComparison } from '../utils/alignment';
-import type { HistoricalGwLane, SectionDef, SpatialFeature, SpatialFeatures } from './types';
+import { buildHistoricalLanes, parseWallThicknessMm } from './historicalLanes';
+import type { SectionDef, SpatialFeature, SpatialFeatures } from './types';
 
 function getDistanceFromLatLonInM(lat1: number, lon1: number, lat2: number, lon2: number) {
   const R = 6371000;
@@ -81,32 +82,11 @@ function parseCoordinate(val: string): string {
   return isNaN(num) ? val : num.toString();
 }
 
-function parseWallThicknessMm(rawData: Record<string, unknown> | undefined): number | null {
-  if (!rawData) return null;
-  const preferredKeys = [
-    'wall_thickness_mm',
-    'wall thickness mm',
-    'wall thickness',
-    'nominal wall thickness',
-    'nominal wall thickness mm',
-    'wt',
-    'wt mm',
-    'wall wt new (mm)',
-    'wall wt old (mm)',
-  ];
-  for (const [key, value] of Object.entries(rawData)) {
-    const normalizedKey = key.toLowerCase().replaceAll('_', ' ').trim();
-    if (!preferredKeys.some((candidate) => normalizedKey === candidate || normalizedKey.includes(candidate))) continue;
-    const parsed = Number.parseFloat(String(value ?? '').replace(',', '.'));
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
-}
-
 export default function IliSectioningPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any[]>([]);
+  const [comparisonRows, setComparisonRows] = useState<any[]>([]);
   const [sessionConfig, setSessionConfig] = useState<any>(null);
   const [sections, setSections] = useState<SectionDef[]>([]);
   const [sessionId, setSessionId] = useState('');
@@ -180,12 +160,22 @@ export default function IliSectioningPage() {
         // upload so opening sectioning never triggers a second Hungarian run.
         const masterRun = config.summaryData?.masterRun || config.summaryData?.newRun;
         const masterFeatures = masterRun?.rawFeatures;
+        const historicalRuns = Array.isArray(config.summaryData?.historicalRuns)
+          ? config.summaryData.historicalRuns
+          : config.summaryData?.oldRun ? [config.summaryData.oldRun] : [];
+        const needsComparisonRows = !Array.isArray(masterFeatures)
+          || masterFeatures.length === 0
+          || historicalRuns.some((run: any) => !Array.isArray(run?.rawFeatures) || run.rawFeatures.length === 0);
+        const comparison = needsComparisonRows
+          ? await fetchAlignmentComparison(resolvedSessionId, undefined, controller.signal)
+          : [];
+        setComparisonRows(comparison);
         if (Array.isArray(masterFeatures) && masterFeatures.length > 0) {
           setData(masterFeatures);
         } else {
           // Backward-compatible fallback for sessions created before masterRun
           // was introduced.  Prefer NEW columns when the result is flattened.
-          setData(await fetchAlignmentComparison(resolvedSessionId, undefined, controller.signal));
+          setData(comparison);
         }
       } catch (error) {
         if ((error as Error).name !== 'AbortError') console.error('Failed to fetch ILI data:', error);
@@ -374,70 +364,10 @@ export default function IliSectioningPage() {
       }
     });
 
-    const matchByOld = new Map(matches.map((match: any) => [
-      masterPairKey(
-        String(match.old_id ?? match.oldId ?? ''),
-        Number(match.old_odometer ?? match.oldVal ?? match.oldDist),
-      ),
-      match,
-    ]));
     const historicalRuns = Array.isArray(sessionConfig?.summaryData?.historicalRuns)
       ? sessionConfig.summaryData.historicalRuns
       : sessionConfig?.summaryData?.oldRun ? [sessionConfig.summaryData.oldRun] : [];
-    const historicalLanes: HistoricalGwLane[] = historicalRuns.map((run: any, runIndex: number) => {
-      const rows = Array.isArray(run?.rawFeatures) ? run.rawFeatures : [];
-      const gws = rows
-        .filter((row: any) => /weld|girth|seam|gw/.test(String(row.type ?? row.originalType ?? '').toLowerCase()))
-        .map((row: any, rowIndex: number): SpatialFeature | null => {
-          const distRaw = row.dist ?? row.odometer ?? row.distance ?? row.val;
-          const dist = Number(distRaw);
-          if (!Number.isFinite(dist)) return null;
-          const id = String(row.id ?? `OLD-${runIndex + 1}-${rowIndex + 1}`);
-          const matched = matchByOld.get(masterPairKey(id, dist)) as any;
-          const hasNewPartner = Boolean(matched && (matched.new_id ?? matched.newId));
-          const masterDistance = Number(matched?.new_odometer ?? matched?.newVal ?? matched?.newDist);
-          return {
-            id,
-            dist,
-            type: String(row.type ?? row.originalType ?? 'weld').toLowerCase(),
-            runRole: 'HISTORICAL',
-            runYear: String(run.year ?? ''),
-            status: runIndex === 0 ? (hasNewPartner ? 'MATCHED' : 'MISSING_IN_MASTER') : 'UNRESOLVED',
-            wallThicknessMm: parseWallThicknessMm(row),
-            rawData: {
-              ...row,
-              sourceDistance: dist,
-              masterDistance: Number.isFinite(masterDistance) ? masterDistance : undefined,
-              matchedMasterId: matched?.new_id ?? matched?.newId,
-            },
-            lat: NaN,
-            lng: NaN,
-          };
-        })
-        .filter((feature: SpatialFeature | null): feature is SpatialFeature => feature !== null)
-        .sort((left: SpatialFeature, right: SpatialFeature) => left.dist - right.dist);
-      const bends = rows
-        .filter((row: any) => String(row.type ?? row.originalType ?? '').toLowerCase().includes('bend'))
-        .map((row: any, rowIndex: number): SpatialFeature | null => {
-          const distRaw = row.dist ?? row.odometer ?? row.distance ?? row.val;
-          const dist = Number(distRaw);
-          if (!Number.isFinite(dist)) return null;
-          return {
-            id: String(row.id ?? `OLD-BEND-${runIndex + 1}-${rowIndex + 1}`),
-            dist,
-            type: String(row.type ?? row.originalType ?? 'bend').toLowerCase(),
-            runRole: 'HISTORICAL',
-            runYear: String(run.year ?? ''),
-            status: 'UNRESOLVED',
-            rawData: { ...row },
-            lat: NaN,
-            lng: NaN,
-          };
-        })
-        .filter((feature: SpatialFeature | null): feature is SpatialFeature => feature !== null)
-        .sort((left: SpatialFeature, right: SpatialFeature) => left.dist - right.dist);
-      return { id: `history-${runIndex}`, label: run.name || `Historical ${runIndex + 1}`, year: String(run.year ?? ''), gws, bends };
-    });
+    const historicalLanes = buildHistoricalLanes(historicalRuns, matches, comparisonRows);
     const missingGwCount = historicalLanes.reduce(
       (count, lane) => count + lane.gws.filter((gw) => gw.status === 'MISSING_IN_MASTER').length,
       0,
@@ -449,7 +379,7 @@ export default function IliSectioningPage() {
       historicalLanes,
       stats: { totalLength: maxDist, gwCount: gws.length, bendCount, missingGwCount }
     };
-  }, [data, drawnRoute, sessionConfig]);
+  }, [comparisonRows, data, drawnRoute, sessionConfig]);
 
   if (loading) {
     return <div className="min-h-screen bg-gray-50 flex items-center justify-center text-blue-600 font-medium">Loading sectioning workspace...</div>;

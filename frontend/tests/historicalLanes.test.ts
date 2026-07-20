@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { buildHistoricalLanes } from '../src/sectioning/historicalLanes.ts';
+
+test('buildHistoricalLanes renders primary OLD GWs from comparison rows when run metadata has no raw features', () => {
+  const lanes = buildHistoricalLanes(
+    [{ name: 'ILI 2021', year: '2021' }],
+    [{ old_id: 'OLD-002', old_odometer: 120, new_id: 'NEW-002', new_odometer: 125 }],
+    [
+      { 'Feature Type OLD': 'Weld', 'Identif. OLD': 'OLD-001', 'Log Dist OLD (m)': 10 },
+      { 'Feature Type OLD': 'Weld', 'Identif. OLD': 'OLD-002', 'Log Dist OLD (m)': 120 },
+      { 'Feature Type OLD': 'Metal loss', 'Identif. OLD': 'ML-001', 'Log Dist OLD (m)': 121 },
+    ],
+  );
+
+  assert.deepEqual(lanes[0].gws.map((gw) => ({ id: gw.id, dist: gw.dist, status: gw.status })), [
+    { id: 'OLD-001', dist: 10, status: 'MISSING_IN_MASTER' },
+    { id: 'OLD-002', dist: 120, status: 'MATCHED' },
+  ]);
+});
