@@ -1,5 +1,6 @@
 import { useMemo, useRef } from 'react';
 import type { SectionDef, SpatialFeatures, SpatialFeature } from './types';
+import { displayDistanceOnMaster } from './historicalLanes';
 import WeldTable from './WeldTable';
 
 interface SchematicProps {
@@ -282,7 +283,7 @@ export default function SectioningSchematic({
               const masterDistance = Number(gw.rawData.masterDistance);
               if (gw.status !== 'MATCHED' || !Number.isFinite(masterDistance)) return null;
               const master = geometry.positionAt(masterDistance);
-              const historical = geometry.positionAt(gw.dist);
+              const historical = geometry.positionAt(displayDistanceOnMaster(gw));
               const historicalY = historyStartY + laneIndex * 48;
               return (
                 <line
@@ -311,7 +312,7 @@ export default function SectioningSchematic({
                   
                   {/* Historical GWs */}
                   {(lane.gws || []).map((gw, gwIndex) => {
-                    const x = geometry.positionAt(gw.dist).x;
+                    const x = geometry.positionAt(displayDistanceOnMaster(gw)).x;
                     const unmatched = gw.status !== 'MATCHED';
                     const isSelected = selectedGWs.some((s) => s.id === gw.id && s.runRole === 'HISTORICAL');
                     

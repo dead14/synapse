@@ -42,6 +42,34 @@ function historicalId(row: ComparisonRow, fallback: string) {
   return String(row.id ?? row['Identif. OLD'] ?? fallback);
 }
 
+export function displayDistanceOnMaster(feature: SpatialFeature) {
+  const masterDistance = Number(feature.rawData.masterDistance);
+  return Number.isFinite(masterDistance) ? masterDistance : feature.dist;
+}
+
+function lockedOldGw(match: AlignmentMatch, run: HistoricalRun): SpatialFeature | null {
+  const id = String(match.old_id ?? match.oldId ?? '');
+  const dist = Number(match.old_odometer ?? match.oldVal ?? match.oldDist);
+  const masterDistance = Number(match.new_odometer ?? match.newVal ?? match.newDist);
+  if (!id || !Number.isFinite(dist) || !Number.isFinite(masterDistance)) return null;
+  return {
+    id,
+    dist,
+    type: 'weld',
+    runRole: 'HISTORICAL',
+    runYear: String(run.year ?? ''),
+    status: 'MATCHED',
+    wallThicknessMm: null,
+    rawData: {
+      sourceDistance: dist,
+      masterDistance,
+      matchedMasterId: String(match.new_id ?? match.newId ?? ''),
+    },
+    lat: Number.NaN,
+    lng: Number.NaN,
+  };
+}
+
 export function buildHistoricalLanes(
   historicalRuns: unknown,
   matches: AlignmentMatch[],
@@ -61,7 +89,7 @@ export function buildHistoricalLanes(
     // Persisted run summaries intentionally omit rawFeatures. The primary OLD
     // run is still available in the saved comparison result under OLD columns.
     const rows = rawFeatures.length > 0 || runIndex > 0 ? rawFeatures : comparisonRows;
-    const gws = rows
+    const gwsFromRows = rows
       .filter((row) => /weld|girth|seam|gw/.test(historicalType(row)))
       .map((row, rowIndex): SpatialFeature | null => {
         const dist = historicalDistance(row);
@@ -90,6 +118,12 @@ export function buildHistoricalLanes(
       })
       .filter((feature): feature is SpatialFeature => feature !== null)
       .sort((left, right) => left.dist - right.dist);
+    const gws = gwsFromRows.length > 0 || runIndex > 0
+      ? gwsFromRows
+      : matches
+        .map((match) => lockedOldGw(match, run))
+        .filter((feature): feature is SpatialFeature => feature !== null)
+        .sort((left, right) => left.dist - right.dist);
 
     const bends = rows
       .filter((row) => historicalType(row).includes('bend'))
