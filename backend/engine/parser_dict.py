@@ -1,41 +1,73 @@
-import os
+import re
 import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from sqlalchemy.orm import Session
-from models import SessionLocal, FieldSynonymDictionary, FeatureTypeSynonym
+import unicodedata
+from pathlib import Path
 
-def auto_detect_field_map(df_columns):
-    """
-    Takes a list of raw column headers from the uploaded file and checks
-    the FieldSynonymDictionary in PostgreSQL for known synonyms.
-    Returns a mapping dict: {'raw_col_name': 'universal_column'}
-    """
-    mapping = {}
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+SRC_DIR = BACKEND_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from python_engines.models import (
+    FeatureTypeSynonym,
+    FieldSynonymDictionary,
+    SessionLocal,
+)
+
+
+def normalize_field_name(value):
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(character for character in text if not unicodedata.combining(character))
+    text = text.replace("%", " percent ").replace("&", " and ")
+    return re.sub(r"[^\w]+", " ", text, flags=re.UNICODE).replace("_", " ").strip().casefold()
+
+
+def build_field_synonym_lookup(records):
+    candidates = {}
+    for record in records:
+        if isinstance(record, (tuple, list)):
+            universal_column, known_synonym = record[:2]
+        else:
+            universal_column = record.universal_column
+            known_synonym = record.known_synonym
+
+        normalized = normalize_field_name(known_synonym)
+        if normalized:
+            candidates.setdefault(normalized, set()).add(str(universal_column))
+
+    return {
+        synonym: next(iter(universal_columns))
+        for synonym, universal_columns in candidates.items()
+        if len(universal_columns) == 1
+    }
+
+
+def load_field_synonym_lookup():
     with SessionLocal() as session:
-        # Load all field synonyms into memory (small table)
         synonyms = session.query(FieldSynonymDictionary).all()
-        synonym_map = {}
-        for syn in synonyms:
-            # lowercased for case-insensitive matching
-            synonym_map[syn.known_synonym.lower()] = syn.universal_column
+    return build_field_synonym_lookup(synonyms)
 
-        for col in df_columns:
-            col_lower = str(col).strip().lower()
-            if col_lower in synonym_map:
-                mapping[str(col)] = synonym_map[col_lower]
-                
-    print(f"   [INFO] Auto-detected {len(mapping)} columns from Synonym Dictionary.")
+
+def auto_detect_field_map(df_columns, synonym_lookup=None):
+    lookup = synonym_lookup if synonym_lookup is not None else load_field_synonym_lookup()
+    mapping = {}
+    claimed_universal_columns = set()
+
+    for column in df_columns:
+        universal_column = lookup.get(normalize_field_name(column))
+        if universal_column and universal_column not in claimed_universal_columns:
+            mapping[str(column)] = universal_column
+            claimed_universal_columns.add(universal_column)
+
     return mapping
 
+
 def load_feature_type_normalization():
-    """
-    Queries FeatureTypeSynonym from PostgreSQL and builds a normalization dictionary
-    mapping aliases to Standard Full Names.
-    """
     with SessionLocal() as session:
         synonyms = session.query(FeatureTypeSynonym).all()
-        norm_dict = {}
-        for syn in synonyms:
-            norm_dict[syn.known_synonym.lower()] = syn.standard_name
-        
-    return norm_dict
+    return {
+        str(synonym.known_synonym).strip().casefold(): synonym.standard_name
+        for synonym in synonyms
+        if str(synonym.known_synonym).strip()
+    }

@@ -8,7 +8,6 @@ interface StepScenarioFilterProps {
 
 export default function StepScenarioFilter({ onNext, onBack, config: _config }: StepScenarioFilterProps & { config?: any }) {
   const [distThresh, setDistThresh] = useState(0.3);
-  const [depthThresh, setDepthThresh] = useState(10);
   
   const [hiddenFeatures, setHiddenFeatures] = useState({
     offtake: true,
@@ -23,7 +22,7 @@ export default function StepScenarioFilter({ onNext, onBack, config: _config }: 
   };
 
   return (
-    <div className="alignment-surface bg-white rounded-2xl p-6 sm:p-8 shadow-sm border border-gray-100 animate-fade-in">
+    <div className="feature-rules-console alignment-surface bg-white rounded-2xl p-6 sm:p-8 shadow-sm border border-gray-100 animate-fade-in">
       <div className="flex items-center gap-3 mb-6">
         <div className="p-3 bg-brand-50 text-brand-600 rounded-xl">
           <FiSettings size={24} />
@@ -54,18 +53,9 @@ export default function StepScenarioFilter({ onNext, onBack, config: _config }: 
               />
             </div>
 
-            <div>
-              <div className="flex justify-between mb-2">
-                <label className="text-sm font-medium text-gray-700">Depth Matching Threshold (%)</label>
-                <span className="text-sm font-mono text-brand-600">{depthThresh}%</span>
-              </div>
-              <input 
-                type="range" min="0" max="50" step="1" 
-                value={depthThresh} onChange={(e) => setDepthThresh(parseInt(e.target.value))}
-                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-brand-600"
-              />
-              <p className="text-xs text-gray-500 mt-1">Ignore metal loss below this depth.</p>
-            </div>
+            <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-800">
+              Depth tidak memfilter kandidat. Nilainya diperiksa setelah Hungarian untuk menandai penurunan depth yang tidak sesuai ekspektasi pertumbuhan corrosion.
+            </p>
           </div>
         </div>
 
@@ -118,7 +108,7 @@ export default function StepScenarioFilter({ onNext, onBack, config: _config }: 
           <FiChevronLeft /> Back
         </button>
           <button 
-            onClick={() => onNext({ distThresh, depthThresh, hiddenFeatures })}
+            onClick={() => onNext({ distThresh, hiddenFeatures })}
             className="px-6 py-3 bg-gray-900 hover:bg-gray-800 text-white font-semibold rounded-xl flex items-center gap-2 transition-colors shadow-theme-md"
           >
             Next <FiChevronRight />

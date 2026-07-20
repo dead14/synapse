@@ -1,7 +1,11 @@
 import { io, Socket } from 'socket.io-client';
 import { API_BASE } from './api';
+import { resolveApiBase } from './apiConfig';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || API_BASE;
+const SOCKET_URL = resolveApiBase(
+  import.meta.env.VITE_SOCKET_URL || API_BASE,
+  import.meta.env.DEV,
+);
 
 let socket: Socket | null = null;
 

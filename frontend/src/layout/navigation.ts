@@ -1,0 +1,64 @@
+export type NavigationItem = {
+  label: string;
+  path: string;
+  description: string;
+};
+
+export type NavigationGroup = {
+  label: string;
+  items: NavigationItem[];
+  roles?: string[];
+};
+
+export const navigationGroups: NavigationGroup[] = [
+  {
+    label: 'Portfolio',
+    items: [
+      { label: 'Overview', path: '/', description: 'Decision readiness and measured portfolio health' },
+    ],
+  },
+  {
+    label: 'Data & alignment',
+    items: [
+      { label: 'ILI runs', path: '/runs', description: 'Vendor-agnostic inspection data and provenance' },
+      { label: 'Alignment', path: '/alignment', description: 'Tie-in, GW locking, matching, and conservation' },
+      { label: 'Run comparison', path: '/ili-comparison', description: 'Review matched and unmatched features' },
+      { label: 'Sectioning', path: '/ili-sectioning', description: 'Spatial partitioning on the master run' },
+      { label: 'Polyginesis timeline', path: '/integrity-timeline', description: 'Multi-run genealogy, growth, and confidence' },
+    ],
+  },
+  {
+    label: 'Assessment',
+    items: [
+      { label: 'FFS · B31G', path: '/ffs', description: 'Corrosion remaining-strength screening' },
+    ],
+  },
+  {
+    label: 'Execution',
+    items: [
+      { label: 'Decision workbench', path: '/integrity-workbench', description: 'Import through repair verification' },
+      { label: 'Repair lifecycle', path: '/repair-evidence', description: 'Plans, digs, approvals, and close-out evidence' },
+      { label: 'Indonesia compliance', path: '/compliance-indonesia', description: 'PLO, RLA, reverse engineering, and dossiers' },
+      { label: 'Pipeline risk', path: '/pipeline-risk', description: 'Transparent drivers, uncertainty, and what-if' },
+      { label: 'Direct assessment & CP', path: '/direct-assessment', description: 'ECDA, ICDA, SCCDA, CIPS, and DCVG' },
+      { label: 'GIS & field', path: '/integrity/gis-field', description: 'Authoritative LRS and offline field packages' },
+      { label: 'Facility RBI add-on', path: '/integrity/rbi', description: 'Separate bounded API 580/581 product' },
+      { label: 'Advanced threats', path: '/integrity/advanced-threats', description: 'Crack, dent/strain, geohazard, and crossings' },
+      { label: 'Engineering copilot', path: '/integrity/copilot', description: 'Advisory QA and report support with human approval' },
+    ],
+  },
+  {
+    label: 'Administration',
+    roles: ['admin', 'super_admin'],
+    items: [
+      { label: 'Users', path: '/users', description: 'Organization members and access' },
+      { label: 'Organizations', path: '/organizations', description: 'Tenant administration' },
+      { label: 'Roles', path: '/roles', description: 'Permission boundaries' },
+      { label: 'Activity log', path: '/activity-logs', description: 'Auditable user activity' },
+    ],
+  },
+];
+
+export function navigationForRole(role: string | undefined): NavigationGroup[] {
+  return navigationGroups.filter((group) => !group.roles || (role ? group.roles.includes(role) : false));
+}

@@ -18,7 +18,6 @@ class HungarianToleranceTests(unittest.TestCase):
         self.engine.us_gw_distance_tolerance = 0.2
         self.engine.ds_gw_distance_tolerance = 0.4
         self.engine.clock_tolerance = 15.0
-        self.engine.depth_tolerance = 10.0
         self.engine.length_tolerance = 50.0
 
     @staticmethod
@@ -44,13 +43,15 @@ class HungarianToleranceTests(unittest.TestCase):
         self.assertEqual(upstream_cost, self.engine.INF_COST)
         self.assertLess(downstream_cost, self.engine.INF_COST)
 
-    def test_scores_depth_difference_instead_of_splitting_anomaly_pair(self):
+    def test_depth_does_not_change_hungarian_pair_cost(self):
         old = self.feature(100.0, depth_pct=10.0)
-        new = self.feature(100.1, depth_pct=25.0)
+        same_depth_new = self.feature(100.1, depth_pct=10.0)
+        lower_depth_new = self.feature(100.1, depth_pct=2.0)
 
-        cost = self.engine.build_cost_matrix([old], [new], [], [])[0][0]
+        same_depth_cost = self.engine.build_cost_matrix([old], [same_depth_new], [], [])[0][0]
+        lower_depth_cost = self.engine.build_cost_matrix([old], [lower_depth_new], [], [])[0][0]
 
-        self.assertLess(cost, self.engine.INF_COST)
+        self.assertEqual(lower_depth_cost, same_depth_cost)
 
     def test_rejects_pair_when_upstream_gw_relative_distance_is_inconsistent(self):
         old = self.feature(100.0, dist_to_us_gw_m=2.0)
@@ -63,10 +64,45 @@ class HungarianToleranceTests(unittest.TestCase):
         self.assertLess(consistent_cost, self.engine.INF_COST)
         self.assertEqual(inconsistent_cost, self.engine.INF_COST)
 
+    def test_clock_difference_is_a_soft_cost_not_a_hard_gate(self):
+        old = self.feature(100.0, clock_position="12:00")
+        near_clock_new = self.feature(100.1, clock_position="12:15")
+        far_clock_new = self.feature(100.1, clock_position="06:00")
+
+        near_cost = self.engine.build_cost_matrix([old], [near_clock_new], [], [])[0][0]
+        far_cost = self.engine.build_cost_matrix([old], [far_clock_new], [], [])[0][0]
+
+        self.assertLess(near_cost, far_cost)
+        self.assertLess(far_cost, self.engine.INF_COST)
+
+    def test_clock_scale_slider_changes_the_soft_cost(self):
+        old = self.feature(100.0, clock_position="12:00")
+        new = self.feature(100.1, clock_position="01:00")
+
+        strict_scale_cost = self.engine.build_cost_matrix(
+            [old], [new], [], [], {"clock_tolerance": 10}
+        )[0][0]
+        forgiving_scale_cost = self.engine.build_cost_matrix(
+            [old], [new], [], [], {"clock_tolerance": 30}
+        )[0][0]
+
+        self.assertGreater(strict_scale_cost, forgiving_scale_cost)
+
     def test_reads_common_upstream_gw_distance_column_alias(self):
         value = self.engine._read_us_gw_distance({"Dist. to U/S GW (m)": "2.35"})
 
         self.assertEqual(value, 2.35)
+
+    def test_upstream_gw_distance_uses_physical_magnitude_across_vendor_signs(self):
+        value = self.engine._read_us_gw_distance({"dist_to_us_gw_m": "-8.64"})
+        old = self.feature(100.0, dist_to_us_gw_m=-8.64)
+        new = self.feature(100.1, dist_to_us_gw_m=8.64)
+
+        self.assertEqual(value, 8.64)
+        self.assertLess(
+            self.engine.build_cost_matrix([old], [new], [], [])[0][0],
+            self.engine.INF_COST,
+        )
 
     def test_onedirection_strategy_requires_upstream_gw_distance_on_both_runs(self):
         self.engine.require_us_gw_distance = True
@@ -76,6 +112,26 @@ class HungarianToleranceTests(unittest.TestCase):
         cost = self.engine.build_cost_matrix([old], [new_without_us_distance], [], [])[0][0]
 
         self.assertEqual(cost, self.engine.INF_COST)
+
+    def test_phase_partition_uses_type_not_non_unique_locked_identifier(self):
+        anomaly = {
+            "id": "duplicate-vendor-id",
+            "originalType": "metal loss",
+            "raw": {"type": "anomaly"},
+        }
+        weld = {
+            "id": "duplicate-vendor-id",
+            "originalType": "girth weld anomaly",
+            "raw": {"type": "weld"},
+        }
+
+        anomalies, bypassed = self.engine._partition_hungarian_features(
+            [anomaly, weld],
+            {"duplicate-vendor-id"},
+        )
+
+        self.assertEqual(anomalies, [anomaly])
+        self.assertEqual(bypassed, [])
 
     def test_depth_decrease_is_preserved_as_a_physics_review_warning(self):
         warnings = self.engine._physics_warnings(
@@ -104,6 +160,33 @@ class FakeSession:
 
     def query(self, *_args, **_kwargs):
         return FakeQuery(self.record)
+
+
+class FeatureQuery:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def order_by(self, *_args, **_kwargs):
+        return self
+
+    def yield_per(self, _size):
+        return iter(self.rows)
+
+
+class SessionWithPersistedFeatures:
+    def __init__(self, session_record, features):
+        self.session_record = session_record
+        self.features = features
+        self.query_count = 0
+
+    def query(self, *_args, **_kwargs):
+        self.query_count += 1
+        if self.query_count == 1:
+            return FakeQuery(self.session_record)
+        return FeatureQuery(self.features)
 
 
 class HungarianTieInOffsetTests(unittest.TestCase):
@@ -154,6 +237,114 @@ class HungarianTieInOffsetTests(unittest.TestCase):
 
         self.assertEqual(features[0]["abs_distance_m"], 95.0)
 
+    def test_piecewise_tie_in_maps_historical_run_to_master_axis(self):
+        params = {
+            "summaryData": {
+                "oldRun": {
+                    "year": "2024",
+                    "rawFeatures": [
+                        {"id": "outside", "dist": 0.0},
+                        {"id": "inside", "dist": 10.0},
+                    ],
+                },
+                "newRun": {"year": "2026", "rawFeatures": [{"id": "master", "dist": 110.0}]},
+            },
+            "tieInDecision": {"status": "AUTO_ACCEPTED"},
+            "tieInTransform": {
+                "direction": "OLD_TO_NEW",
+                "model": "MONOTONIC_PIECEWISE_LINEAR",
+                "allowExtrapolation": False,
+                "domain": {"oldStartM": 5.0, "oldEndM": 15.0},
+                "knots": [
+                    {"oldDistanceM": 5.0, "newDistanceM": 105.0},
+                    {"oldDistanceM": 15.0, "newDistanceM": 115.0},
+                ],
+            },
+        }
+        engine = self.engine_with_params(params)
+
+        historical = engine.fetch_data(is_old_run=True)
+        master = engine.fetch_data(is_old_run=False)
+
+        self.assertEqual([feature["id"] for feature in historical], ["outside", "inside"])
+        self.assertTrue(historical[0]["tiein_outside_domain"])
+        self.assertEqual(historical[1]["abs_distance_m"], 110.0)
+        self.assertEqual(master[0]["abs_distance_m"], 110.0)
+
+    def test_legacy_inverted_field_names_are_resolved_by_survey_year(self):
+        params = {
+            "summaryData": {
+                "oldRun": {"year": "2026", "rawFeatures": [{"id": "latest", "dist": 20}]},
+                "newRun": {"year": "2021", "rawFeatures": [{"id": "historical", "dist": 10}]},
+            }
+        }
+        engine = self.engine_with_params(params)
+
+        historical = engine.fetch_data(is_old_run=True)
+        master = engine.fetch_data(is_old_run=False)
+
+        self.assertEqual(historical[0]["id"], "historical")
+        self.assertEqual(master[0]["id"], "latest")
+        self.assertTrue(engine.swap_persisted_runs)
+
+    def test_master_binding_uses_latest_available_historical_run(self):
+        params = {
+            "summaryData": {
+                "masterRun": {"year": "2026", "rawFeatures": [{"id": "master", "dist": 20}]},
+                "historicalRuns": [
+                    {"year": "2012", "rawFeatures": [{"id": "oldest", "dist": 8}]},
+                    {"year": "2024", "rawFeatures": [{"id": "latest-old", "dist": 10}]},
+                    {"year": "2020", "rawFeatures": [{"id": "middle", "dist": 9}]},
+                ],
+            }
+        }
+        engine = self.engine_with_params(params)
+
+        historical = engine.fetch_data(is_old_run=True)
+        master = engine.fetch_data(is_old_run=False)
+
+        self.assertEqual(historical[0]["id"], "latest-old")
+        self.assertEqual(master[0]["id"], "master")
+        self.assertFalse(engine.swap_persisted_runs)
+
+    def test_persisted_run_id_loads_canonical_features_instead_of_session_raw_rows(self):
+        params = {
+            "summaryData": {
+                "masterRun": {"year": "2026", "runId": 9},
+                "historicalRuns": [{"year": "2024", "runId": 8}],
+            }
+        }
+        feature = SimpleNamespace(
+            id=701,
+            feature_id="vendor-weld-7",
+            log_distance_m=120.5,
+            feature_type="Girth Weld",
+            feature_identification="GW-7",
+            dist_to_us_gw_m=0.0,
+            joint_length_m=12.0,
+            clock_position="12:00",
+            wall_thickness_mm=10.0,
+            length_mm=None,
+            width_mm=None,
+            depth_pct=None,
+            surface_location=None,
+            erf_asme=None,
+            psafe_bar=None,
+            comment=None,
+        )
+        engine = HungarianAnomalyAlignmentEngine.__new__(HungarianAnomalyAlignmentEngine)
+        engine.session_id = 42
+        engine.session = SessionWithPersistedFeatures(
+            SimpleNamespace(params_json=params),
+            [feature],
+        )
+
+        persisted = engine.fetch_data(is_old_run=False)
+
+        self.assertEqual(persisted[0]["id"], "701")
+        self.assertEqual(persisted[0]["abs_distance_m"], 120.5)
+        self.assertEqual(persisted[0]["raw"]["sourceFeatureId"], "vendor-weld-7")
+
 
 class HungarianGwLockTests(unittest.TestCase):
     def test_uses_final_gw_pairs_as_the_only_anomaly_segment_boundaries(self):
@@ -181,6 +372,25 @@ class HungarianGwLockTests(unittest.TestCase):
         self.assertEqual(locked_pairs, [{"oldVal": 10.0, "newVal": 12.0, "offset": 2.0, "status": "Match"}])
         self.assertEqual(engine.assign_to_segment(10.1, [pair["oldVal"] for pair in locked_pairs]), 1)
 
+    def test_legacy_inverted_gw_pair_is_swapped_to_historical_then_master(self):
+        params_json = {
+            "gwMatchesFinal": [{
+                "old_id": "master-gw",
+                "new_id": "historical-gw",
+                "old_odometer": 12.0,
+                "new_odometer": 10.0,
+                "status": "MATCHED",
+            }],
+        }
+        engine = HungarianAnomalyAlignmentEngine.__new__(HungarianAnomalyAlignmentEngine)
+        engine.session_id = 42
+        engine.session = FakeSession(SimpleNamespace(params_json=params_json))
+        engine.swap_persisted_runs = True
+
+        locked_pairs = engine.get_gw_matches()
+
+        self.assertEqual(locked_pairs, [{"oldVal": 10.0, "newVal": 12.0, "offset": 2.0, "status": "Match"}])
+
     def test_only_anomaly_or_metal_loss_is_eligible_for_hungarian(self):
         self.assertTrue(HungarianAnomalyAlignmentEngine._is_matchable_anomaly({"originalType": "Metal loss"}))
         self.assertTrue(HungarianAnomalyAlignmentEngine._is_matchable_anomaly({"raw": {"type": "anomaly"}}))
@@ -203,7 +413,7 @@ class HungarianGwLockTests(unittest.TestCase):
         self.assertEqual([feature["id"] for feature in anomalies], ["defect"])
         self.assertEqual([feature["id"] for feature in bypassed], ["support"])
 
-    def test_scenario_filter_partitions_instead_of_dropping_shallow_anomalies(self):
+    def test_scenario_depth_does_not_filter_matching_candidates(self):
         engine = HungarianAnomalyAlignmentEngine.__new__(HungarianAnomalyAlignmentEngine)
         engine.depth_thresh = 10
         features = [
@@ -213,8 +423,20 @@ class HungarianGwLockTests(unittest.TestCase):
 
         eligible, filtered = engine._partition_scenario_features(features)
 
-        self.assertEqual([feature["id"] for feature in eligible], ["eligible"])
-        self.assertEqual([feature["id"] for feature in filtered], ["shallow"])
+        self.assertEqual([feature["id"] for feature in eligible], ["shallow", "eligible"])
+        self.assertEqual(filtered, [])
+
+    def test_outside_tiein_domain_is_conserved_as_filtered_evidence(self):
+        engine = HungarianAnomalyAlignmentEngine.__new__(HungarianAnomalyAlignmentEngine)
+        features = [
+            {"id": "outside", "tiein_outside_domain": True},
+            {"id": "inside", "tiein_outside_domain": False},
+        ]
+
+        eligible, filtered = engine._partition_scenario_features(features)
+
+        self.assertEqual([feature["id"] for feature in eligible], ["inside"])
+        self.assertEqual([feature["id"] for feature in filtered], ["outside"])
 
     def test_conservation_audit_reports_missing_and_duplicate_source_keys(self):
         audit = HungarianAnomalyAlignmentEngine._build_conservation_audit(
@@ -232,6 +454,23 @@ class HungarianGwLockTests(unittest.TestCase):
 
 
 class OrderedAnomalyMatchingTests(unittest.TestCase):
+    def test_sparse_assignment_preserves_order_and_maximizes_cardinality(self):
+        edges = [
+            (0, 0, 5.0),
+            (0, 1, 0.0),
+            (1, 0, 0.0),
+            (1, 1, 5.0),
+            (2, 2, 1.0),
+        ]
+        pairs = HungarianAnomalyAlignmentEngine.solve_sparse_monotonic_assignment(3, 3, edges)
+        self.assertEqual(pairs, [(0, 0), (1, 1), (2, 2)])
+
+    def test_sparse_assignment_ignores_crossing_only_edges(self):
+        pairs = HungarianAnomalyAlignmentEngine.solve_sparse_monotonic_assignment(
+            2, 2, [(0, 1, 0.0), (1, 0, 0.0)],
+        )
+        self.assertEqual(len(pairs), 1)
+
     def test_crossing_pairs_are_never_returned_even_when_they_are_cheapest(self):
         inf = HungarianAnomalyAlignmentEngine.INF_COST
         crossing_cost = np.array([
@@ -297,6 +536,24 @@ class OrderedAnomalyMatchingTests(unittest.TestCase):
             (1.0, 12.0),
         )
         self.assertEqual(result.sections[0]["reference_run"], "NEW")
+
+    def test_partial_sections_are_valid_and_leave_other_segments_on_global_match(self):
+        locked = [
+            {"old_id": "o1", "new_id": "n1", "old_odometer": 0.0, "new_odometer": 1.0},
+            {"old_id": "o2", "new_id": "n2", "old_odometer": 10.0, "new_odometer": 11.0},
+            {"old_id": "o3", "new_id": "n3", "old_odometer": 20.0, "new_odometer": 21.0},
+        ]
+        key = HungarianAnomalyAlignmentEngine._gw_pair_key
+
+        result = HungarianAnomalyAlignmentEngine.compile_sections([{
+            "id": "optional-area",
+            "name": "Optional area",
+            "startGwKey": key(locked[1]),
+            "endGwKey": key(locked[2]),
+            "policy": "MATCH",
+        }], locked)
+
+        self.assertTrue(result.is_valid)
 
     def test_section_compilation_rejects_crossing_locked_gw_pairs(self):
         locked = [

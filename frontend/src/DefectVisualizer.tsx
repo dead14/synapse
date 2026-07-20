@@ -12,12 +12,58 @@ interface DefectVisualizerProps {
   onSelectRowIdx?: (idx: number | null) => void;
 }
 
+const MAX_TIMELINE_FEATURES = 2_500;
+const MAX_TIMELINE_GWS = 1_500;
+const MAX_SPOOL_FEATURES = 2_000;
+
+function sampleEvenly<T>(items: T[], limit: number, keep?: (item: T) => boolean): T[] {
+  if (items.length <= limit) return items;
+  const selected = keep ? items.filter(keep) : [];
+  const available = Math.max(1, limit - selected.length);
+  const step = Math.max(1, Math.ceil(items.length / available));
+  const sampled = items.filter((_item, index) => index % step === 0);
+  return Array.from(new Set([...sampled, ...selected])).slice(0, limit);
+}
+
+function nearestDistance(sortedDistances: number[], value: number): number {
+  let low = 0;
+  let high = sortedDistances.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (sortedDistances[middle] < value) low = middle + 1;
+    else high = middle;
+  }
+  return Math.min(
+    Math.abs((sortedDistances[low] ?? Infinity) - value),
+    Math.abs((sortedDistances[low - 1] ?? Infinity) - value),
+  );
+}
+
 const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { renderLength: number, sLength: number, startDist: number, spoolData: any[], gwList: number[] }) => {
+  const defectBuckets = useMemo(() => {
+    const buckets = new Map<number, any[]>();
+    const add = (distance: number | null, defect: any) => {
+      if (distance === null || !Number.isFinite(distance)) return;
+      const key = Math.floor(distance);
+      const list = buckets.get(key) || [];
+      list.push({ defect, distance });
+      buckets.set(key, list);
+    };
+    spoolData.forEach((defect) => {
+      add(defect.dist1, defect);
+      add(defect.dist2, defect);
+    });
+    return buckets;
+  }, [spoolData]);
+
   const geom = useMemo(() => {
     const segments = 64;
     const padding = 2.0;
     const actualPipeLength = renderLength + (padding * 2);
-    const heightSegments = Math.max(10, Math.ceil(actualPipeLength * 10));
+    // A bounded longitudinal mesh preserves the inspection view while
+    // preventing the 3D renderer from allocating hundreds of thousands of
+    // vertices for a long selected spool.
+    const heightSegments = Math.min(400, Math.max(10, Math.ceil(actualPipeLength * 4)));
     const pipeRadius = 2.0;
     const geometry = new THREE.CylinderGeometry(pipeRadius, pipeRadius, actualPipeLength, segments, heightSegments, true);
     
@@ -47,11 +93,7 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { 
       
       // --- GIRTH WELD: Paint & Bulge ---
       // Find nearest girth weld distance
-      let minGwDist = Infinity;
-      for (const gwDist of gwList) {
-        const d = Math.abs(trueDist - gwDist);
-        if (d < minGwDist) minGwDist = d;
-      }
+      const minGwDist = nearestDistance(gwList, trueDist);
       
       // Convert weld half-width from real meters to the vy coordinate space
       const weldHalfWidthVy = (weldHalfWidth / sLength) * renderLength;
@@ -83,7 +125,13 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { 
       // --- DEFECT HEATMAP (only if not already painted as weld) ---
       if (!isInWeld) {
         let maxDepth = 0;
-        spoolData.forEach(d => {
+        const nearbyDefects: any[] = [];
+        const distanceBucket = Math.floor(trueDist);
+        for (let bucket = distanceBucket - 1; bucket <= distanceBucket + 1; bucket += 1) {
+          const candidates = defectBuckets.get(bucket);
+          if (candidates) nearbyDefects.push(...candidates);
+        }
+        nearbyDefects.forEach(({ defect: d, distance: defectDistance }) => {
           const checkDefect = (dist: number, orient: number, len: number, wid: number, depth: number) => {
             const sLen = Math.max(0.4, len * 0.03); 
             const sWidAngle = Math.max(15, wid * 1.5); 
@@ -93,8 +141,8 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { 
             const inOrient = angleDiff <= (sWidAngle / 2);
             if (inDist && inOrient) maxDepth = Math.max(maxDepth, depth);
           };
-          if (d.dist1 !== null) checkDefect(d.dist1, d.orient1, d.len1, d.wid1, d?.depth1);
-          if (d.dist2 !== null) checkDefect(d.dist2, d.orient2, d.len2, d.wid2, d?.depth2);
+          if (defectDistance === d.dist1) checkDefect(d.dist1, d.orient1, d.len1, d.wid1, d?.depth1);
+          if (defectDistance === d.dist2) checkDefect(d.dist2, d.orient2, d.len2, d.wid2, d?.depth2);
         });
         
         if (maxDepth > 0) {
@@ -114,7 +162,7 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { 
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.computeVertexNormals();
     return geometry;
-  }, [renderLength, sLength, startDist, spoolData, gwList]);
+  }, [renderLength, sLength, startDist, defectBuckets, gwList]);
 
   const padding = 2.0;
   const clockRadius = 2.4;
@@ -137,6 +185,49 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { 
       <Text position={[clockRadius, capY, 0]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.4} color="#f87171" anchorX="center" anchorY="middle">3:00</Text>
       <Text position={[0, capY, -clockRadius]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.4} color="#f87171" anchorX="center" anchorY="middle">6:00</Text>
       <Text position={[-clockRadius, capY, 0]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.4} color="#f87171" anchorX="center" anchorY="middle">9:00</Text>
+    </group>
+  );
+};
+
+const DefectOverlayInstancedMesh = ({ spoolData, renderLength, sLength, startDist, onSelect }: any) => {
+  const meshRef = React.useRef<THREE.InstancedMesh>(null);
+  const geometry = useMemo(() => new THREE.BoxGeometry(1, 1, 1), []);
+  const material = useMemo(() => new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }), []);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  const instances = useMemo(() => spoolData.flatMap((d: any) => [
+    d.dist1 === null ? null : { d, dist: d.dist1, orient: d.orient1, len: d.len1, wid: d.wid1, id: d.id1 },
+    d.dist2 === null ? null : { d, dist: d.dist2, orient: d.orient2, len: d.len2, wid: d.wid2, id: d.id2 },
+  ]).filter(Boolean), [spoolData]);
+
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    mesh.count = instances.length;
+    instances.forEach((instance: any, index: number) => {
+      const angle = Number(instance.orient || 0) * (Math.PI / 180);
+      const vy = ((Number(instance.dist) - startDist) / Math.max(sLength, 0.001)) * renderLength - renderLength / 2;
+      dummy.position.set(Math.cos(angle) * 2.05, vy, Math.sin(angle) * 2.05);
+      dummy.rotation.set(0, -angle, 0);
+      dummy.scale.set(Math.max(0.6, Number(instance.wid || 0) * 0.05), Math.max(0.6, Number(instance.len || 0) * 0.05), 1);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(index, dummy.matrix);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+  }, [dummy, instances, renderLength, sLength, startDist]);
+
+  return (
+    <group rotation={[Math.PI / 2, 0, 0]}>
+      <instancedMesh
+        ref={meshRef}
+        args={[geometry, material, Math.max(1, instances.length)]}
+        onPointerOver={(event: any) => { event.stopPropagation(); document.body.style.cursor = 'pointer'; }}
+        onPointerOut={(event: any) => { event.stopPropagation(); document.body.style.cursor = 'default'; }}
+        onClick={(event: any) => {
+          event.stopPropagation();
+          const instance = instances[event.instanceId ?? -1] as any;
+          if (instance) onSelect(instance.id, instance.d, event);
+        }}
+      />
     </group>
   );
 };
@@ -192,6 +283,26 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
   const [newRawFeatures, setNewRawFeatures] = useState<any[]>([]);
 
   useEffect(() => {
+    if (!isModalOpen || modalViewMode !== '3D') return undefined;
+    const startedAt = performance.now();
+    let firstFrame = 0;
+    let secondFrame = 0;
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const durationMs = performance.now() - startedAt;
+        apiFetch('/api/metrics/browser', {
+          method: 'POST',
+          body: { name: 'render_3d_viewer', durationMs: Math.round(durationMs * 100) / 100 },
+        }).catch(() => {});
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [isModalOpen, modalViewMode, selectedRowIdx]);
+
+  useEffect(() => {
     const fetchSession = async () => {
       try {
         const sessionId = new URLSearchParams(window.location.search).get('sessionId') || localStorage.getItem('synapse_last_session_id');
@@ -201,8 +312,8 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
              const config = typeof data.config === 'string' ? JSON.parse(data.config) : data.config;
              const oldY = config?.summaryData?.oldRun?.year || config?.oldRun?.year;
              const newY = config?.summaryData?.newRun?.year || config?.newRun?.year;
-             if (oldY) setRunOldName(`${oldY} (Reference)`);
-             if (newY) setRunNewName(`${newY} (Current)`);
+             if (oldY) setRunOldName(`${oldY} (Historical OLD)`);
+             if (newY) setRunNewName(`${newY} (Master NEW)`);
              
              if (config?.summaryData?.oldRun?.rawFeatures) {
                setOldRawFeatures(config.summaryData.oldRun.rawFeatures);
@@ -268,9 +379,18 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
     }).filter(Boolean);
   }, [data]);
 
+  const timelineData = useMemo(() => sampleEvenly(
+    parsedData,
+    MAX_TIMELINE_FEATURES,
+    (item: any) => item.dataIdx === selectedRowIdx,
+  ), [parsedData, selectedRowIdx]);
+
   // Derived boundaries
-  const minDistance = Math.min(...parsedData.flatMap(d => [d?.dist1, d?.dist2]).filter(d => d !== null && d !== undefined) as number[]);
-  const maxDistance = Math.max(...parsedData.flatMap(d => [d?.dist1, d?.dist2]).filter(d => d !== null && d !== undefined) as number[]);
+  const availableDistances = parsedData
+    .flatMap(d => [d?.dist1, d?.dist2])
+    .filter((d): d is number => Number.isFinite(d));
+  const minDistance = availableDistances.length > 0 ? Math.min(...availableDistances) : 0;
+  const maxDistance = availableDistances.length > 0 ? Math.max(...availableDistances) : 0;
   const totalLength = Math.max(10, maxDistance - minDistance + 20);
   const startDist = Math.max(0, minDistance - 10);
 
@@ -293,7 +413,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
     if (list.length === 0) {
        for(let d = startDist; d <= startDist + totalLength; d += 12) list.push(d);
     }
-    return Array.from(new Set(list));
+    return sampleEvenly(Array.from(new Set(list)), MAX_TIMELINE_GWS);
   }, [parsedData, startDist, totalLength]);
 
   // Determine actual selected range
@@ -413,7 +533,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
             })}
 
             {/* Run 1 Anomalies & Landmarks */}
-            {parsedData.map((d, i) => {
+            {timelineData.map((d, i) => {
               if (d?.dist1 === null || d?.dist1 === undefined) return null;
               const x = mToX(d.dist1);
               const searchStr = selectedRowIdx;
@@ -473,7 +593,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
             })}
 
             {/* Run 2 Anomalies & Landmarks */}
-            {parsedData.map((d, i) => {
+            {timelineData.map((d, i) => {
               if (d?.dist2 === null || d?.dist2 === undefined) return null;
               const x2 = mToX(d.dist2);
               const isSel = selectedRowIdx !== null && selectedRowIdx !== undefined && d.dataIdx === selectedRowIdx;
@@ -513,6 +633,11 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
       if (dist === null) return false;
       return dist >= selectedRange.startDist && dist <= selectedRange.endDist;
     });
+    const renderableSpoolData = sampleEvenly(
+      spoolData,
+      MAX_SPOOL_FEATURES,
+      (item: any) => item.dataIdx === selectedRowIdx,
+    );
 
     const sLength = selectedRange.length;
     // For 2D SVG rendering inside modal (fixed width)
@@ -543,7 +668,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
                 );
               })}
 
-              {spoolData.map((d, i) => {
+              {renderableSpoolData.map((d, i) => {
                 const scaleDim = (val: number) => Math.max(10, val * 0.8); 
 
                 if (d.isMatched && d.dist1 !== null && d.dist2 !== null) {
@@ -633,11 +758,11 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
                renderLength={renderLength} 
                sLength={sLength} 
                startDist={selectedRange.startDist} 
-               spoolData={spoolData} 
+               spoolData={renderableSpoolData} 
                gwList={gwList}
              />
-             <DefectOverlayMeshes 
-               spoolData={spoolData} 
+             <DefectOverlayInstancedMesh 
+               spoolData={renderableSpoolData} 
                renderLength={renderLength} 
                sLength={sLength} 
                startDist={selectedRange.startDist} 
@@ -667,6 +792,11 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
             <p className="text-sm text-gray-500 font-medium mt-1">
               {(totalLength / 1000).toFixed(1)}+ km Interactive Pipeline Alignment Map
             </p>
+            {timelineData.length < parsedData.length && (
+              <p className="mt-1 text-xs font-medium text-amber-700">
+                Viewer sampling {timelineData.length.toLocaleString()} of {parsedData.length.toLocaleString()} rows; the selected row is always retained.
+              </p>
+            )}
           </div>
           
           {/* Dynamic Selection Actions */}

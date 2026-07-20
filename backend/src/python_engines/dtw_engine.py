@@ -1,9 +1,9 @@
 import sys
 import json
 import math
+import re
 from bisect import bisect_left, bisect_right
-import numpy as np
-from scipy.optimize import linear_sum_assignment
+from tiein_transform import map_old_to_new, validated_tiein_knots
 
 # Feature types that serve as absolute anchors (Tier-1 in ILI alignment).
 # Valves and Tees are sparse, physical fixtures whose odometer positions are
@@ -13,6 +13,7 @@ ANCHOR_TYPES = {'valve', 'tee'}
 # whose odometer drift is bounded by physical placement (ported from
 # engine/constants.py LANDMARK_MATCH_TOL).
 ANCHOR_TOLERANCE_M = 200.0
+TIEIN_ANCHOR_TOLERANCE_M = 10.0
 
 # The implementation allocates both a cost matrix and a path matrix. Keep the
 # allocation bounded so malformed or unexpectedly large requests fail before
@@ -32,9 +33,50 @@ def ota_deviation_ratio(old_spool, new_spool):
     return abs((old_spool / new_spool) - 1.0)
 
 
+def _distance_intervals(previous, current):
+    source_values = (
+        previous.get('oldSourceDist'),
+        current.get('oldSourceDist'),
+        previous.get('newSourceDist'),
+        current.get('newSourceDist'),
+    )
+    use_source_distances = all(
+        isinstance(value, (int, float)) and math.isfinite(value)
+        for value in source_values
+    )
+    if use_source_distances:
+        old_previous, old_current, new_previous, new_current = source_values
+    else:
+        old_previous = previous.get('oldDist', 0.0)
+        old_current = current.get('oldDist', 0.0)
+        new_previous = previous.get('newDist', 0.0)
+        new_current = current.get('newDist', 0.0)
+    return old_current - old_previous, new_current - new_previous
+
+
+def _alignment_feature_kind(feature):
+    primary = feature.get('type')
+    primary_label = str(primary or '').strip()
+    if not primary_label or primary_label.lower() in {'other', 'unknown', 'unclassified'}:
+        primary_label = str(
+            feature.get('originalType')
+            or feature.get('feature_type')
+            or feature.get('feature_identification')
+            or ''
+        ).strip()
+    label = primary_label.lower()
+    if re.search(r'\bvalve\b', label):
+        return 'valve'
+    if re.search(r'\b(?:tee|offtake|branch(?:\s+connection)?)\b', label):
+        return 'tee'
+    if re.search(r'\b(?:weld|girth|seam|flange)\b', label):
+        return 'weld'
+    return label
+
+
 def match_valves(old_features, new_features, tolerance=ANCHOR_TOLERANCE_M):
     """
-    Match valve/tee anchors between OLD and NEW runs via the Hungarian algorithm.
+    Match valve/tee anchors by type while preserving physical order.
 
     Valves and tees are the most physically stable features — they don't move
     between inspections. Matching them FIRST establishes "mega-segments" that
@@ -47,56 +89,89 @@ def match_valves(old_features, new_features, tolerance=ANCHOR_TOLERANCE_M):
     sorted by old_dist. Empty if no anchors found in either run.
     """
     old_anchors = sorted(
-        [f for f in old_features if str(f.get('type', '')).lower() in ANCHOR_TYPES],
+        [f for f in old_features if _alignment_feature_kind(f) in ANCHOR_TYPES],
         key=lambda f: float(f.get('dist', 0))
     )
     new_anchors = sorted(
-        [f for f in new_features if str(f.get('type', '')).lower() in ANCHOR_TYPES],
+        [f for f in new_features if _alignment_feature_kind(f) in ANCHOR_TYPES],
         key=lambda f: float(f.get('dist', 0))
     )
 
     if not old_anchors or not new_anchors:
         return []
 
-    na = len(old_anchors)
-    nb = len(new_anchors)
-    INF = float('inf')
-    # Build a rectangular cost matrix — scipy can handle non-square.
-    cost_mat = np.full((na, nb), INF)
+    old_count = len(old_anchors)
+    new_count = len(new_anchors)
+    # Scores only need the previous row. Keep one byte per cell for
+    # backtracking instead of retaining several full Python-object matrices.
+    actions = [bytearray(new_count + 1) for _ in range(old_count + 1)]
+    for new_index in range(1, new_count + 1):
+        actions[0][new_index] = 1  # Skip the new anchor.
 
-    for i, oa in enumerate(old_anchors):
-        d_old = float(oa.get('dist', 0))
-        for j, na_f in enumerate(new_anchors):
-            d_new = float(na_f.get('dist', 0))
-            diff = abs(d_old - d_new)
-            if diff > tolerance:
-                continue
-            cost_mat[i, j] = diff
+    previous_counts = [0] * (new_count + 1)
+    previous_errors = [0.0] * (new_count + 1)
 
-    # Ensure at least one valid entry per row/column by replacing all-INF
-    # rows/columns with a large-but-finite penalty, so the solver doesn't
-    # fail on infeasible matrices (happens when anchors are very asymmetric).
-    for i in range(na):
-        if np.all(np.isinf(cost_mat[i, :])):
-            # This OLD anchor has no valid NEW candidate — assign max penalty
-            cost_mat[i, :] = tolerance * 2
-    for j in range(nb):
-        if np.all(np.isinf(cost_mat[:, j])):
-            cost_mat[:, j] = tolerance * 2
+    for old_index in range(1, old_count + 1):
+        old_anchor = old_anchors[old_index - 1]
+        current_counts = [0] * (new_count + 1)
+        current_errors = [0.0] * (new_count + 1)
+        for new_index in range(1, new_count + 1):
+            new_anchor = new_anchors[new_index - 1]
+            options = [
+                (
+                    previous_counts[new_index],
+                    previous_errors[new_index],
+                    0,
+                ),
+                (
+                    current_counts[new_index - 1],
+                    current_errors[new_index - 1],
+                    1,
+                ),
+            ]
+            difference = abs(
+                float(old_anchor.get('dist', 0)) - float(new_anchor.get('dist', 0))
+            )
+            if (
+                _alignment_feature_kind(old_anchor) == _alignment_feature_kind(new_anchor)
+                and difference <= tolerance
+            ):
+                options.append((
+                    previous_counts[new_index - 1] + 1,
+                    previous_errors[new_index - 1] + difference,
+                    2,
+                ))
 
-    row_ind, col_ind = linear_sum_assignment(cost_mat)
+            best = max(options, key=lambda option: (option[0], -option[1], option[2]))
+            current_counts[new_index] = best[0]
+            current_errors[new_index] = best[1]
+            actions[old_index][new_index] = best[2]
+
+        previous_counts = current_counts
+        previous_errors = current_errors
+
+    matched_indexes = []
+    old_index, new_index = old_count, new_count
+    while old_index > 0 or new_index > 0:
+        action = actions[old_index][new_index]
+        if action == 2:
+            matched_indexes.append((old_index - 1, new_index - 1))
+            old_index -= 1
+            new_index -= 1
+        elif action == 1:
+            new_index -= 1
+        else:
+            old_index -= 1
+    matched_indexes.reverse()
+
     pairs = []
-    for i, j in zip(row_ind, col_ind):
-        if cost_mat[i, j] >= tolerance:
-            continue  # Skip penalty-only assignments (no real match)
+    for i, j in matched_indexes:
         pairs.append({
             'old_dist': float(old_anchors[i].get('dist', 0)),
             'new_dist': float(new_anchors[j].get('dist', 0)),
             'old_id': old_anchors[i].get('id'),
             'new_id': new_anchors[j].get('id'),
         })
-
-    pairs.sort(key=lambda p: p['old_dist'])
     return pairs
 
 
@@ -169,6 +244,8 @@ def calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty=False):
         
         for j in range(first_j, last_j + 1):
             new_dist = new_dists[j-1]
+            if _alignment_feature_kind(old_gws[i-1]) != _alignment_feature_kind(new_gws[j-1]):
+                continue
             abs_dist_diff = abs(old_dist - new_dist)
             
             best_cost = inf
@@ -438,6 +515,11 @@ def reconcile_gw_matches(candidate_matches, old_gws, new_gws):
             "newId": new_feature.get("id"),
             "oldDist": old_feature.get("dist"),
             "newDist": new_feature.get("dist"),
+            # Dist is the common NEW-master coordinate after TIE IN.  Preserve
+            # source odometers too, so the UI can measure actual spool length
+            # when an engineer clicks two adjacent GW markers.
+            "oldSourceDist": old_feature.get("sourceDist", old_feature.get("dist")),
+            "newSourceDist": new_feature.get("sourceDist", new_feature.get("dist")),
             "oldKey": old_feature.get("sourceKey", f"OLD:{old_index}"),
             "newKey": new_feature.get("sourceKey", f"NEW:{new_index}"),
             "status": "Match",
@@ -453,6 +535,8 @@ def reconcile_gw_matches(candidate_matches, old_gws, new_gws):
             "newId": None,
             "oldDist": old_feature.get("dist"),
             "newDist": None,
+            "oldSourceDist": old_feature.get("sourceDist", old_feature.get("dist")),
+            "newSourceDist": None,
             "oldKey": old_feature.get("sourceKey", f"OLD:{old_index}"),
             "newKey": None,
             "status": "Skipped",
@@ -468,6 +552,8 @@ def reconcile_gw_matches(candidate_matches, old_gws, new_gws):
             "newId": new_feature.get("id"),
             "oldDist": None,
             "newDist": new_feature.get("dist"),
+            "oldSourceDist": None,
+            "newSourceDist": new_feature.get("sourceDist", new_feature.get("dist")),
             "oldKey": None,
             "newKey": new_feature.get("sourceKey", f"NEW:{new_index}"),
             "status": "Skipped",
@@ -475,37 +561,109 @@ def reconcile_gw_matches(candidate_matches, old_gws, new_gws):
 
     return reconciled
 
+
+def _prepare_runs_in_master_space(data):
+    """Copy input rows and apply only an accepted OLD-to-NEW transform."""
+    old_run = [dict(feature) for feature in data.get('oldRun', [])]
+    new_run = [dict(feature) for feature in data.get('newRun', [])]
+    knots = validated_tiein_knots(data)
+    transform_applied = bool(knots)
+    excluded_old = []
+    excluded_new = []
+
+    if transform_applied:
+        transformed_old = []
+        for feature in old_run:
+            distance = feature.get('dist')
+            if not isinstance(distance, (int, float)) or not math.isfinite(distance):
+                continue
+            master_distance = map_old_to_new(float(distance), knots)
+            if master_distance is None:
+                excluded_old.append({
+                    'id': feature.get('id'),
+                    'sourceDistanceM': float(distance),
+                    'type': feature.get('type', feature.get('originalType')),
+                    'reason': 'OUTSIDE_ACCEPTED_TIEIN_DOMAIN',
+                })
+                continue
+            feature['sourceDist'] = float(distance)
+            feature['dist'] = master_distance
+            transformed_old.append(feature)
+        old_run = transformed_old
+        target_start = knots[0][1]
+        target_end = knots[-1][1]
+        overlapping_new = []
+        for feature in new_run:
+            distance = feature.get('dist')
+            if not isinstance(distance, (int, float)) or not math.isfinite(distance):
+                continue
+            if float(distance) < target_start or float(distance) > target_end:
+                excluded_new.append({
+                    'id': feature.get('id'),
+                    'sourceDistanceM': float(distance),
+                    'type': feature.get('type', feature.get('originalType')),
+                    'reason': 'OUTSIDE_ACCEPTED_TIEIN_TARGET_DOMAIN',
+                })
+                continue
+            overlapping_new.append(feature)
+        new_run = overlapping_new
+    else:
+        # Compatibility path for sessions created before the directional
+        # transform contract. Legacy offset maps NEW approximately onto OLD.
+        tie_in_offset = data.get('tieInOffset', 0.0)
+        if isinstance(tie_in_offset, (int, float)) and tie_in_offset != 0.0:
+            for feature in new_run:
+                if isinstance(feature.get('dist'), (int, float)):
+                    feature['sourceDist'] = feature['dist']
+                    feature['dist'] = feature['dist'] + tie_in_offset
+    return old_run, new_run, transform_applied, excluded_old, excluded_new
+
+
 def process_request(data):
     ota_threshold = data.get('ota', 1.5)
     strict_penalty = data.get('strictPenalty', False)
-    old_run = data.get('oldRun', [])
-    new_run = data.get('newRun', [])
+    if data.get('partialRunEnabled') is True and data.get('tieInTransform') is None:
+        return {
+            "success": False,
+            "code": "PARTIAL_RUN_TIEIN_REQUIRED",
+            "error": "Partial-run alignment requires accepted TIE IN evidence; raw odometer matching is blocked.",
+            "requestId": data.get('requestId'),
+        }
+    if data.get('tieInTransform') is not None and not validated_tiein_knots(data):
+        return {
+            "success": False,
+            "code": "INVALID_TIEIN_TRANSFORM",
+            "error": "Tie-in transform is invalid or lacks server-accepted evidence.",
+            "requestId": data.get('requestId'),
+        }
+    old_run, new_run, tie_in_transform_applied, tie_in_excluded_old, tie_in_excluded_new = _prepare_runs_in_master_space(data)
     use_valve_anchor = data.get('useValveAnchor', False)
     apply_dtw_correction = data.get('applyDtwCorrection', True)
     request_id = data.get('requestId')
-    tie_in_offset = data.get('tieInOffset', 0.0)
-
-    # 1. Apply tieInOffset globally to ALL NEW features
-    if tie_in_offset != 0.0:
-        for f in new_run:
-            f['dist'] = f['dist'] + tie_in_offset
-
-    # 2. Extract GW candidates (strict Tier-1/Tier-2 anchors only)
-    gw_types = {'weld', 'girth weld', 'valve', 'tee', 'flange'}
+    # Extract GW candidates (strict Tier-1/Tier-2 anchors only)
+    gw_types = {'weld', 'valve', 'tee'}
     
     old_gws = sorted(
-        [f for f in old_run if str(f.get('type', f.get('originalType'))).lower() in gw_types
+        [f for f in old_run if _alignment_feature_kind(f) in gw_types
          and isinstance(f.get('dist'), (int, float)) and math.isfinite(f['dist'])],
         key=lambda feature: feature['dist'],
     )
     new_gws = sorted(
-        [f for f in new_run if str(f.get('type', f.get('originalType'))).lower() in gw_types
+        [f for f in new_run if _alignment_feature_kind(f) in gw_types
          and isinstance(f.get('dist'), (int, float)) and math.isfinite(f['dist'])],
         key=lambda feature: feature['dist'],
     )
 
     if not old_gws or not new_gws:
-        return {"error": "No GWs/Anchors found in one or both runs", "requestId": request_id}
+        return {
+            "success": False,
+            "code": "NO_ALIGNMENT_ANCHORS",
+            "error": "No GWs/Anchors found in one or both runs",
+            "requestId": request_id,
+            "tieInTransformApplied": tie_in_transform_applied,
+            "tieInExcludedOld": tie_in_excluded_old,
+            "tieInExcludedNew": tie_in_excluded_new,
+        }
 
     cell_count = len(old_gws) * len(new_gws)
     if cell_count > MAX_DTW_CELLS:
@@ -519,7 +677,11 @@ def process_request(data):
             "requestId": request_id,
         }
 
-    valve_pairs = match_valves(old_gws, new_gws) if use_valve_anchor else []
+    valve_pairs = match_valves(
+        old_gws,
+        new_gws,
+        tolerance=(TIEIN_ANCHOR_TOLERANCE_M if tie_in_transform_applied else ANCHOR_TOLERANCE_M),
+    ) if use_valve_anchor else []
 
     all_gw_matches = []
     
@@ -542,18 +704,6 @@ def process_request(data):
                 continue
 
             seg_matches = _run_dtw_segment(seg_old, seg_new, ota_threshold, strict_penalty)
-
-            global_old_dists = {round(w['dist'], 6): w for w in old_gws}
-            global_new_dists = {round(w['dist'], 6): w for w in new_gws}
-
-            for m in seg_matches:
-                od = m.get('oldDist')
-                nd = m.get('newDist')
-                gw_old = global_old_dists.get(round(float(od), 6) if od is not None else -1)
-                gw_new = global_new_dists.get(round(float(nd), 6) if nd is not None else -1)
-                m['oldId'] = gw_old.get('id') if gw_old else None
-                m['newId'] = gw_new.get('id') if gw_new else None
-
             all_gw_matches.extend(seg_matches)
 
         first_old = valve_pairs[0]['old_dist']
@@ -565,33 +715,18 @@ def process_request(data):
         pre_new = [w for w in new_gws if w['dist'] < first_new]
         if pre_old and pre_new:
             pre_matches = _run_dtw_segment(pre_old, pre_new, ota_threshold, strict_penalty)
-            global_old_dists = {round(w['dist'], 6): w for w in old_gws}
-            global_new_dists = {round(w['dist'], 6): w for w in new_gws}
-            for m in pre_matches:
-                od = m.get('oldDist')
-                nd = m.get('newDist')
-                gw_old = global_old_dists.get(round(float(od), 6) if od is not None else -1)
-                gw_new = global_new_dists.get(round(float(nd), 6) if nd is not None else -1)
-                m['oldId'] = gw_old.get('id') if gw_old else None
-                m['newId'] = gw_new.get('id') if gw_new else None
             all_gw_matches.extend(pre_matches)
 
         post_old = [w for w in old_gws if w['dist'] >= last_old]
         post_new = [w for w in new_gws if w['dist'] >= last_new]
         if post_old and post_new:
             post_matches = _run_dtw_segment(post_old, post_new, ota_threshold, strict_penalty)
-            global_old_dists = {round(w['dist'], 6): w for w in old_gws}
-            global_new_dists = {round(w['dist'], 6): w for w in new_gws}
-            for m in post_matches:
-                od = m.get('oldDist')
-                nd = m.get('newDist')
-                gw_old = global_old_dists.get(round(float(od), 6) if od is not None else -1)
-                gw_new = global_new_dists.get(round(float(nd), 6) if nd is not None else -1)
-                m['oldId'] = gw_old.get('id') if gw_old else None
-                m['newId'] = gw_new.get('id') if gw_new else None
             all_gw_matches.extend(post_matches)
 
-        all_gw_matches.sort(key=lambda m: (m.get('oldDist') or 999999))
+        all_gw_matches.sort(key=lambda match: (
+            match.get('oldDist') is None,
+            float(match.get('oldDist') or 0.0),
+        ))
         gw_matches = all_gw_matches
 
     else:
@@ -657,6 +792,9 @@ def process_request(data):
         "offsetTrend": offset_trend,
         "valveAnchors": valve_pairs if use_valve_anchor else [],
         "alignedFeatures": aligned_non_gw,
+        "tieInTransformApplied": tie_in_transform_applied,
+        "tieInExcludedOld": tie_in_excluded_old,
+        "tieInExcludedNew": tie_in_excluded_new,
         "dtwCorrectionApplied": apply_dtw_correction,
         "valveSegmented": use_valve_anchor and len(valve_pairs) >= 2,
         "requestId": request_id,
@@ -718,8 +856,7 @@ def _post_process_matches(gw_matches, ota_threshold):
         prev = valid_matches[k - 1]
         curr = valid_matches[k]
 
-        L_ref = curr.get('oldDist', 0) - prev.get('oldDist', 0)
-        L_new = curr.get('newDist', 0) - prev.get('newDist', 0)
+        L_ref, L_new = _distance_intervals(prev, curr)
 
         curr['L_ref'] = L_ref
         curr['L_new'] = L_new

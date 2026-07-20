@@ -33,6 +33,7 @@ router.post('/estimate-tiein-offset', authMiddleware, alignmentController.estima
 // Wizard State Persistence
 router.post('/wizard/save', authMiddleware, alignmentController.saveWizardState);
 router.post('/wizard/save-sections', authMiddleware, alignmentController.saveSections);
+router.post('/wizard/save-intervention', authMiddleware, alignmentController.saveIntervention);
 router.get('/wizard/resume', authMiddleware, alignmentController.resumeWizardState);
 router.get('/wizard/session/:id', authMiddleware, alignmentController.getWizardSession);
 router.get('/pipeline-runs', authMiddleware, alignmentController.getPipelineRuns);
@@ -41,6 +42,7 @@ router.delete('/pipeline-runs/:id', authMiddleware, alignmentController.deletePi
 
 router.get('/ili-results', authMiddleware, alignmentController.getIliResults);
 router.get('/results/:runId', authMiddleware, alignmentController.getAlignmentResults);
+router.get('/results/:runId/page', authMiddleware, alignmentController.getAlignmentResultsPage);
 router.post('/alignment/export-excel', authMiddleware, alignmentController.exportExcel);
 router.get('/job/:jobId/result', authMiddleware, alignmentController.getJobResult);
 

@@ -17,13 +17,14 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
   const startedRef = useRef(false);
   const jobIdRef = useRef<string | null>(null);
   const completedRef = useRef(false);
+  const configuredAlgorithm = config.algorithm || config.summaryData?.algorithm || 'dtw_hungarian';
 
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
 
-    const configuredAlgorithm = config.algorithm || config.summaryData?.algorithm || 'dtw_hungarian';
-    if (config.sessionStatus === 'completed' && configuredAlgorithm !== 'dtw_hungarian_onedirection') {
+    if (config.sessionStatus === 'completed'
+      && !['dtw_hungarian_onedirection', 'manual'].includes(configuredAlgorithm)) {
       setTerminalLines(['Session alignment sebelumnya sudah selesai.', '✅ All done! Results are ready.']);
       setProgress(100);
       setShowValidation(true);
@@ -77,12 +78,12 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
         requestController = new AbortController();
         requestTimeout = setTimeout(() => requestController?.abort(), 15000);
         const algorithm = config.algorithm || config.summaryData?.algorithm || 'dtw_hungarian';
-        const usesOrderedPipeline = algorithm === 'dtw_hungarian_onedirection';
+        const usesResultPipeline = ['dtw_hungarian_onedirection', 'manual'].includes(algorithm);
         const data = await apiFetch<{ success?: boolean; jobId?: string; error?: string }>(
-          usesOrderedPipeline
+          usesResultPipeline
             ? `/api/ili-results?sessionId=${encodeURIComponent(String(config.sessionId))}`
             : '/api/run',
-          usesOrderedPipeline
+          usesResultPipeline
             ? { signal: requestController.signal }
             : {
                 method: 'POST',
@@ -155,7 +156,7 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
       socket.off('alignment_complete', handleComplete);
       socket.off('alignment_error', handleError);
     };
-  }, [config.algorithm, config.sessionId, config.sessionStatus, config.summaryData?.algorithm]);
+  }, [config.algorithm, config.sessionId, config.sessionStatus, config.summaryData?.algorithm, configuredAlgorithm]);
 
   return (
     <div className="alignment-surface bg-white rounded-2xl p-6 sm:p-8 shadow-sm border border-gray-100 animate-fade-in flex flex-col gap-8">
@@ -222,7 +223,9 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
           
           <div className="flex gap-4 justify-end pt-4 border-t border-gray-100">
             <button 
-                onClick={() => navigate(`/ili-comparison?sessionId=${config.sessionId || ''}`)}
+                onClick={() => navigate(
+                  `/ili-comparison?sessionId=${config.sessionId || ''}${configuredAlgorithm === 'manual' ? '&mode=intervention' : ''}`,
+                )}
                 className="bg-brand-500 hover:bg-brand-600 text-white px-8 py-3 rounded-xl font-bold transition-all shadow-theme-md hover:shadow-theme-lg flex items-center gap-2"
               >
                 <FiFileText size={18} />

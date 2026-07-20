@@ -11,14 +11,12 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
   const [clockTol, setClockTol] = useState(config?.ToleranceConfig?.clock_tolerance ?? 15);
   const [usGwTol, setUsGwTol] = useState(config?.ToleranceConfig?.us_gw_distance_tolerance ?? config?.scenario?.distThresh ?? 0.2);
   const [dsGwTol, setDsGwTol] = useState(config?.ToleranceConfig?.ds_gw_distance_tolerance ?? config?.scenario?.distThresh ?? 0.2);
-  const [depthTol, setDepthTol] = useState(config?.ToleranceConfig?.depth_tolerance ?? 10);
   const [lengthTol, setLengthTol] = useState(config?.ToleranceConfig?.length_tolerance ?? 50);
   
   const applyRecommended = () => {
     setClockTol(15);
     setUsGwTol(0.2);
     setDsGwTol(0.2);
-    setDepthTol(10);
     setLengthTol(50);
   };
 
@@ -28,7 +26,6 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
         clock_tolerance: clockTol,
         us_gw_distance_tolerance: usGwTol,
         ds_gw_distance_tolerance: dsGwTol,
-        depth_tolerance: depthTol,
         length_tolerance: lengthTol
       }
     });
@@ -67,7 +64,7 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
         {/* Clock Tolerance */}
         <div className="border border-gray-200 rounded-xl p-5 hover:border-blue-300 transition-colors bg-gray-50/50">
           <div className="flex justify-between items-start mb-4">
-            <label className="text-sm font-bold text-gray-700">Clock Tolerance (± deg)</label>
+            <label className="text-sm font-bold text-gray-700">Clock Cost Scale (deg)</label>
             <span className="bg-white px-2 py-1 rounded text-blue-600 font-mono text-sm shadow-sm border border-gray-100">{clockTol}°</span>
           </div>
           <input 
@@ -75,6 +72,7 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
             value={clockTol} onChange={(e) => setClockTol(parseInt(e.target.value))}
             className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
           />
+          <p className="text-xs text-gray-500">Soft cost only: nilai kecil memperbesar penalti selisih clock, tanpa menolak kandidat.</p>
         </div>
 
         {/* US GW Tolerance */}
@@ -103,19 +101,6 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
           />
         </div>
 
-        {/* Depth Tolerance */}
-        <div className="border border-gray-200 rounded-xl p-5 hover:border-blue-300 transition-colors bg-gray-50/50">
-          <div className="flex justify-between items-start mb-4">
-            <label className="text-sm font-bold text-gray-700">Depth Tolerance (± %WT)</label>
-            <span className="bg-white px-2 py-1 rounded text-blue-600 font-mono text-sm shadow-sm border border-gray-100">{depthTol}%</span>
-          </div>
-          <input 
-            type="range" min="1" max="50" step="1" 
-            value={depthTol} onChange={(e) => setDepthTol(parseInt(e.target.value))}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
-          />
-        </div>
-
         {/* Length Tolerance */}
         <div className="border border-gray-200 rounded-xl p-5 hover:border-blue-300 transition-colors bg-gray-50/50">
           <div className="flex justify-between items-start mb-4">
@@ -130,6 +115,10 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
         </div>
 
       </div>
+
+      <p className="mb-8 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        Depth tidak dipakai untuk memilih pasangan. Setelah Hungarian selesai, depth NEW yang lebih kecil dari OLD ditandai sebagai validasi fisika untuk review.
+      </p>
 
       <div className="flex justify-between border-t border-gray-100 pt-6">
         <button 

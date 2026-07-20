@@ -12,13 +12,13 @@ export interface SectionTolerances {
   clock_tolerance: number;
   us_gw_distance_tolerance: number;
   ds_gw_distance_tolerance: number;
-  depth_tolerance: number;
   length_tolerance: number;
 }
 
 export interface MatchingSection {
   id: string;
   name: string;
+  sectionType?: string;
   policy: SectionPolicy;
   startGwKey: string;
   endGwKey: string;
@@ -53,7 +53,9 @@ export function normalizeLockedGws(pairs: any[]): LockedGwPair[] {
 }
 
 export function validateSectionOrder(sections: MatchingSection[], lockedGws: LockedGwPair[]): string | null {
-  if (sections.length === 0) return 'Minimal satu section diperlukan.';
+  // Sectioning is optional. Without sections the entire aligned range uses the
+  // global MATCH policy and Hungarian still executes normally.
+  if (sections.length === 0) return null;
   const indexes = new Map(lockedGws.map((pair, index) => [pair.key, index]));
   const ranges: Array<{ name: string; start: number; end: number }> = [];
 

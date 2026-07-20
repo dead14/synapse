@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey, JSON, create_engine
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey, JSON, UniqueConstraint, create_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from datetime import datetime
 
@@ -95,14 +95,23 @@ class AlignmentLink(Base):
 
 class SurveyRun(Base):
     __tablename__ = 'survey_runs'
+    __table_args__ = (
+        UniqueConstraint('pipeline_id', 'source_sha256', name='uq_survey_runs_pipeline_source_sha256'),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     pipeline_id = Column(Integer, ForeignKey('pipelines.id'))
     survey_year = Column(Integer, index=True)
     vendor = Column(String)
     source_file = Column(String)
+    source_object_key = Column(String)
+    source_sha256 = Column(String(64))
     uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_by = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
     row_count = Column(Integer, default=0)
+    parser_version = Column(String(64))
+    schema_version = Column(String(64))
+    ingestion_audit = Column(JSON, default=dict)
 
     # Relationships
     pipeline = relationship("Pipeline", back_populates="runs")

@@ -600,6 +600,8 @@ export default function IliSectioningPage() {
           {/* Canvas & Sidebar Grid */}
           <div className="flex-1 flex overflow-hidden bg-white relative">
             <main className="flex-1 relative border-r border-gray-200 flex flex-col">
+              {viewMode === 'schematic' ? (
+                <>
                   <div className="flex-1 min-h-0 relative">
                     <SectioningSchematic
                       features={features}
@@ -633,7 +635,7 @@ export default function IliSectioningPage() {
                           <div className="text-sm font-mono font-semibold text-gray-900 mb-1">{bend.dist.toFixed(3)} m</div>
                           <div className="flex items-center text-xs text-gray-500 gap-3 mt-2">
                             <span className="flex items-center gap-1" title="Angle"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg> {bend.rawData.angleDeg ? Number(bend.rawData.angleDeg).toFixed(1) : 'N/A'}°</span>
-                            <span className="flex items-center gap-1" title="Clock Pos"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> {bend.rawData.clockPos || '-'}</span>
+                            <span className="flex items-center gap-1" title="Clock Pos"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> {String(bend.rawData.clockPos || '-')}</span>
                           </div>
                         </div>
                       ))}
@@ -667,6 +669,7 @@ export default function IliSectioningPage() {
                     </div>
                     <span className="text-xs font-mono font-semibold text-gray-500 ml-4">{(features?.stats?.totalLength / 1000).toFixed(2) || 0} km</span>
                   </div>
+                </>
               ) : (
                 <>
                   <SectionMap 

@@ -1,10 +1,12 @@
 import sys
 import json
+import os
 import pandas as pd
 import numpy as np
 import bisect
 from dataclasses import dataclass
 from models import SessionLocal, ILIFeature, AlignmentResult, AlignmentSession
+from tiein_transform import map_old_to_new, validated_tiein_knots
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,7 @@ def safe_int(val):
     except:
         return None
 
+
 class HungarianAnomalyAlignmentEngine:
     """
     Two-phase ILI alignment engine:
@@ -35,6 +38,10 @@ class HungarianAnomalyAlignmentEngine:
     """
 
     INF_COST = 1e9
+    # Dense matrix + Python DP is exact for small segments, but becomes
+    # unusable when both runs contain many anomalies. Large segments switch to
+    # a sparse distance-window solver below.
+    MAX_DENSE_ALIGNMENT_CELLS = int(os.getenv("MAX_DENSE_ALIGNMENT_CELLS", "250000"))
 
     @staticmethod
     def _read_us_gw_distance(feature: dict):
@@ -51,7 +58,10 @@ class HungarianAnomalyAlignmentEngine:
             if value is None or str(value).strip() == "":
                 continue
             try:
-                return float(str(value).replace(",", ""))
+                # Vendors may encode upstream as a negative signed direction
+                # while others store a positive distance.  Matching compares
+                # physical magnitude, not the vendor sign convention.
+                return abs(float(str(value).replace(",", "")))
             except (TypeError, ValueError):
                 continue
 
@@ -69,7 +79,7 @@ class HungarianAnomalyAlignmentEngine:
             ):
                 continue
             try:
-                return float(str(value).replace(",", ""))
+                return abs(float(str(value).replace(",", "")))
             except (TypeError, ValueError):
                 continue
         return None
@@ -138,6 +148,110 @@ class HungarianAnomalyAlignmentEngine:
 
         pairs.reverse()
         return pairs
+
+    @classmethod
+    def solve_sparse_monotonic_assignment(
+        cls,
+        rows: int,
+        columns: int,
+        edges: list[tuple[int, int, float]],
+    ) -> list[tuple[int, int]]:
+        """Solve ordered matching without allocating a rows x columns matrix.
+
+        Edges are candidate pairs that already passed the physical distance
+        window. A Fenwick prefix tree keeps the best chain ending before each
+        NEW index, giving O(E log M) instead of O(N*M).
+        """
+        if not edges or rows <= 0 or columns <= 0:
+            return []
+
+        def better(left, right):
+            if left is None:
+                return right
+            if right is None:
+                return left
+            if left[0] != right[0]:
+                return left if left[0] > right[0] else right
+            if left[1] != right[1]:
+                return left if left[1] < right[1] else right
+            return left if left[2] >= right[2] else right
+
+        tree = [None] * (columns + 1)
+
+        def query(index):
+            result = None
+            while index > 0:
+                result = better(result, tree[index])
+                index -= index & -index
+            return result
+
+        def update(index, state):
+            index += 1
+            while index <= columns:
+                tree[index] = better(tree[index], state)
+                index += index & -index
+
+        indexed_edges = sorted(enumerate(edges), key=lambda item: (item[1][0], item[1][1]))
+        states = [None] * len(edges)
+        cursor = 0
+        while cursor < len(indexed_edges):
+            row = indexed_edges[cursor][1][0]
+            pending = []
+            while cursor < len(indexed_edges) and indexed_edges[cursor][1][0] == row:
+                edge_index, (_row, column, cost) = indexed_edges[cursor]
+                previous = query(column)
+                state = (
+                    (previous[0] if previous else 0) + 1,
+                    (previous[1] if previous else 0.0) + float(cost),
+                    edge_index,
+                )
+                states[edge_index] = (state[0], state[1], edge_index, previous[2] if previous else None)
+                pending.append((column, states[edge_index]))
+                cursor += 1
+            for column, state in pending:
+                update(column, state)
+
+        best = query(columns)
+        pairs = []
+        while best is not None:
+            edge_index = best[2]
+            row, column, _cost = edges[edge_index]
+            pairs.append((row, column))
+            previous_edge = best[3]
+            best = states[previous_edge] if previous_edge is not None else None
+        pairs.reverse()
+        return pairs
+
+    def build_sparse_cost_edges(
+        self,
+        anomalies_1: list[dict],
+        anomalies_2: list[dict],
+        offset_table: list[tuple[float, float]],
+        offset_keys: list[float] | None = None,
+        tolerance_overrides: dict | None = None,
+    ) -> list[tuple[int, int, float]]:
+        """Build only physically plausible anomaly pairs using sorted distance."""
+        if not anomalies_1 or not anomalies_2:
+            return []
+        new_distances = [float(item["abs_distance_m"]) for item in anomalies_2]
+        overrides = tolerance_overrides or {}
+        upstream = float(overrides.get("us_gw_distance_tolerance", self.us_gw_distance_tolerance))
+        downstream = float(overrides.get("ds_gw_distance_tolerance", self.ds_gw_distance_tolerance))
+        edges = []
+        for old_index, old_feature in enumerate(anomalies_1):
+            corrected = old_feature["abs_distance_m"] + self._interpolate_offset(
+                old_feature["abs_distance_m"], offset_table, offset_keys,
+            )
+            first = bisect.bisect_left(new_distances, corrected - upstream)
+            last = bisect.bisect_right(new_distances, corrected + downstream)
+            for new_index in range(first, last):
+                new_feature = anomalies_2[new_index]
+                cost = self.build_cost_matrix(
+                    [old_feature], [new_feature], offset_table, offset_keys, tolerance_overrides,
+                )[0][0]
+                if cost < self.INF_COST:
+                    edges.append((old_index, new_index, float(cost)))
+        return edges
 
     @staticmethod
     def _gw_pair_key(pair: dict) -> str:
@@ -231,19 +345,64 @@ class HungarianAnomalyAlignmentEngine:
         self.clock_tolerance = 15.0
         self.us_gw_distance_tolerance = distance_tolerance_m
         self.ds_gw_distance_tolerance = distance_tolerance_m
-        self.depth_tolerance = 50.0
         self.length_tolerance = 400.0
-        self.max_total_cost = distance_tolerance_m + self.depth_tolerance
         self.session = SessionLocal()
         
-        # Load run years from session config
+        # Resolve chronology from survey years. Older wizard sessions stored
+        # the newest upload in ``oldRun``; logical OLD/NEW must never inherit
+        # that legacy field-name inversion.
         sess = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
         if sess and sess.params_json:
-            self.run_1_year = int(sess.params_json.get("oldRun", {}).get("year", 2020))
-            self.run_2_year = int(sess.params_json.get("newRun", {}).get("year", 2025))
+            old_run, new_run, self.swap_persisted_runs = self._resolve_run_bindings(sess.params_json)
+            self.run_1_year = int(old_run.get("year") or 2020)
+            self.run_2_year = int(new_run.get("year") or 2025)
         else:
+            self.swap_persisted_runs = False
             self.run_1_year = 2020
             self.run_2_year = 2025
+
+    @staticmethod
+    def _run_year(run: dict) -> int | None:
+        try:
+            return int(float(run.get("year") or run.get("surveyYear")))
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _resolve_run_bindings(cls, params_json: dict) -> tuple[dict, dict, bool]:
+        summary = params_json.get("summaryData", {})
+        master = summary.get("masterRun")
+        historical = summary.get("historicalRuns") or []
+        if master:
+            old_run = (
+                max(historical, key=lambda run: cls._run_year(run) or -1)
+                if historical
+                else summary.get("oldRun", params_json.get("oldRun", {}))
+            )
+            return old_run or {}, master, False
+
+        stored_old = summary.get("oldRun", params_json.get("oldRun", {})) or {}
+        stored_new = summary.get("newRun", params_json.get("newRun", {})) or {}
+        old_year = cls._run_year(stored_old)
+        new_year = cls._run_year(stored_new)
+        if old_year is not None and new_year is not None and old_year > new_year:
+            return stored_new, stored_old, True
+        return stored_old, stored_new, False
+
+    def _logical_gw_pair(self, pair: dict) -> dict:
+        if not getattr(self, "swap_persisted_runs", False):
+            return dict(pair)
+        swapped = dict(pair)
+        swapped["old_id"], swapped["new_id"] = pair.get("new_id"), pair.get("old_id")
+        swapped["old_odometer"], swapped["new_odometer"] = (
+            pair.get("new_odometer"), pair.get("old_odometer")
+        )
+        status = str(pair.get("status", "")).upper().replace(" ", "_")
+        if status == "ONLY_OLD":
+            swapped["status"] = "ONLY_NEW"
+        elif status == "ONLY_NEW":
+            swapped["status"] = "ONLY_OLD"
+        return swapped
 
     def _clock_to_deg(self, s):
         if s is None: return None
@@ -279,14 +438,54 @@ class HungarianAnomalyAlignmentEngine:
             "message": "NEW depth is lower than OLD; review tool tolerance, repair, or identity.",
         }]
 
+    def _load_persisted_run_features(self, run_id: int) -> list[dict]:
+        """Read canonical records from the run table in bounded ORM batches."""
+        query = (
+            self.session.query(ILIFeature)
+            .filter(ILIFeature.run_id == run_id)
+            .order_by(ILIFeature.log_distance_m.asc(), ILIFeature.id.asc())
+        )
+        records = []
+        for feature in query.yield_per(5_000):
+            records.append({
+                # The database id is stable and is valid for AlignmentResult
+                # foreign keys. Vendor feature identifiers are only evidence.
+                "id": str(feature.id),
+                "sourceFeatureId": feature.feature_id,
+                "feature_id": feature.feature_id,
+                "log_distance_m": feature.log_distance_m,
+                "dist": feature.log_distance_m,
+                "feature_type": feature.feature_type,
+                "feature_identification": feature.feature_identification,
+                "dist_to_us_gw_m": feature.dist_to_us_gw_m,
+                "joint_length_m": feature.joint_length_m,
+                "clock_position": feature.clock_position,
+                "wall_thickness_mm": feature.wall_thickness_mm,
+                "length_mm": feature.length_mm,
+                "width_mm": feature.width_mm,
+                "depth_pct": feature.depth_pct,
+                "surface_location": feature.surface_location,
+                "erf_asme": feature.erf_asme,
+                "psafe_bar": feature.psafe_bar,
+                "comment": feature.comment,
+            })
+        return records
+
     def fetch_data(self, is_old_run: bool) -> list[dict]:
         try:
             sess = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
             if not sess or not sess.params_json:
                 return []
             
-            run_key = "oldRun" if is_old_run else "newRun"
-            features = sess.params_json.get("summaryData", {}).get(run_key, {}).get("rawFeatures", [])
+            old_run, new_run, swap_persisted_runs = self._resolve_run_bindings(sess.params_json)
+            self.swap_persisted_runs = swap_persisted_runs
+            run = old_run if is_old_run else new_run
+            run_id = safe_int(run.get("runId"))
+            features = (
+                self._load_persisted_run_features(run_id)
+                if run_id is not None and run_id > 0
+                else run.get("rawFeatures", [])
+            )
             
             # The wizard persists globalOffset. Keep tieInOffset as a legacy
             # fallback so older saved sessions still map into the same space.
@@ -296,6 +495,7 @@ class HungarianAnomalyAlignmentEngine:
                     sess.params_json.get("tieInOffset", 0.0),
                 )
             )
+            tie_in_knots = validated_tiein_knots(sess.params_json)
             
             # Map them into the format expected by the engine (abs_distance_m, id, depth_pct, length_mm, width_mm)
             mapped = []
@@ -303,10 +503,21 @@ class HungarianAnomalyAlignmentEngine:
                 # Need to handle string " " and None gracefully
                 try:
                     abs_dist = float(f.get("log_distance_m") or f.get("dist") or 0.0)
-                    if not is_old_run and tie_in_offset != 0.0:
+                    source_abs_dist = abs_dist
+                    if is_old_run and tie_in_knots:
+                        master_distance = map_old_to_new(abs_dist, tie_in_knots)
+                        tiein_outside_domain = master_distance is None
+                        if master_distance is not None:
+                            abs_dist = master_distance
+                    elif not tie_in_knots and not is_old_run and tie_in_offset != 0.0:
                         abs_dist += tie_in_offset
+                        tiein_outside_domain = False
+                    else:
+                        tiein_outside_domain = False
                 except:
                     abs_dist = 0.0
+                    source_abs_dist = 0.0
+                    tiein_outside_domain = False
                     
                 depth = f.get("depth_pct") or f.get("depth")
                 try:
@@ -349,8 +560,10 @@ class HungarianAnomalyAlignmentEngine:
                         pass
                 
                 mapped.append({
-                    "id": str(f.get("feature_id") or f.get("id")),
+                    "id": str(f.get("id") or f.get("feature_id")),
                     "abs_distance_m": abs_dist,
+                    "source_abs_distance_m": source_abs_dist,
+                    "tiein_outside_domain": tiein_outside_domain,
                     "depth_pct": depth,
                     "length_mm": length,
                     "width_mm": width,
@@ -362,7 +575,7 @@ class HungarianAnomalyAlignmentEngine:
                 
             return sorted(mapped, key=lambda x: x["abs_distance_m"])
         except Exception as e:
-            print(f"[ERROR] Failed to read run data from JSON: {e}")
+            print(f"[ERROR] Failed to read run data: {e}")
             return []
 
     def get_gw_matches(self) -> list[dict]:
@@ -387,17 +600,18 @@ class HungarianAnomalyAlignmentEngine:
             if gw_pairs_final:
                 gw_pairs = [
                     {
-                        "oldVal": pair.get("old_odometer"),
-                        "newVal": pair.get("new_odometer"),
+                        "oldVal": logical_pair.get("old_odometer"),
+                        "newVal": logical_pair.get("new_odometer"),
                         "offset": (
-                            float(pair["new_odometer"]) - float(pair["old_odometer"])
-                            if pair.get("old_odometer") is not None and pair.get("new_odometer") is not None
+                            float(logical_pair["new_odometer"]) - float(logical_pair["old_odometer"])
+                            if logical_pair.get("old_odometer") is not None and logical_pair.get("new_odometer") is not None
                             else None
                         ),
                         "status": "Match",
                     }
-                    for pair in gw_pairs_final
-                    if str(pair.get("status", "MATCHED")).upper() in {"MATCH", "MATCHED"}
+                    for persisted_pair in gw_pairs_final
+                    for logical_pair in [self._logical_gw_pair(persisted_pair)]
+                    if str(logical_pair.get("status", "MATCHED")).upper() in {"MATCH", "MATCHED"}
                 ]
             else:
                 # Backward compatibility for sessions saved before
@@ -405,13 +619,16 @@ class HungarianAnomalyAlignmentEngine:
                 # the earlier UI used oldVal/newVal, so accept either shape.
                 gw_pairs = [
                     {
-                        "oldVal": pair.get("oldVal", pair.get("oldDist")),
-                        "newVal": pair.get("newVal", pair.get("newDist")),
-                        "offset": pair.get("offset"),
+                        "oldVal": pair.get("newVal", pair.get("newDist")) if getattr(self, "swap_persisted_runs", False) else pair.get("oldVal", pair.get("oldDist")),
+                        "newVal": pair.get("oldVal", pair.get("oldDist")) if getattr(self, "swap_persisted_runs", False) else pair.get("newVal", pair.get("newDist")),
+                        "offset": None if getattr(self, "swap_persisted_runs", False) else pair.get("offset"),
                         "status": pair.get("status", "Match"),
                     }
                     for pair in sess.params_json.get("gwMatches", [])
                 ]
+                for pair in gw_pairs:
+                    if pair.get("offset") is None and pair.get("oldVal") is not None and pair.get("newVal") is not None:
+                        pair["offset"] = float(pair["newVal"]) - float(pair["oldVal"])
             if not gw_pairs:
                 print(f"[WARN] No gwMatches found in params_json for session_id={self.session_id}")
                 return []
@@ -463,15 +680,11 @@ class HungarianAnomalyAlignmentEngine:
         return eligible
 
     def _partition_scenario_features(self, features: list[dict]):
-        """Partition scenario input so filtered records remain auditable."""
-        eligible = []
-        filtered = []
-        for feature in features:
-            if feature.get("depth_pct") is None or feature["depth_pct"] >= self.depth_thresh:
-                eligible.append(feature)
-            else:
-                filtered.append(feature)
-        return eligible, filtered
+        """Depth is post-match physics evidence, never a candidate filter."""
+        return (
+            [feature for feature in features if not feature.get("tiein_outside_domain")],
+            [feature for feature in features if feature.get("tiein_outside_domain")],
+        )
 
     @staticmethod
     def _ensure_source_keys(features: list[dict], run_label: str) -> None:
@@ -543,7 +756,10 @@ class HungarianAnomalyAlignmentEngine:
     @classmethod
     def _partition_hungarian_features(cls, features: list[dict], locked_ids: set[str]):
         """Split Phase-2 input without re-emitting any Phase-1 GW feature."""
-        remaining = [feature for feature in features if str(feature["id"]) not in locked_ids]
+        # Phase ownership is determined by feature type, not identifier alone.
+        # IDs are not guaranteed unique across vendor exports; filtering every
+        # row whose ID appears in a GW lock can silently remove an anomaly.
+        remaining = [feature for feature in features if not cls._is_gw_feature(feature)]
         anomalies = [feature for feature in remaining if cls._is_matchable_anomaly(feature)]
         bypassed = [
             feature for feature in remaining
@@ -566,7 +782,6 @@ class HungarianAnomalyAlignmentEngine:
         # Physics penalty weights from Algoritma.py
         w_gw = 3.0
         w_clock = 2.0
-        w_depth = 1.5
         w_length = 1.0
         w_width = 0.5
         overrides = tolerance_overrides or {}
@@ -577,7 +792,6 @@ class HungarianAnomalyAlignmentEngine:
         ds_distance_tolerance = float(overrides.get(
             "ds_gw_distance_tolerance", self.ds_gw_distance_tolerance
         ))
-        depth_tolerance = float(overrides.get("depth_tolerance", self.depth_tolerance))
         length_tolerance = float(overrides.get("length_tolerance", self.length_tolerance))
 
         for i, f1 in enumerate(anomalies_1):
@@ -605,7 +819,7 @@ class HungarianAnomalyAlignmentEngine:
                     if getattr(self, "require_us_gw_distance", False) and (gw1 is None or gw2 is None):
                         continue
                     if gw1 is not None and gw2 is not None:
-                        gw_distance_difference = abs(gw1 - gw2)
+                        gw_distance_difference = abs(abs(gw1) - abs(gw2))
                         if gw_distance_difference > us_distance_tolerance:
                             continue
                         base_cost += w_gw * (
@@ -615,27 +829,20 @@ class HungarianAnomalyAlignmentEngine:
                     # 2. Clock Penalty
                     cd = self._clock_diff(f1.get("clock_position"), f2.get("clock_position"))
                     if cd is not None:
-                        if cd > clock_tolerance:
-                            continue # Strict gating
+                        # Clock is soft identity evidence. A large circular
+                        # difference raises ranking cost but never removes an
+                        # otherwise physically plausible candidate.
                         base_cost += w_clock * (cd / max(clock_tolerance, 1.0))
                         
-                    # 3. Depth Penalty
-                    d1, d2 = f1.get("depth_pct"), f2.get("depth_pct")
-                    if d1 is not None and d2 is not None:
-                        depth_difference = abs(d1 - d2)
-                        # Depth is a ranking signal, not an eligibility gate:
-                        # the scenario depth threshold has already removed
-                        # shallow defects before segmentation.  A second hard
-                        # cutoff here incorrectly splits otherwise valid pairs.
-                        base_cost += w_depth * (depth_difference / max(depth_tolerance, 1.0))
-                        
-                    # 4. Length Penalty
+                    # 3. Length Penalty. Depth is deliberately excluded from
+                    # pair selection and evaluated only after Hungarian as a
+                    # physical growth/decrease warning.
                     l1, l2 = f1.get("length_mm"), f2.get("length_mm")
                     if l1 is not None and l2 is not None:
                         length_difference = abs(l1 - l2)
                         base_cost += w_length * (length_difference / max(length_tolerance, 1.0))
                         
-                    # 5. Width Penalty
+                    # 4. Width Penalty
                     wid1, wid2 = f1.get("width_mm"), f2.get("width_mm")
                     if wid1 is not None and wid2 is not None:
                         base_cost += w_width * (min(abs(wid1 - wid2), 200.0) / 200.0)
@@ -680,8 +887,6 @@ class HungarianAnomalyAlignmentEngine:
             name for name, is_hidden in params_json.get("hiddenFeatures", {}).items()
             if is_hidden
         ]
-        self.depth_thresh = float(params_json.get("depthThresh", 0) or 0)
-
         # We will map distThresh to us_gw_distance_tolerance if provided in ToleranceConfig
         tol_config = params_json.get("ToleranceConfig", {})
         
@@ -692,16 +897,20 @@ class HungarianAnomalyAlignmentEngine:
             self.us_gw_distance_tolerance = float(tol_config["us_gw_distance_tolerance"])
         if "ds_gw_distance_tolerance" in tol_config:
             self.ds_gw_distance_tolerance = float(tol_config["ds_gw_distance_tolerance"])
-        if "depth_tolerance" in tol_config:
-            self.depth_tolerance = float(tol_config["depth_tolerance"])
         if "length_tolerance" in tol_config:
             self.length_tolerance = float(tol_config["length_tolerance"])
 
         try:
             sess = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
             if sess and sess.params_json:
-                gw_matches_final = sess.params_json.get("gwMatchesFinal", [])
-                gw_orphans = sess.params_json.get("gwOrphans", [])
+                gw_matches_final = [
+                    self._logical_gw_pair(pair)
+                    for pair in sess.params_json.get("gwMatchesFinal", [])
+                ]
+                gw_orphans = [
+                    self._logical_gw_pair(pair)
+                    for pair in sess.params_json.get("gwOrphans", [])
+                ]
             else:
                 gw_matches_final = []
                 gw_orphans = []
@@ -716,20 +925,22 @@ class HungarianAnomalyAlignmentEngine:
                 legacy_gws = sess.params_json["gwMatches"]
                 for m in legacy_gws:
                     if m.get("status") == "Match":
-                        gw_matches_final.append({
+                        gw_matches_final.append(self._logical_gw_pair({
                             "old_id": m.get("oldId"),
                             "new_id": m.get("newId"),
                             "old_odometer": m.get("oldVal"),
                             "new_odometer": m.get("newVal")
-                        })
+                        }))
                     else:
                         is_old = m.get("newId") is None
-                        gw_orphans.append({
+                        gw_orphans.append(self._logical_gw_pair({
                             "id": m.get("oldId") if is_old else m.get("newId"),
                             "status": "ONLY_OLD" if is_old else "ONLY_NEW",
                             "old_id": m.get("oldId"),
-                            "new_id": m.get("newId")
-                        })
+                            "new_id": m.get("newId"),
+                            "old_odometer": m.get("oldVal", m.get("oldDist")),
+                            "new_odometer": m.get("newVal", m.get("newDist")),
+                        }))
                 print(f"      [Validation] Reconstructed {len(gw_matches_final)} matches from legacy gwMatches", file=sys.stderr)
         except Exception as e:
             print(f"[ERROR] Legacy fallback failed: {e}", file=sys.stderr)
@@ -744,7 +955,6 @@ class HungarianAnomalyAlignmentEngine:
         )
         if not compiled_sections.is_valid:
             raise ValueError("Invalid matching sections: " + "; ".join(compiled_sections.errors))
-        has_explicit_sections = bool(params_json.get("matchingSections"))
 
         # Extract locked IDs from gwMatchesFinal ONLY
         locked_run1_str = {str(p["old_id"]) for p in gw_matches_final if p.get("old_id")}
@@ -767,17 +977,10 @@ class HungarianAnomalyAlignmentEngine:
         print(f"      [Validation] Valid Anomaly Candidates Run1: {len(anomalies_1)} (Out of {len(anomalies_1_all)})", file=sys.stderr)
         print(f"      [Validation] Valid Anomaly Candidates Run2: {len(anomalies_2)} (Out of {len(anomalies_2_all)})", file=sys.stderr)
 
-        # Extract anomalies without depth_pct to bypass Hungarian matcher
-        excluded_old = [f for f in anomalies_1 if f.get("depth_pct") is None]
-        excluded_new = [f for f in anomalies_2 if f.get("depth_pct") is None]
-        
-        # Add the non-anomaly features to the bypass list so they aren't lost
-        excluded_old.extend(non_anomaly_old)
-        excluded_new.extend(non_anomaly_new)
-        
-        # Keep only anomalies WITH depth_pct for Hungarian matcher
-        anomalies_1 = [f for f in anomalies_1 if f.get("depth_pct") is not None]
-        anomalies_2 = [f for f in anomalies_2 if f.get("depth_pct") is not None]
+        # Non-anomaly records stay visible in bypass buckets. Missing depth is
+        # not a bypass reason; identity matching must rely on position/shape.
+        excluded_old = list(non_anomaly_old)
+        excluded_new = list(non_anomaly_new)
 
         # Filter before segmenting so matrix indexes and source features always
         # refer to the same list.  Filtering inside build_cost_matrix used to
@@ -785,8 +988,8 @@ class HungarianAnomalyAlignmentEngine:
         anomalies_1, filtered_old = self._partition_scenario_features(anomalies_1)
         anomalies_2, filtered_new = self._partition_scenario_features(anomalies_2)
         
-        print(f"      [Validation] Bypassed Anomalies (No Depth) Run1: {len(excluded_old)}", file=sys.stderr)
-        print(f"      [Validation] Bypassed Anomalies (No Depth) Run2: {len(excluded_new)}", file=sys.stderr)
+        print(f"      [Validation] Bypassed Non-Anomaly Run1: {len(excluded_old)}", file=sys.stderr)
+        print(f"      [Validation] Bypassed Non-Anomaly Run2: {len(excluded_new)}", file=sys.stderr)
 
         run1_boundaries = [float(p["oldVal"]) for p in gw_pairs]
         run2_boundaries = [float(p["newVal"]) for p in gw_pairs]
@@ -836,9 +1039,9 @@ class HungarianAnomalyAlignmentEngine:
                 item for item in compiled_sections.sections
                 if item["start_index"] < seg_id <= item["end_index"]
             ), None)
-            section_policy = section["policy"] if section else (
-                "UNSECTIONED" if has_explicit_sections else "MATCH"
-            )
+            # Sectioning is optional and partial coverage is valid. Segments
+            # outside an explicit section inherit the global MATCH policy.
+            section_policy = section["policy"] if section else "MATCH"
 
             if not seg_anomalies_1 and not seg_anomalies_2:
                 continue
@@ -862,21 +1065,50 @@ class HungarianAnomalyAlignmentEngine:
                     total_missing += 1
                 continue
 
-            cost_matrix = self.build_cost_matrix(
-                seg_anomalies_1,
-                seg_anomalies_2,
-                offset_table,
-                offset_keys,
-                section.get("tolerances") if section else None,
-            )
-            ordered_pairs = self.solve_monotonic_assignment(cost_matrix)
+            segment_cells = len(seg_anomalies_1) * len(seg_anomalies_2)
+            segment_tolerances = section.get("tolerances") if section else None
+            if segment_cells > self.MAX_DENSE_ALIGNMENT_CELLS:
+                print(
+                    f"      [Optimization] Sparse matching for segment {seg_id}: "
+                    f"{len(seg_anomalies_1):,} x {len(seg_anomalies_2):,} candidates",
+                    file=sys.stderr,
+                )
+                sparse_edges = self.build_sparse_cost_edges(
+                    seg_anomalies_1,
+                    seg_anomalies_2,
+                    offset_table,
+                    offset_keys,
+                    segment_tolerances,
+                )
+                ordered_pairs = self.solve_sparse_monotonic_assignment(
+                    len(seg_anomalies_1), len(seg_anomalies_2), sparse_edges,
+                )
+                selected_costs = {
+                    (old_index, new_index): cost
+                    for old_index, new_index, cost in sparse_edges
+                }
+            else:
+                cost_matrix = self.build_cost_matrix(
+                    seg_anomalies_1,
+                    seg_anomalies_2,
+                    offset_table,
+                    offset_keys,
+                    segment_tolerances,
+                )
+                ordered_pairs = self.solve_monotonic_assignment(cost_matrix)
+                selected_costs = None
 
             matched_1 = set()
             matched_2 = set()
 
             for i, j in ordered_pairs:
                 # THRESHOLD GATE: Buang pasangan yang cost == INF_COST
-                if cost_matrix[i][j] >= self.INF_COST:
+                pair_cost = (
+                    selected_costs.get((i, j), self.INF_COST)
+                    if selected_costs is not None
+                    else cost_matrix[i][j]
+                )
+                if pair_cost >= self.INF_COST:
                     continue
 
                 f1 = seg_anomalies_1[i]
@@ -919,20 +1151,29 @@ class HungarianAnomalyAlignmentEngine:
         # --- Print JSON for Node.js ---
         print("\n[4/5] Outputting structured 5-key JSON for Node.js...")
         
-        def find_feature(features, feature_id, odometer=None):
+        def find_feature(features, feature_id, odometer=None, consumed=None):
             """Find a GW source record without silently collapsing duplicate IDs."""
             if feature_id is None:
                 return None
             candidates = [feature for feature in features if str(feature["id"]) == str(feature_id)]
+            if consumed is not None:
+                candidates = [
+                    feature for feature in candidates
+                    if feature.get("source_key") not in consumed
+                ]
             if not candidates:
                 return None
-            if odometer is None or len(candidates) == 1:
-                return candidates[0]
-            return min(candidates, key=lambda feature: abs(feature["abs_distance_m"] - float(odometer)))
+            selected = candidates[0] if odometer is None or len(candidates) == 1 else min(
+                candidates,
+                key=lambda feature: abs(feature["abs_distance_m"] - float(odometer)),
+            )
+            if consumed is not None:
+                consumed.add(selected.get("source_key"))
+            return selected
         
-        def format_row(old_id_val, new_id_val, status, result_group, odo_diff=None, old_feature=None, new_feature=None, old_odometer=None, new_odometer=None):
-            f1 = old_feature or find_feature(anomalies_1_all, old_id_val, old_odometer)
-            f2 = new_feature or find_feature(anomalies_2_all, new_id_val, new_odometer)
+        def format_row(old_id_val, new_id_val, status, result_group, odo_diff=None, old_feature=None, new_feature=None, old_odometer=None, new_odometer=None, consumed_old=None, consumed_new=None):
+            f1 = old_feature or find_feature(anomalies_1_all, old_id_val, old_odometer, consumed_old)
+            f2 = new_feature or find_feature(anomalies_2_all, new_id_val, new_odometer, consumed_new)
             physics_warnings = self._physics_warnings(f1, f2)
             year_span = self.run_2_year - self.run_1_year
             depth_growth = None
@@ -942,6 +1183,20 @@ class HungarianAnomalyAlignmentEngine:
                     depth_growth = (float(f2["depth_pct"]) - float(f1["depth_pct"])) / year_span
                 if f1.get("length_mm") is not None and f2.get("length_mm") is not None:
                     length_growth = (float(f2["length_mm"]) - float(f1["length_mm"])) / year_span
+            def section_for(feature, side):
+                if not feature:
+                    return None
+                distance = float(feature["abs_distance_m"])
+                start_key = "old_start" if side == "OLD" else "new_start"
+                end_key = "old_end" if side == "OLD" else "new_end"
+                return next((
+                    section for section in compiled_sections.sections
+                    if min(section[start_key], section[end_key]) <= distance <= max(section[start_key], section[end_key])
+                ), None)
+
+            old_section = section_for(f1, "OLD")
+            new_section = section_for(f2, "NEW")
+            row_section = new_section or old_section
             return {
                 "session_id": self.session_id,
                 "feature_old_id": safe_int(old_id_val) if old_id_val else None,
@@ -957,13 +1212,33 @@ class HungarianAnomalyAlignmentEngine:
                 "Length Growth (mm/yr)": length_growth if length_growth is not None else "-",
                 "Source Key OLD": f1.get("source_key") if f1 else "-",
                 "Source Key NEW": f2.get("source_key") if f2 else "-",
+                "Section": row_section.get("name") if row_section else "-",
+                "Section ID": row_section.get("id") if row_section else "-",
+                "Section OLD": old_section.get("name") if old_section else "-",
+                "Section NEW": new_section.get("name") if new_section else "-",
                 "odo_diff": odo_diff,
+                # Keep the legacy Identif. fields for existing interactions,
+                # while exposing the complete source schema in the result.
                 "Identif. OLD": f1.get("id") if f1 else "-",
                 "Identif. NEW": f2.get("id") if f2 else "-",
+                "Feature ID OLD": f1.get("id") if f1 else "-",
+                "Feature ID NEW": f2.get("id") if f2 else "-",
                 "Log Dist OLD (m)": f1.get("abs_distance_m") if f1 else "-",
                 "Log Dist NEW (m)": f2.get("abs_distance_m") if f2 else "-",
+                "Joint No. OLD": f1.get("raw", {}).get("joint_number") if f1 else "-",
+                "Joint No. NEW": f2.get("raw", {}).get("joint_number") if f2 else "-",
+                "Dist GW OLD (m)": f1.get("dist_to_us_gw_m") if f1 else "-",
+                "Dist GW NEW (m)": f2.get("dist_to_us_gw_m") if f2 else "-",
+                "Joint Len OLD (m)": f1.get("raw", {}).get("joint_length_m") if f1 else "-",
+                "Joint Len NEW (m)": f2.get("raw", {}).get("joint_length_m") if f2 else "-",
                 "Feature Type OLD": f1.get("originalType") if f1 else "-",
                 "Feature Type NEW": f2.get("originalType") if f2 else "-",
+                "Feature Identification OLD": f1.get("raw", {}).get("feature_identification") if f1 else "-",
+                "Feature Identification NEW": f2.get("raw", {}).get("feature_identification") if f2 else "-",
+                "Dim Classification OLD": f1.get("raw", {}).get("dim_classification") if f1 else "-",
+                "Dim Classification NEW": f2.get("raw", {}).get("dim_classification") if f2 else "-",
+                "Wall WT OLD (mm)": f1.get("raw", {}).get("wall_thickness_mm") if f1 else "-",
+                "Wall WT NEW (mm)": f2.get("raw", {}).get("wall_thickness_mm") if f2 else "-",
                 "Depth OLD (%WT)": f1.get("depth_pct") if f1 else "-",
                 "Depth NEW (%WT)": f2.get("depth_pct") if f2 else "-",
                 "Length OLD (mm)": f1.get("length_mm") if f1 else "-",
@@ -971,25 +1246,66 @@ class HungarianAnomalyAlignmentEngine:
                 "Width OLD (mm)": f1.get("width_mm") if f1 else "-",
                 "Width NEW (mm)": f2.get("width_mm") if f2 else "-",
                 "O'Clock OLD": f1.get("clock_position") if f1 else "-",
-                "O'Clock NEW": f2.get("clock_position") if f2 else "-"
+                "O'Clock NEW": f2.get("clock_position") if f2 else "-",
+                "Surface OLD": f1.get("raw", {}).get("surface_location") if f1 else "-",
+                "Surface NEW": f2.get("raw", {}).get("surface_location") if f2 else "-",
+                "ERF ASME OLD": f1.get("raw", {}).get("erf_asme") if f1 else "-",
+                "ERF ASME NEW": f2.get("raw", {}).get("erf_asme") if f2 else "-",
+                "Psafe OLD (bar)": f1.get("raw", {}).get("psafe_bar") if f1 else "-",
+                "Psafe NEW (bar)": f2.get("raw", {}).get("psafe_bar") if f2 else "-",
+                "Comment OLD": f1.get("raw", {}).get("comment") if f1 else "-",
+                "Comment NEW": f2.get("raw", {}).get("comment") if f2 else "-",
             }
 
+        consumed_gw_old = set()
+        consumed_gw_new = set()
         gw_locked = []
         for gw in gw_matches_final:
             gw_locked.append(format_row(
                 gw.get("old_id"), gw.get("new_id"), "Matched", "GW",
-                old_odometer=gw.get("old_odometer"), new_odometer=gw.get("new_odometer")
+                old_odometer=gw.get("old_odometer"), new_odometer=gw.get("new_odometer"),
+                consumed_old=consumed_gw_old, consumed_new=consumed_gw_new,
             ))
             
         gw_unmatched = []
         for gw in gw_orphans:
             status = gw.get("status", "Skipped")
+            orphan_odometer = gw.get("odometer")
             if status == "ONLY_OLD":
-                gw_unmatched.append(format_row(gw.get("old_id") or gw.get("id"), None, status, "GW"))
+                gw_unmatched.append(format_row(
+                    gw.get("old_id") or gw.get("id"), None, status, "GW",
+                    old_odometer=gw.get("old_odometer", gw.get("oldDist", orphan_odometer)),
+                    consumed_old=consumed_gw_old,
+                ))
             elif status == "ONLY_NEW":
-                gw_unmatched.append(format_row(None, gw.get("new_id") or gw.get("id"), status, "GW"))
+                gw_unmatched.append(format_row(
+                    None, gw.get("new_id") or gw.get("id"), status, "GW",
+                    new_odometer=gw.get("new_odometer", gw.get("newDist", orphan_odometer)),
+                    consumed_new=consumed_gw_new,
+                ))
             else:
-                gw_unmatched.append(format_row(gw.get("old_id") or gw.get("id"), gw.get("new_id") or gw.get("id"), status, "GW"))
+                gw_unmatched.append(format_row(
+                    gw.get("old_id") or gw.get("id"), gw.get("new_id") or gw.get("id"), status, "GW",
+                    old_odometer=gw.get("oldDist", orphan_odometer),
+                    new_odometer=gw.get("newDist", orphan_odometer),
+                    consumed_old=consumed_gw_old, consumed_new=consumed_gw_new,
+                ))
+
+        # Phase 1 can come from an older cached DTW result that did not know
+        # every vendor-specific anchor label.  Conserve any remaining typed GW
+        # here as an orphan instead of dropping it from both phases.
+        for feature in anomalies_1_all:
+            if self._is_gw_feature(feature) and feature["source_key"] not in consumed_gw_old:
+                consumed_gw_old.add(feature["source_key"])
+                gw_unmatched.append(format_row(
+                    feature["id"], None, "ONLY_OLD", "GW", old_feature=feature,
+                ))
+        for feature in anomalies_2_all:
+            if self._is_gw_feature(feature) and feature["source_key"] not in consumed_gw_new:
+                consumed_gw_new.add(feature["source_key"])
+                gw_unmatched.append(format_row(
+                    None, feature["id"], "ONLY_NEW", "GW", new_feature=feature,
+                ))
 
         anomaly_matched = []
         anomaly_only_old = []

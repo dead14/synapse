@@ -13,14 +13,31 @@ const {
     markOwnedSessionCompleted,
     markOwnedSessionFailed,
     deleteOwnedSession,
+    createAlignmentJob,
+    getLatestAlignmentJob,
+    getOwnedAlignmentJob,
+    listOwnedAlignmentResultPage,
+    serializeAlignmentJob,
 } = require('./alignmentRepository');
 const {
     normalizeComparisonResult,
     summarizeComparison,
     validateDtwPayload,
     validateMatchingSections,
+    validateAlignmentReview,
+    normalizeCanonicalGwLocks,
+    normalizeAlignmentReviewForPersistence,
+    normalizeInterventionEvent,
 } = require('./alignmentContract');
+const { buildRunEndpointRejection } = require('./alignmentStrategyCapabilities');
+const { buildTieInEvidence, signTieInEvidence, verifyTieInEvidence } = require('./tieInEvidence');
 const { OwnedJobStore } = require('./ownedJobStore');
+const ingestionController = require('../ingestion/ingestionController');
+const { alignmentQueue } = require('./alignmentWorker');
+const {
+    ALIGNMENT_ANCHOR_FEATURE_TYPE_SQL,
+    canonicalAlignmentAnchorType,
+} = require('./alignmentAnchorTypes');
 
 // Local execution remains intentionally bounded and owner-scoped. A shared
 // queue can replace this store later without changing the public job contract.
@@ -28,19 +45,184 @@ const localJobs = new OwnedJobStore({
     ttlMs: Number(process.env.JOB_RESULT_TTL_MS) || 60 * 60 * 1000,
 });
 const resultsCache = new Map(); // sessionId -> cached result
+// Bump whenever result semantics change so a hot backend process cannot keep
+// serving rows produced by an older Python engine implementation.
+const ALIGNMENT_ENGINE_VERSION = '2026-07-16-physics-softcost-v4';
 
 const MAX_EXPORT_ROWS = Number(process.env.MAX_EXPORT_ROWS) || 100_000;
+const MAX_DTW_ANCHORS = Number(process.env.MAX_DTW_RECORDS) || 25_000;
 
 function parsePositiveId(value) {
     const parsed = Number(value);
     return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function parseSessionRevision(value) {
+    return typeof value === 'string' && /^\d{1,20}$/.test(value) ? value : null;
+}
+
+function reviewPersistenceError(message, code = 'INVALID_ALIGNMENT_REVIEW') {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+}
+
+function getPersistedRunReferences(config) {
+    const oldRunId = parsePositiveId(config?.summaryData?.oldRun?.runId);
+    const newRunId = parsePositiveId(config?.summaryData?.newRun?.runId);
+    if (!oldRunId || !newRunId || oldRunId === newRunId) {
+        throw reviewPersistenceError('The alignment session must reference two distinct persisted inspection runs');
+    }
+    return { oldRunId, newRunId };
+}
+
+async function countOwnedRunFeatures({ oldRunId, newRunId }, orgId) {
+    const result = await pool.query(
+        `SELECT f.run_id, COUNT(*)::integer AS feature_count
+         FROM ili_features f
+         JOIN survey_runs sr ON sr.id = f.run_id
+         JOIN pipelines p ON p.id = sr.pipeline_id
+         WHERE f.run_id = ANY($1::integer[])
+           AND p.organization_id = $2
+         GROUP BY f.run_id`,
+        [[oldRunId, newRunId], orgId],
+    );
+    const counts = new Map(result.rows.map((row) => [Number(row.run_id), Number(row.feature_count)]));
+    return {
+        master: counts.get(newRunId) || 0,
+        historical: counts.get(oldRunId) || 0,
+    };
+}
+
+function hasReviewEvidence(config) {
+    return config?.dataReview !== undefined || config?.gwReview !== undefined;
+}
+
+function canonicalSignature(payload, { oldRunId, newRunId }) {
+    return JSON.stringify({
+        oldRunId,
+        newRunId,
+        ota: Number(payload?.ota) || 0,
+        strictPenalty: Boolean(payload?.strictPenalty),
+        useValveAnchor: Boolean(payload?.useValveAnchor),
+        applyDtwCorrection: Boolean(payload?.applyDtwCorrection),
+        tieInOffset: Number(payload?.tieInOffset) || 0,
+        tieInTransform: payload?.tieInTransform || null,
+        tieInDecisionStatus: payload?.tieInDecision?.status || null,
+        tieInEvidenceToken: payload?.tieInEvidenceToken || null,
+        tieInMethodVersion: payload?.tieInMethodVersion || null,
+        tieInExcludedRanges: payload?.excludedRanges || payload?.tieInExcludedRanges || [],
+    });
+}
+
+function canonicalSignatureForConfig(config, references) {
+    return canonicalSignature({
+        ota: config?.ota,
+        strictPenalty: config?.strictPenalty,
+        useValveAnchor: config?.useValveAnchor,
+        applyDtwCorrection: config?.dtwOn,
+        tieInOffset: config?.globalOffset,
+        tieInTransform: config?.tieInTransform,
+        tieInDecision: config?.tieInDecision,
+        tieInEvidenceToken: config?.tieInEvidenceToken,
+        tieInMethodVersion: config?.tieInMethodVersion,
+        tieInExcludedRanges: config?.tieInExcludedRanges,
+    }, references);
+}
+
+function requireServerTieInEvidence(payload, organizationId) {
+    if (payload?.tieInTransform === undefined || payload?.tieInTransform === null) return;
+    const valid = verifyTieInEvidence(
+        buildTieInEvidence(payload, organizationId),
+        payload.tieInEvidenceToken,
+    );
+    if (!valid) {
+        throw reviewPersistenceError(
+            'Tie-in transform is not bound to server-estimated evidence. Recalculate Tie-In.',
+            'INVALID_TIEIN_EVIDENCE',
+        );
+    }
+}
+
+function toCanonicalAnchor(row) {
+    const canonicalType = canonicalAlignmentAnchorType(
+        row.feature_type,
+        row.feature_identification,
+    );
+    return {
+        id: String(row.id),
+        feature_id: row.feature_id || String(row.id),
+        dist: Number(row.log_distance_m),
+        log_distance_m: Number(row.log_distance_m),
+        type: canonicalType || row.feature_type || row.feature_identification || 'other',
+        originalType: row.feature_type || row.feature_identification || 'other',
+        feature_type: row.feature_type || null,
+        feature_identification: row.feature_identification || null,
+        dist_to_us_gw_m: row.dist_to_us_gw_m === null ? null : Number(row.dist_to_us_gw_m),
+        joint_length_m: row.joint_length_m === null ? null : Number(row.joint_length_m),
+        clock: row.clock_position || null,
+        clock_position: row.clock_position || null,
+        depth: row.depth_pct === null ? null : Number(row.depth_pct),
+        depth_pct: row.depth_pct === null ? null : Number(row.depth_pct),
+        length: row.length_mm === null ? null : Number(row.length_mm),
+        length_mm: row.length_mm === null ? null : Number(row.length_mm),
+        width: row.width_mm === null ? null : Number(row.width_mm),
+        width_mm: row.width_mm === null ? null : Number(row.width_mm),
+    };
+}
+
+async function loadOwnedRunAnchors(runId, orgId) {
+    const result = await pool.query(
+        `SELECT f.id, f.feature_id, f.log_distance_m, f.feature_type,
+                f.feature_identification, f.dist_to_us_gw_m, f.joint_length_m,
+                f.clock_position, f.depth_pct, f.length_mm, f.width_mm
+         FROM ili_features f
+         JOIN survey_runs sr ON sr.id = f.run_id
+         JOIN pipelines p ON p.id = sr.pipeline_id
+         WHERE f.run_id = $1
+           AND p.organization_id = $2
+           AND (
+               f.feature_type IN (${ALIGNMENT_ANCHOR_FEATURE_TYPE_SQL})
+               OR (
+                   COALESCE(f.feature_type, '') IN ('', 'Other')
+                   AND COALESCE(f.feature_identification, '') ~* '(weld|girth|seam|valve|tee|offtake|branch|bend|elbow|launcher|receiver)'
+               )
+           )
+         ORDER BY f.log_distance_m ASC, f.id ASC
+         LIMIT $3`,
+        [runId, orgId, MAX_DTW_ANCHORS + 1],
+    );
+    if (result.rows.length > MAX_DTW_ANCHORS) {
+        const error = new Error(`Inspection run has more than ${MAX_DTW_ANCHORS.toLocaleString()} alignment anchors. Narrow the run or raise MAX_DTW_RECORDS for this deployment.`);
+        error.code = 'DTW_INPUT_TOO_LARGE';
+        throw error;
+    }
+    return result.rows.map(toCanonicalAnchor);
+}
+
+async function hydrateRunReferences(payload, orgId) {
+    const oldRunId = parsePositiveId(payload?.oldRunId);
+    const newRunId = parsePositiveId(payload?.newRunId);
+    const referencesProvided = payload?.oldRunId !== undefined || payload?.newRunId !== undefined;
+    if (!referencesProvided) return payload;
+    if (!oldRunId || !newRunId) {
+        const error = new Error('oldRunId and newRunId must both be valid inspection run ids');
+        error.code = 'INVALID_ALIGNMENT_PAYLOAD';
+        throw error;
+    }
+
+    const [oldRun, newRun] = await Promise.all([
+        loadOwnedRunAnchors(oldRunId, orgId),
+        loadOwnedRunAnchors(newRunId, orgId),
+    ]);
+    return { ...payload, oldRun, newRun };
+}
+
 function emitToUser(io, userId, event, payload) {
     if (io && userId != null) io.to(`user_${userId}`).emit(event, payload);
 }
 
-exports.uploadCsv = (req, res) => {
+exports.uploadCsv = async (req, res) => {
     const { pipelineName, surveyYear, vendor } = req.body;
     const file = req.file;
     if (!file) {
@@ -77,169 +259,50 @@ exports.uploadCsv = (req, res) => {
         return res.status(400).json({ error: 'Survey year is invalid' });
     }
 
-    const io = socketConfig.getIO();
-    const userId = req.user?.id;
-
-    if (io && userId) {
-        io.to(`user_${userId}`).emit('upload_progress', { progress: 10, message: 'File received, starting ingestion...' });
+    try {
+        const intake = await ingestionController.enqueueIngestion({
+            file,
+            pipelineName: normalizedPipelineName,
+            surveyYear: normalizedYear,
+            vendor: normalizedVendor,
+            user: req.user,
+        });
+        fs.unlink(file.path, () => {});
+        if (intake.kind === 'existing') {
+            const audit = intake.run.ingestion_audit && typeof intake.run.ingestion_audit === 'object'
+                ? intake.run.ingestion_audit
+                : {};
+            const acceptedRows = Number(intake.run.row_count || 0);
+            return res.status(200).json({
+                message: 'Existing inspection run reused',
+                pipeline_run_id: Number(intake.run.run_id),
+                run_summary: audit.feature_counts || { total: acceptedRows },
+                audit: { ...audit, accepted_rows: audit.accepted_rows ?? acceptedRows },
+                source_sha256: intake.run.source_sha256 || null,
+                reused: true,
+            });
+        }
+        const job = intake.job;
+        return res.status(202).json({
+            message: 'Ingestion queued',
+            jobId: job.job_id,
+            state: job.state,
+            progress: Number(job.progress || 0),
+            sourceFile: job.source_file,
+        });
+    } catch (error) {
+        fs.unlink(file.path, () => {});
+        console.error('Failed to queue ingestion:', error);
+        return res.status(503).json({
+            error: 'Ingestion queue is unavailable',
+            code: 'INGESTION_QUEUE_UNAVAILABLE',
+        });
     }
-
-    let settled = false;
-    const respondOnce = (status, body) => {
-        if (settled || res.headersSent) return;
-        settled = true;
-        res.status(status).json(body);
-    };
-
-    const pythonProcess = spawn('python', [
-        'src/python_engines/db_ingest.py',
-        '--file', file.path,
-        '--pipeline', normalizedPipelineName,
-        '--year', normalizedYear.toString(),
-        '--vendor', normalizedVendor,
-        '--organization-id', req.user.orgId.toString(),
-        '--user-id', req.user.id.toString(),
-    ], { cwd: path.join(__dirname, '../../..') });
-    let output = '';
-
-    pythonProcess.stdout.on('data', (data) => {
-        output += data.toString();
-        console.log(`Python: ${data}`);
-        if (io && userId) {
-            io.to(`user_${userId}`).emit('upload_progress', { progress: 50, message: 'Processing data...' });
-        }
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-        console.error(`Python Error: ${data}`);
-    });
-
-    pythonProcess.on('close', (code) => {
-        fs.unlink(file.path, () => {});
-        if (code === 0) {
-            try {
-                const markedResult = output.match(/JSON_OUTPUT:(\{[^\r\n]+\})/);
-                const result = JSON.parse(markedResult ? markedResult[1] : output.trim());
-                if (result.status === 'success') {
-                    if (io && userId) {
-                        io.to(`user_${userId}`).emit('upload_progress', { progress: 100, message: 'Ingestion complete!', pipeline_run_id: result.run_id });
-                    }
-                    respondOnce(200, { message: 'Ingestion successful', pipeline_run_id: result.run_id });
-                } else {
-                    respondOnce(500, { error: 'Ingestion failed' });
-                }
-            } catch (err) {
-                console.error('Failed to parse ingestion output:', err);
-                respondOnce(500, { error: 'Failed to process ingestion result' });
-            }
-        } else {
-            respondOnce(500, { error: 'Ingestion process failed' });
-        }
-    });
-
-    pythonProcess.on('error', (err) => {
-        fs.unlink(file.path, () => {});
-        console.error('Failed to start ingestion process:', err);
-        respondOnce(500, { error: 'Failed to start ingestion process' });
-    });
 };
 
-exports.runAlignment = async (req, res) => {
-    const { algorithm } = req.body;
-    const runId = parsePositiveId(req.body.runId);
-    if (!runId) {
-        return res.status(400).json({ error: 'runId is required' });
-    }
-
-    const ownedSession = await findOwnedSession(pool, runId, req.user.orgId);
-    if (!ownedSession) {
-        return res.status(404).json({ error: 'Session not found' });
-    }
-    
-    const algoArg = algorithm || 'dtw_hungarian';
-    console.log(`Starting alignment for run ${runId} using ${algoArg}...`);
-    
-    // Fallback: Run directly without BullMQ to avoid Redis requirement
-    const jobId = `job_${Date.now()}`;
-    const io = socketConfig.getIO();
-
-    // Keep a queryable status from the moment the job is accepted.  The
-    // frontend polls this as a fallback when Socket.IO is disconnected.
-    localJobs.create(jobId, { userId: req.user.id, orgId: req.user.orgId });
-    
-    const emitProgress = (progress, message) => {
-        localJobs.update(jobId, { state: 'active', progress });
-        emitToUser(io, req.user.id, 'alignment_progress', { jobId, progress, message });
-    };
-
-    // Send immediate response so UI can start listening
-    res.json({ success: true, jobId: jobId, message: 'Alignment job started' });
-
-    // Run asynchronously
-    setTimeout(async () => {
-        try {
-            emitProgress(10, `Starting job run-alignment...`);
-            emitProgress(20, 'Initializing pipeline data...');
-            
-            const pythonProcess = spawn('python', ['src/python_engines/alignment_engine.py', runId.toString(), algoArg], { cwd: path.join(__dirname, '../../..') });
-            
-            let output = '';
-            let errorOutput = '';
-
-            pythonProcess.stdout.on('data', (data) => {
-                output += data.toString();
-            });
-
-            pythonProcess.stderr.on('data', (data) => {
-                errorOutput += data.toString();
-                console.error(`[alignment_engine.py] Error: ${data}`);
-            });
-
-            pythonProcess.on('close', async (code) => {
-                if (code === 0) {
-                    try {
-                        const firstBrace = output.indexOf('{');
-                        const lastBrace = output.lastIndexOf('}');
-                        let result = {};
-                        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-                            const jsonStr = output.substring(firstBrace, lastBrace + 1);
-                            result = JSON.parse(jsonStr);
-                        }
-                        emitProgress(90, 'Alignment complete, saving results...');
-                        emitProgress(100, 'Job finished successfully!');
-                        // Update localJobs map
-                        localJobs.update(jobId, {
-                            state: 'completed',
-                            progress: 100,
-                            returnvalue: result
-                        });
-                        await markOwnedSessionCompleted(
-                            pool,
-                            runId,
-                            req.user.orgId,
-                            result,
-                        );
-                        emitToUser(io, req.user.id, 'alignment_complete', { jobId, result });
-                    } catch (err) {
-                        console.error('Failed to parse python engine output:', err);
-                        localJobs.update(jobId, { state: 'failed', failedReason: 'Failed to parse engine output' });
-                        await markOwnedSessionFailed(pool, runId, req.user.orgId, 'Failed to parse engine output');
-                        emitToUser(io, req.user.id, 'alignment_error', { jobId, error: 'Failed to parse engine output' });
-                    }
-                } else {
-                    console.error(`Python engine failed with code ${code}. Details: ${errorOutput}`);
-                    localJobs.update(jobId, { state: 'failed', failedReason: `Engine failed with code ${code}` });
-                    await markOwnedSessionFailed(pool, runId, req.user.orgId, 'Alignment engine failed');
-                    emitToUser(io, req.user.id, 'alignment_error', { jobId, error: 'Alignment engine failed' });
-                }
-            });
-        } catch (err) {
-            console.error("Execution error:", err);
-            localJobs.update(jobId, { state: 'failed', failedReason: 'Alignment execution failed' });
-            await markOwnedSessionFailed(pool, runId, req.user.orgId, 'Alignment execution failed');
-            emitToUser(io, req.user.id, 'alignment_error', { jobId, error: 'Alignment execution failed' });
-        }
-    }, 100);
+exports.runAlignment = (req, res) => {
+    const rejection = buildRunEndpointRejection(req.body?.algorithm);
+    return res.status(422).json(rejection);
 };
 
 exports.getAlignmentResults = async (req, res) => {
@@ -259,6 +322,32 @@ exports.getAlignmentResults = async (req, res) => {
         res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: 'Failed to fetch alignment results' });
+    }
+};
+
+exports.getAlignmentResultsPage = async (req, res) => {
+    const sessionId = parsePositiveId(req.params.runId);
+    if (!sessionId) return res.status(400).json({ error: 'Invalid session ID' });
+    const limit = req.query.limit === undefined ? 1000 : Number(req.query.limit);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 5000) {
+        return res.status(400).json({ error: 'limit must be an integer between 1 and 5000' });
+    }
+    let after = null;
+    if (req.query.cursor !== undefined && req.query.cursor !== '') {
+        after = Number(req.query.cursor);
+        if (!Number.isSafeInteger(after) || after < 0) {
+            return res.status(400).json({ error: 'cursor must be a non-negative result ordinal' });
+        }
+    }
+    try {
+        const page = await listOwnedAlignmentResultPage(pool, sessionId, req.user.orgId, { limit, after });
+        return res.json({
+            items: page.rows,
+            nextCursor: page.nextCursor === null ? null : String(page.nextCursor),
+        });
+    } catch (error) {
+        console.error('Paged alignment results error:', error);
+        return res.status(500).json({ error: 'Failed to fetch paged alignment results' });
     }
 };
 
@@ -342,11 +431,30 @@ startDtwPythonWorker();
 
 
 exports.runDtwAlignment = async (req, res) => {
-    const payload = { ...req.body };
+    let payload;
+    let session = null;
+    let persistedReferences = null;
     try {
+        const sessionId = parsePositiveId(req.body?.sessionId);
+        if (req.body?.sessionId !== undefined && !sessionId) {
+            throw reviewPersistenceError('Invalid alignment session ID', 'INVALID_ALIGNMENT_PAYLOAD');
+        }
+        if (sessionId) {
+            session = await findOwnedSession(pool, sessionId, req.user.orgId);
+            if (!session) {
+                throw reviewPersistenceError('Alignment session not found', 'ALIGNMENT_SESSION_NOT_FOUND');
+            }
+            persistedReferences = getPersistedRunReferences(session.params_json || {});
+        }
+        payload = await hydrateRunReferences({
+            ...req.body,
+            ...(persistedReferences || {}),
+        }, req.user.orgId);
+        requireServerTieInEvidence(payload, req.user.orgId);
         validateDtwPayload(payload);
     } catch (err) {
-        return res.status(err.code === 'DTW_INPUT_TOO_LARGE' ? 413 : 400).json({
+        const status = err.code === 'DTW_INPUT_TOO_LARGE' ? 413 : err.code === 'ALIGNMENT_SESSION_NOT_FOUND' ? 404 : 400;
+        return res.status(status).json({
             error: err.message,
             code: err.code || 'INVALID_ALIGNMENT_PAYLOAD',
         });
@@ -380,6 +488,26 @@ exports.runDtwAlignment = async (req, res) => {
         });
         
         if (result.success) {
+            if (session && persistedReferences) {
+                const canonicalGwLocks = normalizeCanonicalGwLocks(result.gwMatchesFinal);
+                const current = await findOwnedSession(pool, session.id, req.user.orgId);
+                if (!current) return res.status(404).json({ error: 'Alignment session not found' });
+                const currentReferences = getPersistedRunReferences(current.params_json || {});
+                if (currentReferences.oldRunId !== persistedReferences.oldRunId
+                    || currentReferences.newRunId !== persistedReferences.newRunId) {
+                    return res.status(409).json({ error: 'Inspection runs changed while GW matching was running. Refresh and try again.' });
+                }
+                const signature = canonicalSignature(payload, persistedReferences);
+                const config = { ...(current.params_json || {}), canonicalGwLocks, gwCanonicalSignature: signature };
+                if (current.params_json?.gwCanonicalSignature !== signature) {
+                    delete config.gwReview;
+                    delete config.gwMatchesFinal;
+                    delete config.matchingSections;
+                }
+                const updated = await updateOwnedSessionConfig(pool, session.id, req.user.orgId, config);
+                if (!updated) return res.status(409).json({ error: 'GW matching result could not be saved. Refresh and try again.' });
+                result.sessionRevision = updated.revision;
+            }
             res.json(result);
         } else {
             console.error(`[DTW] Request ${requestId} failed:`, result.error);
@@ -440,8 +568,9 @@ function startTieInPythonWorker() {
 startTieInPythonWorker();
 
 exports.estimateTieInOffset = async (req, res) => {
-    const payload = { ...req.body };
+    let payload;
     try {
+        payload = await hydrateRunReferences({ ...req.body }, req.user.orgId);
         validateDtwPayload(payload);
     } catch (err) {
         return res.status(err.code === 'DTW_INPUT_TOO_LARGE' ? 413 : 400).json({
@@ -469,6 +598,13 @@ exports.estimateTieInOffset = async (req, res) => {
             }, 30000);
         });
         
+        if (result.success && result.transform && result.decision) {
+            result.evidenceToken = signTieInEvidence(buildTieInEvidence({
+                ...payload,
+                decision: result.decision,
+                transform: result.transform,
+            }, req.user.orgId, result.methodVersion));
+        }
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -476,40 +612,92 @@ exports.estimateTieInOffset = async (req, res) => {
 };
 
 exports.saveWizardState = async (req, res) => {
-    const { config, sessionId } = req.body || {};
+    const { config, sessionId, sessionRevision } = req.body || {};
     if (!config || typeof config !== 'object' || Array.isArray(config)) {
         return res.status(400).json({ error: 'Config object is required' });
     }
     try {
-        validateMatchingSections(config);
+        requireServerTieInEvidence(config, req.user.orgId);
     } catch (err) {
-        return res.status(422).json({
-            error: err.message,
-            code: err.code || 'INVALID_MATCHING_SECTIONS',
-        });
+        return res.status(422).json({ error: err.message, code: err.code });
     }
     try {
         if (sessionId) {
             const parsedSessionId = parsePositiveId(sessionId);
             if (!parsedSessionId) return res.status(400).json({ error: 'Invalid session ID' });
+            const session = await findOwnedSession(pool, parsedSessionId, req.user.orgId);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            const requiresReviewBoundary = hasReviewEvidence(config);
+            const expectedRevision = parseSessionRevision(sessionRevision);
+            if (requiresReviewBoundary && !expectedRevision) {
+                return res.status(409).json({ error: 'This review is out of date. Refresh the alignment session before saving.' });
+            }
+            let configToPersist = config;
+            try {
+                if (requiresReviewBoundary) {
+                    const references = getPersistedRunReferences(session.params_json || {});
+                    const featureCounts = await countOwnedRunFeatures(references, req.user.orgId);
+                    if (config.gwReview !== undefined
+                        && session.params_json?.gwCanonicalSignature !== canonicalSignatureForConfig(config, references)) {
+                        throw reviewPersistenceError('GW matching settings changed. Recalculate the canonical matching result before saving review decisions.');
+                    }
+                    configToPersist = normalizeAlignmentReviewForPersistence(config, {
+                        featureCounts,
+                        canonicalGwLocks: session.params_json?.canonicalGwLocks,
+                        existingDataReview: session.params_json?.dataReview,
+                    });
+                    if (Array.isArray(session.params_json?.canonicalGwLocks)) {
+                        configToPersist.canonicalGwLocks = session.params_json.canonicalGwLocks;
+                        configToPersist.gwCanonicalSignature = session.params_json.gwCanonicalSignature;
+                        if (config.gwReview === undefined) {
+                            configToPersist.gwMatchesFinal = session.params_json.gwMatchesFinal || [];
+                        }
+                    }
+                } else {
+                    validateAlignmentReview(config);
+                }
+                validateMatchingSections(configToPersist);
+            } catch (err) {
+                return res.status(422).json({
+                    error: err.message,
+                    code: err.code || 'INVALID_ALIGNMENT_CONFIG',
+                });
+            }
             const updated = await updateOwnedSessionConfig(
                 pool,
                 parsedSessionId,
                 req.user.orgId,
-                config,
+                configToPersist,
+                { expectedRevision: requiresReviewBoundary ? expectedRevision : null },
             );
-            if (!updated) return res.status(404).json({ error: 'Session not found' });
+            if (!updated) {
+                return res.status(requiresReviewBoundary ? 409 : 404).json({
+                    error: requiresReviewBoundary ? 'This review changed in another session. Refresh before saving.' : 'Session not found',
+                });
+            }
             // GW alignment and Hungarian tolerances are part of this config.
             // A saved change must force a fresh Hungarian run rather than
             // returning the previous comparison for the same session.
             resultsCache.delete(parsedSessionId);
-            res.json({ success: true, sessionId: parsedSessionId });
+            res.json({ success: true, sessionId: parsedSessionId, sessionRevision: updated.revision });
         } else {
+            if (hasReviewEvidence(config)) {
+                return res.status(422).json({ error: 'Review evidence requires an existing alignment session' });
+            }
+            try {
+                validateMatchingSections(config);
+                validateAlignmentReview(config);
+            } catch (err) {
+                return res.status(422).json({
+                    error: err.message,
+                    code: err.code || 'INVALID_ALIGNMENT_CONFIG',
+                });
+            }
             const created = await createOwnedSession(pool, config, req.user);
             if (!created) {
                 return res.status(400).json({ error: 'Pipeline does not belong to your organization' });
             }
-            res.status(201).json({ success: true, sessionId: created.id });
+            res.status(201).json({ success: true, sessionId: created.id, sessionRevision: created.revision });
         }
     } catch (err) {
         console.error("Save state error:", err);
@@ -523,7 +711,7 @@ exports.getWizardSession = async (req, res) => {
     try {
         const session = await findOwnedSession(pool, id, req.user.orgId);
         if (session) {
-            res.json({ config: session.params_json, sessionId: session.id, status: session.status });
+            res.json({ config: session.params_json, sessionId: session.id, status: session.status, sessionRevision: session.revision });
         } else {
             res.status(404).json({ error: 'Session not found' });
         }
@@ -534,17 +722,36 @@ exports.getWizardSession = async (req, res) => {
 };
 
 exports.saveSections = async (req, res) => {
-    const { sessionId, sections } = req.body;
+    const { sessionId, sections, pipelineRoute } = req.body;
     try {
         const parsedSessionId = parsePositiveId(sessionId);
         if (!parsedSessionId) return res.status(400).json({ error: 'Session ID required' });
         if (!Array.isArray(sections) || sections.length > 5_000) {
             return res.status(400).json({ error: 'Sections must be an array with at most 5000 items' });
         }
+        if (pipelineRoute !== undefined) {
+            const routeIsValid = Array.isArray(pipelineRoute)
+                && pipelineRoute.length <= 10_000
+                && pipelineRoute.every((point) => Array.isArray(point)
+                    && point.length === 2
+                    && Number.isFinite(Number(point[0]))
+                    && Number.isFinite(Number(point[1]))
+                    && Number(point[0]) >= -90
+                    && Number(point[0]) <= 90
+                    && Number(point[1]) >= -180
+                    && Number(point[1]) <= 180);
+            if (!routeIsValid) {
+                return res.status(400).json({ error: 'Pipeline route must contain valid [latitude, longitude] points' });
+            }
+        }
         const session = await findOwnedSession(pool, parsedSessionId, req.user.orgId);
         if (!session) return res.status(404).json({ error: 'Session not found' });
 
-        const config = { ...(session.params_json || {}), sections };
+        const config = {
+            ...(session.params_json || {}),
+            sections,
+            ...(pipelineRoute === undefined ? {} : { pipelineRoute }),
+        };
         const updated = await updateOwnedSessionConfig(
             pool,
             parsedSessionId,
@@ -556,6 +763,35 @@ exports.saveSections = async (req, res) => {
     } catch (err) {
         console.error("Save sections error:", err);
         res.status(500).json({ error: 'Failed to save sections' });
+    }
+};
+
+exports.saveIntervention = async (req, res) => {
+    const parsedSessionId = parsePositiveId(req.body?.sessionId);
+    if (!parsedSessionId) return res.status(400).json({ error: 'Session ID required' });
+    try {
+        const event = normalizeInterventionEvent(req.body?.event);
+        const session = await findOwnedSession(pool, parsedSessionId, req.user.orgId);
+        if (!session) return res.status(404).json({ error: 'Session not found' });
+        const existing = Array.isArray(session.params_json?.interventions)
+            ? session.params_json.interventions
+            : [];
+        if (existing.length >= 10_000) {
+            return res.status(400).json({ error: 'Intervention event limit reached' });
+        }
+        const interventions = existing.some((item) => item.id === event.id)
+            ? existing
+            : [...existing, event];
+        const config = { ...(session.params_json || {}), interventions };
+        const updated = await updateOwnedSessionConfig(pool, parsedSessionId, req.user.orgId, config);
+        if (!updated) return res.status(404).json({ error: 'Session not found' });
+        return res.status(201).json({ success: true, event, count: interventions.length });
+    } catch (error) {
+        if (error?.code === 'INVALID_INTERVENTION') {
+            return res.status(400).json({ error: error.message, code: error.code });
+        }
+        console.error('Save intervention error:', error);
+        return res.status(500).json({ error: 'Failed to save intervention' });
     }
 };
 
@@ -605,7 +841,7 @@ exports.resumeWizardState = async (req, res) => {
         );
 
         if (session) {
-            res.json({ success: true, sessionId: session.id, config: session.params_json });
+            res.json({ success: true, sessionId: session.id, sessionRevision: session.revision, config: session.params_json });
         } else {
             res.json({ success: false, message: 'No session to resume' });
         }
@@ -637,103 +873,29 @@ exports.getIliResults = async (req, res) => {
 
         const resolvedSessionId = session.id;
 
-        // Check cache first
-        if (resultsCache.has(resolvedSessionId)) {
-            console.log("Returning cached results for session:", resolvedSessionId);
-            const jobId = `job_hungarian_cached_${Date.now()}`;
-            const cachedResult = resultsCache.get(resolvedSessionId);
-            localJobs.create(jobId, { userId: req.user.id, orgId: req.user.orgId }, {
-                state: 'completed',
-                progress: 100,
-                returnvalue: cachedResult,
-            });
-            return res.json({ jobId });
+        const previousJob = await getLatestAlignmentJob(pool, resolvedSessionId, req.user.orgId);
+        if (previousJob && ['queued', 'active', 'retrying', 'completed'].includes(previousJob.state)) {
+            return res.status(previousJob.state === 'completed' ? 200 : 202).json({ jobId: previousJob.job_id });
         }
 
-        try {
-            console.log("Starting run-hungarian job for session:", resolvedSessionId);
-            const jobId = `job_hungarian_${Date.now()}`;
-
-            localJobs.create(jobId, { userId: req.user.id, orgId: req.user.orgId }, {
-                state: 'active',
-                progress: 10,
-                returnvalue: null,
-            });
-
-            // Run asynchronously
-            setTimeout(() => {
-                const pythonProcess = spawn('python', ['src/python_engines/hungarian_engine.py', resolvedSessionId.toString()], { cwd: path.join(__dirname, '../../..') });
-                let output = '';
-                let errorOutput = '';
-
-                localJobs.update(jobId, { progress: 30 });
-
-                pythonProcess.stdout.on('data', (data) => {
-                    output += data.toString();
-                });
-
-                pythonProcess.stderr.on('data', (data) => {
-                    errorOutput += data.toString();
-                    console.error(`[hungarian_engine.py] Error: ${data}`);
-                });
-
-                pythonProcess.on('close', async (code) => {
-                    if (code === 0) {
-                        try {
-                            let resultData = {};
-                            const match = output.match(/___RESULT_JSON_BEGIN___([\s\S]*?)___RESULT_JSON_END___/);
-                            if (match && match[1]) {
-                                resultData = JSON.parse(match[1]);
-                            } else {
-                                // Fallback
-                                const firstBracket = output.indexOf('{');
-                                const lastBracket = output.lastIndexOf('}');
-                                if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
-                                    resultData = JSON.parse(output.substring(firstBracket, lastBracket + 1));
-                                }
-                            }
-                            
-                            const normalized = normalizeComparisonResult(resultData);
-                            const resultPayload = {
-                                comparison: normalized.comparison,
-                                groups: normalized.groups,
-                                sessionId: resolvedSessionId,
-                            };
-                            resultsCache.set(resolvedSessionId, resultPayload);
-
-                            localJobs.update(jobId, {
-                                state: 'completed',
-                                progress: 100,
-                                returnvalue: resultPayload,
-                            });
-                            await markOwnedSessionCompleted(
-                                pool,
-                                resolvedSessionId,
-                                req.user.orgId,
-                                summarizeComparison(normalized.comparison),
-                            );
-                            emitToUser(socketConfig.getIO(), req.user.id, 'alignment_complete', {
-                                jobId,
-                                result: resultPayload,
-                            });
-                        } catch (err) {
-                            console.error('Failed to normalize Hungarian output:', err);
-                            localJobs.update(jobId, { state: 'failed', failedReason: 'Failed to parse alignment result' });
-                            await markOwnedSessionFailed(pool, resolvedSessionId, req.user.orgId, 'Failed to parse alignment result');
-                        }
-                    } else {
-                        console.error(`Hungarian engine failed with code ${code}: ${errorOutput}`);
-                        localJobs.update(jobId, { state: 'failed', failedReason: 'Hungarian engine failed' });
-                        await markOwnedSessionFailed(pool, resolvedSessionId, req.user.orgId, 'Hungarian engine failed');
-                    }
-                });
-            }, 100);
-
-            res.json({ success: true, jobId: jobId, message: 'Hungarian alignment job started' });
-        } catch (err) {
-            console.error("Queue error:", err);
-            res.status(500).json({ error: 'Failed to run Hungarian job' });
-        }
+        const jobId = randomUUID();
+        const configuredAlgorithm = session.params_json?.algorithm
+            || session.params_json?.summaryData?.algorithm
+            || 'dtw_hungarian';
+        await createAlignmentJob(pool, {
+            jobId,
+            sessionId: resolvedSessionId,
+            organizationId: req.user.orgId,
+            userId: req.user.id,
+        });
+        await alignmentQueue.add('align-ili', {
+            jobId,
+            sessionId: resolvedSessionId,
+            organizationId: req.user.orgId,
+            userId: req.user.id,
+            algorithm: configuredAlgorithm,
+        }, { jobId });
+        return res.status(202).json({ success: true, jobId, message: 'Alignment job queued' });
 
 
     } catch (err) {
@@ -745,6 +907,8 @@ exports.getIliResults = async (req, res) => {
 exports.getJobResult = async (req, res) => {
     const { jobId } = req.params;
     try {
+        const durableJob = await getOwnedAlignmentJob(pool, jobId, req.user.orgId);
+        if (durableJob) return res.json(serializeAlignmentJob(durableJob));
         const job = localJobs.getForPrincipal(jobId, req.user);
         if (!job) {
             return res.status(404).json({ error: 'Job not found' });

@@ -1,0 +1,16 @@
+{
+  "date": "2026-07-19",
+  "framework": "React 19 with Vite 8 and Tailwind CSS 4",
+  "fontStack": {
+    "display": "Urbanist",
+    "body": "Urbanist",
+    "data": "Cascadia Mono"
+  },
+  "paletteSource": "frontend/tokens.css",
+  "motion": "Tokenized CSS micro-interactions with reduced-motion coverage",
+  "spacing": "Named 4 px-compatible spacing scale",
+  "sourceReferences": [
+    "C:/Users/rizki/Downloads/exec-54945295-9eff-45eb-8adc-dfaf7adedf46.png",
+    "C:/Users/rizki/AppData/Local/Temp/codex-clipboard-e0a1e50c-7766-409d-b9a8-5f2bed5b0314.png"
+  ]
+}

@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 
 
 PYTHON_ENGINES = Path(__file__).resolve().parents[1] / "src" / "python_engines"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PYTHON_ENGINES))
+sys.path.insert(0, str(REPOSITORY_ROOT))
 
 import seed_dictionary
 from models import FeatureTypeSynonym, FieldSynonymDictionary

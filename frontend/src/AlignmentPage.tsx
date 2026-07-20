@@ -8,23 +8,24 @@ import StepUploadILI from './wizard/StepUploadILI';
 import StepTieInConfig from './wizard/StepTieInConfig';
 import StepMatchingSections from './wizard/StepMatchingSections';
 import { apiFetch, ApiError } from './utils/api';
+import './styles/alignment-review.css';
 
 const WIZARD_PROGRESS_STORAGE_KEY = 'synapse_alignment_wizard_progress';
 
 const baseSteps = [
-  { id: 'upload', name: 'Upload', desc: 'Validate' },
-  { id: 'tiein', name: 'Tie-In Config', desc: 'Offset Calc', conditional: true },
-  { id: 'summary', name: 'Data Summary', desc: 'Overview' },
-  { id: 'gw', name: 'GW Matching', desc: 'Simulator' },
-  { id: 'sections', name: 'Sectioning', desc: 'NEW Reference', oneDirectionOnly: true },
-  { id: 'scenario', name: 'Scenario Filter', desc: 'Thresholds' },
-  { id: 'anomaly', name: 'Anomaly Tolerances', desc: 'Matcher' },
-  { id: 'exec', name: 'Execution', desc: 'Report Gen' },
+  { id: 'upload', name: 'Inspection data', desc: 'Import & validate' },
+  { id: 'tiein', name: 'Tie-in setup', desc: 'Calculate offset', conditional: true },
+  { id: 'summary', name: 'Data review', desc: 'Check extraction' },
+  { id: 'gw', name: 'GW matching', desc: 'Review alignment' },
+  { id: 'sections', name: 'Sectioning', desc: 'Define reference' },
+  { id: 'scenario', name: 'Feature rules', desc: 'Set thresholds' },
+  { id: 'anomaly', name: 'Tolerances', desc: 'Tune matcher' },
+  { id: 'exec', name: 'Execution', desc: 'Run & report' },
 ];
 
 const visibleSteps = (config: any) => baseSteps.filter((item) => {
+  if (config?.algorithm === 'manual') return ['upload', 'exec'].includes(item.id);
   if (item.conditional && item.id === 'tiein' && !config?.enablePartialRun) return false;
-  if (item.oneDirectionOnly && config?.algorithm !== 'dtw_hungarian_onedirection') return false;
   return true;
 });
 
@@ -49,12 +50,12 @@ export default function AlignmentPage() {
           return;
         }
 
-        const session = await apiFetch<{ config?: any; sessionId?: string | number; status?: string }>(
+        const session = await apiFetch<{ config?: any; sessionId?: string | number; status?: string; sessionRevision?: string }>(
           `/api/wizard/session/${encodeURIComponent(String(parsed.sessionId))}`,
         );
         if (!active || !session.config || !session.sessionId) return;
 
-        const restoredConfig = { ...session.config, sessionId: session.sessionId, sessionStatus: session.status };
+        const restoredConfig = { ...session.config, sessionId: session.sessionId, sessionRevision: session.sessionRevision, sessionStatus: session.status };
         setWizardConfig(restoredConfig);
         setStep(Math.min(parsed.step, visibleSteps(restoredConfig).length - 1));
         localStorage.setItem('synapse_last_session_id', String(session.sessionId));
@@ -72,6 +73,12 @@ export default function AlignmentPage() {
   }, []);
 
   const stepsList = visibleSteps(wizardConfig);
+  const currentStep = stepsList[step];
+  const progress = stepsList.length > 1 ? Math.round((step / (stepsList.length - 1)) * 100) : 100;
+  const runLabel = wizardConfig.sessionName
+    || wizardConfig.summaryData?.newRun?.name
+    || wizardConfig.summaryData?.masterRun?.name
+    || 'Unsaved alignment run';
   
   const handleNext = async (data?: any) => {
     let updatedConfig = { ...wizardConfig };
@@ -80,12 +87,17 @@ export default function AlignmentPage() {
     }
     
     try {
-      const resData = await apiFetch<{ success?: boolean; sessionId?: string | number }>('/api/wizard/save', {
+      const resData = await apiFetch<{ success?: boolean; sessionId?: string | number; sessionRevision?: string }>('/api/wizard/save', {
         method: 'POST',
-        body: JSON.stringify({ config: updatedConfig, sessionId: updatedConfig.sessionId })
+        body: JSON.stringify({
+          config: updatedConfig,
+          sessionId: updatedConfig.sessionId,
+          sessionRevision: updatedConfig.sessionRevision,
+        })
       });
       if (resData.success && resData.sessionId) {
         updatedConfig.sessionId = resData.sessionId;
+        updatedConfig.sessionRevision = resData.sessionRevision;
         localStorage.setItem('synapse_last_session_id', String(resData.sessionId));
       } else {
         setSaveError('Server tidak mengembalikan ID sesi alignment. Periksa backend lalu coba lagi.');
@@ -111,7 +123,10 @@ export default function AlignmentPage() {
     localStorage.setItem(WIZARD_PROGRESS_STORAGE_KEY, JSON.stringify({ sessionId: updatedConfig.sessionId, step: nextStep }));
   };
 
-  const handleBack = () => {
+  const handleBack = (data?: any) => {
+    if (data && typeof data === 'object' && !('nativeEvent' in data)) {
+      setWizardConfig((current: any) => ({ ...current, ...data }));
+    }
     const previousStep = Math.max(step - 1, 0);
     setStep(previousStep);
     if (previousStep === 0) {
@@ -126,7 +141,7 @@ export default function AlignmentPage() {
   }
 
   return (
-    <div className="alignment-workspace">
+    <div className={`alignment-workspace${currentStep?.id === 'gw' ? ' alignment-workspace--gw' : ''}`}>
       <div className="alignment-shell flex flex-col gap-5">
         {saveError && (
           <div role="alert" className="mx-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm md:mx-6 xl:mx-8">
@@ -136,10 +151,11 @@ export default function AlignmentPage() {
         
         {step > 0 && (
           <section className="alignment-progress" aria-label="Alignment progress">
-            <div className="flex flex-col gap-4 border-b border-gray-100 pb-5 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <div className="flex items-center gap-4">
-                  <p className="alignment-eyebrow">Pipeline alignment</p>
+            <div className="alignment-progress-header">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-3">
+                  <p className="alignment-eyebrow">Alignment workspace</p>
+                  <span className="alignment-run-label" title={runLabel}>{runLabel}</span>
                   <button 
                     onClick={() => {
                       if (window.confirm("Are you sure you want to abandon this session and start a new run?")) {
@@ -148,21 +164,24 @@ export default function AlignmentPage() {
                         setWizardConfig({});
                       }
                     }} 
-                    className="text-xs text-red-500 hover:text-red-700 font-semibold underline transition-colors"
+                    className="alignment-reset"
                     title="Clear current progress and start a new alignment run"
                   >
                     Start New Run
                   </button>
                 </div>
-                <h1 className="mt-1 text-2xl font-semibold tracking-tight text-gray-900">{stepsList[step]?.name}</h1>
-                <p className="mt-1 text-sm text-gray-500">{stepsList[step]?.desc} · Review each decision before continuing.</p>
+                <h1 className="alignment-title">{currentStep?.name}</h1>
+                <p className="alignment-subtitle">{currentStep?.desc}. Verify the engineering evidence before continuing.</p>
               </div>
               <div className="alignment-progress-value">
-                <span>Step {step + 1} of {stepsList.length}</span>
-                <strong>{Math.round((step / (stepsList.length - 1)) * 100)}%</strong>
+                <span>Stage {step + 1} / {stepsList.length}</span>
+                <strong>{progress}%</strong>
               </div>
             </div>
 
+            <div className="alignment-progress-track" aria-hidden="true">
+              <span style={{ width: `${progress}%` }} />
+            </div>
             <ol className="alignment-stepper">
               {stepsList.map((s, index) => {
                 const isComplete = index < step;

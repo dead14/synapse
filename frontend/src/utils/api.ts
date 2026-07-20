@@ -1,10 +1,10 @@
-const LOCAL_DEV_API_BASE = "http://localhost:8000";
+import { resolveApiBase } from "./apiConfig";
 
-export const API_BASE = (
+export const API_BASE = resolveApiBase(
   import.meta.env.VITE_API_URL ||
-  import.meta.env.VITE_API_BASE_URL ||
-  (import.meta.env.DEV ? LOCAL_DEV_API_BASE : "")
-).replace(/\/$/, "");
+    import.meta.env.VITE_API_BASE_URL,
+  import.meta.env.DEV,
+);
 
 type ApiErrorPayload = {
   error?: unknown;

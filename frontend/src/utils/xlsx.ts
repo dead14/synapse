@@ -1,6 +1,23 @@
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8, unzip, unzipSync } from 'fflate';
+
+import { detectHeaderRowIndex } from './headerDetection';
 
 type CellValue = string | number | boolean | null;
+
+const ASYNC_UNZIP_THRESHOLD_BYTES = 50_000;
+
+async function unzipWorkbook(data: Uint8Array): Promise<Record<string, Uint8Array>> {
+  if (data.byteLength < ASYNC_UNZIP_THRESHOLD_BYTES) {
+    return unzipSync(data);
+  }
+
+  return new Promise((resolve, reject) => {
+    unzip(data, (error, files) => {
+      if (error) reject(error);
+      else resolve(files);
+    });
+  });
+}
 
 function parseXml(xml: string): Document {
   const document = new DOMParser().parseFromString(xml, 'application/xml');
@@ -66,7 +83,7 @@ function worksheetPath(files: Record<string, Uint8Array>): string {
 }
 
 export async function readXlsxRows(file: File): Promise<Record<string, CellValue>[]> {
-  const files = unzipSync(new Uint8Array(await file.arrayBuffer()));
+  const files = await unzipWorkbook(new Uint8Array(await file.arrayBuffer()));
   const decode = (name: string) => files[name] ? strFromU8(files[name]) : undefined;
   const sharedStrings = parseSharedStrings(decode('xl/sharedStrings.xml'));
   const worksheetXml = decode(worksheetPath(files));
@@ -82,10 +99,8 @@ export async function readXlsxRows(file: File): Promise<Record<string, CellValue
     return values;
   });
 
-  const headerRow = rows.find((row) => row.some((value) => value !== null && value !== undefined && value !== ''));
-  if (!headerRow) throw new Error('Baris header tidak ditemukan.');
-
-  const headerIndex = rows.indexOf(headerRow);
+  const headerIndex = detectHeaderRowIndex(rows);
+  const headerRow = rows[headerIndex];
   const headers = headerRow.map((value, index) => String(value || `Column ${index + 1}`).trim());
 
   return rows.slice(headerIndex + 1)

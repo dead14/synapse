@@ -30,9 +30,9 @@ export default function SignInForm() {
       navigate(safeFrom, { replace: true });
     } catch (err: any) {
       const message = err instanceof ApiError && err.status === 404
-        ? "Endpoint login tidak ditemukan. Restart backend Synapse di port 8000 lalu coba lagi."
+        ? "Endpoint login tidak ditemukan. Hubungi administrator Synapse."
         : err instanceof TypeError || /fetch|network/i.test(String(err?.message || ''))
-          ? "Backend Synapse tidak dapat dihubungi. Pastikan server berjalan di port 8000."
+          ? "Layanan Synapse tidak dapat dihubungi. Periksa koneksi Anda lalu coba lagi."
           : err?.message || "Login gagal. Periksa email dan password.";
       setError(message);
     }

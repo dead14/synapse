@@ -245,15 +245,11 @@ export default function SectioningSchematic({
               const isUnmatched = isGw && feature.status !== 'MATCHED';
               const isSelected = selectedGWs.some((gw) => gw.id === feature.id && Math.abs(gw.dist - feature.dist) < 0.001);
               
-              // Hide clutter at low zoom, but always show anomalies/selections
-              if (isGw && !isUnmatched && !isSelected && !isValve && zoom < 1.5) {
-                // Return a very thin tick to form a continuous line without looking bulky
-                return <line key={`${feature.id}-${index}`} x1={position.x} y1={position.y - 5} x2={position.x} y2={position.y + 5} stroke="#22c55e" strokeWidth="1.5" strokeOpacity="0.7" />;
-              }
-              
-              const color = isSelected ? '#2563eb' : isUnmatched ? '#ef4444' : isValve ? '#8b5cf6' : '#22c55e';
-              const strokeW = isSelected || isUnmatched || isValve ? 4 : 2;
-              const halfLen = isSelected || isUnmatched || isValve ? 9 : 6;
+              const color = isSelected ? '#2563eb' : isUnmatched ? '#ef4444' : isValve ? '#8b5cf6' : '#10b981';
+              const isAnomaly = isSelected || isUnmatched || isValve;
+              const boxW = isAnomaly ? 6 : 4;
+              const boxH = isAnomaly ? 18 : 14;
+              const rx = boxW / 2;
               
               return (
                 <g
@@ -268,7 +264,14 @@ export default function SectioningSchematic({
                   }}
                 >
                   <title>{`${feature.type} · ${feature.id} · abs ${feature.dist.toFixed(3)} m · ${isUnmatched ? 'ONLY NEW / unmatched' : feature.status}`}</title>
-                  <line x1={position.x} y1={position.y - halfLen} x2={position.x} y2={position.y + halfLen} stroke={color} strokeWidth={strokeW} strokeLinecap="round" />
+                  <rect x={position.x - boxW / 2} y={position.y - boxH / 2} width={boxW} height={boxH} rx={rx} fill={color} />
+                  
+                  {isUnmatched && (
+                    <g pointerEvents="none">
+                      <rect x={position.x - 22} y={position.y - 28} width="44" height="14" rx="7" fill="#fff" stroke={color} strokeWidth="1" strokeOpacity="0.7" />
+                      <text x={position.x} y={position.y - 18} textAnchor="middle" fontSize="8" fill={color} fontWeight="bold">{feature.dist.toFixed(2)} m</text>
+                    </g>
+                  )}
                   {isGw && <rect x={position.x - 14} y={position.y - 14} width="28" height="28" fill="transparent" pointerEvents="all" />}
                 </g>
               );
@@ -288,10 +291,10 @@ export default function SectioningSchematic({
                   y1={master.y + 10}
                   x2={historical.x}
                   y2={historicalY - 10}
-                  stroke="#22c55e"
+                  stroke="#10b981"
                   strokeWidth="1"
                   strokeOpacity="0.4"
-                  strokeDasharray="4 4"
+                  strokeDasharray="3 3"
                 >
                   <title>{`${gw.id} (${gw.dist.toFixed(3)} m) matched to ${gw.rawData.matchedMasterId} (${masterDistance.toFixed(3)} m)`}</title>
                 </line>
@@ -312,13 +315,11 @@ export default function SectioningSchematic({
                     const unmatched = gw.status !== 'MATCHED';
                     const isSelected = selectedGWs.some((s) => s.id === gw.id && s.runRole === 'HISTORICAL');
                     
-                    if (!unmatched && !isSelected && zoom < 1.5) {
-                      return <line key={`${gw.id}-${gwIndex}`} x1={x} y1={y - 5} x2={x} y2={y + 5} stroke="#22c55e" strokeWidth="1.5" strokeOpacity="0.7" />;
-                    }
-
-                    const color = unmatched ? '#ef4444' : isSelected ? '#2563eb' : '#22c55e';
-                    const strokeW = unmatched || isSelected ? 4 : 2;
-                    const halfLen = unmatched || isSelected ? 9 : 6;
+                    const color = unmatched ? '#ef4444' : isSelected ? '#2563eb' : '#10b981';
+                    const isAnomaly = isSelected || unmatched;
+                    const boxW = isAnomaly ? 6 : 4;
+                    const boxH = isAnomaly ? 18 : 14;
+                    const rx = boxW / 2;
                     
                     return (
                       <g
@@ -330,9 +331,15 @@ export default function SectioningSchematic({
                           if (selectionEnabled) onGwClick(gw);
                         }}
                       >
-                        <line x1={x} y1={y - halfLen} x2={x} y2={y + halfLen} stroke={color} strokeWidth={strokeW} strokeLinecap="round">
-                          <title>{`${gw.id} · abs ${gw.dist.toFixed(3)} m · ${gw.status}`}</title>
-                        </line>
+                        <rect x={x - boxW / 2} y={y - boxH / 2} width={boxW} height={boxH} rx={rx} fill={color} />
+                        <title>{`${gw.id} · abs ${gw.dist.toFixed(3)} m · ${gw.status}`}</title>
+                        
+                        {unmatched && (
+                          <g pointerEvents="none">
+                            <rect x={x - 22} y={y + 14} width="44" height="14" rx="7" fill="#fff" stroke={color} strokeWidth="1" strokeOpacity="0.7" />
+                            <text x={x} y={y + 24} textAnchor="middle" fontSize="8" fill={color} fontWeight="bold">{gw.dist.toFixed(2)} m</text>
+                          </g>
+                        )}
                         <rect x={x - 16} y={y - 16} width="32" height="32" fill="transparent" pointerEvents="all" />
                       </g>
                     );

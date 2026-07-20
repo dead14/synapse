@@ -4,8 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node server.js",
-    "test": "node --test tests/*.test.js && python -m unittest discover -s tests -p \"test_dtw_engine_regressions.py\" && python -m unittest discover -s tests -p \"test_hungarian_engine.py\" && python -m unittest discover -s tests -p \"test_tiein_engine.py\" && python -m unittest discover -s tests -p \"test_manual_alignment_engine.py\" && python -m unittest discover -s tests -p \"test_export_excel_layout.py\"",
+    "start": "node --env-file=.env server.js",
+    "worker:ingestion": "node --env-file=.env worker.js",
+    "test": "node --test tests/*.test.js && python -m unittest discover -s tests -p \"test_dtw_engine_regressions.py\" && python -m unittest discover -s tests -p \"test_hungarian_engine.py\" && python -m unittest discover -s tests -p \"test_tiein_engine.py\" && python -m unittest discover -s tests -p \"test_manual_alignment_engine.py\" && python -m unittest discover -s tests -p \"test_export_excel_layout.py\" && python -m unittest discover -s tests -p \"test_parser_dictionary.py\" && python -m unittest discover -s tests -p \"test_parser_ingest.py\"",
     "check": "node --check server.js && node --check src/app.js && node --check src/modules/alignment/alignmentController.js"
   },
   "keywords": [],
@@ -13,11 +14,12 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1089.0",
+    "@excel.js/exceljs": "^0.9.0",
     "bcryptjs": "^3.0.3",
     "bullmq": "^5.80.2",
     "cors": "^2.8.6",
     "csv-parser": "^3.2.1",
-    "@excel.js/exceljs": "^0.9.0",
     "express": "^5.2.1",
     "ioredis": "^5.11.1",
     "jsonwebtoken": "^9.0.3",

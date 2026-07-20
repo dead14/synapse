@@ -34,6 +34,21 @@ const sameDistance = (left: unknown, right: number) => (
   Number.isFinite(Number(left)) && Math.abs(Number(left) - right) < 0.0005
 );
 
+const sourceDistance = (match: GwTimelineMatch, side: 'old' | 'new') => {
+  const preferred = side === 'old' ? match.originalOldVal : match.originalNewVal;
+  const master = side === 'old' ? match.oldVal : match.newVal;
+  const value = Number(preferred ?? master);
+  return Number.isFinite(value) ? value : null;
+};
+
+const spacingBetween = (left: GwTimelineMatch, right: GwTimelineMatch, side: 'old' | 'new') => {
+  const leftDistance = sourceDistance(left, side);
+  const rightDistance = sourceDistance(right, side);
+  return leftDistance === null || rightDistance === null
+    ? null
+    : Math.abs(rightDistance - leftDistance);
+};
+
 function TrackMarker({
   position,
   maxDistance,
@@ -145,29 +160,37 @@ export default function GwPipelineCanvas({
   const prevMatch = matches.find(m => String(m.id) === previousSelectedId);
   const currMatch = matches.find(m => String(m.id) === currentSelectedId);
   const isMeasuring = prevMatch && currMatch && prevMatch.id !== currMatch.id;
+  const rawOldSpool = isMeasuring ? spacingBetween(prevMatch, currMatch, 'old') : null;
+  const rawNewSpool = isMeasuring ? spacingBetween(prevMatch, currMatch, 'new') : null;
+  const masterOldSpool = isMeasuring
+    ? Math.abs(Number(currMatch.oldVal) - Number(prevMatch.oldVal))
+    : null;
+  const masterNewSpool = isMeasuring
+    ? Math.abs(Number(currMatch.newVal) - Number(prevMatch.newVal))
+    : null;
+  const lengthDifference = rawOldSpool !== null && rawNewSpool !== null
+    ? Math.abs(rawOldSpool - rawNewSpool)
+    : null;
 
   return (
     <div className="gw-pipeline" style={{ position: 'relative' }}>
       {isMeasuring && (
         <div style={{
-          position: 'absolute',
-          insetBlockStart: '0.5rem',
-          insetInlineStart: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 30,
-          background: 'var(--color-gw-paper-strong, #fff)',
-          padding: '0.5rem 1rem',
+          margin: '0 0 0.75rem',
+          background: '#eff6ff',
+          padding: '0.75rem 1rem',
           borderRadius: '0.5rem',
-          boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-          border: '1px solid var(--color-gw-accent)',
+          border: '1px solid #93c5fd',
           display: 'flex',
-          gap: '1.5rem',
+          gap: '1rem',
           alignItems: 'center'
         }}>
-          <strong style={{color: 'var(--color-gw-accent)', fontSize: '0.875rem'}}>Joint Length</strong>
-          <div style={{fontSize: '0.875rem', display: 'flex', gap: '1.5rem', fontWeight: 600}}>
-            <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>OLD:</span> {distanceLabel(Math.abs(Number(currMatch.oldVal) - Number(prevMatch.oldVal)))}</div>
-            <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>NEW:</span> {distanceLabel(Math.abs(Number(currMatch.newVal) - Number(prevMatch.newVal)))}</div>
+          <strong style={{color: '#1d4ed8', fontSize: '0.875rem'}}>Selected GW spacing</strong>
+          <div style={{fontSize: '0.875rem', display: 'flex', gap: '1.25rem', fontWeight: 600, flexWrap: 'wrap'}}>
+            <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>OLD raw:</span> {rawOldSpool !== null && Number.isFinite(rawOldSpool) ? distanceLabel(rawOldSpool) : '-'}</div>
+            <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>NEW raw:</span> {rawNewSpool !== null && Number.isFinite(rawNewSpool) ? distanceLabel(rawNewSpool) : '-'}</div>
+            <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>LD:</span> <strong style={{ color: lengthDifference !== null && lengthDifference <= 0.5 ? '#15803d' : '#b45309' }}>{lengthDifference !== null ? distanceLabel(lengthDifference) : '-'}</strong></div>
+            <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>Master:</span> {masterOldSpool !== null && masterNewSpool !== null && Number.isFinite(masterOldSpool) && Number.isFinite(masterNewSpool) ? `${distanceLabel(masterOldSpool)} / ${distanceLabel(masterNewSpool)}` : '-'}</div>
           </div>
           <button onClick={() => setPreviousSelectedId('')} style={{background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5, padding: 0, fontSize: '1.2rem'}} aria-label="Close measurement">✕</button>
         </div>

@@ -1,92 +1,76 @@
-import React, { useMemo } from 'react';
-import { Line, Bar } from 'react-chartjs-2';
-import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip, Legend } from 'chart.js';
-import annotationPlugin from 'chartjs-plugin-annotation';
+import React, { useMemo, useState } from 'react';
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip, Legend, annotationPlugin);
+export default function OdometerDashboard({ matches, ota, setOta, dtwOn: _dtwOn, setDtwOn: _setDtwOn }: any) {
+  const [selectedIndex, setSelectedIndex] = useState(0);
 
-export default function OdometerDashboard({ matches, ota, setOta: _setOta, dtwOn: _dtwOn, setDtwOn: _setDtwOn }: any) {
   const samples = useMemo(() => matches
-    .map((match: any) => {
+    .map((match: any, index: number) => {
       const oldDistance = Number(match.oldVal ?? match.oldDist);
       const newDistance = Number(match.newVal ?? match.newDist);
-      const deviationPct = Math.abs(Number(match.deviationRatio ?? 0)) * 100;
+      const ratioValue = Number(match.deviationRatio);
+      const percentValue = Number(match.rawVarPct ?? match.varPct ?? match.otaPercent);
+      const deviationPct = Number.isFinite(ratioValue)
+        ? Math.abs(ratioValue) * 100
+        : Number.isFinite(percentValue)
+          ? Math.abs(percentValue)
+          : 0;
 
       return {
+        id: match.id ?? `sample-${index}`,
+        label: match.oldDesc || match.newDesc || `Joint ${index + 1}`,
         oldDistance,
         newDistance,
         offset: newDistance - oldDistance,
         deviationPct,
-        flagged: Boolean(match.flagged) || deviationPct > ota,
+        // Re-evaluate the review state from the current slider value.
+        // `match.flagged` was calculated with the previous OTA value and
+        // must not keep a joint flagged after the user raises the threshold.
+        flagged: deviationPct > ota,
       };
     })
     .filter((sample: any) => Number.isFinite(sample.oldDistance) && Number.isFinite(sample.newDistance))
     .sort((left: any, right: any) => left.oldDistance - right.oldDistance), [matches, ota]);
 
-  const lineChartData = useMemo(() => ({
-    datasets: [
-      {
-        label: 'Baseline (Reference)',
-        data: samples.map((sample: any) => ({ x: sample.oldDistance, y: sample.oldDistance })),
-        borderColor: '#F59E0B', borderDash: [5, 5], pointRadius: 0, borderWidth: 1.5, parsing: false as const,
-      },
-      {
-        label: 'Raw Odometer',
-        data: samples.map((sample: any) => ({ x: sample.oldDistance, y: sample.newDistance })),
-        borderColor: '#3B82F6', pointRadius: 0, borderWidth: 1.5, parsing: false as const,
-      },
-    ],
-  }), [samples]);
-
-  const barChartData = useMemo(() => ({
-    datasets: [{
-      label: 'Spool OTA deviation (%)',
-      data: samples.map((sample: any) => ({ x: sample.oldDistance, y: sample.deviationPct })),
-      backgroundColor: samples.map((sample: any) => sample.flagged ? '#EF4444' : '#10B981'),
-      borderRadius: 1,
-      parsing: false as const,
-    }],
-  }), [samples]);
-
   const maxDrift = samples.length > 0 ? Math.max(...samples.map((sample: any) => Math.abs(sample.offset))) : 0;
   const avgSlip = samples.length > 0 ? samples.reduce((total: number, sample: any) => total + sample.deviationPct, 0) / samples.length : 0;
   const flaggedCount = samples.filter((sample: any) => sample.flagged).length;
-  const maximumDeviation = samples.length > 0 ? Math.max(...samples.map((sample: any) => sample.deviationPct)) : 0;
-  const deviationAxisMax = Math.max(5, Math.ceil((Math.max(maximumDeviation, ota) + 1) / 5) * 5);
-
-  const axisText = { font: { size: 9 }, color: '#9ca3af' };
-  const chartGrid = { color: 'rgba(0,0,0,0.04)' };
-  const positionChartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    normalized: true,
-    plugins: { legend: { display: false } },
-    scales: {
-      x: { type: 'linear' as const, grid: chartGrid, ticks: axisText, title: { display: true, text: 'Pipeline position (m)', color: '#9ca3af', font: { size: 9 } } },
-      y: { grid: chartGrid, ticks: axisText, title: { display: true, text: 'Odometer (m)', color: '#9ca3af', font: { size: 9 } } },
-    },
-  };
-
-  const deviationChartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    normalized: true,
-    plugins: {
-      legend: { display: false },
-      annotation: {
-        annotations: {
-          otaLimit: { type: 'line', yMin: ota, yMax: ota, borderColor: '#EF4444', borderWidth: 1.5, borderDash: [4, 4] },
-        },
-      } as any,
-    },
-    scales: {
-      x: { type: 'linear' as const, grid: chartGrid, ticks: axisText, title: { display: true, text: 'Pipeline position (m)', color: '#9ca3af', font: { size: 9 } } },
-      y: { beginAtZero: true, max: deviationAxisMax, grid: chartGrid, ticks: axisText, title: { display: true, text: 'OTA deviation (%)', color: '#9ca3af', font: { size: 9 } } },
-    },
-  };
+  const selectedSample = samples[Math.min(selectedIndex, Math.max(samples.length - 1, 0))];
+  const worstSamples = useMemo(() => [...samples]
+    .sort((left: any, right: any) => right.deviationPct - left.deviationPct)
+    .slice(0, 5), [samples]);
+  const statusText = flaggedCount > 0
+    ? `${flaggedCount} joint melewati OTA. Review joint merah sebelum lanjut.`
+    : 'Semua matched joint masih di dalam toleransi OTA saat ini.';
 
   return (
     <div className="w-full flex flex-col gap-5">
+      <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h4 className="text-sm font-semibold text-gray-900">What this panel checks</h4>
+            <p className="mt-1 text-xs leading-relaxed text-gray-600">
+              Validates whether matched weld spacing is physically consistent after alignment. Spikes indicate possible odometer slippage, skipped welds, repair spool insertion, or a bad anchor match.
+            </p>
+          </div>
+          <div className="min-w-[220px] rounded-lg border border-blue-200 bg-white px-3 py-2">
+            <label className="flex items-center justify-between text-xs font-semibold text-gray-700">
+              <span>Review threshold</span>
+              <span className="font-mono text-blue-700">{ota}% OTA</span>
+            </label>
+            <input
+              type="range"
+              min="0.1"
+              max="10"
+              step="0.1"
+              value={ota}
+              onChange={(event) => setOta?.(parseFloat(event.target.value))}
+              className="mt-2 w-full accent-blue-600"
+              aria-label="Set OTA review threshold"
+            />
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3">
           <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
@@ -117,33 +101,90 @@ export default function OdometerDashboard({ matches, ota, setOta: _setOta, dtwOn
         </div>
       </div>
 
-      {/* Side-by-side Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Odometer Distance Chart */}
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-theme-xs">
-          <div className="flex justify-between items-center mb-3">
-            <h4 className="text-sm font-semibold text-gray-800">Odometer comparison</h4>
-            <div className="flex items-center gap-3 text-[9px]">
-              <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-amber-500 inline-block" style={{borderTop: '2px dashed #F59E0B'}}></span> Baseline</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-blue-500 inline-block"></span> Raw</span>
-            </div>
+      <div className={`rounded-xl border px-4 py-3 text-sm ${flaggedCount > 0 ? 'border-red-200 bg-red-50 text-red-800' : 'border-green-200 bg-green-50 text-green-800'}`}>
+        <div className="font-semibold">Engineering decision</div>
+        <div className="mt-1 text-xs">{statusText}</div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-theme-xs">
+          <div className="border-b border-gray-100 px-4 py-3">
+            <h4 className="text-sm font-semibold text-gray-800">Joints to review first</h4>
+            <p className="mt-1 text-xs text-gray-500">Sorted by highest OTA deviation. Click a row to inspect its drift and tolerance status.</p>
           </div>
-          <div className="h-52" aria-label="Reference and raw odometer comparison chart">
-            <Line data={lineChartData} options={positionChartOptions as any} />
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left text-xs">
+              <thead className="bg-gray-50 text-[10px] uppercase tracking-wide text-gray-500">
+                <tr>
+                  <th className="px-4 py-2">Status</th>
+                  <th className="px-4 py-2">Old run</th>
+                  <th className="px-4 py-2">New run</th>
+                  <th className="px-4 py-2 text-right">Drift</th>
+                  <th className="px-4 py-2 text-right">OTA</th>
+                  <th className="px-4 py-2">Likely action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {worstSamples.map((sample: any) => {
+                  const originalIndex = samples.findIndex((item: any) => item.id === sample.id);
+                  return (
+                    <tr
+                      key={sample.id}
+                      onClick={() => setSelectedIndex(Math.max(originalIndex, 0))}
+                      className={`cursor-pointer transition-colors hover:bg-blue-50 ${originalIndex === selectedIndex ? 'bg-blue-50' : ''}`}
+                    >
+                      <td className="px-4 py-2">
+                        <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${sample.flagged ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
+                          {sample.flagged ? 'Review' : 'OK'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 font-mono text-gray-800">{sample.oldDistance.toFixed(3)} m</td>
+                      <td className="px-4 py-2 font-mono text-gray-800">{sample.newDistance.toFixed(3)} m</td>
+                      <td className="px-4 py-2 text-right font-mono text-gray-800">{sample.offset.toFixed(3)} m</td>
+                      <td className={`px-4 py-2 text-right font-mono font-semibold ${sample.flagged ? 'text-red-600' : 'text-green-700'}`}>{sample.deviationPct.toFixed(2)}%</td>
+                      <td className="px-4 py-2 text-gray-600">{sample.flagged ? 'Check anchor / spool evidence' : 'No action needed'}</td>
+                    </tr>
+                  );
+                })}
+                {worstSamples.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-gray-500">No matched joints available for odometer review.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
 
-        {/* Deviation Ratio Chart */}
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-theme-xs">
-          <div className="flex justify-between items-center mb-3">
-            <h4 className="text-sm font-semibold text-gray-800">Spool / joint OTA deviation</h4>
-            <div className="flex items-center gap-1 text-[9px] text-red-500 font-medium">
-              <span className="w-6 h-0 border-t-2 border-dashed border-red-400 inline-block"></span> OTA {ota}%
+        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-theme-xs">
+          <h4 className="text-sm font-semibold text-gray-800">Selected joint</h4>
+          {selectedSample ? (
+            <div className="mt-4 space-y-3 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">Old run</span>
+                <span className="font-mono font-semibold text-gray-800">{selectedSample.oldDistance.toFixed(3)} m</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">New run</span>
+                <span className="font-mono font-semibold text-gray-800">{selectedSample.newDistance.toFixed(3)} m</span>
+              </div>
+              <div className="flex items-center justify-between border-t border-gray-100 pt-3">
+                <span className="text-gray-500">Raw drift</span>
+                <span className="font-mono font-semibold text-gray-800">{selectedSample.offset.toFixed(3)} m</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">OTA deviation</span>
+                <span className={`font-mono font-semibold ${selectedSample.flagged ? 'text-red-600' : 'text-green-700'}`}>{selectedSample.deviationPct.toFixed(2)}%</span>
+              </div>
+              <div className={`rounded-lg px-3 py-2 ${selectedSample.flagged ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
+                {selectedSample.flagged
+                  ? 'This joint exceeds the current tolerance. Treat it as an engineering review item, not an automatic match.'
+                  : 'This joint supports the current alignment under the selected tolerance.'}
+              </div>
             </div>
-          </div>
-          <div className="h-52" aria-label="Spool and joint OTA deviation chart">
-            <Bar data={barChartData} options={deviationChartOptions as any} />
-          </div>
+          ) : (
+            <p className="mt-3 text-xs text-gray-500">Select a point or row to inspect the joint.</p>
+          )}
         </div>
       </div>
     </div>

@@ -1,6 +1,8 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import ResultsPanel from './ResultsPanel';
-import { fetchAlignmentComparison, type ComparisonRow } from './utils/alignment';
+import { fetchAlignmentResult, type ComparisonRow, type ConservationAudit } from './utils/alignment';
+import { apiFetch } from './utils/api';
+import { applyInterventions, type InterventionEvent } from './utils/interventions';
 
 const DefectVisualizer = lazy(() => import('./DefectVisualizer'));
 const AdvancedCharts = lazy(() => import('./components/charts/AdvancedCharts'));
@@ -38,6 +40,8 @@ export default function IliComparisonPage() {
   const [showVisualizer, setShowVisualizer] = useState(false);
   const [selectedRowIdx, setSelectedRowIdx] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState('');
+  const [audit, setAudit] = useState<ConservationAudit | undefined>();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -47,14 +51,22 @@ export default function IliComparisonPage() {
         const params = new URLSearchParams(window.location.search);
         const sessionId = params.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
         if (!sessionId) throw new Error('ID sesi tidak ditemukan. Pilih pipeline terlebih dahulu.');
+        setSessionId(sessionId);
 
         setIsProcessing(true);
         setJobProgress(10);
-        const comparison = await fetchAlignmentComparison(sessionId, (progress, message) => {
-          setJobProgress(progress);
-          setJobMessage(message);
-        }, controller.signal);
-        setData(comparison);
+        const [alignment, session] = await Promise.all([
+          fetchAlignmentResult(sessionId, (progress, message) => {
+            setJobProgress(progress);
+            setJobMessage(message);
+          }, controller.signal),
+          apiFetch<{ config?: { interventions?: InterventionEvent[] } }>(
+            `/api/wizard/session/${encodeURIComponent(sessionId)}`,
+            { signal: controller.signal },
+          ),
+        ]);
+        setAudit(alignment.audit);
+        setData(applyInterventions(alignment.comparison, session.config?.interventions || []));
       } catch (caughtError) {
         if ((caughtError as Error).name !== 'AbortError') {
           setError(caughtError instanceof Error ? caughtError.message : 'Gagal memuat hasil ILI.');
@@ -71,21 +83,52 @@ export default function IliComparisonPage() {
     return () => controller.abort();
   }, []);
 
-  const handleUpdateMatch = (sourceIdx: number, targetIdx: number) => {
+  const handleUpdateMatch = async (sourceIdx: number, targetIdx: number, evidenceScore = 0) => {
+    const sourceBefore = data[sourceIdx];
+    const targetBefore = data[targetIdx];
+    const sourceNewKey = String(sourceBefore?.['Source Key NEW'] || '');
+    const targetOldKey = String(targetBefore?.['Source Key OLD'] || '');
+    const targetAlreadyHasNew = targetBefore?.['Source Key NEW'] && targetBefore['Source Key NEW'] !== '-';
+    if (!sourceNewKey || sourceNewKey === '-' || !targetOldKey || targetOldKey === '-' || targetAlreadyHasNew) {
+      setError('Intervention dibatalkan: pilih NEW unmatched dan target OLD yang belum memiliki pasangan. Data existing tidak boleh ditimpa.');
+      return;
+    }
+    const event: InterventionEvent = {
+      id: `intervention-${Date.now()}-${sourceIdx}-${targetIdx}`,
+      type: 'REASSIGN_NEW', sourceNewKey, targetOldKey, evidenceScore,
+    };
+    if (!sessionId) {
+      setError('Intervention dibatalkan karena sesi belum tersedia.');
+      return;
+    }
+    try {
+      await apiFetch('/api/wizard/save-intervention', {
+        method: 'POST',
+        body: JSON.stringify({ sessionId, event }),
+      });
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Gagal menyimpan intervention event.');
+      return;
+    }
+
     setData((previousData) => {
       const nextData = [...previousData];
       const sourceRow = { ...nextData[sourceIdx] };
       const targetRow = { ...nextData[targetIdx] };
 
-      Object.keys(sourceRow)
-        .filter((key) => key.includes('NEW') || key === "O'Clock NEW")
-        .forEach((key) => {
-          targetRow[key] = sourceRow[key];
-          sourceRow[key] = typeof sourceRow[key] === 'number' ? Number.NaN : '-';
-        });
+      // Capture the complete NEW payload before clearing the source row.  The
+      // previous implementation cleared Identif. NEW and then copied it, which
+      // made a successful manual intervention lose the NEW feature identity.
+      const newPayload = Object.fromEntries(
+        Object.keys(sourceRow)
+          .filter((key) => key.includes('NEW') || key === "O'Clock NEW")
+          .map((key) => [key, sourceRow[key]])
+      );
+      Object.entries(newPayload).forEach(([key, value]) => {
+        targetRow[key] = value;
+        sourceRow[key] = typeof value === 'number' ? Number.NaN : '-';
+      });
 
-      targetRow['Identif. NEW'] = sourceRow['Identif. NEW'];
-      sourceRow['Identif. NEW'] = '-';
       targetRow['Match/Unmatch'] = 'Match';
       nextData[sourceIdx] = sourceRow;
       nextData[targetIdx] = targetRow;
@@ -96,6 +139,7 @@ export default function IliComparisonPage() {
         return hasOld || hasNew;
       });
     });
+    setError(null);
   };
 
   return (
@@ -120,6 +164,7 @@ export default function IliComparisonPage() {
               selectedRowIdx={selectedRowIdx}
               onSelectRowIdx={setSelectedRowIdx}
               onUpdateMatch={handleUpdateMatch}
+              audit={audit}
             />
           </div>
         )}

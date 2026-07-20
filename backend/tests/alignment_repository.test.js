@@ -10,6 +10,7 @@ const {
     markOwnedSessionCompleted,
     markOwnedSessionFailed,
     deleteOwnedSession,
+    listOwnedAlignmentResultPage,
 } = require('../src/modules/alignment/alignmentRepository');
 
 function recordingPool(result = { rows: [], rowCount: 0 }) {
@@ -51,7 +52,7 @@ test('updateOwnedSessionConfig cannot update a session outside the organization'
 
     assert.equal(updated, null);
     assert.match(pool.calls[0].text, /COALESCE\(s\.organization_id, p\.organization_id\) = \$3/i);
-    assert.deepEqual(pool.calls[0].values.slice(1), [7, 22]);
+    assert.deepEqual(pool.calls[0].values.slice(1), [7, 22, null]);
 });
 
 test('findLatestOwnedSession never falls back outside the organization', async () => {
@@ -109,4 +110,20 @@ test('deleteOwnedSession removes only an owned session and dependent records', a
     assert.match(pool.calls[0].text, /DELETE FROM alignment_results/i);
     assert.match(pool.calls[0].text, /DELETE FROM alignment_sessions/i);
     assert.deepEqual(pool.calls[0].values, [7, 22]);
+});
+
+test('alignment result page is tenant scoped and keyset paginated inside stored JSON', async () => {
+    const pool = recordingPool({
+        rows: [
+            { row: { id: 1 }, ordinal: 2 },
+            { row: { id: 2 }, ordinal: 3 },
+            { row: { id: 3 }, ordinal: 4 },
+        ],
+    });
+    const page = await listOwnedAlignmentResultPage(pool, 8, 22, { limit: 2, after: 1 });
+    assert.deepEqual(page.rows, [{ id: 1 }, { id: 2 }]);
+    assert.equal(page.nextCursor, 3);
+    assert.match(pool.calls[0].text, /organization_id = \$2/i);
+    assert.match(pool.calls[0].text, /jsonb_array_elements/i);
+    assert.deepEqual(pool.calls[0].values, [8, 22, 1, 3]);
 });

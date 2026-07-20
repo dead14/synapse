@@ -160,7 +160,7 @@ export default function PipelineRuns() {
 
                         {/* Action: FFS */}
                         <button 
-                          onClick={() => navigate('/ffs')}
+                          onClick={() => navigate(`/ffs?sessionId=${encodeURIComponent(run.id)}`)}
                           className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-gray-900 bg-[#cfff2e] rounded-lg hover:bg-[#bfee1a] shadow-sm transition-colors"
                           title="Fitness For Service"
                         >

@@ -47,6 +47,7 @@ interface ResultsPanelProps {
   selectedRowIdx?: number | null;
   onSelectRowIdx?: (idx: number | null) => void;
   onUpdateMatch?: (sourceIdx: number, targetIdx: number) => void;
+  audit?: unknown;
 }
 
 /** Parse a clock value to hours (0..12) regardless of format ("HH:MM" or Excel serial fraction). */

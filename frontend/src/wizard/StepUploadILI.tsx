@@ -3,10 +3,9 @@ import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettin
 import { apiFetch, apiUrl } from '../utils/api';
 import {
   buildPersistedIliRun,
+  ingestPersistedInspectionRunPair,
   type IngestionResponse,
 } from '../domain/alignmentIntake';
-import { readXlsxRows } from '../utils/xlsx';
-import { summarizeIliRows } from '../utils/iliRowParser';
 
 interface StepUploadILIProps {
   onNext: (data?: any) => void;
@@ -19,29 +18,6 @@ function fileStem(fileName: string): string {
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-}
-
-async function parseBrowserRun(file: File, vendor: string, year: string) {
-  const rows = await readXlsxRows(file);
-  const parsed = summarizeIliRows(rows);
-  return {
-    runId: 0,
-    name: file.name,
-    vendor,
-    year,
-    tool: '',
-    total: parsed.counts.total,
-    anomalies: parsed.counts.anomalies,
-    welds: parsed.counts.welds,
-    valves: parsed.counts.valves,
-    tees: parsed.counts.tees,
-    offtakes: parsed.counts.offtakes,
-    bends: parsed.counts.bends,
-    others: parsed.counts.others,
-    gwAnchors: parsed.counts.gwAnchors,
-    invalidAnchorDistances: parsed.counts.invalidAnchorDistances,
-    rawFeatures: parsed.rawFeatures,
-  };
 }
 
 async function waitForIngestion(jobId: string, fileName: string, setLabel: (value: string) => void) {
@@ -109,8 +85,6 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         algorithm: algorithm,
         enablePartialRun: enablePartialRun
       };
-      const parsedRuns: any[] = [];
-
       if (algorithm === 'phylogenetic') {
         summaryData.ancestorRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
         summaryData.run1 = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
@@ -120,43 +94,47 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         summaryData.oldRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
       }
 
-      // Fast path: parse the workbook in the browser and keep the canonical
-      // rows in memory. This avoids the slow ingestion queue/Python process;
-      // StepGwSimulator sends these anchors directly to the DTW endpoint.
       if (algorithm !== 'phylogenetic') {
-        for (let i = 0; i < datasets.length; i += 1) {
-          const ds = datasets[i];
-          if (!ds.file) continue;
-          setProcessingLabel(`Reading ${i + 1} of ${datasets.length}: ${ds.file.name}`);
-          parsedRuns[i] = await parseBrowserRun(ds.file, String(ds.vendor || ''), String(ds.year || ''));
-        }
-        const masterRun = parsedRuns[masterIndex];
-        const historicalRuns = parsedRuns
-          .filter((run, index) => run && index !== masterIndex)
-          .sort((left, right) => Number(right.year || 0) - Number(left.year || 0));
-        summaryData.masterRun = masterRun;
-        summaryData.historicalRuns = historicalRuns;
-        summaryData.newRun = masterRun;
-        summaryData.oldRun = historicalRuns[0];
+        const runPair = await ingestPersistedInspectionRunPair({
+          datasets: datasets.map((dataset) => ({
+            file: dataset.file as File,
+            vendor: String(dataset.vendor || ''),
+            year: String(dataset.year || ''),
+            tool: String(dataset.tool || ''),
+          })),
+          masterIndex,
+          ingest: async (dataset, index) => {
+            setProcessingLabel(`Importing ${index + 1} of ${datasets.length}: ${dataset.file.name}`);
+            const formData = new FormData();
+            formData.append('file', dataset.file);
+            formData.append('pipelineName', pipelineName);
+            formData.append('surveyYear', dataset.year);
+            formData.append('vendor', dataset.vendor);
+            const queued = await apiFetch<IngestionResponse>('/api/upload-csv', {
+              method: 'POST',
+              body: formData,
+            });
+            const response = queued.jobId
+              ? await waitForIngestion(String(queued.jobId), dataset.file.name, setProcessingLabel)
+              : queued;
+            return buildPersistedIliRun(response, {
+              name: dataset.file.name,
+              vendor: dataset.vendor,
+              year: dataset.year,
+              tool: dataset.tool,
+            });
+          },
+        });
+        Object.assign(summaryData, runPair);
         onNext({ summaryData, algorithm, enablePartialRun });
         return;
       }
 
-      // Phylogenetic mode still uses the persisted ingestion contract.
       for (let i = 0; i < datasets.length; i += 1) {
         const ds = datasets[i];
         if (!ds.file) continue;
         setProcessingLabel(`Importing ${i + 1} of ${datasets.length}: ${ds.file.name}`);
-        let runKey = '';
-        if (algorithm === 'phylogenetic') {
-          if (i === 0) runKey = 'ancestorRun';
-          else if (i === 1) runKey = 'run1';
-          else if (i === 2) runKey = 'run2';
-        } else {
-          // Non-phylogenetic runs are assigned after every file is parsed so
-          // additional historical uploads cannot overwrite each other.
-          runKey = '';
-        }
+        const runKey = i === 0 ? 'ancestorRun' : i === 1 ? 'run1' : 'run2';
 
         const formData = new FormData();
         formData.append('file', ds.file);
@@ -176,21 +154,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           year: String(ds.year || ''),
           tool: String(ds.tool || ''),
         });
-        if (algorithm === 'phylogenetic') summaryData[runKey] = parsedRun;
-        else parsedRuns[i] = parsedRun;
-      }
-
-      if (algorithm !== 'phylogenetic') {
-        const masterRun = parsedRuns[masterIndex];
-        const historicalRuns = parsedRuns
-          .filter((run, index) => run && index !== masterIndex)
-          .sort((left, right) => Number(right.year || 0) - Number(left.year || 0));
-        summaryData.masterRun = masterRun;
-        summaryData.historicalRuns = historicalRuns;
-        // Backward-compatible pair consumed by the current DTW/Hungarian
-        // engines. NEW is always the newest/master run.
-        summaryData.newRun = masterRun;
-        summaryData.oldRun = historicalRuns[0];
+        summaryData[runKey] = parsedRun;
       }
       
       onNext({ summaryData, algorithm, enablePartialRun });

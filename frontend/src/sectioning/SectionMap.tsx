@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect } from 'react';
 import { MapContainer, TileLayer, Polyline, Tooltip, Marker, CircleMarker, useMapEvents, useMap } from 'react-leaflet';
-import { SectionDef } from './IliSectioningPage';
+import type { SectionDef } from './types';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 

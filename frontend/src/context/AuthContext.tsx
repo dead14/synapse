@@ -3,6 +3,8 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { apiFetch } from "../utils/api";
 import { disconnectSocket } from "../utils/socket";
 
+const AUTH_BOOT_TIMEOUT_MS = 8000;
+
 interface User {
   id: number;
   username: string;
@@ -88,6 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const controller = new AbortController();
     let isCurrent = true;
+    const timeoutId = window.setTimeout(() => controller.abort(), AUTH_BOOT_TIMEOUT_MS);
 
     const handleAuthExpired = () => {
       if (!isCurrent) return;
@@ -114,6 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       isCurrent = false;
       controller.abort();
+      window.clearTimeout(timeoutId);
       window.removeEventListener("synapse:auth-expired", handleAuthExpired);
     };
   }, []);

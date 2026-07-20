@@ -3,6 +3,8 @@ import { useLocation, useNavigate, Navigate } from 'react-router-dom';
 import { FiArrowLeft, FiSearch, FiFilter } from 'react-icons/fi';
 import PageMeta from '../../components/common/PageMeta';
 import type { FfsResult, FfsConfig } from '../../lib/ffs/types';
+import SynButton from '../../components/ui/SynButton';
+import { buildFfsDecision } from '../../lib/ffs/assessmentDecision';
 
 export default function FfsResultsPage() {
   const location = useLocation();
@@ -25,6 +27,16 @@ export default function FfsResultsPage() {
   const okCount = results.filter(r => r.acceptance === 'Acceptable').length;
   const failCount = results.filter(r => r.acceptance === 'Un-Acceptable').length;
   const warnCount = results.filter(r => r.expectedLife < thresh).length;
+  const governingResult = [...results].sort((a, b) => b.ERF - a.ERF || a.expectedLife - b.expectedLife)[0];
+  const governingDecision = governingResult ? buildFfsDecision({
+    nominal: governingResult,
+    provenance: {
+      sourceRunId: 'navigation-session',
+      sourceFeatureKey: `${governingResult.section}:${governingResult.ld}`,
+      calculationVersion: 'synapse-b31g-1.0.0',
+    },
+    confidence: { dataQuality: 0.5, alignment: 0.5, measurement: 0.5 },
+  }) : null;
 
   // Filtering and Sorting
   const filtered = results.filter(r => {
@@ -66,23 +78,26 @@ export default function FfsResultsPage() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="syn-page syn-ui-kit">
       <PageMeta title="FFS Results" description="Assessment Results" />
       
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+      <div className="syn-page__header">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800 dark:text-white uppercase">Assessment Results</h1>
+          <p className="syn-eyebrow">Fitness-for-service</p>
+          <h1 className="syn-page__title">Assessment results</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
             Line: {config.lineName} · Method: {config.method === 'modified' ? 'Modified B31G' : 'Original B31G'} · ILI: {config.iliDate.toLocaleDateString()}
           </p>
         </div>
-        <button 
+        <SynButton
           onClick={() => navigate('/ffs')}
-          className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+          variant="outline"
+          size="sm"
+          className="inline-flex items-center gap-2"
         >
           <FiArrowLeft /> New Assessment
-        </button>
+        </SynButton>
       </div>
 
       {/* Summary Cards */}
@@ -108,6 +123,24 @@ export default function FfsResultsPage() {
           <div className="text-xs text-slate-500 mt-2">Expected life &lt; {thresh} yrs</div>
         </div>
       </div>
+
+      {governingDecision && (
+        <section className="syn-panel mb-6 p-5" aria-label="Governing engineering decision">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="syn-kicker">Decision layer · engineering review required</p>
+              <h2 className="syn-heading mt-2">Governing response: {governingDecision.responseCategory.replace('_', ' ')}</h2>
+              <p className="syn-copy mt-2 max-w-3xl">{governingDecision.explanation.join(' ')}</p>
+            </div>
+            <span className="syn-pill syn-pill--warning"><span className="syn-dot" />Confidence {Math.round(governingDecision.confidence.overall * 100)}%</span>
+          </div>
+          <dl className="mt-5 grid gap-3 md:grid-cols-3">
+            <div className="rounded-xl bg-gray-50 p-4 dark:bg-gray-900"><dt className="syn-eyebrow">Method</dt><dd className="mt-2 text-sm font-semibold">{governingDecision.provenance.method} · {governingDecision.provenance.methodEdition}</dd></div>
+            <div className="rounded-xl bg-gray-50 p-4 dark:bg-gray-900"><dt className="syn-eyebrow">Validation status</dt><dd className="mt-2 text-sm font-semibold">{governingDecision.provenance.validationStatus}</dd></div>
+            <div className="rounded-xl bg-gray-50 p-4 dark:bg-gray-900"><dt className="syn-eyebrow">Missing evidence</dt><dd className="mt-2 text-sm font-semibold">{governingDecision.missingData.join(', ') || 'None recorded'}</dd></div>
+          </dl>
+        </section>
+      )}
 
       {/* Table Section */}
       <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm overflow-hidden flex flex-col">
