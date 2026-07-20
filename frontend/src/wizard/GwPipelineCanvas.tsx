@@ -242,7 +242,7 @@ export default function GwPipelineCanvas({
               const status = statusFor(match);
               if (status === 'missing') return null;
               const isSelected = String(match.id) === selectedId;
-              return <line key={String(match.id ?? index)} className={`is-${status}${isSelected ? ' is-selected' : ''}`} x1={(oldPosition / safeMaximum) * 1000} y1="228" x2={(newPosition / safeMaximum) * 1000} y2="105" />;
+              return <line key={String(match.id ?? index)} className={`is-${status}${isSelected ? ' is-selected' : ''}`} x1={(oldPosition / safeMaximum) * 1000} y1="105" x2={(newPosition / safeMaximum) * 1000} y2="228" />;
             })}
           </svg>
 
