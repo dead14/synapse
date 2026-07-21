@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, FiX, FiDownload, FiMap } from 'react-icons/fi';
 import { apiFetch, apiUrl } from './utils/api';
+import { createExcelExportRows } from './utils/alignmentExport';
 
 // Lazy load chart.js - heavy library, only load when Chart tab is selected
 const LazyScatterChart = lazy(() =>
@@ -549,13 +550,14 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
     if (sortedData.length === 0) return;
     setIsExporting(true);
     try {
+      const exportRows = createExcelExportRows(sortedData);
       const response = await fetch(apiUrl('/api/alignment/export-excel'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         credentials: 'include',
-        body: JSON.stringify({ data: sortedData })
+        body: JSON.stringify({ data: exportRows })
       });
       
       if (!response.ok) {
