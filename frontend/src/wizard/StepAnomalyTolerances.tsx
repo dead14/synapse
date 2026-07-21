@@ -11,12 +11,14 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
   const [clockTol, setClockTol] = useState(config?.ToleranceConfig?.clock_tolerance ?? 15);
   const [usGwTol, setUsGwTol] = useState(config?.ToleranceConfig?.us_gw_distance_tolerance ?? config?.scenario?.distThresh ?? 0.2);
   const [dsGwTol, setDsGwTol] = useState(config?.ToleranceConfig?.ds_gw_distance_tolerance ?? config?.scenario?.distThresh ?? 0.2);
+  const [useUsGwDistance, setUseUsGwDistance] = useState(config?.ToleranceConfig?.use_us_gw_distance !== false);
   const [lengthTol, setLengthTol] = useState(config?.ToleranceConfig?.length_tolerance ?? 50);
   
   const applyRecommended = () => {
     setClockTol(15);
     setUsGwTol(0.2);
     setDsGwTol(0.2);
+    setUseUsGwDistance(true);
     setLengthTol(50);
   };
 
@@ -26,6 +28,7 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
         clock_tolerance: clockTol,
         us_gw_distance_tolerance: usGwTol,
         ds_gw_distance_tolerance: dsGwTol,
+        use_us_gw_distance: useUsGwDistance,
         length_tolerance: lengthTol
       }
     });
@@ -79,13 +82,32 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
         <div className="border border-gray-200 rounded-xl p-5 hover:border-blue-300 transition-colors bg-gray-50/50">
           <div className="flex justify-between items-start mb-4">
             <label className="text-sm font-bold text-gray-700">US GW Distance Tol (± m)</label>
-            <span className="bg-white px-2 py-1 rounded text-blue-600 font-mono text-sm shadow-sm border border-gray-100">{usGwTol}m</span>
+            <span className={`bg-white px-2 py-1 rounded font-mono text-sm shadow-sm border border-gray-100 ${useUsGwDistance ? 'text-blue-600' : 'text-gray-400'}`}>{usGwTol}m</span>
+          </div>
+          <div className="flex items-center gap-2 mb-3">
+            <input
+              id="use-us-gw-distance"
+              type="checkbox"
+              checked={useUsGwDistance}
+              onChange={(event) => setUseUsGwDistance(event.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              aria-describedby="use-us-gw-distance-help"
+            />
+            <label htmlFor="use-us-gw-distance" className="text-xs font-semibold text-gray-700 cursor-pointer">
+              Gunakan Dist. U/S GW untuk matching
+            </label>
           </div>
           <input 
             type="range" min="0.05" max="2.0" step="0.05" 
             value={usGwTol} onChange={(e) => setUsGwTol(parseFloat(e.target.value))}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
+            disabled={!useUsGwDistance}
+            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2 disabled:cursor-not-allowed disabled:opacity-50"
           />
+          <p id="use-us-gw-distance-help" className="text-xs text-gray-500">
+            {useUsGwDistance
+              ? 'Hanya gunakan jika nilai Dist. U/S GW tersedia dan dapat dipercaya.'
+              : 'Nonaktif: nilai Dist. U/S GW diabaikan; batas posisi U/S dan D/S tetap digunakan.'}
+          </p>
         </div>
 
         {/* DS GW Tolerance */}
