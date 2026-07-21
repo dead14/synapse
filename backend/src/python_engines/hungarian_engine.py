@@ -736,6 +736,23 @@ class HungarianAnomalyAlignmentEngine:
         return {"isConserved": is_conserved, "old": old_audit, "new": new_audit}
 
     @staticmethod
+    def _result_distance_fields(old_feature, new_feature):
+        def distances(feature):
+            if not feature:
+                return "-", "-"
+            mapped = feature.get("abs_distance_m")
+            return mapped, feature.get("source_abs_distance_m", mapped)
+
+        old_mapped, old_original = distances(old_feature)
+        new_mapped, new_original = distances(new_feature)
+        return {
+            "Log Dist OLD (m)": old_mapped,
+            "Log Dist NEW (m)": new_mapped,
+            "Original Log Dist OLD (m)": old_original,
+            "Original Log Dist NEW (m)": new_original,
+        }
+
+    @staticmethod
     def _is_matchable_anomaly(feature: dict) -> bool:
         """Only anomaly / metal-loss records are eligible for Hungarian."""
         feature_type = str(feature.get("originalType", "")).strip().lower()
@@ -1233,8 +1250,9 @@ class HungarianAnomalyAlignmentEngine:
                 "Identif. NEW": f2.get("id") if f2 else "-",
                 "Feature ID OLD": f1.get("id") if f1 else "-",
                 "Feature ID NEW": f2.get("id") if f2 else "-",
-                "Log Dist OLD (m)": f1.get("abs_distance_m") if f1 else "-",
-                "Log Dist NEW (m)": f2.get("abs_distance_m") if f2 else "-",
+                # Presentation metadata only. Matching and all physics calculations
+                # continue to use abs_distance_m on the canonical master axis.
+                **self._result_distance_fields(f1, f2),
                 "Joint No. OLD": f1.get("raw", {}).get("joint_number") if f1 else "-",
                 "Joint No. NEW": f2.get("raw", {}).get("joint_number") if f2 else "-",
                 "Dist GW OLD (m)": f1.get("dist_to_us_gw_m") if f1 else "-",

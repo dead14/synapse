@@ -292,6 +292,17 @@ class HungarianTieInOffsetTests(unittest.TestCase):
         self.assertEqual(historical[1]["abs_distance_m"], 110.0)
         self.assertEqual(master[0]["abs_distance_m"], 110.0)
 
+    def test_result_distance_fields_keep_mapped_and_original_values_separate(self):
+        fields = HungarianAnomalyAlignmentEngine._result_distance_fields(
+            {"abs_distance_m": 3905.57, "source_abs_distance_m": 42.243},
+            {"abs_distance_m": 3905.57, "source_abs_distance_m": 3905.57},
+        )
+
+        self.assertEqual(fields["Log Dist OLD (m)"], 3905.57)
+        self.assertEqual(fields["Log Dist NEW (m)"], 3905.57)
+        self.assertEqual(fields["Original Log Dist OLD (m)"], 42.243)
+        self.assertEqual(fields["Original Log Dist NEW (m)"], 3905.57)
+
     def test_legacy_inverted_field_names_are_resolved_by_survey_year(self):
         params = {
             "summaryData": {

@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, FiX, FiDownload, FiMap } from 'react-icons/fi';
 import { apiFetch, apiUrl } from './utils/api';
 import { createExcelExportRows } from './utils/alignmentExport';
+import { alignmentDisplayValue, isAlignmentDisplayMetadata } from './utils/alignmentDisplay';
 
 // Lazy load chart.js - heavy library, only load when Chart tab is selected
 const LazyScatterChart = lazy(() =>
@@ -272,7 +273,11 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   // Extract all columns
   const allColumns = useMemo(() => {
     if (data && data.length > 0) {
-      const keys = Object.keys(data[0]).filter(k => k !== 'Match/Unmatch' && k !== '__resultGroup');
+      const keys = Object.keys(data[0]).filter(k =>
+        k !== 'Match/Unmatch'
+        && k !== '__resultGroup'
+        && !isAlignmentDisplayMetadata(k)
+      );
       // Add computed columns at the end
       keys.push('Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning');
       return ['Section', ...keys];
@@ -490,7 +495,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
       // Column data filters
       for (const [key, value] of Object.entries(filterConfig)) {
         if (value) {
-          const rowValue = row[key];
+          const rowValue = alignmentDisplayValue(row, key);
           if (rowValue === undefined || rowValue === null || !rowValue.toString().toLowerCase().includes(value.toLowerCase())) {
             return false;
           }
@@ -504,8 +509,8 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   const sortedData = useMemo(() => {
     if (!sortConfig) return filteredData;
     return [...filteredData].sort((a, b) => {
-      const aVal = a[sortConfig.key];
-      const bVal = b[sortConfig.key];
+      const aVal = alignmentDisplayValue(a, sortConfig.key);
+      const bVal = alignmentDisplayValue(b, sortConfig.key);
       if (aVal === bVal) return 0;
       
       if (aVal === undefined || aVal === null || aVal === '-') return sortConfig.direction === 'asc' ? 1 : -1;
@@ -935,7 +940,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                               }}
                             >
                               {visibleColumns.filter(c => allColumns.includes(c)).map((col, j) => {
-                                let val = row[col];
+                                let val = alignmentDisplayValue(row, col);
                                 if (typeof val === 'string' && (val.toLowerCase() === 'null' || val.toLowerCase() === 'nan' || val.toLowerCase() === 'undefined')) {
                                   val = null;
                                 }
