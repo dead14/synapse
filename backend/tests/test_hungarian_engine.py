@@ -64,6 +64,27 @@ class HungarianToleranceTests(unittest.TestCase):
         self.assertLess(consistent_cost, self.engine.INF_COST)
         self.assertEqual(inconsistent_cost, self.engine.INF_COST)
 
+    def test_can_ignore_upstream_gw_distance_when_disabled(self):
+        old = self.feature(100.0, dist_to_us_gw_m=2.0)
+        new = self.feature(100.1, dist_to_us_gw_m=3.0)
+
+        cost = self.engine.build_cost_matrix(
+            [old], [new], [], [], {"use_us_gw_distance": False},
+        )[0][0]
+
+        self.assertLess(cost, self.engine.INF_COST)
+
+    def test_disabling_upstream_gw_distance_overrides_onedirection_requirement(self):
+        self.engine.require_us_gw_distance = True
+        old = self.feature(100.0, dist_to_us_gw_m=2.0)
+        new_without_us_distance = self.feature(100.1)
+
+        cost = self.engine.build_cost_matrix(
+            [old], [new_without_us_distance], [], [], {"use_us_gw_distance": False},
+        )[0][0]
+
+        self.assertLess(cost, self.engine.INF_COST)
+
     def test_clock_difference_is_a_soft_cost_not_a_hard_gate(self):
         old = self.feature(100.0, clock_position="12:00")
         near_clock_new = self.feature(100.1, clock_position="12:15")

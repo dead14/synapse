@@ -345,6 +345,7 @@ class HungarianAnomalyAlignmentEngine:
         self.clock_tolerance = 15.0
         self.us_gw_distance_tolerance = distance_tolerance_m
         self.ds_gw_distance_tolerance = distance_tolerance_m
+        self.use_us_gw_distance = True
         self.length_tolerance = 400.0
         self.session = SessionLocal()
         
@@ -793,6 +794,9 @@ class HungarianAnomalyAlignmentEngine:
             "ds_gw_distance_tolerance", self.ds_gw_distance_tolerance
         ))
         length_tolerance = float(overrides.get("length_tolerance", self.length_tolerance))
+        use_us_gw_distance = overrides.get(
+            "use_us_gw_distance", getattr(self, "use_us_gw_distance", True),
+        ) is not False
 
         for i, f1 in enumerate(anomalies_1):
             corrected_dist = f1["abs_distance_m"] + self._interpolate_offset(
@@ -816,9 +820,13 @@ class HungarianAnomalyAlignmentEngine:
                     # 1. GW Penalty
                     gw1 = f1.get("dist_to_us_gw_m")
                     gw2 = f2.get("dist_to_us_gw_m")
-                    if getattr(self, "require_us_gw_distance", False) and (gw1 is None or gw2 is None):
+                    if (
+                        use_us_gw_distance
+                        and getattr(self, "require_us_gw_distance", False)
+                        and (gw1 is None or gw2 is None)
+                    ):
                         continue
-                    if gw1 is not None and gw2 is not None:
+                    if use_us_gw_distance and gw1 is not None and gw2 is not None:
                         gw_distance_difference = abs(abs(gw1) - abs(gw2))
                         if gw_distance_difference > us_distance_tolerance:
                             continue
@@ -880,9 +888,6 @@ class HungarianAnomalyAlignmentEngine:
             sess = None
 
         params_json = sess.params_json if sess and sess.params_json else {}
-        self.require_us_gw_distance = (
-            params_json.get("algorithm") == "dtw_hungarian_onedirection"
-        )
         self.hidden_features = [
             name for name, is_hidden in params_json.get("hiddenFeatures", {}).items()
             if is_hidden
@@ -897,6 +902,11 @@ class HungarianAnomalyAlignmentEngine:
             self.us_gw_distance_tolerance = float(tol_config["us_gw_distance_tolerance"])
         if "ds_gw_distance_tolerance" in tol_config:
             self.ds_gw_distance_tolerance = float(tol_config["ds_gw_distance_tolerance"])
+        self.use_us_gw_distance = tol_config.get("use_us_gw_distance", True) is not False
+        self.require_us_gw_distance = (
+            params_json.get("algorithm") == "dtw_hungarian_onedirection"
+            and self.use_us_gw_distance
+        )
         if "length_tolerance" in tol_config:
             self.length_tolerance = float(tol_config["length_tolerance"])
 
