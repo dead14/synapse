@@ -246,5 +246,109 @@ class ParserIngestTests(unittest.TestCase):
         self.assertEqual(result["summary"]["anomalies"], 1)
 
 
+class FeatureClassificationTests(unittest.TestCase):
+    """POF short codes must classify, not fall through to 'other'.
+
+    Regression: the patterns were written as r"\\banom\\b" inside a raw
+    string, which matches a literal backslash-b rather than a word boundary.
+    Every vendor exporting short codes reported anomalies: 0, welds: 0.
+    """
+
+    def _summarize(self, labels):
+        return db_ingest.summarize_feature_counts(
+            pd.DataFrame({"feature_type": labels})
+        )
+
+    def test_pof_short_codes_are_classified(self):
+        summary = self._summarize(
+            ["ANOM", "ML", "COCL", "CORR", "GW", "VALV", "OFFT"]
+        )
+        self.assertEqual(summary["anomalies"], 4)
+        self.assertEqual(summary["welds"], 1)
+        self.assertEqual(summary["valves"], 1)
+        self.assertEqual(summary["offtakes"], 1)
+        self.assertEqual(summary["others"], 0)
+
+    def test_long_form_labels_still_classify(self):
+        summary = self._summarize(
+            ["Metal Loss", "Corrosion", "Girth Weld", "Valve", "Offtake", "Tee", "Bend"]
+        )
+        self.assertEqual(summary["anomalies"], 2)
+        self.assertEqual(summary["welds"], 1)
+        self.assertEqual(summary["tees"], 1)
+        self.assertEqual(summary["bends"], 1)
+
+    def test_word_boundaries_still_exclude_substring_matches(self):
+        # 'html' must not match \bml\b, 'gwen' must not match \bgw\b.
+        summary = self._summarize(["html report", "gwen", "normalize"])
+        self.assertEqual(summary["anomalies"], 0)
+        self.assertEqual(summary["welds"], 0)
+        self.assertEqual(summary["others"], 3)
+
+
+class UnitDetectionTests(unittest.TestCase):
+    def test_imperial_distance_detected_from_column_headers(self):
+        columns = ["Feature ID", "Distance (ft)", "Feature Type"]
+        field_map = {"Distance (ft)": "log_distance_m"}
+        result = db_ingest.detect_source_units(columns, field_map)
+        self.assertEqual(result["distances"], "imperial")
+
+    def test_metric_distance_detected_from_column_headers(self):
+        columns = ["Feature ID", "Log Distance (m)", "Type"]
+        field_map = {"Log Distance (m)": "log_distance_m"}
+        result = db_ingest.detect_source_units(columns, field_map)
+        self.assertEqual(result["distances"], "metric")
+
+    def test_imperial_dimensions_detected(self):
+        columns = ["ID", "Distance", "Length (in)", "Width (inches)"]
+        field_map = {"Length (in)": "length_mm", "Width (inches)": "width_mm"}
+        result = db_ingest.detect_source_units(columns, field_map)
+        self.assertEqual(result["dimensions"], "imperial")
+
+    def test_no_units_when_headers_are_ambiguous(self):
+        columns = ["Feature ID", "Log Distance", "Feature Type"]
+        field_map = {"Log Distance": "log_distance_m"}
+        result = db_ingest.detect_source_units(columns, field_map)
+        self.assertIsNone(result["distances"])
+        self.assertIsNone(result["dimensions"])
+
+    def test_imperial_distance_conversion_applied(self):
+        raw = pd.DataFrame({
+            "Distance (ft)": [100.0, 200.0, 300.0],
+            "Feature Type": ["Weld", "Metal Loss", "Weld"],
+        })
+        field_map = {"Distance (ft)": "log_distance_m", "Feature Type": "feature_type"}
+        universal, audit = db_ingest.normalize_ingestion_frame(raw, field_map)
+        self.assertAlmostEqual(universal["log_distance_m"].iloc[0], 100.0 * 0.3048, places=4)
+        self.assertAlmostEqual(universal["log_distance_m"].iloc[2], 300.0 * 0.3048, places=4)
+        self.assertEqual(audit["unit_conversions"]["log_distance_m"], "ft_to_m")
+        self.assertEqual(audit["source_units"]["distances"], "imperial")
+
+    def test_imperial_dimension_conversion_applied(self):
+        raw = pd.DataFrame({
+            "Log Distance (m)": [10.0, 20.0],
+            "Length (inches)": [4.0, 6.0],
+            "Feature Type": ["Metal Loss", "Metal Loss"],
+        })
+        field_map = {
+            "Log Distance (m)": "log_distance_m",
+            "Length (inches)": "length_mm",
+            "Feature Type": "feature_type",
+        }
+        universal, audit = db_ingest.normalize_ingestion_frame(raw, field_map)
+        self.assertAlmostEqual(universal["length_mm"].iloc[0], 4.0 * 25.4, places=4)
+        self.assertEqual(audit["unit_conversions"]["length_mm"], "in_to_mm")
+
+    def test_metric_data_is_not_converted(self):
+        raw = pd.DataFrame({
+            "Log Distance (m)": [100.0, 200.0],
+            "Feature Type": ["Weld", "Metal Loss"],
+        })
+        field_map = {"Log Distance (m)": "log_distance_m", "Feature Type": "feature_type"}
+        universal, audit = db_ingest.normalize_ingestion_frame(raw, field_map)
+        self.assertAlmostEqual(universal["log_distance_m"].iloc[0], 100.0)
+        self.assertEqual(audit["unit_conversions"], {})
+
+
 if __name__ == "__main__":
     unittest.main()

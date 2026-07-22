@@ -226,13 +226,29 @@ test('socket handshake rejects an unauthenticated client', async () => {
 });
 
 test('database configuration comes only from environment values', () => {
-    assert.deepEqual(
-        buildDatabaseConfig({ DATABASE_URL: 'postgresql://configured-host/synapse' }),
-        { connectionString: 'postgresql://configured-host/synapse' },
-    );
+    const fromUrl = buildDatabaseConfig({ DATABASE_URL: 'postgresql://configured-host/synapse' });
+    assert.equal(fromUrl.connectionString, 'postgresql://configured-host/synapse');
+    // No credential may be synthesised when only DATABASE_URL is supplied.
+    for (const key of ['host', 'port', 'database', 'user', 'password', 'ssl']) {
+        assert.equal(fromUrl[key], undefined, `${key} must not be inferred`);
+    }
 
     assert.throws(
         () => buildDatabaseConfig({}),
         /DATABASE_URL.*DB_HOST.*DB_USER.*DB_PASSWORD.*DB_NAME/,
     );
+});
+
+test('database pool limits are bounded and overridable', () => {
+    const defaults = buildDatabaseConfig({ DATABASE_URL: 'postgresql://h/s' });
+    assert.equal(defaults.max, 20);
+    assert.equal(defaults.connectionTimeoutMillis, 5000);
+    assert.equal(defaults.statement_timeout, 30000);
+
+    const tuned = buildDatabaseConfig({ DATABASE_URL: 'postgresql://h/s', DB_POOL_MAX: '50' });
+    assert.equal(tuned.max, 50);
+
+    // A nonsense override must fall back rather than disable the limit.
+    const bogus = buildDatabaseConfig({ DATABASE_URL: 'postgresql://h/s', DB_POOL_MAX: '0' });
+    assert.equal(bogus.max, 20);
 });

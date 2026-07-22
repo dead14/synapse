@@ -4,7 +4,11 @@ import { useNavigate } from 'react-router-dom';
 import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, FiX, FiDownload, FiMap } from 'react-icons/fi';
 import { apiFetch, apiUrl } from './utils/api';
 import { createExcelExportRows } from './utils/alignmentExport';
-import { alignmentDisplayValue, isAlignmentDisplayMetadata } from './utils/alignmentDisplay';
+import {
+  alignmentDisplayValue,
+  isAlignmentDisplayMetadata,
+  sortAlignmentRowsByDisplayedLogDistance,
+} from './utils/alignmentDisplay';
 
 // Lazy load chart.js - heavy library, only load when Chart tab is selected
 const LazyScatterChart = lazy(() =>
@@ -185,21 +189,9 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
           ...(rawData.bypassed_new || []).map((row: any) => ({ ...row, __resultGroup: 'BYPASSED' }))
        ];
     }
-    // The backend keeps separate buckets for the matching phases.  The
-    // Results view is one pipeline, so merge those buckets by odometer and
-    // keep OLD/NEW pairs adjacent instead of rendering phase-sized blocks.
-    return flattened
-      .map((row: any, index: number) => ({ row, index }))
-      .sort((a: any, b: any) => {
-        const aDistances = [a.row['Log Dist OLD (m)'], a.row['Log Dist NEW (m)']]
-          .map(Number).filter(Number.isFinite);
-        const bDistances = [b.row['Log Dist OLD (m)'], b.row['Log Dist NEW (m)']]
-          .map(Number).filter(Number.isFinite);
-        const aSortable = aDistances.length ? Math.min(...aDistances) : Number.POSITIVE_INFINITY;
-        const bSortable = bDistances.length ? Math.min(...bDistances) : Number.POSITIVE_INFINITY;
-        return aSortable - bSortable || a.index - b.index;
-      })
-      .map(({ row }: { row: any }) => row);
+    // NEW is the spatial master. Keep the default order consistent with the
+    // source NEW log distance rendered in the table; OLD-only rows follow it.
+    return sortAlignmentRowsByDisplayedLogDistance(flattened);
   }, [rawData]);
 
   const navigate = useNavigate();
@@ -1009,9 +1001,9 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                       <tr>
                         <th className="px-1 py-1 font-bold border-r border-gray-200">Defect ID</th>
                         <th className="px-1 py-1 font-bold border-r border-gray-200">Distance <span className="text-blue-500">m</span></th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200">Dist. Adj <span className="text-blue-500">m</span></th>
+                        <th className="px-1 py-1 font-bold border-r border-gray-200" title="Estimate only: nominal 0.1 m offset applied to the logged distance. Not a surveyed value — do not use directly for dig planning.">Dist. Adj <span className="text-blue-500">m</span> <span className="text-amber-500 font-normal">(est.)</span></th>
                         <th className="px-1 py-1 font-bold border-r border-gray-200">Rel. to U/S Weld <span className="text-blue-500">m</span></th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200">Rel. Nearest Weld <span className="text-blue-500">m</span></th>
+                        <th className="px-1 py-1 font-bold border-r border-gray-200" title="Estimate only: nominal 0.05 m offset applied to the upstream-weld distance. Not derived from the weld table — do not use directly for dig planning.">Rel. Nearest Weld <span className="text-blue-500">m</span> <span className="text-amber-500 font-normal">(est.)</span></th>
                         <th className="px-1 py-1 font-bold border-r border-gray-200">Wall Thick <span className="text-blue-500">mm</span></th>
                         <th className="px-1 py-1 font-bold border-r border-gray-200">Orient <span className="text-blue-500">deg</span></th>
                         <th className="px-1 py-1 font-bold border-r border-gray-200">Length <span className="text-blue-500">mm</span></th>
@@ -1041,9 +1033,27 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                           const surface = row[isOld ? 'Surface OLD' : 'Surface NEW'] ?? 'Internal';
                           
                           const distFormatted = typeof distance === 'number' ? distance.toFixed(3) : '';
+                          // Rough estimates, not measured values: fixed nominal
+                          // offsets pending a real tie-in / weld-table lookup.
+                          // The column headers mark them as such.
                           const distAdj = typeof distance === 'number' ? (distance - 0.1).toFixed(3) : '';
                           const nearWeld = distGw ? (parseFloat(distGw) - 0.05).toFixed(2) : '';
-                          const perc = (parseFloat(depth) / parseFloat(wt) * 100).toFixed(1);
+
+                          // The source column is 'Depth (%WT)' — already a
+                          // percentage of wall thickness. The two depth columns
+                          // were inverted: the mm column printed the raw
+                          // percentage, and the % column divided that
+                          // percentage by the wall thickness and scaled it
+                          // again, so a 40 %WT flaw in a 10 mm wall rendered as
+                          // "400.0" under a [%] header.
+                          const depthPctValue = parseFloat(depth);
+                          const wallThicknessMm = parseFloat(wt);
+                          const depthPct = Number.isFinite(depthPctValue)
+                            ? depthPctValue.toFixed(1)
+                            : '';
+                          const depthMm = Number.isFinite(depthPctValue) && Number.isFinite(wallThicknessMm)
+                            ? ((depthPctValue / 100) * wallThicknessMm).toFixed(2)
+                            : '';
 
                           return (
                             <tr key={i} className="hover:bg-blue-50/50 transition-colors">
@@ -1056,8 +1066,8 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                               <td className="px-1 py-1 border-r border-gray-100">{oclock}</td>
                               <td className="px-1 py-1 border-r border-gray-100">{length}</td>
                               <td className="px-1 py-1 border-r border-gray-100">{width}</td>
-                              <td className="px-1 py-1 border-r border-gray-100">{depth}</td>
-                              <td className="px-1 py-1 border-r border-gray-100">{isNaN(Number(perc)) ? '-' : perc}</td>
+                              <td className="px-1 py-1 border-r border-gray-100">{depthMm || '-'}</td>
+                              <td className="px-1 py-1 border-r border-gray-100">{depthPct || '-'}</td>
                               <td className="px-1 py-1 text-blue-600 font-medium">{surface}</td>
                             </tr>
                           );

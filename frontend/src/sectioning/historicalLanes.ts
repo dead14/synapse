@@ -1,3 +1,4 @@
+import { pairKey } from './pairing.ts';
 import type { HistoricalGwLane, SpatialFeature } from './types';
 
 type AlignmentMatch = Record<string, unknown>;
@@ -24,10 +25,6 @@ export function parseWallThicknessMm(rawData: Record<string, unknown> | undefine
     if (Number.isFinite(parsed)) return parsed;
   }
   return null;
-}
-
-function pairKey(id: string, distance: number) {
-  return `${id}::${distance.toFixed(6)}`;
 }
 
 function historicalType(row: ComparisonRow) {

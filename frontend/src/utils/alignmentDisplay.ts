@@ -20,3 +20,28 @@ export function alignmentDisplayValue<T extends Record<string, unknown>>(row: T,
 export function isAlignmentDisplayMetadata(column: string): boolean {
   return DISPLAY_METADATA_COLUMNS.has(column);
 }
+
+function displayedDistance<T extends Record<string, unknown>>(row: T, column: string): number | null {
+  const distance = Number(alignmentDisplayValue(row, column));
+  return Number.isFinite(distance) ? distance : null;
+}
+
+export function sortAlignmentRowsByDisplayedLogDistance<T extends Record<string, unknown>>(rows: readonly T[]): T[] {
+  return rows
+    .map((row, index) => ({
+      row,
+      index,
+      oldDistance: displayedDistance(row, 'Log Dist OLD (m)'),
+      newDistance: displayedDistance(row, 'Log Dist NEW (m)'),
+    }))
+    .sort((left, right) => {
+      const leftHasNew = left.newDistance !== null;
+      const rightHasNew = right.newDistance !== null;
+      if (leftHasNew !== rightHasNew) return leftHasNew ? -1 : 1;
+
+      const leftDistance = left.newDistance ?? left.oldDistance ?? Number.POSITIVE_INFINITY;
+      const rightDistance = right.newDistance ?? right.oldDistance ?? Number.POSITIVE_INFINITY;
+      return leftDistance - rightDistance || left.index - right.index;
+    })
+    .map(({ row }) => row);
+}

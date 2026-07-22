@@ -1,12 +1,14 @@
 import React, { useMemo, useState } from 'react';
+import { sourceOdometerDistance } from '../domain/gwTimeline';
+import { maxOf } from '../utils/numericRange.ts';
 
 export default function OdometerDashboard({ matches, ota, setOta, dtwOn: _dtwOn, setDtwOn: _setDtwOn }: any) {
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   const samples = useMemo(() => matches
     .map((match: any, index: number) => {
-      const oldDistance = Number(match.oldVal ?? match.oldDist);
-      const newDistance = Number(match.newVal ?? match.newDist);
+      const oldDistance = sourceOdometerDistance(match, 'old');
+      const newDistance = sourceOdometerDistance(match, 'new');
       const ratioValue = Number(match.deviationRatio);
       const percentValue = Number(match.rawVarPct ?? match.varPct ?? match.otaPercent);
       const deviationPct = Number.isFinite(ratioValue)
@@ -31,7 +33,7 @@ export default function OdometerDashboard({ matches, ota, setOta, dtwOn: _dtwOn,
     .filter((sample: any) => Number.isFinite(sample.oldDistance) && Number.isFinite(sample.newDistance))
     .sort((left: any, right: any) => left.oldDistance - right.oldDistance), [matches, ota]);
 
-  const maxDrift = samples.length > 0 ? Math.max(...samples.map((sample: any) => Math.abs(sample.offset))) : 0;
+  const maxDrift = maxOf(samples.map((sample: any) => Math.abs(sample.offset)));
   const avgSlip = samples.length > 0 ? samples.reduce((total: number, sample: any) => total + sample.deviationPct, 0) / samples.length : 0;
   const flaggedCount = samples.filter((sample: any) => sample.flagged).length;
   const selectedSample = samples[Math.min(selectedIndex, Math.max(samples.length - 1, 0))];

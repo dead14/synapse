@@ -1,4 +1,5 @@
 import type { GwReviewDisposition } from './alignmentReview';
+import { extentOf, maxOf } from '../utils/numericRange.ts';
 
 export type TimelineStatus = 'matched' | 'review' | 'missing';
 
@@ -11,9 +12,33 @@ export type TimelineMatchLike = {
   oldVal?: number | null;
   newVal?: number | null;
   offset?: number | null;
+  originalOldVal?: number | null;
+  originalNewVal?: number | null;
   confidence?: number | null;
   matchConfidence?: number | null;
 };
+
+export function sourceOdometerDistance(
+  match: TimelineMatchLike,
+  side: 'old' | 'new',
+): number | null {
+  const candidates = side === 'old'
+    ? [match.originalOldVal, match.oldVal]
+    : [match.originalNewVal, match.newVal];
+  for (const candidate of candidates) {
+    const distance = Number(candidate);
+    if (Number.isFinite(distance)) return distance;
+  }
+  return null;
+}
+
+export function sourceOdometerOffset(match: TimelineMatchLike): number | null {
+  const oldDistance = sourceOdometerDistance(match, 'old');
+  const newDistance = sourceOdometerDistance(match, 'new');
+  return oldDistance !== null && newDistance !== null
+    ? newDistance - oldDistance
+    : null;
+}
 
 export type GwTimelineMatch = TimelineMatchLike & {
   oldDesc?: string;
@@ -96,6 +121,22 @@ const finiteDistance = (value: unknown): number | null => {
   const distance = Number(value);
   return Number.isFinite(distance) ? distance : null;
 };
+
+export function rawLdForTimelineMarker(
+  sourceDistanceM: unknown,
+  match: GwTimelineMatch | undefined,
+  side: 'old' | 'new',
+) {
+  const originalDistance = side === 'old' ? match?.originalOldVal : match?.originalNewVal;
+  const mappedDistance = side === 'old' ? match?.oldVal : match?.newVal;
+
+  for (const candidate of [sourceDistanceM, originalDistance, mappedDistance]) {
+    if (candidate === null || candidate === undefined || candidate === '') continue;
+    const distance = finiteDistance(candidate);
+    if (distance !== null) return distance;
+  }
+  return null;
+}
 
 const normalizedCoverage = (coverage: TimelineCoverage | null | undefined) => {
   const startM = finiteDistance(coverage?.startM);
@@ -194,8 +235,9 @@ export function buildTimelineModel(
     ...baseMatches.flatMap((match) => [finiteDistance(match.oldVal), finiteDistance(match.newVal)])
       .filter((distance): distance is number => distance !== null),
   ];
-  const derivedStart = knownDistances.length ? Math.min(...knownDistances) : 0;
-  const derivedEnd = knownDistances.length ? Math.max(...knownDistances) : 1;
+  const knownExtent = extentOf(knownDistances, { min: 0, max: 1 });
+  const derivedStart = knownExtent.min;
+  const derivedEnd = knownExtent.max;
   const domain = evidenceDomain ?? {
     startM: derivedStart,
     endM: derivedEnd > derivedStart ? derivedEnd : derivedStart + 1,
@@ -264,7 +306,7 @@ export function buildTimelineSummary(
     meanOffset: summary.offsets.length === 0
       ? 0
       : summary.offsets.reduce((sum, offset) => sum + offset, 0) / summary.offsets.length,
-    maxOffset: summary.offsets.length === 0 ? 0 : Math.max(...summary.offsets.map(Math.abs)),
+    maxOffset: maxOf(summary.offsets.map(Math.abs)),
   };
 }
 

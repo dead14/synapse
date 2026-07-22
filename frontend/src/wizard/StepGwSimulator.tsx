@@ -1,19 +1,22 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Line } from 'react-chartjs-2';
 import { FiX, FiBox, FiChevronRight, FiChevronLeft, FiDownload, FiSearch } from 'react-icons/fi';
-import Pipeline3DViewer from '../components/3d/Pipeline3DViewer';
 import OdometerDashboard from './OdometerDashboard';
 import GwTimelineViewer from './GwTimelineViewer';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Tooltip } from 'chart.js';
 import { apiFetch, ApiError } from '../utils/api';
+import { extentOf, maxOf, minOf } from '../utils/numericRange.ts';
 import { gwReviewKey, normalizeGwReview, selectReviewedGwLocks, type GwReviewDisposition, type GwReviewState } from '../domain/alignmentReview';
-import { buildTimelineModel, type TimelineEvidence, type TimelineGeometry } from '../domain/gwTimeline';
+import { buildTimelineModel, sourceOdometerOffset, type TimelineEvidence, type TimelineGeometry } from '../domain/gwTimeline';
+import { buildGwReviewTransitionPayload } from './gwReviewTransition';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip);
 
+const Pipeline3DViewer = React.lazy(() => import('../components/3d/Pipeline3DViewer'));
+
 interface StepGwSimulatorProps {
   initialOta: number;
-  onNext: (data?: any) => void;
+  onNext: (data?: any) => Promise<void> | void;
   onBack: (data?: any) => void;
   config?: any;
 }
@@ -103,9 +106,9 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
   const [matches, setMatches] = useState<any[]>([]);
   const [gwMatchesFinal, setGwMatchesFinal] = useState<any[]>([]);
   const [gwOrphans, setGwOrphans] = useState<any[]>([]);
-  const [alignedFeatures, setAlignedFeatures] = useState<any[]>([]);
   const [timelineGeometry, setTimelineGeometry] = useState<TimelineGeometry>(() => buildTimelineModel([], null));
   const [isCalculating, setIsCalculating] = useState(false);
+  const [isSavingReview, setIsSavingReview] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
   const [gwReview, setGwReview] = useState<GwReviewState>(() => (
@@ -130,7 +133,6 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
       setMatches([]);
       setGwMatchesFinal([]);
       setGwOrphans([]);
-      setAlignedFeatures([]);
       setTimelineGeometry(buildTimelineModel([], null));
       if (reviewSignature.current !== null && reviewSignature.current !== currentReviewSignature) {
         setGwReview({});
@@ -235,7 +237,6 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
         if (data.success && Array.isArray(data.gwMatches)) {
           reviewSignature.current = currentReviewSignature;
           if (typeof data.sessionRevision === 'string') setSessionRevision(data.sessionRevision);
-          if (data.alignedFeatures) setAlignedFeatures(data.alignedFeatures);
           if (data.gwMatchesFinal) setGwMatchesFinal(data.gwMatchesFinal);
           if (data.gwOrphans) setGwOrphans(data.gwOrphans);
           
@@ -252,15 +253,21 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
           const oldTees = hasPersistedRuns ? [] : rawOldRun.filter((f: any) => featureTypeText(f).includes('tee')).map((f: any) => f.dist);
           const newTees = hasPersistedRuns ? [] : adjustedNewRun.filter((f: any) => featureTypeText(f).includes('tee')).map((f: any) => f.dist);
           
+          const oldFeatureById = new Map(
+            (config?.summaryData?.oldRun?.rawFeatures || []).map((f: any) => [f.id, f]),
+          );
+          const newFeatureById = new Map(
+            (config?.summaryData?.newRun?.rawFeatures || []).map((f: any) => [f.id, f]),
+          );
           const formattedMatches = data.gwMatches.map((m: any, idx: number) => {
               const isMatch = m && m.status === 'Match';
               const rawOffset = m.newDist !== null && m.oldDist !== null ? (m.newDist - m.oldDist) : null;
-              
+
               let correctedNewVal = m.newDist;
               let correctedOffset = rawOffset;
-              
-              const oldFeature = m.oldId ? config?.summaryData?.oldRun?.rawFeatures?.find((f: any) => f.id === m.oldId) : null;
-              const newFeature = m.newId ? config?.summaryData?.newRun?.rawFeatures?.find((f: any) => f.id === m.newId) : null;
+
+              const oldFeature = m.oldId ? oldFeatureById.get(m.oldId) ?? null : null;
+              const newFeature = m.newId ? newFeatureById.get(m.newId) ?? null : null;
               const oldDesc = oldFeature ? (oldFeature.feature_identification || oldFeature.originalType || 'Weld') : '(Missing)';
               const newDesc = newFeature ? (newFeature.feature_identification || newFeature.originalType || 'Weld') : '(Missing)';
 
@@ -282,6 +289,12 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                 ),
                 varPct: finalVarPct,
                 offset: correctedOffset,
+                odometerOffset: sourceOdometerOffset({
+                  originalOldVal: m.oldSourceDist ?? oldFeature?.dist ?? m.oldDist ?? null,
+                  originalNewVal: m.newSourceDist ?? newFeature?.dist ?? m.newDist ?? null,
+                  oldVal: m.oldDist,
+                  newVal: m.newDist,
+                }),
                 status: m.status,
                 deviationRatio: m.deviation_ratio,
                 flagged: m.flagged,
@@ -293,12 +306,12 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
             .filter(Number.isFinite);
           const fallbackEvidence: TimelineEvidence = {
             coordinateSystem: hasCanonicalTieIn ? 'NEW_MASTER' : 'COMMON_DISPLAY',
-            domain: {
-              startM: fallbackDistances.length ? Math.min(...fallbackDistances) : 0,
-              endM: fallbackDistances.length ? Math.max(...fallbackDistances) : 1,
-            },
-            oldCoverage: oldW.length ? { startM: Math.min(...oldW), endM: Math.max(...oldW) } : null,
-            newCoverage: newW.length ? { startM: Math.min(...newW), endM: Math.max(...newW) } : null,
+            domain: (() => {
+              const extent = extentOf(fallbackDistances, { min: 0, max: 1 });
+              return { startM: extent.min, endM: extent.max };
+            })(),
+            oldCoverage: oldW.length ? { startM: minOf(oldW), endM: maxOf(oldW) } : null,
+            newCoverage: newW.length ? { startM: minOf(newW), endM: maxOf(newW) } : null,
             oldFeatures: [
               ...oldW.map((distance) => ({ type: 'weld', displayDistanceM: distance, sourceDistanceM: distance })),
               ...oldValves.map((distance) => ({ type: 'valve', displayDistanceM: distance, sourceDistanceM: distance })),
@@ -393,7 +406,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
     return matchedOnly
       .map((match) => ({
         x: match.oldVal as number,
-        y: match.offset as number,
+        y: match.odometerOffset as number,
         match,
       }))
       .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
@@ -436,6 +449,25 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
     () => selectReviewedGwLocks(gwMatchesFinal, gwReview),
     [gwMatchesFinal, gwReview],
   );
+  const saveReviewAndContinue = async () => {
+    if (isSavingReview) return;
+    setIsSavingReview(true);
+    try {
+      await onNext(buildGwReviewTransitionPayload({
+        ota,
+        strictPenalty,
+        useValveAnchor,
+        dtwOn,
+        gwMatchesFinal: reviewedLocks,
+        gwOrphans,
+        gwReview,
+        gwReviewSignature: reviewSignature.current,
+        sessionRevision,
+      }));
+    } finally {
+      setIsSavingReview(false);
+    }
+  };
 
   const chartPalette = useMemo(() => {
     const styles = getComputedStyle(document.documentElement);
@@ -838,11 +870,11 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
         </button>
         <button 
           type="button"
-          disabled={isCalculating || Boolean(loadError) || matches.length === 0 || gwMatchesFinal.length === 0}
-          onClick={() => onNext({ ota, strictPenalty, useValveAnchor, dtwOn, gwMatches: matches, gwMatchesFinal: reviewedLocks, gwOrphans, alignedFeatures, gwReview, gwReviewSignature: reviewSignature.current, sessionRevision })}
+          disabled={isCalculating || isSavingReview || Boolean(loadError) || matches.length === 0 || gwMatchesFinal.length === 0}
+          onClick={() => { void saveReviewAndContinue(); }}
           className="bg-white hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 text-black px-8 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-lg shadow-white/10"
         >
-          Save review & Next <FiChevronRight />
+          {isSavingReview ? 'Saving review…' : 'Save review & Next'} <FiChevronRight />
         </button>
       </div>
       {/* 3D Viewer Modal */}
@@ -875,7 +907,17 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                     clockAngle: f.orientation || 0
                   }));
 
-                return <Pipeline3DViewer length={endDist - startDist} od={12} anomalies={anomalies} />;
+                return (
+                  <React.Suspense
+                    fallback={(
+                      <div className="flex h-full items-center justify-center text-sm text-gray-300" role="status">
+                        Loading interactive 3D view…
+                      </div>
+                    )}
+                  >
+                    <Pipeline3DViewer length={endDist - startDist} od={12} anomalies={anomalies} />
+                  </React.Suspense>
+                );
               })()}
             </div>
           </div>

@@ -1,6 +1,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const fsPromises = require('fs').promises;
 const { randomUUID } = require('crypto');
 const socketConfig = require('../../socket');
 const pool = require('../../config/db');
@@ -42,6 +43,11 @@ const {
     canonicalSignature,
     canonicalSignatureForConfig,
 } = require('./alignmentSignature');
+const {
+    ALIGNMENT_ENGINE_VERSION,
+    alignmentConfigFingerprint,
+    isReusableAlignmentJob,
+} = require('./alignmentExecution');
 
 // Local execution remains intentionally bounded and owner-scoped. A shared
 // queue can replace this store later without changing the public job contract.
@@ -49,9 +55,6 @@ const localJobs = new OwnedJobStore({
     ttlMs: Number(process.env.JOB_RESULT_TTL_MS) || 60 * 60 * 1000,
 });
 const resultsCache = new Map(); // sessionId -> cached result
-// Bump whenever result semantics change so a hot backend process cannot keep
-// serving rows produced by an older Python engine implementation.
-const ALIGNMENT_ENGINE_VERSION = '2026-07-20-tiein-locked-v5';
 
 const MAX_EXPORT_ROWS = Number(process.env.MAX_EXPORT_ROWS) || 100_000;
 const MAX_DTW_ANCHORS = Number(process.env.MAX_DTW_RECORDS) || 25_000;
@@ -271,6 +274,12 @@ exports.uploadCsv = async (req, res) => {
     } catch (error) {
         fs.unlink(file.path, () => {});
         console.error('Failed to queue ingestion:', error);
+        if (error.code === 'PARSER_DICTIONARY_UNAVAILABLE') {
+            return res.status(503).json({
+                error: error.message,
+                code: error.code,
+            });
+        }
         return res.status(503).json({
             error: 'Ingestion queue is unavailable',
             code: 'INGESTION_QUEUE_UNAVAILABLE',
@@ -339,7 +348,7 @@ let tieInPendingRequests = new Map();
 let tieInRequestCounter = 0;
 let tieInRestartTimer = null;
 let workersShuttingDown = false;
-const pythonExecutable = process.env.PYTHON_EXECUTABLE || 'python';
+const { pythonExecutable, pythonSpawnOptions } = require('../../config/python');
 
 function scheduleWorkerRestart(startWorker, getTimer, setTimer) {
     if (workersShuttingDown || getTimer()) return;
@@ -362,7 +371,7 @@ process.once('exit', stopPythonWorkers);
 function startDtwPythonWorker() {
     console.log("Starting persistent DTW Python worker...");
     if (workersShuttingDown) return;
-    dtwPythonProcess = spawn(pythonExecutable, ['src/python_engines/dtw_engine.py'], { cwd: path.join(__dirname, '../../..') });
+    dtwPythonProcess = spawn(pythonExecutable, ['src/python_engines/dtw_engine.py'], pythonSpawnOptions({ cwd: path.join(__dirname, '../../..') }));
     
     let buffer = '';
     dtwPythonProcess.stdout.on('data', (data) => {
@@ -403,10 +412,6 @@ function startDtwPythonWorker() {
         );
     });
 }
-
-// Start the worker once when the module loads
-startDtwPythonWorker();
-
 
 exports.runDtwAlignment = async (req, res) => {
     let payload;
@@ -509,7 +514,7 @@ exports.runDtwAlignment = async (req, res) => {
 function startTieInPythonWorker() {
     console.log("Starting persistent TieIn Python worker...");
     if (workersShuttingDown) return;
-    tieInPythonProcess = spawn(pythonExecutable, ['src/python_engines/tiein_engine.py'], { cwd: path.join(__dirname, '../../..') });
+    tieInPythonProcess = spawn(pythonExecutable, ['src/python_engines/tiein_engine.py'], pythonSpawnOptions({ cwd: path.join(__dirname, '../../..') }));
     
     let buffer = '';
     tieInPythonProcess.stdout.on('data', (data) => {
@@ -551,8 +556,12 @@ function startTieInPythonWorker() {
     });
 }
 
-// Start the worker once when the module loads
-startTieInPythonWorker();
+function startPythonWorkers() {
+    if (!dtwPythonProcess) startDtwPythonWorker();
+    if (!tieInPythonProcess) startTieInPythonWorker();
+}
+
+exports.startPythonWorkers = startPythonWorkers;
 
 exports.estimateTieInOffset = async (req, res) => {
     let payload;
@@ -861,11 +870,12 @@ exports.getIliResults = async (req, res) => {
         const resolvedSessionId = session.id;
 
         const previousJob = await getLatestAlignmentJob(pool, resolvedSessionId, req.user.orgId);
-        if (previousJob && ['queued', 'active', 'retrying', 'completed'].includes(previousJob.state)) {
+        if (isReusableAlignmentJob(previousJob, session.params_json)) {
             return res.status(previousJob.state === 'completed' ? 200 : 202).json({ jobId: previousJob.job_id });
         }
 
         const jobId = randomUUID();
+        const configFingerprint = alignmentConfigFingerprint(session.params_json);
         const configuredAlgorithm = session.params_json?.algorithm
             || session.params_json?.summaryData?.algorithm
             || 'dtw_hungarian';
@@ -874,6 +884,8 @@ exports.getIliResults = async (req, res) => {
             sessionId: resolvedSessionId,
             organizationId: req.user.orgId,
             userId: req.user.id,
+            engineVersion: ALIGNMENT_ENGINE_VERSION,
+            configFingerprint,
         });
         await alignmentQueue.add('align-ili', {
             jobId,
@@ -881,6 +893,8 @@ exports.getIliResults = async (req, res) => {
             organizationId: req.user.orgId,
             userId: req.user.id,
             algorithm: configuredAlgorithm,
+            engineVersion: ALIGNMENT_ENGINE_VERSION,
+            configFingerprint,
         }, { jobId });
         return res.status(202).json({ success: true, jobId, message: 'Alignment job queued' });
 
@@ -929,67 +943,128 @@ exports.deletePipelineRun = async (req, res) => {
     }
 };
 
+// Each export spawns a Python process and writes a temp file, so an
+// authenticated client looping this endpoint could otherwise spawn unbounded
+// interpreters and fill uploads/.  Cap how many can run at once.
+const MAX_CONCURRENT_EXPORTS = Number(process.env.MAX_CONCURRENT_EXPORTS) || 3;
+const EXPORT_PROCESS_TIMEOUT_MS = Number(process.env.EXPORT_PROCESS_TIMEOUT_MS) || 2 * 60 * 1000;
+let activeExports = 0;
+
+async function removeQuietly(filePath) {
+    await fsPromises.rm(filePath, { force: true }).catch(() => {});
+}
+
 exports.exportExcel = async (req, res) => {
+    const { data } = req.body;
+    if (!data || !Array.isArray(data)) {
+        return res.status(400).json({ error: 'Invalid data payload' });
+    }
+    if (data.length > MAX_EXPORT_ROWS) {
+        return res.status(413).json({ error: `Export is limited to ${MAX_EXPORT_ROWS} rows` });
+    }
+    if (!data.every((row) => row && typeof row === 'object' && !Array.isArray(row))) {
+        return res.status(400).json({ error: 'Each export row must be an object' });
+    }
+
+    if (activeExports >= MAX_CONCURRENT_EXPORTS) {
+        res.set('Retry-After', '10');
+        return res.status(429).json({
+            error: 'Too many exports in progress. Retry shortly.',
+            code: 'EXPORT_BUSY',
+        });
+    }
+    activeExports += 1;
+
+    const uploadsDir = path.join(__dirname, '../../../../uploads');
+    const exportId = randomUUID();
+    const tempInputFile = path.join(uploadsDir, `export_input_${exportId}.json`);
+    const tempOutputFile = path.join(uploadsDir, `export_output_${exportId}.xlsx`);
+
+    let settled = false;
+    const finish = async (handler) => {
+        if (settled) return;
+        settled = true;
+        await removeQuietly(tempInputFile);
+        try {
+            await handler();
+        } finally {
+            activeExports -= 1;
+        }
+    };
+
     try {
-        const { data } = req.body;
-        if (!data || !Array.isArray(data)) {
-            return res.status(400).json({ error: 'Invalid data payload' });
-        }
-        if (data.length > MAX_EXPORT_ROWS) {
-            return res.status(413).json({ error: `Export is limited to ${MAX_EXPORT_ROWS} rows` });
-        }
-        if (!data.every((row) => row && typeof row === 'object' && !Array.isArray(row))) {
-            return res.status(400).json({ error: 'Each export row must be an object' });
-        }
-        
-        // Write the data to a temporary file
-        const uploadsDir = path.join(__dirname, '../../../../uploads');
-        if (!fs.existsSync(uploadsDir)) {
-            fs.mkdirSync(uploadsDir, { recursive: true });
-        }
-        
-        const exportId = randomUUID();
-        const tempInputFile = path.join(uploadsDir, `export_input_${exportId}.json`);
-        const tempOutputFile = path.join(uploadsDir, `export_output_${exportId}.xlsx`);
-        
-        fs.writeFileSync(tempInputFile, JSON.stringify(data, null, 2));
-        
-        // Spawn Python process
-        const pythonProcess = spawn('python', [
-            path.join(__dirname, '../../python_engines/export_excel.py'),
-            tempInputFile,
-            tempOutputFile
-        ]);
-        
+        await fsPromises.mkdir(uploadsDir, { recursive: true });
+        // Async, and without the pretty-printing that tripled the bytes written
+        // for a 100k-row export.
+        await fsPromises.writeFile(tempInputFile, JSON.stringify(data));
+
+        const pythonProcess = spawn(
+            pythonExecutable,
+            [
+                path.join(__dirname, '../../python_engines/export_excel.py'),
+                tempInputFile,
+                tempOutputFile,
+            ],
+            pythonSpawnOptions(),
+        );
+
         let errorOutput = '';
-        pythonProcess.stderr.on('data', (data) => {
-            errorOutput += data.toString();
-        });
-        
-        pythonProcess.on('close', (code) => {
-            // Clean up input file
-            if (fs.existsSync(tempInputFile)) {
-                fs.unlinkSync(tempInputFile);
-            }
-            
-            if (code === 0 && fs.existsSync(tempOutputFile)) {
-                res.download(tempOutputFile, 'synapse_alignment_report.xlsx', () => {
-                    // Clean up output file after download
-                    if (fs.existsSync(tempOutputFile)) {
-                        fs.unlinkSync(tempOutputFile);
-                    }
-                });
-            } else {
-                console.error("Excel export python failed with error: ", errorOutput);
-                if (fs.existsSync(tempOutputFile)) {
-                    fs.unlinkSync(tempOutputFile);
+        pythonProcess.stderr.on('data', (chunk) => { errorOutput += chunk.toString(); });
+
+        const timeout = setTimeout(() => {
+            pythonProcess.kill();
+            finish(async () => {
+                await removeQuietly(tempOutputFile);
+                if (!res.headersSent) {
+                    res.status(504).json({ error: 'Excel export timed out', code: 'EXPORT_TIMEOUT' });
                 }
-                res.status(500).json({ error: 'Failed to generate Excel file' });
+            });
+        }, EXPORT_PROCESS_TIMEOUT_MS);
+
+        // 'error' is emitted asynchronously (e.g. the interpreter is not on
+        // PATH).  With no listener it becomes an uncaught exception, the
+        // request hangs until the client times out, and the temp file leaks.
+        pythonProcess.on('error', (error) => {
+            clearTimeout(timeout);
+            console.error('Excel export failed to spawn:', error.message);
+            finish(async () => {
+                await removeQuietly(tempOutputFile);
+                if (!res.headersSent) {
+                    res.status(500).json({ error: 'Failed to generate Excel file' });
+                }
+            });
+        });
+
+        pythonProcess.on('close', (code) => {
+            clearTimeout(timeout);
+            finish(async () => {
+                const produced = code === 0 && await fsPromises
+                    .access(tempOutputFile)
+                    .then(() => true, () => false);
+
+                if (!produced) {
+                    console.error('Excel export python failed:', errorOutput);
+                    await removeQuietly(tempOutputFile);
+                    if (!res.headersSent) {
+                        res.status(500).json({ error: 'Failed to generate Excel file' });
+                    }
+                    return;
+                }
+
+                await new Promise((resolve) => {
+                    res.download(tempOutputFile, 'synapse_alignment_report.xlsx', () => {
+                        removeQuietly(tempOutputFile).finally(resolve);
+                    });
+                });
+            });
+        });
+    } catch (err) {
+        console.error('Failed to export Excel:', err);
+        await finish(async () => {
+            await removeQuietly(tempOutputFile);
+            if (!res.headersSent) {
+                res.status(500).json({ error: 'Failed to export Excel' });
             }
         });
-        
-    } catch (err) {
-        console.error("Failed to export Excel:", err);
-        res.status(500).json({ error: 'Failed to export Excel' });
     }
 };

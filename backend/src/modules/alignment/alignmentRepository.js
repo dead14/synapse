@@ -86,7 +86,7 @@ async function updateOwnedSessionConfig(pool, sessionId, orgId, config, { expect
          FROM owned
          WHERE s.id = owned.id
            AND ($4::text IS NULL OR s.xmin::text = $4::text)
-         RETURNING s.id, s.status, s.params_json, s.xmin::text AS revision`,
+         RETURNING s.id, s.status, s.xmin::text AS revision`,
         [toJson(config), sessionId, orgId, expectedRevision],
     );
     return result.rows[0] || null;
@@ -170,12 +170,16 @@ async function deleteOwnedSession(pool, sessionId, orgId) {
 }
 
 async function createAlignmentJob(pool, input) {
+    const executionMetadata = JSON.stringify({
+        engineVersion: input.engineVersion,
+        configFingerprint: input.configFingerprint,
+    });
     const result = await pool.query(
         `INSERT INTO alignment_jobs
-            (job_id, session_id, organization_id, user_id, state, progress)
-         VALUES ($1, $2, $3, $4, 'queued', 0)
+            (job_id, session_id, organization_id, user_id, state, progress, result_json)
+         VALUES ($1, $2, $3, $4, 'queued', 0, $5::jsonb)
          RETURNING *`,
-        [input.jobId, input.sessionId, input.organizationId, input.userId || null],
+        [input.jobId, input.sessionId, input.organizationId, input.userId || null, executionMetadata],
     );
     return result.rows[0] || null;
 }

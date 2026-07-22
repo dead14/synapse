@@ -5,6 +5,7 @@ const {
     ensureOwnedPipeline,
     findOwnedPersistedRunByChecksum,
     getOwnedIngestionJob,
+    isParserDictionaryReady,
     serializeIngestionJob,
 } = require('./ingestionRepository');
 
@@ -24,6 +25,11 @@ exports.getIngestionJob = async (req, res) => {
 exports.enqueueIngestion = async ({ file, pipelineName, surveyYear, vendor, user }) => {
     const jobId = randomUUID();
     const storage = require('../storage/objectStorage');
+    if (!(await isParserDictionaryReady(pool))) {
+        const error = new Error('Konfigurasi importer belum siap. Hubungi administrator.');
+        error.code = 'PARSER_DICTIONARY_UNAVAILABLE';
+        throw error;
+    }
     await ensureOwnedPipeline(pool, {
         organizationId: user.orgId,
         pipelineName,

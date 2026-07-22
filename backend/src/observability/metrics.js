@@ -1,4 +1,10 @@
-const MAX_SAMPLES_PER_METRIC = 10_000;
+const MAX_SAMPLES_PER_METRIC = 1_000;
+// Metric series are never evicted, so an unbounded label space is a memory
+// leak reachable by anyone who can send requests.  Past this many distinct
+// series, further ones collapse into a single overflow bucket.
+const MAX_DISTINCT_METRICS = Number(process.env.METRICS_MAX_SERIES) || 500;
+const OVERFLOW_LABEL = 'other';
+
 const metrics = new Map();
 
 function normalizeLabel(value) {
@@ -15,13 +21,35 @@ function metricKey(name, labels = {}) {
 
 function observe(name, durationMs, labels = {}) {
     if (!Number.isFinite(durationMs) || durationMs < 0) return;
-    const key = metricKey(name, labels);
-    const current = metrics.get(key) || { name, labels, count: 0, sum: 0, samples: [] };
+
+    let key = metricKey(name, labels);
+    let effectiveLabels = labels;
+    if (!metrics.has(key) && metrics.size >= MAX_DISTINCT_METRICS) {
+        effectiveLabels = { ...labels, route: OVERFLOW_LABEL };
+        key = metricKey(name, effectiveLabels);
+    }
+
+    const current = metrics.get(key) || {
+        name,
+        labels: effectiveLabels,
+        count: 0,
+        sum: 0,
+        // Fixed-capacity ring buffer.  The previous array + shift() was O(n)
+        // per observation once it reached capacity.
+        samples: new Array(MAX_SAMPLES_PER_METRIC),
+        sampleCount: 0,
+        sampleCursor: 0,
+    };
     current.count += 1;
     current.sum += durationMs;
-    current.samples.push(durationMs);
-    if (current.samples.length > MAX_SAMPLES_PER_METRIC) current.samples.shift();
+    current.samples[current.sampleCursor] = durationMs;
+    current.sampleCursor = (current.sampleCursor + 1) % MAX_SAMPLES_PER_METRIC;
+    if (current.sampleCount < MAX_SAMPLES_PER_METRIC) current.sampleCount += 1;
     metrics.set(key, current);
+}
+
+function filledSamples(metric) {
+    return metric.samples.slice(0, metric.sampleCount);
 }
 
 function observeDuration(name, startedAt, labels = {}) {
@@ -41,8 +69,13 @@ function snapshot() {
         labels: metric.labels,
         count: metric.count,
         averageMs: metric.sum / metric.count,
-        p95Ms: percentile(metric.samples, 0.95),
+        p95Ms: percentile(filledSamples(metric), 0.95),
     }));
+}
+
+// Test seam: metric state is process-global.
+function reset() {
+    metrics.clear();
 }
 
 function prometheus() {
@@ -57,4 +90,12 @@ function prometheus() {
     return `${lines.join('\n')}\n`;
 }
 
-module.exports = { observe, observeDuration, prometheus, snapshot };
+module.exports = {
+    observe,
+    observeDuration,
+    prometheus,
+    snapshot,
+    reset,
+    MAX_DISTINCT_METRICS,
+    MAX_SAMPLES_PER_METRIC,
+};

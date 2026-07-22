@@ -57,6 +57,37 @@ test('summarizeComparison calculates persisted run metrics', () => {
     });
 });
 
+test('summarizeComparison counts only anomaly rows as anomalies', () => {
+    const summary = summarizeComparison([
+        { 'Result Group': 'GW', 'Match Status': 'Matched' },
+        { 'Result Group': 'GW', 'Match Status': 'ONLY_OLD' },
+        { 'Result Group': 'ANOMALY', 'Match Status': 'Matched' },
+        { 'Result Group': 'ANOMALY', 'Match Status': 'Only NEW' },
+        { 'Result Group': 'BYPASSED', 'Match Status': 'Bypassed OLD' },
+        { 'Result Group': 'FILTERED', 'Match Status': 'Filtered NEW' },
+    ]);
+
+    // Every row is still conserved in `total`...
+    assert.equal(summary.total, 6);
+    // ...but GW locks, bypasses and filtered rows are not anomalies, and the
+    // match rate is computed over anomaly candidates only (1 of 2), not 2 of 6.
+    assert.equal(summary.anomaliesFound, 2);
+    assert.equal(summary.matched, 1);
+    assert.equal(summary.unmatched, 1);
+    assert.equal(summary.matchRate, 50);
+});
+
+test('summarizeComparison reports a zero match rate for an empty anomaly set', () => {
+    const summary = summarizeComparison([
+        { 'Result Group': 'GW', 'Match Status': 'Matched' },
+        { 'Result Group': 'BYPASSED', 'Match Status': 'Bypassed OLD' },
+    ]);
+
+    assert.equal(summary.total, 2);
+    assert.equal(summary.anomaliesFound, 0);
+    assert.equal(summary.matchRate, 0);
+});
+
 test('validateDtwPayload rejects malformed datasets before starting the worker', () => {
     assert.throws(
         () => validateDtwPayload({ oldRun: [], newRun: 'not-an-array' }),

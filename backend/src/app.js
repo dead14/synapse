@@ -2,10 +2,24 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const { getJwtSecret } = require('./config/auth');
+const { healthHandler } = require('./config/health');
 const { createCorsOptions, securityHeaders } = require('./config/security');
 const { authMiddleware } = require('./middlewares/authMiddleware');
 const metrics = require('./observability/metrics');
 const app = express();
+
+// Label metrics by the matched route template, never by the raw URL.  This
+// middleware runs before auth, so with req.path as the label any client could
+// mint an unbounded number of permanent metric series with a 404 loop.
+// Unmatched requests all collapse into a single bucket.
+function metricRoute(req) {
+    const template = req.route?.path;
+    if (template) {
+        const base = req.baseUrl || '';
+        return `${base}${template === '/' ? '' : template}`.slice(0, 100) || '/';
+    }
+    return 'unmatched';
+}
 
 // Validate security-critical production configuration during startup.
 getJwtSecret();
@@ -27,10 +41,7 @@ app.use((req, res, next) => {
         if (req.path.startsWith('/api/')) {
             metrics.observe('http_request', Date.now() - startedAt, {
                 method: req.method,
-                route: req.path
-                    .replace(/\/[0-9a-f]{8}-[0-9a-f-]{27,36}(?=\/|$)/gi, '/:id')
-                    .replace(/\/\d+(?=\/|$)/g, '/:id')
-                    .slice(0, 100),
+                route: metricRoute(req),
                 status: res.statusCode,
             });
         }
@@ -44,6 +55,8 @@ app.use(cors(corsOptions));
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '10mb';
 app.use(express.json({ limit: requestBodyLimit }));
 app.use(express.urlencoded({ limit: requestBodyLimit, extended: true }));
+
+app.get('/api/health', healthHandler);
 
 app.get('/api/metrics', authMiddleware, (_req, res) => {
     res.type('text/plain').send(metrics.prometheus());

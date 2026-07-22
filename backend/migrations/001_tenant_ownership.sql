@@ -1,5 +1,3 @@
-BEGIN;
-
 ALTER TABLE pipelines
     ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id);
 
@@ -30,5 +28,3 @@ CREATE INDEX IF NOT EXISTS ix_alignment_sessions_organization_id
     ON alignment_sessions (organization_id);
 CREATE INDEX IF NOT EXISTS ix_alignment_sessions_created_by
     ON alignment_sessions (created_by);
-
-COMMIT;

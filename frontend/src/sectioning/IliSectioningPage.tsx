@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import SectionModal from './SectionModal';
 import SectioningSchematic from './SectioningSchematic';
@@ -7,80 +7,14 @@ import SectionMap from './SectionMap';
 import { apiFetch } from '../utils/api';
 import { fetchAlignmentComparison } from '../utils/alignment';
 import { buildHistoricalLanes, parseWallThicknessMm } from './historicalLanes';
+import { formatCoordinate, interpolateAlongRoute, parseCoordinate, routeLengthMeters } from './geo';
+import { pairKey } from './pairing';
+import { sectionColor } from './sectionColors';
+import { countMissingInRange, coveragePercent, validateSectionRange } from './sectionRanges';
+import { MAX_SCHEMATIC_ZOOM, clampSchematicZoom } from './viewOptions';
 import type { SectionDef, SpatialFeature, SpatialFeatures } from './types';
 
-function getDistanceFromLatLonInM(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 6371000;
-  const dLat = (lat2-lat1) * (Math.PI/180);
-  const dLon = (lon2-lon1) * (Math.PI/180); 
-  const a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * (Math.PI/180)) * Math.cos(lat2 * (Math.PI/180)) * 
-    Math.sin(dLon/2) * Math.sin(dLon/2); 
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
-  return R * c;
-}
-
-function interpolatePoint(routeCoords: [number, number][], targetRatio: number) {
-  if (routeCoords.length === 0) return { lat: NaN, lng: NaN };
-  if (routeCoords.length === 1) return { lat: routeCoords[0][0], lng: routeCoords[0][1] };
-  if (targetRatio <= 0) return { lat: routeCoords[0][0], lng: routeCoords[0][1] };
-  if (targetRatio >= 1) return { lat: routeCoords[routeCoords.length - 1][0], lng: routeCoords[routeCoords.length - 1][1] };
-
-  let totalLength = 0;
-  const segments = [];
-  for (let i = 0; i < routeCoords.length - 1; i++) {
-    const p1 = routeCoords[i];
-    const p2 = routeCoords[i+1];
-    const d = getDistanceFromLatLonInM(p1[0], p1[1], p2[0], p2[1]);
-    segments.push({ p1, p2, d });
-    totalLength += d;
-  }
-
-  const targetLength = targetRatio * totalLength;
-  let accumulated = 0;
-
-  for (const seg of segments) {
-    if (accumulated + seg.d >= targetLength) {
-      const remaining = targetLength - accumulated;
-      const segRatio = seg.d === 0 ? 0 : remaining / seg.d;
-      const lat = seg.p1[0] + (seg.p2[0] - seg.p1[0]) * segRatio;
-      const lng = seg.p1[1] + (seg.p2[1] - seg.p1[1]) * segRatio;
-      return { lat, lng };
-    }
-    accumulated += seg.d;
-  }
-  return { lat: routeCoords[routeCoords.length - 1][0], lng: routeCoords[routeCoords.length - 1][1] };
-}
-
-function parseCoordinate(val: string): string {
-  if (!val) return '';
-  val = val.trim();
-  
-  // Sangat kebal/robust: Cari 3 kelompok angka yang dipisah oleh simbol apapun (derajat, menit, detik)
-  // Contoh: "0° 52' 20.9270\" S" atau "117 15 59.6039 E"
-  const dmsRegex = /^(-?\d+)[^\d]+([\d]+)[^\d]+([\d.]+)[^\d]*([NSEWnsew])?/;
-  const match = val.match(dmsRegex);
-  
-  if (match) {
-    const d = parseFloat(match[1]);
-    const m = parseFloat(match[2]);
-    const s = parseFloat(match[3]);
-    let dir = match[4] ? match[4].toUpperCase() : '';
-    
-    let decimal = Math.abs(d) + (m / 60) + (s / 3600);
-    // Kalau aslinya minus, atau huruf S/W, jadikan minus
-    if (d < 0 || dir === 'S' || dir === 'W') {
-      decimal = decimal * -1;
-    }
-    return decimal.toFixed(6);
-  }
-  
-  // Fallback: Parsing desimal standar
-  val = val.replace(',', '.');
-  const num = parseFloat(val);
-  return isNaN(num) ? val : num.toString();
-}
+type SaveState = { status: 'idle' | 'saving' | 'saved' | 'error'; message?: string };
 
 export default function IliSectioningPage() {
   const navigate = useNavigate();
@@ -97,8 +31,10 @@ export default function IliSectioningPage() {
   const [selectedGWs, setSelectedGWs] = useState<any[]>([]); // stores up to 2 GW objects
   const [inspectedGw, setInspectedGw] = useState<any | null>(null);
   const [showModal, setShowModal] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  
+  const [saveState, setSaveState] = useState<SaveState>({ status: 'idle' });
+  const [sectionError, setSectionError] = useState<string | null>(null);
+  const [routeError, setRouteError] = useState<string | null>(null);
+
   const [pickingMode, setPickingMode] = useState<'start' | 'end' | 'route' | null>(null);
   const [routeForm, setRouteForm] = useState({ startLat: '', startLng: '', endLat: '', endLng: '' });
   
@@ -111,19 +47,20 @@ export default function IliSectioningPage() {
     }
   });
 
+  // Free-hand route drawing fires one update per click; without this the page
+  // would POST the whole route on every single point.
+  const routeSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (routeSaveTimer.current) clearTimeout(routeSaveTimer.current); }, []);
+
   const updateDrawnRoute = (newRoute: [number, number][]) => {
     setDrawnRoute(newRoute);
     localStorage.setItem('synapse_drawn_route', JSON.stringify(newRoute));
-    if (sessionId) void saveSpatialState(sections, newRoute);
+    if (!sessionId) return;
+    if (routeSaveTimer.current) clearTimeout(routeSaveTimer.current);
+    routeSaveTimer.current = setTimeout(() => { void saveSpatialState(sections, newRoute); }, 800);
   };
-  
-  const mapDistanceMeters = useMemo(() => {
-    let dist = 0;
-    for (let i = 0; i < drawnRoute.length - 1; i++) {
-      dist += getDistanceFromLatLonInM(drawnRoute[i][0], drawnRoute[i][1], drawnRoute[i+1][0], drawnRoute[i+1][1]);
-    }
-    return dist;
-  }, [drawnRoute]);
+
+  const mapDistanceMeters = useMemo(() => routeLengthMeters(drawnRoute), [drawnRoute]);
 
   // Sync routeForm with drawnRoute if it's exactly 2 points
   useEffect(() => {
@@ -189,18 +126,29 @@ export default function IliSectioningPage() {
 
   const saveSpatialState = async (newSections: SectionDef[], pipelineRoute = drawnRoute) => {
     if (!sessionId) return;
+    setSaveState({ status: 'saving' });
     try {
       await apiFetch('/api/wizard/save-sections', {
         method: 'POST',
         body: JSON.stringify({ sessionId, sections: newSections, pipelineRoute })
       });
+      setSaveState({ status: 'saved' });
     } catch (e) {
       console.error("Failed to save sections", e);
+      setSaveState({ status: 'error', message: (e as Error).message || 'Gagal menyimpan ke server.' });
     }
+  };
+
+  // Keeps unparseable text on screen so the operator can correct it instead of
+  // silently turning "0 52.348 S" into a wrong number.
+  const normalizeCoordinateField = (value: string) => {
+    const parsed = parseCoordinate(value);
+    return parsed === null ? value : formatCoordinate(parsed);
   };
 
   const handleCancelSelection = () => {
     setSelectedGWs([]);
+    setSectionError(null);
   };
 
   const handleInspectGw = (gw: any) => {
@@ -225,16 +173,20 @@ export default function IliSectioningPage() {
       const text = String(value ?? '');
       return /^[=+\-@]/.test(text) ? `'${text}` : text;
     };
-    const header = "SECTION NAME,TYPE,START GW,END GW,START (M),END (M),LENGTH (M),NOTES\n";
-    const rows = sections.map(s => 
-      `"${protectSpreadsheetValue(s.name).replaceAll('"', '""')}","${protectSpreadsheetValue(s.type).replaceAll('"', '""')}","${protectSpreadsheetValue(s.startGw).replaceAll('"', '""')}","${protectSpreadsheetValue(s.endGw).replaceAll('"', '""')}",${s.startM},${s.endM},${s.length},"${protectSpreadsheetValue(s.notes).replaceAll('"', '""')}"`
-    ).join("\n");
-    const blob = new Blob([header + rows], { type: 'text/csv' });
+    const quote = (value: unknown) => `"${protectSpreadsheetValue(value).replaceAll('"', '""')}"`;
+    const header = "SECTION NAME,TYPE,PHYSICAL TYPE,POLICY,START GW,END GW,START (M),END (M),LENGTH (M),NOTES\n";
+    const rows = sections.map(s => [
+      quote(s.name), quote(s.type), quote(s.physicalType ?? ''), quote(s.policy ?? ''),
+      quote(s.startGw), quote(s.endGw), s.startM, s.endM, s.length, quote(s.notes),
+    ].join(',')).join("\n");
+    // BOM keeps Excel from mangling non-ASCII section names.
+    const blob = new Blob(['﻿' + header + rows], { type: 'text/csv;charset=utf-8' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = 'sections_export.csv';
     a.click();
+    window.URL.revokeObjectURL(url);
   };
 
   const handleGwClick = (gw: any) => {
@@ -253,27 +205,36 @@ export default function IliSectioningPage() {
   };
 
   const handleSaveSection = (section: Partial<SectionDef>) => {
-    const newId = `sec-${Date.now()}`;
+    const [start, end] = [selectedGWs[0], selectedGWs[1]].sort((a, b) => a.dist - b.dist);
     const newSection: SectionDef = {
-      id: newId,
+      id: `sec-${Date.now()}`,
       name: section.name || 'Unnamed',
       type: section.type || 'OTH',
-      startGw: selectedGWs[0].id,
-      endGw: selectedGWs[1].id,
-      startM: selectedGWs[0].dist,
-      endM: selectedGWs[1].dist,
-      length: Math.abs(selectedGWs[1].dist - selectedGWs[0].dist),
+      physicalType: section.physicalType,
+      policy: section.policy,
+      startGw: start.id,
+      endGw: end.id,
+      startM: start.dist,
+      endM: end.dist,
+      length: Math.abs(end.dist - start.dist),
       notes: section.notes || '',
       latStart: section.latStart,
       lngStart: section.lngStart,
       latEnd: section.latEnd,
       lngEnd: section.lngEnd
     };
-    
-    const updated = [...sections, newSection];
+
+    const problem = validateSectionRange(sections, newSection);
+    if (problem) {
+      setSectionError(problem);
+      return;
+    }
+
+    const updated = [...sections, newSection].sort((a, b) => a.startM - b.startM);
     setSections(updated);
+    setSectionError(null);
     saveSpatialState(updated);
-    
+
     setShowModal(false);
     setSelectedGWs([]);
   };
@@ -293,15 +254,26 @@ export default function IliSectioningPage() {
     let maxDist = 0;
     let bendCount = 0;
     const matches = Array.isArray(sessionConfig?.gwMatchesFinal) ? sessionConfig.gwMatchesFinal : [];
-    const masterPairKey = (id: string, distance: number) => `${id}::${distance.toFixed(6)}`;
-    const matchByMaster = new Map(matches.map((match: any) => [
-      masterPairKey(
-        String(match.new_id ?? match.newId ?? ''),
-        Number(match.new_odometer ?? match.newVal ?? match.newDist),
-      ),
-      match,
-    ]));
-    
+    const masterId = (match: any) => String(match.new_id ?? match.newId ?? '');
+    const masterDist = (match: any) => Number(match.new_odometer ?? match.newVal ?? match.newDist);
+    const matchByMaster = new Map(matches.map((match: any) => [pairKey(masterId(match), masterDist(match)), match]));
+    // The engine payload and the persisted rows round odometers differently, so
+    // an exact key miss falls back to the id when it is unambiguous.  Without
+    // this every GW renders as unresolved after a sub-millimetre drift.
+    const matchesById = matches.reduce((index: Map<string, any[]>, match: any) => {
+      const list = index.get(masterId(match)) ?? [];
+      list.push(match);
+      index.set(masterId(match), list);
+      return index;
+    }, new Map<string, any[]>());
+    const findMatch = (id: string, distance: number) => {
+      const exact = matchByMaster.get(pairKey(id, distance));
+      if (exact) return exact;
+      const candidates = matchesById.get(id) ?? [];
+      return candidates.length === 1 ? candidates[0] : undefined;
+    };
+
+
     // First pass to find maxDist
     data.forEach(row => {
       const dist = Number(row.dist ?? row['Log Dist NEW (m)']);
@@ -315,7 +287,7 @@ export default function IliSectioningPage() {
       
       const type = String(row.type ?? row.originalType ?? row['Feature Type NEW'] ?? '').toLowerCase();
       const identif = String(row.id ?? row['Identif. NEW'] ?? `NEW-${allFeatures.length + 1}`);
-      const matched = matchByMaster.get(masterPairKey(identif, dist)) as any;
+      const matched = findMatch(identif, dist) as any;
       
       // Try to get actual coordinates, or fake them based on dist for demo
       let lat = parseFloat(row.latitude ?? row.Latitude ?? row['Latitude NEW'] ?? row['Lat NEW']);
@@ -324,8 +296,7 @@ export default function IliSectioningPage() {
       if (isNaN(lat) || isNaN(lng)) {
          if (drawnRoute.length >= 2 && maxDist > 0) {
             // Interpolate from user-drawn route
-            const ratio = dist / maxDist;
-            const pt = interpolatePoint(drawnRoute, ratio);
+            const pt = interpolateAlongRoute(drawnRoute, dist / maxDist);
             lat = pt.lat;
             lng = pt.lng;
          } else {
@@ -381,6 +352,16 @@ export default function IliSectioningPage() {
     };
   }, [comparisonRows, data, drawnRoute, sessionConfig]);
 
+  const coverage = useMemo(
+    () => coveragePercent(sections, features.stats.totalLength),
+    [features.stats.totalLength, sections],
+  );
+  const selectedMissingCount = useMemo(() => {
+    if (selectedGWs.length !== 2) return null;
+    const historicalGws = features.historicalLanes.flatMap((lane) => lane.gws);
+    return countMissingInRange(historicalGws, selectedGWs[0].dist, selectedGWs[1].dist);
+  }, [features.historicalLanes, selectedGWs]);
+
   if (loading) {
     return <div className="min-h-screen bg-gray-50 flex items-center justify-center text-blue-600 font-medium">Loading sectioning workspace...</div>;
   }
@@ -397,14 +378,12 @@ export default function IliSectioningPage() {
           <span className="w-2 h-2 rounded-full bg-green-500 mx-1"></span>
           <span className="text-green-600 text-xs uppercase tracking-wider">operational</span>
         </div>
-        <div className="flex items-center gap-4">
-          <div className="relative">
-            <input type="text" placeholder="Search by feature, pair ID, KP..." className="w-64 pl-10 pr-4 py-2 bg-gray-100 border-transparent focus:bg-white focus:border-blue-500 rounded-lg text-sm outline-none transition-colors" />
-            <svg className="w-4 h-4 absolute left-3 top-2.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-          </div>
-          <button className="p-2 text-gray-400 hover:text-gray-600"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg></button>
-          <button className="p-2 text-gray-400 hover:text-gray-600"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg></button>
-          <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold">M</div>
+        <div className="flex items-center gap-4" aria-live="polite">
+          {saveState.status === 'saving' && <span className="text-xs font-semibold text-gray-500">Menyimpan…</span>}
+          {saveState.status === 'saved' && <span className="text-xs font-semibold text-green-600">Tersimpan</span>}
+          {saveState.status === 'error' && (
+            <span className="text-xs font-semibold text-red-600" role="alert">Gagal menyimpan: {saveState.message}</span>
+          )}
         </div>
       </header>
 
@@ -492,37 +471,32 @@ export default function IliSectioningPage() {
               <div className="flex-1 border-r border-gray-100 px-4"><span className="text-gray-500 mr-2">Locked GW:</span><span className="text-green-600">{features?.stats?.gwCount ?? 0}</span></div>
               <div className="flex-1 border-r border-gray-100 px-4"><span className="text-gray-500 mr-2">Bend inferred:</span><span className="text-orange-500">{features?.stats?.bendCount ?? 0}</span></div>
               <div className="flex-1 border-r border-gray-100 px-4"><span className="text-gray-500 mr-2">Missing di NEW:</span><span className={features?.stats?.missingGwCount > 0 ? 'text-red-500' : 'text-green-600'}>{features?.stats?.missingGwCount ?? 0}</span></div>
-              <div className="flex-1 pl-4"><span className="text-gray-500 mr-2">Coverage:</span><span className="text-green-600">Optional · global</span></div>
+              <div className="flex-1 pl-4"><span className="text-gray-500 mr-2">Coverage:</span><span className={coverage > 0 ? 'text-green-600' : 'text-gray-500'}>{sections.length === 0 ? 'Optional · global' : `${coverage.toFixed(1)}%`}</span></div>
             </div>
           </div>
 
           {/* Canvas Toolbar */}
           {viewMode === 'schematic' && (
             <div className="bg-gray-50/50 px-6 py-3 border-b border-gray-200 flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="text-sm font-medium text-gray-700 flex items-center gap-2">View mode <select className="bg-transparent font-bold text-gray-900 border-none outline-none cursor-pointer"><option>Longitudinal</option></select></div>
-                <div className="relative">
-                  <input type="text" placeholder="Search by feature, KP, pair ID..." className="w-64 pl-9 pr-3 py-1.5 bg-white border border-gray-200 rounded-md text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors" />
-                  <svg className="w-4 h-4 absolute left-3 top-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-                </div>
+              <div className="text-sm font-medium text-gray-700">
+                Longitudinal view
+                <span className="ml-3 text-xs font-normal text-gray-500">
+                  {zoom >= 6 ? 'Klik marker GW untuk memilih batas section' : 'Zoom minimal 600% untuk memilih GW dengan presisi'}
+                  <span className="ml-2 text-gray-400">· ctrl + scroll untuk zoom</span>
+                </span>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => setZoom(1)} className="px-3 py-1.5 bg-white border border-gray-200 rounded-md text-sm text-gray-600 hover:bg-gray-50 flex items-center gap-2"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg> Fit</button>
+                <button type="button" onClick={() => setZoom(1)} className="px-3 py-1.5 bg-white border border-gray-200 rounded-md text-sm text-gray-600 hover:bg-gray-50 flex items-center gap-2"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg> Fit</button>
                 <div className="flex items-center border border-gray-200 rounded-md overflow-hidden bg-white ml-2">
-                  <button onClick={() => setZoom(Math.max(0.5, zoom - 0.5))} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">−</button>
+                  <button type="button" aria-label="Perkecil" onClick={() => setZoom(clampSchematicZoom(zoom - 0.5))} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">−</button>
                   <div className="w-px h-4 bg-gray-200"></div>
-                  <button onClick={() => setZoom(1)} className={`px-3 py-1.5 text-sm ${zoom === 1 ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>100%</button>
+                  <button type="button" onClick={() => setZoom(1)} className={`px-3 py-1.5 text-sm ${zoom === 1 ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>100%</button>
                   <div className="w-px h-4 bg-gray-200"></div>
-                  <button onClick={() => setZoom(Math.min(1000, zoom + 0.5))} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">+</button>
+                  <button type="button" aria-label="Perbesar" onClick={() => setZoom(clampSchematicZoom(zoom + 0.5))} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">+</button>
                   <div className="w-px h-4 bg-gray-200"></div>
-                  <button onClick={() => setZoom(1000)} className={`px-3 py-1.5 text-sm ${zoom === 1000 ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>100000%</button>
+                  <button type="button" onClick={() => setZoom(MAX_SCHEMATIC_ZOOM)} className={`px-3 py-1.5 text-sm ${zoom === MAX_SCHEMATIC_ZOOM ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>{MAX_SCHEMATIC_ZOOM * 100}%</button>
                 </div>
-                <input type="range" min="0.5" max="1000" step="0.5" value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-24 ml-2 accent-blue-600" />
-                <div className="flex items-center border border-gray-200 rounded-md overflow-hidden bg-white ml-2">
-                  <button className="p-1.5 text-gray-600 hover:bg-gray-50" title="Undo"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>
-                  <div className="w-px h-4 bg-gray-200"></div>
-                  <button className="p-1.5 text-gray-400 cursor-not-allowed" title="Redo"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" /></svg></button>
-                </div>
+                <input type="range" aria-label="Tingkat zoom" min="0.5" max={MAX_SCHEMATIC_ZOOM} step="0.5" value={zoom} onChange={(e) => setZoom(clampSchematicZoom(Number(e.target.value)))} className="w-24 ml-2 accent-blue-600" />
               </div>
             </div>
           )}
@@ -538,7 +512,6 @@ export default function IliSectioningPage() {
                       sections={sections}
                       zoom={zoom}
                       onZoomChange={setZoom}
-                      selectUnmatched
                       selectedGWs={selectedGWs}
                       onGwClick={handleGwClick}
                       inspectedGw={inspectedGw}
@@ -580,24 +553,21 @@ export default function IliSectioningPage() {
                     <span className="text-xs font-bold text-gray-400 mr-4 tracking-wider">OVERVIEW</span>
                     <div className="flex-1 h-3 bg-gray-200 rounded-full relative overflow-hidden shadow-inner border border-gray-300">
                       {/* Sections overlay */}
-                      {sections.map((s, i) => {
+                      {sections.map((s) => {
                         const total = features?.stats?.totalLength || 1;
-                        const left = (s.startM / total) * 100;
-                        const width = ((s.endM - s.startM) / total) * 100;
-                        const colors = ['bg-blue-500', 'bg-indigo-500', 'bg-violet-500', 'bg-fuchsia-500'];
+                        const left = (Math.min(s.startM, s.endM) / total) * 100;
+                        const width = (Math.abs(s.endM - s.startM) / total) * 100;
                         return (
-                          <div 
-                            key={s.id} 
-                            className={`absolute h-full ${colors[i % colors.length]} opacity-70 border-r border-white/50`} 
-                            style={{ left: `${left}%`, width: `${width}%` }} 
-                            title={s.name}
+                          <div
+                            key={s.id}
+                            className="absolute h-full opacity-80 border-r border-white/50"
+                            style={{ left: `${left}%`, width: `${width}%`, backgroundColor: sectionColor(s.type) }}
+                            title={`${s.name} · ${s.type}`}
                           />
                         );
                       })}
-                      {/* Current viewport indicator (simulated) */}
-                      <div className="absolute top-0 bottom-0 border-2 border-gray-800 bg-gray-800/10 rounded-sm cursor-grab active:cursor-grabbing" style={{ left: '0%', width: '10%' }}></div>
                     </div>
-                    <span className="text-xs font-mono font-semibold text-gray-500 ml-4">{(features?.stats?.totalLength / 1000).toFixed(2) || 0} km</span>
+                    <span className="text-xs font-mono font-semibold text-gray-500 ml-4">{((features?.stats?.totalLength ?? 0) / 1000).toFixed(2)} km</span>
                   </div>
                 </>
               ) : (
@@ -643,7 +613,7 @@ export default function IliSectioningPage() {
                             placeholder="Lat (Desimal / DMS)" 
                             value={routeForm.startLat} 
                             onChange={e => setRouteForm(f => ({...f, startLat: e.target.value}))}
-                            onBlur={e => setRouteForm(f => ({...f, startLat: parseCoordinate(e.target.value)}))} 
+                            onBlur={e => setRouteForm(f => ({...f, startLat: normalizeCoordinateField(e.target.value)}))}
                             className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-900" 
                           />
                           <input 
@@ -651,7 +621,7 @@ export default function IliSectioningPage() {
                             placeholder="Lng (Desimal / DMS)" 
                             value={routeForm.startLng} 
                             onChange={e => setRouteForm(f => ({...f, startLng: e.target.value}))} 
-                            onBlur={e => setRouteForm(f => ({...f, startLng: parseCoordinate(e.target.value)}))}
+                            onBlur={e => setRouteForm(f => ({...f, startLng: normalizeCoordinateField(e.target.value)}))}
                             className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-900" 
                           />
                         </div>
@@ -676,7 +646,7 @@ export default function IliSectioningPage() {
                             placeholder="Lat (Desimal / DMS)" 
                             value={routeForm.endLat} 
                             onChange={e => setRouteForm(f => ({...f, endLat: e.target.value}))} 
-                            onBlur={e => setRouteForm(f => ({...f, endLat: parseCoordinate(e.target.value)}))}
+                            onBlur={e => setRouteForm(f => ({...f, endLat: normalizeCoordinateField(e.target.value)}))}
                             className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-900" 
                           />
                           <input 
@@ -684,7 +654,7 @@ export default function IliSectioningPage() {
                             placeholder="Lng (Desimal / DMS)" 
                             value={routeForm.endLng} 
                             onChange={e => setRouteForm(f => ({...f, endLng: e.target.value}))} 
-                            onBlur={e => setRouteForm(f => ({...f, endLng: parseCoordinate(e.target.value)}))}
+                            onBlur={e => setRouteForm(f => ({...f, endLng: normalizeCoordinateField(e.target.value)}))}
                             className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-900" 
                           />
                         </div>
@@ -718,30 +688,35 @@ export default function IliSectioningPage() {
                         </div>
                       </div>
 
+                      {routeError && (
+                        <p role="alert" className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs font-medium text-red-700">{routeError}</p>
+                      )}
+
                       {/* ACTIONS */}
                       <div className="flex flex-col gap-3 pt-2">
                         <button 
                           onClick={() => {
-                            const lat1 = parseFloat(parseCoordinate(routeForm.startLat));
-                            const lng1 = parseFloat(parseCoordinate(routeForm.startLng));
-                            const lat2 = parseFloat(parseCoordinate(routeForm.endLat));
-                            const lng2 = parseFloat(parseCoordinate(routeForm.endLng));
-                            
-                            if (!isNaN(lat1) && !isNaN(lng1) && !isNaN(lat2) && !isNaN(lng2)) {
-                              if (lat1 === lat2 && lng1 === lng2) {
-                                alert("Titik Start dan End tidak boleh sama, karena jaraknya akan jadi 0 meter.");
-                                return;
-                              }
-                              updateDrawnRoute([[lat1, lng1], [lat2, lng2]]);
-                              setRouteForm({
-                                startLat: lat1.toFixed(6),
-                                startLng: lng1.toFixed(6),
-                                endLat: lat2.toFixed(6),
-                                endLng: lng2.toFixed(6)
-                              });
-                            } else {
-                              alert("Isi format koordinat Start dan End terlebih dahulu dengan benar.");
+                            const lat1 = parseCoordinate(routeForm.startLat);
+                            const lng1 = parseCoordinate(routeForm.startLng);
+                            const lat2 = parseCoordinate(routeForm.endLat);
+                            const lng2 = parseCoordinate(routeForm.endLng);
+
+                            if (lat1 === null || lng1 === null || lat2 === null || lng2 === null) {
+                              setRouteError('Koordinat Start dan End belum terisi dengan format yang dikenali (desimal, DDM, atau DMS).');
+                              return;
                             }
+                            if (lat1 === lat2 && lng1 === lng2) {
+                              setRouteError('Titik Start dan End tidak boleh sama, jaraknya akan jadi 0 meter.');
+                              return;
+                            }
+                            setRouteError(null);
+                            updateDrawnRoute([[lat1, lng1], [lat2, lng2]]);
+                            setRouteForm({
+                              startLat: formatCoordinate(lat1),
+                              startLng: formatCoordinate(lng1),
+                              endLat: formatCoordinate(lat2),
+                              endLng: formatCoordinate(lng2),
+                            });
                           }}
                           className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-6 py-2.5 text-sm font-bold transition-colors shadow-sm"
                         >
@@ -787,7 +762,7 @@ export default function IliSectioningPage() {
                     <div className="flex justify-between items-center"><span className="text-gray-500 text-xs font-semibold uppercase tracking-wider">End KP</span><strong className="text-gray-900 font-mono bg-gray-100 px-2 py-1 rounded">{selectedGWs[1] ? (selectedGWs[1].dist / 1000).toFixed(3) : '-.---'} km</strong></div>
                     <div className="w-full h-px bg-gray-100 my-1"></div>
                     <div className="flex justify-between items-center"><span className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Length</span><strong className="text-blue-700 font-mono font-bold text-base">{selectedGWs.length === 2 ? (Math.abs(selectedGWs[1].dist - selectedGWs[0].dist) / 1000).toFixed(3) : '-.---'} km</strong></div>
-                    <div className="flex justify-between items-center"><span className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Missing in NEW</span><strong className="text-gray-900 bg-gray-100 px-2 py-1 rounded">0</strong></div>
+                    <div className="flex justify-between items-center"><span className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Missing in NEW</span><strong className={`px-2 py-1 rounded ${selectedMissingCount ? 'bg-red-50 text-red-700' : 'bg-gray-100 text-gray-900'}`}>{selectedMissingCount ?? '-'}</strong></div>
                   </div>
 
                   {selectedGWs.length > 0 && (
@@ -824,6 +799,9 @@ export default function IliSectioningPage() {
 
               {/* Sidebar Footer Actions */}
               <div className="p-5 border-t border-gray-200 bg-white flex flex-col gap-3">
+                {sectionError && (
+                  <p role="alert" className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs font-medium text-red-700">{sectionError}</p>
+                )}
                 <button type="button" onClick={() => setShowModal(true)} disabled={selectedGWs.length !== 2} className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition-colors shadow-sm flex items-center justify-center gap-2">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
                   Mark section
@@ -845,8 +823,8 @@ export default function IliSectioningPage() {
         let autoEndCoords = undefined;
         
         if (drawnRoute.length > 1 && features?.stats?.totalLength > 0) {
-          autoStartCoords = interpolatePoint(drawnRoute, selectedGWs[0].dist / features.stats.totalLength);
-          autoEndCoords = interpolatePoint(drawnRoute, selectedGWs[1].dist / features.stats.totalLength);
+          autoStartCoords = interpolateAlongRoute(drawnRoute, selectedGWs[0].dist / features.stats.totalLength);
+          autoEndCoords = interpolateAlongRoute(drawnRoute, selectedGWs[1].dist / features.stats.totalLength);
         }
 
         return (
@@ -855,7 +833,8 @@ export default function IliSectioningPage() {
             endGw={selectedGWs[1]}
             autoStartCoords={autoStartCoords}
             autoEndCoords={autoEndCoords}
-            onClose={() => { setShowModal(false); setSelectedGWs([]); }}
+            error={sectionError}
+            onClose={() => { setShowModal(false); setSelectedGWs([]); setSectionError(null); }}
             onSave={handleSaveSection}
           />
         );

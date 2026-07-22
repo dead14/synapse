@@ -1,6 +1,9 @@
-import { useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import type { SectionDef, SpatialFeatures, SpatialFeature } from './types';
 import { displayDistanceOnMaster } from './historicalLanes';
+import { canInspectGwPrecisely, clampSchematicZoom, shouldShowUnmatchedMarkerLabel } from './viewOptions';
+import { sectionColor } from './sectionColors';
+import { bendDefinition } from './bendGeometry';
 import WeldTable from './WeldTable';
 
 interface SchematicProps {
@@ -12,7 +15,6 @@ interface SchematicProps {
   onZoomChange: (zoom: number) => void;
   inspectedGw?: SpatialFeature | null;
   onInspectGw?: (gw: SpatialFeature | null) => void;
-  selectUnmatched?: boolean;
   selectionEnabled?: boolean;
 }
 
@@ -30,68 +32,6 @@ interface RouteGeometry {
   path: string;
   positionAt: (distance: number) => Point & { unit: Point };
   rangePath: (startM: number, endM: number) => string;
-}
-
-const sectionColor = (type: string) => ({
-  RL: '#2dd4bf',
-  AL: '#60a5fa',
-  RIS: '#ef4444',
-  ROC: '#fb923c',
-  BUR: '#84cc16',
-  CAS: '#94a3b8',
-  UNCLASSIFIED: '#cbd5e1',
-  OTH: '#c084fc',
-}[type] || '#c084fc');
-
-const featureColor = (type: string) => {
-  const normalized = type.toLowerCase();
-  if (/weld|girth|seam|gw/.test(normalized)) return '#00c853';
-  if (normalized.includes('bend')) return '#f59e0b';
-  if (normalized.includes('jog')) return '#eab308';
-  if (normalized.includes('riser')) return '#ef4444';
-  if (normalized.includes('valve')) return '#2563eb';
-  if (normalized.includes('casing')) return '#64748b';
-  return 'transparent';
-};
-
-function readRawNumber(feature: SpatialFeature, patterns: RegExp[]): number | null {
-  for (const [key, rawValue] of Object.entries(feature.rawData || {})) {
-    const normalizedKey = key.toLowerCase().replaceAll('_', ' ');
-    if (!patterns.some((pattern) => pattern.test(normalizedKey))) continue;
-    const value = Number.parseFloat(String(rawValue ?? '').replace(',', '.'));
-    if (Number.isFinite(value)) return value;
-  }
-  return null;
-}
-
-function bendDefinition(feature: SpatialFeature) {
-  const angleFromColumn = readRawNumber(feature, [/bend.*angle/, /deflection/, /^angle$/, /degree/]);
-  const angleFromType = Number.parseFloat(feature.type.match(/(?:bend|elbow)[^0-9]*(\d+(?:\.\d+)?)/i)?.[1] || '');
-  const angleDeg = Math.max(5, Math.min(175, angleFromColumn ?? (Number.isFinite(angleFromType) ? angleFromType : 90)));
-  const radiusM = readRawNumber(feature, [/bend.*radius/, /^radius$/, /radius.*m/]);
-  let turnSign: 1 | -1 | null = null;
-  for (const [key, rawValue] of Object.entries(feature.rawData || {})) {
-    if (!/direction|turn|clockwise|bend.*dir/i.test(key)) continue;
-    const value = String(rawValue || '').toLowerCase();
-    if (/left|counter|ccw|kiri/.test(value)) turnSign = -1;
-    if (/right|clockwise|cw|kanan/.test(value)) turnSign = 1;
-  }
-  return { angleDeg, radiusM, turnSign, inferred: angleFromColumn === null && !Number.isFinite(angleFromType) };
-}
-
-function formatWallThickness(feature: SpatialFeature) {
-  return Number.isFinite(feature.wallThicknessMm as number) ? `${Number(feature.wallThicknessMm).toFixed(1)} mm` : null;
-}
-
-function isThicknessChange(feature: SpatialFeature, prev?: SpatialFeature, next?: SpatialFeature) {
-  const current = feature.wallThicknessMm;
-  if (!Number.isFinite(current as number)) return false;
-  const prevValue = prev?.wallThicknessMm;
-  const nextValue = next?.wallThicknessMm;
-  return (
-    (Number.isFinite(prevValue as number) && Number(prevValue) !== Number(current)) ||
-    (Number.isFinite(nextValue as number) && Number(nextValue) !== Number(current))
-  );
 }
 
 function buildRouteGeometry(features: SpatialFeatures, zoom: number): RouteGeometry {
@@ -147,7 +87,6 @@ export default function SectioningSchematic({
   onZoomChange,
   inspectedGw,
   onInspectGw,
-  selectUnmatched = false,
   selectionEnabled = true,
 }: SchematicProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -155,6 +94,39 @@ export default function SectioningSchematic({
   const historyStartY = geometry.routeHeight + 55;
   const totalHeight = historyStartY + Math.max(80, features.historicalLanes.length * 48 + 35);
   const markerStep = Math.max(100, Math.ceil(features.stats.totalLength / 10 / 100) * 100);
+  const showUnmatchedLabels = shouldShowUnmatchedMarkerLabel(zoom);
+  const canInspectGws = canInspectGwPrecisely(zoom);
+
+  // Selecting a girth weld needs zoom 6+, which is tedious to reach from the
+  // toolbar alone, so ctrl/cmd + wheel zooms around the pointer.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const anchorRatio = (container.scrollLeft + event.offsetX) / Math.max(1, container.scrollWidth);
+      const next = clampSchematicZoom(zoom * (event.deltaY < 0 ? 1.2 : 1 / 1.2));
+      if (next === zoom) return;
+      onZoomChange(next);
+      requestAnimationFrame(() => {
+        container.scrollLeft = anchorRatio * container.scrollWidth - event.clientX + container.getBoundingClientRect().left;
+      });
+    };
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheel);
+  }, [onZoomChange, zoom]);
+
+  const activateGw = (gw: SpatialFeature) => {
+    if (!canInspectGws) return;
+    onInspectGw?.(gw);
+    if (selectionEnabled) onGwClick(gw);
+  };
+  const markerKeyDown = (gw: SpatialFeature) => (event: React.KeyboardEvent<SVGGElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    activateGw(gw);
+  };
 
   return (
     <div className="sectioning-schematic flex h-full min-h-0 w-full flex-col bg-slate-50">
@@ -184,6 +156,7 @@ export default function SectioningSchematic({
             {sections.map((section) => {
               const startX = geometry.positionAt(section.startM).x;
               const endX = geometry.positionAt(section.endM).x;
+              const color = sectionColor(section.type);
               return (
                 <g key={`section-path-${section.id}`}>
                   <rect
@@ -191,17 +164,17 @@ export default function SectioningSchematic({
                     y={60}
                     width={Math.abs(endX - startX)}
                     height={historyStartY - 60 + 40}
-                    fill="#3b82f6"
-                    fillOpacity="0.08"
-                    stroke="#3b82f6"
+                    fill={color}
+                    fillOpacity="0.12"
+                    stroke={color}
                     strokeWidth="1"
-                    strokeOpacity="0.5"
+                    strokeOpacity="0.6"
                   />
                   {/* Boundary Dots on Master */}
-                  <circle cx={startX} cy={125} r="4" fill="#3b82f6" stroke="#fff" strokeWidth="1.5" />
-                  <circle cx={endX} cy={125} r="4" fill="#3b82f6" stroke="#fff" strokeWidth="1.5" />
+                  <circle cx={startX} cy={125} r="4" fill={color} stroke="#fff" strokeWidth="1.5" />
+                  <circle cx={endX} cy={125} r="4" fill={color} stroke="#fff" strokeWidth="1.5" />
                   {/* Section Label */}
-                  <text x={(startX + endX) / 2} y={55} textAnchor="middle" fontSize="10" fontWeight="bold" fill="#1e3a8a">{section.name}</text>
+                  <text x={(startX + endX) / 2} y={55} textAnchor="middle" fontSize="10" fontWeight="bold" fill="#1e293b">{section.name}</text>
                 </g>
               );
             })}
@@ -245,7 +218,8 @@ export default function SectioningSchematic({
               const isValve = feature.type.toLowerCase().includes('valve') || feature.type.toLowerCase().includes('tee');
               const isUnmatched = isGw && feature.status !== 'MATCHED';
               const isSelected = selectedGWs.some((gw) => gw.id === feature.id && Math.abs(gw.dist - feature.dist) < 0.001);
-              
+              const isInspected = Boolean(inspectedGw && inspectedGw.id === feature.id && inspectedGw.runRole === feature.runRole);
+
               const color = isSelected ? '#2563eb' : isUnmatched ? '#ef4444' : isValve ? '#8b5cf6' : '#10b981';
               const isAnomaly = isSelected || isUnmatched || isValve;
               const boxW = isAnomaly ? 6 : 4;
@@ -255,25 +229,25 @@ export default function SectioningSchematic({
               return (
                 <g
                   key={`${feature.id}-${index}`}
-                  role={isGw ? 'button' : undefined}
-                  tabIndex={isGw ? 0 : undefined}
-                  className={isGw ? 'cursor-pointer outline-none' : ''}
-                  onClick={() => {
-                    if (!isGw) return;
-                    onInspectGw?.(feature);
-                    if (selectionEnabled) onGwClick(feature);
-                  }}
+                  role={isGw && canInspectGws ? 'button' : undefined}
+                  tabIndex={isGw && canInspectGws ? 0 : undefined}
+                  aria-label={isGw && canInspectGws ? `GW ${feature.id} pada ${feature.dist.toFixed(3)} m, ${isUnmatched ? 'tanpa pasangan OLD' : 'terpasang'}` : undefined}
+                  className={isGw && canInspectGws ? 'cursor-pointer' : ''}
+                  onClick={() => { if (isGw) activateGw(feature); }}
+                  onKeyDown={isGw && canInspectGws ? markerKeyDown(feature) : undefined}
                 >
-                  <title>{`${feature.type} · ${feature.id} · abs ${feature.dist.toFixed(3)} m · ${isUnmatched ? 'ONLY NEW / unmatched' : feature.status}`}</title>
+                  <title>{`${feature.type} · ${feature.id} · abs ${feature.dist.toFixed(3)} m · ${isUnmatched ? 'No OLD pair' : feature.status}`}</title>
+                  {isInspected && (
+                    <rect x={position.x - boxW / 2 - 3} y={position.y - boxH / 2 - 3} width={boxW + 6} height={boxH + 6} rx={rx + 3} fill="none" stroke="#1d4ed8" strokeWidth="1.5" />
+                  )}
                   <rect x={position.x - boxW / 2} y={position.y - boxH / 2} width={boxW} height={boxH} rx={rx} fill={color} />
                   
-                  {isUnmatched && (
+                  {isUnmatched && showUnmatchedLabels && (
                     <g pointerEvents="none">
-                      <rect x={position.x - 22} y={position.y - 28} width="44" height="14" rx="7" fill="#fff" stroke={color} strokeWidth="1" strokeOpacity="0.7" />
-                      <text x={position.x} y={position.y - 18} textAnchor="middle" fontSize="8" fill={color} fontWeight="bold">{feature.dist.toFixed(2)} m</text>
+                      <rect x={position.x - 48} y={position.y - 28} width="96" height="14" rx="7" fill="#fff" stroke={color} strokeWidth="1" strokeOpacity="0.7" />
+                      <text x={position.x} y={position.y - 18} textAnchor="middle" fontSize="8" fill={color} fontWeight="bold">NO OLD PAIR · {feature.dist.toFixed(1)} m</text>
                     </g>
                   )}
-                  {isGw && <rect x={position.x - 14} y={position.y - 14} width="28" height="28" fill="transparent" pointerEvents="all" />}
                 </g>
               );
             })}
@@ -325,23 +299,22 @@ export default function SectioningSchematic({
                     return (
                       <g
                         key={`${gw.id}-${gwIndex}`}
-                        role="button"
-                        className="cursor-pointer outline-none"
-                        onClick={() => {
-                          onInspectGw?.(gw);
-                          if (selectionEnabled) onGwClick(gw);
-                        }}
+                        role={canInspectGws ? 'button' : undefined}
+                        tabIndex={canInspectGws ? 0 : undefined}
+                        aria-label={canInspectGws ? `GW OLD ${gw.id} pada ${gw.dist.toFixed(3)} m, ${unmatched ? 'tanpa pasangan NEW' : 'terpasang'}` : undefined}
+                        className={canInspectGws ? 'cursor-pointer' : ''}
+                        onClick={() => activateGw(gw)}
+                        onKeyDown={canInspectGws ? markerKeyDown(gw) : undefined}
                       >
                         <rect x={x - boxW / 2} y={y - boxH / 2} width={boxW} height={boxH} rx={rx} fill={color} />
                         <title>{`${gw.id} · abs ${gw.dist.toFixed(3)} m · ${gw.status}`}</title>
                         
-                        {unmatched && (
+                        {unmatched && showUnmatchedLabels && (
                           <g pointerEvents="none">
-                            <rect x={x - 22} y={y + 14} width="44" height="14" rx="7" fill="#fff" stroke={color} strokeWidth="1" strokeOpacity="0.7" />
-                            <text x={x} y={y + 24} textAnchor="middle" fontSize="8" fill={color} fontWeight="bold">{gw.dist.toFixed(2)} m</text>
+                            <rect x={x - 48} y={y + 14} width="96" height="14" rx="7" fill="#fff" stroke={color} strokeWidth="1" strokeOpacity="0.7" />
+                            <text x={x} y={y + 24} textAnchor="middle" fontSize="8" fill={color} fontWeight="bold">NO NEW PAIR · {gw.dist.toFixed(1)} m</text>
                           </g>
                         )}
-                        <rect x={x - 16} y={y - 16} width="32" height="32" fill="transparent" pointerEvents="all" />
                       </g>
                     );
                   })}
@@ -353,11 +326,12 @@ export default function SectioningSchematic({
           
           {/* Legend */}
           <div className="absolute bottom-6 left-6 flex gap-4 items-center text-xs font-medium text-gray-700 bg-white/90 px-5 py-3 rounded-xl border border-gray-200 shadow-md backdrop-blur-sm">
-            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#22c55e] rounded-[2px]" />Matched</span>
-            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#ef4444] rounded-[2px]" />Missing</span>
-            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#eab308] rounded-[2px]" />Review</span>
-            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#8b5cf6] rounded-full" />Valve/Tee</span>
-            <span className="flex items-center gap-2"><div className="w-5 h-0 border-t-[1.5px] border-dashed border-[#22c55e]" />Pair link</span>
+            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#10b981] rounded-[2px]" />Matched</span>
+            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#ef4444] rounded-[2px]" />Tanpa pasangan</span>
+            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#2563eb] rounded-[2px]" />Terpilih</span>
+            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#8b5cf6] rounded-[2px]" />Valve/Tee</span>
+            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#f59e0b] rounded-[2px]" />Bend</span>
+            <span className="flex items-center gap-2"><div className="w-5 h-0 border-t-[1.5px] border-dashed border-[#10b981]" />Pair link</span>
           </div>
         </div>
       </div>

@@ -1047,12 +1047,28 @@ def process_request(data):
     }
 
 
+def _force_utf8_io():
+    """Never let the locale codepage decide how requests are decoded.
+
+    Node sets PYTHONIOENCODING, but this keeps the engine correct when it is
+    run by hand.  ``errors='replace'`` matters as much as the encoding: a
+    UnicodeDecodeError raised by the ``for line in sys.stdin`` iterator happens
+    outside the per-request try block and would kill the persistent worker.
+    """
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main():
+    _force_utf8_io()
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
-            
+
         try:
             data = json.loads(line)
             result = process_request(data)

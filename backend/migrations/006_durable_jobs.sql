@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE TABLE IF NOT EXISTS ingestion_jobs (
     job_id TEXT PRIMARY KEY,
     organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -47,5 +45,3 @@ CREATE INDEX IF NOT EXISTS ix_alignment_jobs_org_created
     ON alignment_jobs (organization_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_alignment_jobs_session
     ON alignment_jobs (session_id, created_at DESC);
-
-COMMIT;

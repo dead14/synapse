@@ -10,6 +10,7 @@ const {
     markOwnedSessionCompleted,
     markOwnedSessionFailed,
     deleteOwnedSession,
+    createAlignmentJob,
     listOwnedAlignmentResultPage,
 } = require('../src/modules/alignment/alignmentRepository');
 
@@ -53,6 +54,15 @@ test('updateOwnedSessionConfig cannot update a session outside the organization'
     assert.equal(updated, null);
     assert.match(pool.calls[0].text, /COALESCE\(s\.organization_id, p\.organization_id\) = \$3/i);
     assert.deepEqual(pool.calls[0].values.slice(1), [7, 22, null]);
+});
+
+test('updateOwnedSessionConfig does not echo the full saved JSON payload', async () => {
+    const pool = recordingPool({ rows: [{ id: 7, status: 'in_progress', revision: '43' }], rowCount: 1 });
+
+    await updateOwnedSessionConfig(pool, 7, 22, { bulky: 'x'.repeat(10_000) });
+
+    const returningClause = pool.calls[0].text.match(/RETURNING[\s\S]*$/i)?.[0] || '';
+    assert.doesNotMatch(returningClause, /params_json/i);
 });
 
 test('findLatestOwnedSession never falls back outside the organization', async () => {
@@ -110,6 +120,25 @@ test('deleteOwnedSession removes only an owned session and dependent records', a
     assert.match(pool.calls[0].text, /DELETE FROM alignment_results/i);
     assert.match(pool.calls[0].text, /DELETE FROM alignment_sessions/i);
     assert.deepEqual(pool.calls[0].values, [7, 22]);
+});
+
+test('alignment job persists engine and configuration metadata before execution', async () => {
+    const pool = recordingPool({ rows: [{ job_id: 'job-1' }], rowCount: 1 });
+
+    await createAlignmentJob(pool, {
+        jobId: 'job-1',
+        sessionId: 7,
+        organizationId: 22,
+        userId: 4,
+        engineVersion: 'engine-v6',
+        configFingerprint: 'config-sha256',
+    });
+
+    assert.match(pool.calls[0].text, /result_json/i);
+    assert.deepEqual(JSON.parse(pool.calls[0].values[4]), {
+        engineVersion: 'engine-v6',
+        configFingerprint: 'config-sha256',
+    });
 });
 
 test('alignment result page is tenant scoped and keyset paginated inside stored JSON', async () => {

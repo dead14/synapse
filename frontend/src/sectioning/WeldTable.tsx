@@ -14,6 +14,7 @@ interface WeldRow {
   partnerId: string;
   partnerDistance: number | null;
   unmatched: boolean;
+  detail: string;
 }
 
 const numberFrom = (value: unknown): number | null => {
@@ -33,6 +34,7 @@ export default function WeldTable({ features }: Props) {
       partnerId: String(gw.rawData.oldId ?? '-'),
       partnerDistance: numberFrom(gw.rawData.oldDistance),
       unmatched: gw.status !== 'MATCHED',
+      detail: String(gw.rawData.missingReason ?? (gw.status === 'MATCHED' ? 'Paired to historical OLD' : 'Tidak ada GW OLD pasangan')),
     }));
     const historicalRows = features.historicalLanes.flatMap((lane) => lane.gws.map((gw, index) => ({
       key: `${lane.id}-${gw.id}-${gw.dist}-${index}`,
@@ -43,6 +45,7 @@ export default function WeldTable({ features }: Props) {
       partnerId: String(gw.rawData.matchedMasterId ?? '-'),
       partnerDistance: numberFrom(gw.rawData.masterDistance),
       unmatched: gw.status !== 'MATCHED',
+      detail: String(gw.rawData.missingReason ?? (gw.status === 'MATCHED' ? 'Paired to master NEW' : 'Tidak ada GW NEW pasangan')),
     })));
     return [...masterRows, ...historicalRows];
   }, [features]);
@@ -54,7 +57,7 @@ export default function WeldTable({ features }: Props) {
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
         <div>
           <h3 className="text-xs font-bold uppercase tracking-wide text-slate-700">Weld data</h3>
-          <p className="text-[11px] text-slate-500">Merah = GW tidak memiliki pasangan.</p>
+          <p className="text-[11px] text-slate-500">Merah = GW tidak memiliki pasangan; kolom detail menjelaskan sisi yang tidak ditemukan.</p>
         </div>
         <div className="sectioning-weld-table__controls">
           <div className="sectioning-weld-table__filters" role="group" aria-label="Weld status filter">
@@ -69,7 +72,7 @@ export default function WeldTable({ features }: Props) {
             <tr>
               <th className="px-3 py-2">Run</th><th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Weld ID</th><th className="px-3 py-2 text-right">Abs distance (m)</th>
-              <th className="px-3 py-2">Matched weld</th><th className="px-3 py-2 text-right">Matched abs distance (m)</th>
+              <th className="px-3 py-2">Matched weld</th><th className="px-3 py-2 text-right">Matched abs distance (m)</th><th className="px-3 py-2">Evidence detail</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -81,6 +84,7 @@ export default function WeldTable({ features }: Props) {
                 <td className="whitespace-nowrap px-3 py-1.5 text-right font-mono">{row.distance.toFixed(3)}</td>
                 <td className="whitespace-nowrap px-3 py-1.5">{row.partnerId}</td>
                 <td className="whitespace-nowrap px-3 py-1.5 text-right font-mono">{row.partnerDistance?.toFixed(3) ?? '-'}</td>
+                <td className="whitespace-nowrap px-3 py-1.5">{row.detail}</td>
               </tr>
             ))}
           </tbody>

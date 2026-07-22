@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { alignmentDisplayValue, isAlignmentDisplayMetadata } from '../src/utils/alignmentDisplay.ts';
+import {
+  alignmentDisplayValue,
+  isAlignmentDisplayMetadata,
+  sortAlignmentRowsByDisplayedLogDistance,
+} from '../src/utils/alignmentDisplay.ts';
 import { createExcelExportRows } from '../src/utils/alignmentExport.ts';
 
 test('shows original source log distance while retaining mapped values in the result row', () => {
@@ -45,4 +49,38 @@ test('keeps mapped distances in export because original distance is display-only
   assert.equal(exportRow['Log Dist OLD (m)'], 3905.57);
   assert.equal(exportRow['Log Dist NEW (m)'], 3905.57);
   assert.equal(Object.hasOwn(exportRow, 'Original Log Dist OLD (m)'), false);
+});
+
+test('sorts result rows by the displayed NEW master log distance', () => {
+  const rows = [
+    { 'Log Dist OLD (m)': '-', 'Log Dist NEW (m)': 1893.527 },
+    { 'Log Dist OLD (m)': 1893.650, 'Original Log Dist OLD (m)': 29.241, 'Log Dist NEW (m)': 1893.903 },
+    { 'Log Dist OLD (m)': '-', 'Log Dist NEW (m)': 1893.602 },
+    { 'Log Dist OLD (m)': '-', 'Log Dist NEW (m)': 1893.756 },
+    { 'Log Dist OLD (m)': 1893.840, 'Original Log Dist OLD (m)': 29.347, 'Log Dist NEW (m)': 1893.903 },
+    { 'Log Dist OLD (m)': '-', 'Log Dist NEW (m)': 1893.814 },
+    { 'Log Dist OLD (m)': '-', 'Log Dist NEW (m)': 1893.857 },
+    { 'Log Dist OLD (m)': '-', 'Log Dist NEW (m)': 1893.932 },
+  ];
+
+  const sorted = sortAlignmentRowsByDisplayedLogDistance(rows);
+
+  assert.deepEqual(
+    sorted.map((row) => alignmentDisplayValue(row, 'Log Dist NEW (m)')),
+    [1893.527, 1893.602, 1893.756, 1893.814, 1893.857, 1893.903, 1893.903, 1893.932],
+  );
+});
+
+test('places OLD-only rows after the ordered NEW master timeline', () => {
+  const rows = [
+    { id: 'old-2', 'Log Dist OLD (m)': 2, 'Log Dist NEW (m)': '-' },
+    { id: 'new-2', 'Log Dist OLD (m)': '-', 'Log Dist NEW (m)': 20 },
+    { id: 'old-1', 'Log Dist OLD (m)': 1, 'Log Dist NEW (m)': '-' },
+    { id: 'new-1', 'Log Dist OLD (m)': '-', 'Log Dist NEW (m)': 10 },
+  ];
+
+  assert.deepEqual(
+    sortAlignmentRowsByDisplayedLogDistance(rows).map((row) => row.id),
+    ['new-1', 'new-2', 'old-1', 'old-2'],
+  );
 });

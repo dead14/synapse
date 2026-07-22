@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 
 from hungarian_engine import HungarianAnomalyAlignmentEngine
@@ -87,9 +88,15 @@ def main(session_id):
         engine.run_1_year,
         engine.run_2_year,
     )
-    print("___RESULT_JSON_BEGIN___")
-    print(json.dumps(output))
-    print("___RESULT_JSON_END___")
+    result_path = os.environ.get("ALIGNMENT_RESULT_FILE")
+    if result_path:
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(output, fh)
+        print(f"___RESULT_FILE___{result_path}")
+    else:
+        print("___RESULT_JSON_BEGIN___")
+        print(json.dumps(output))
+        print("___RESULT_JSON_END___")
 
 
 if __name__ == "__main__":

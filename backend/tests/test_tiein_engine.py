@@ -358,5 +358,67 @@ class TieInEngineTests(unittest.TestCase):
         self.assertLessEqual(result["overlap"]["oldEndM"], result["evidenceOverlap"]["oldEndM"])
 
 
+class WallThicknessTransitionTests(unittest.TestCase):
+    """A chain must be able to *start* at anchors whose node score is <= 0.
+
+    Regression: the DP rejected any predecessor whose running score was
+    ``<= 0.0``, conflating "unreachable" with "legitimately penalised".
+    Because the running score is cumulative, this bites hardest at the head of
+    a chain -- exactly where a tie-in sits, since a replaced spool is precisely
+    where wall thickness and joint length change.  The leading anchors were
+    then dropped and only the clean tail survived as the overlap.
+    """
+
+    @staticmethod
+    def pair(idx, wall_old, wall_new, joint_old, joint_new):
+        return (
+            tiein_engine.Anchor(
+                idx=idx, dist=100.0 + idx * 12.0, type="weld", feature_id=f"o{idx}",
+                wall_thickness_mm=wall_old, joint_length_m=joint_old,
+            ),
+            tiein_engine.Anchor(
+                idx=idx, dist=500.0 + idx * 12.0, type="weld", feature_id=f"n{idx}",
+                wall_thickness_mm=wall_new, joint_length_m=joint_new,
+            ),
+        )
+
+    def _runs(self):
+        old, new = [], []
+        for idx in range(10):
+            # First five welds sit in the replaced spool: wall steps 9.3 -> 12.7
+            # and joint length differs, scoring 2.0 - 2.0 - 1.5 = -1.5 each.
+            # The last five are clean, scoring 2.0 + 1.5 + 2.5 = 6.0.
+            args = (9.3, 12.7, 1.0, 3.0) if idx < 5 else (9.3, 9.3, 12.0, 12.0)
+            old_anchor, new_anchor = self.pair(idx, *args)
+            old.append(old_anchor)
+            new.append(new_anchor)
+        return old, new
+
+    def test_penalised_leading_anchors_stay_in_the_overlap(self):
+        old, new = self._runs()
+        self.assertLess(tiein_engine._node_score(old[0], new[0]), 0.0)
+
+        candidates = tiein_engine.find_overlap_candidates(old, new, max_candidates=1)
+        self.assertTrue(candidates, "expected an alignment candidate")
+        path = candidates[0]["path"]
+
+        # Pre-fix this returned only [(5,5)..(9,9)] -- the first five welds,
+        # half the real overlap, were discarded.
+        self.assertEqual(len(path), 10, f"overlap truncated to {len(path)} anchors")
+        self.assertEqual(min(pair[0] for pair in path), 0)
+
+    def test_non_finite_nodes_are_still_unreachable(self):
+        # Type mismatch yields -inf and must not become a chain predecessor.
+        old = [
+            tiein_engine.Anchor(idx=0, dist=10.0, type="weld", feature_id="a"),
+            tiein_engine.Anchor(idx=1, dist=22.0, type="weld", feature_id="b"),
+        ]
+        new = [
+            tiein_engine.Anchor(idx=0, dist=10.0, type="valve", feature_id="c"),
+            tiein_engine.Anchor(idx=1, dist=22.0, type="valve", feature_id="d"),
+        ]
+        self.assertEqual(tiein_engine.find_overlap_candidates(old, new), [])
+
+
 if __name__ == "__main__":
     unittest.main()

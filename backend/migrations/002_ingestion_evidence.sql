@@ -1,5 +1,3 @@
-BEGIN;
-
 ALTER TABLE survey_runs
     ADD COLUMN IF NOT EXISTS source_sha256 VARCHAR(64),
     ADD COLUMN IF NOT EXISTS uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -25,5 +23,3 @@ CREATE INDEX IF NOT EXISTS ix_alignment_sessions_old_run
 
 CREATE INDEX IF NOT EXISTS ix_alignment_sessions_new_run
     ON alignment_sessions (run_new_id);
-
-COMMIT;

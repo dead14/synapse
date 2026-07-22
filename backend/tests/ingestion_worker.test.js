@@ -7,6 +7,10 @@ const {
     ingestionWorkerCwd,
 } = require('../src/workers/ingestionCommand');
 const { resolveIngestionExit } = require('../src/workers/ingestionOutcome');
+const {
+    ingestionLimiter,
+    isUnrecoverableIngestionError,
+} = require('../src/workers/ingestionPolicy');
 
 test('ingestion worker passes the stored object key to the Python importer', () => {
     const argumentsForImporter = buildIngestionArguments({
@@ -43,4 +47,25 @@ test('ingestion worker returns the importer failure message instead of a generic
         errorOutput: '',
         output: 'JSON_OUTPUT:{"status":"error","message":"This source file is already imported."}',
     }), /already imported/i);
+});
+
+test('ingestion worker preserves a structured importer error code', () => {
+    assert.throws(() => resolveIngestionExit({
+        code: 1,
+        errorOutput: '',
+        output: 'JSON_OUTPUT:{"status":"error","code":"PARSER_DICTIONARY_UNAVAILABLE","message":"Dictionary missing"}',
+    }), (error) => {
+        assert.equal(error.code, 'PARSER_DICTIONARY_UNAVAILABLE');
+        assert.equal(isUnrecoverableIngestionError(error), true);
+        return true;
+    });
+});
+
+test('ingestion throughput is concurrency-bound unless an explicit rate limit is configured', () => {
+    assert.equal(ingestionLimiter({}), null);
+    assert.equal(ingestionLimiter({ INGESTION_RATE_MAX: '0' }), null);
+    assert.deepEqual(ingestionLimiter({
+        INGESTION_RATE_MAX: '12',
+        INGESTION_RATE_DURATION_MS: '30000',
+    }), { max: 12, duration: 30000 });
 });

@@ -29,6 +29,16 @@ async function findOwnedPersistedRunByChecksum(pool, { organizationId, pipelineN
     return result.rows[0] || null;
 }
 
+async function isParserDictionaryReady(pool) {
+    const result = await pool.query(`
+        SELECT
+            EXISTS (SELECT 1 FROM field_synonym_dictionary LIMIT 1) AS field_ready,
+            EXISTS (SELECT 1 FROM feature_type_synonym LIMIT 1) AS feature_ready
+    `);
+    const row = result.rows[0] || {};
+    return Boolean(row.field_ready && row.feature_ready);
+}
+
 async function createIngestionJob(pool, input) {
     const result = await pool.query(
         `INSERT INTO ingestion_jobs
@@ -75,7 +85,7 @@ async function updateIngestionJob(pool, jobId, patch) {
     if (patch.errorCode !== undefined) add('error_code', patch.errorCode);
     if (patch.errorMessage !== undefined) add('error_message', patch.errorMessage);
     if (patch.startedAt) add('started_at', patch.startedAt);
-    if (patch.completedAt) add('completed_at', patch.completedAt);
+    if (patch.completedAt !== undefined) add('completed_at', patch.completedAt);
     if (fields.length === 0) return getOwnedIngestionJob(pool, jobId, patch.organizationId);
 
     fields.push('updated_at = NOW()');
@@ -115,6 +125,7 @@ module.exports = {
     ensureOwnedPipeline,
     findOwnedPersistedRunByChecksum,
     getOwnedIngestionJob,
+    isParserDictionaryReady,
     serializeIngestionJob,
     updateIngestionJob,
 };

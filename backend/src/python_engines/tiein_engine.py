@@ -279,9 +279,15 @@ def find_overlap_candidates(old_anchors, new_anchors, max_candidates=3):
                 prior_old_index = old_index - old_step
                 for new_step in range(1, min(MAX_SKIP_ANCHORS, new_index) + 1):
                     prior_new_index = new_index - new_step
-                    prior_score = scores[prior_old_index][prior_new_index]
-                    if prior_score <= 0.0:
+                    # Reachability, not sign.  A legitimate weld pair scores <= 0
+                    # whenever it carries a wall-thickness change (base 2.0 minus
+                    # up to 2.0), so testing the score truncated valid chains at
+                    # every WT transition and split one true alignment into two
+                    # short ones -> spurious AMBIGUOUS_OVERLAP.  path_lengths is
+                    # 0 only for cells that were skipped as non-finite.
+                    if path_lengths[prior_old_index][prior_new_index] <= 0:
                         continue
+                    prior_score = scores[prior_old_index][prior_new_index]
                     span_score = _span_score(
                         old_anchor.dist - old_anchors[prior_old_index].dist,
                         new_anchor.dist - new_anchors[prior_new_index].dist,
@@ -763,8 +769,19 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
     }
 
 
+def _force_utf8_io():
+    """See dtw_engine._force_utf8_io — a decode error in the stdin iterator is
+    raised outside the per-request try block and kills the persistent worker."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main():
     """Persistent worker loop: one JSON request per stdin line."""
+    _force_utf8_io()
     for line in sys.stdin:
         line = line.strip()
         if not line:

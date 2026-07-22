@@ -34,6 +34,13 @@ export default function AlignmentPage() {
   const [wizardConfig, setWizardConfig] = useState<any>({});
   const [isResuming, setIsResuming] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const saveErrorRef = React.useRef<HTMLDivElement>(null);
+
+  // The wizard footer sits far below the fold, so a save rejection used to look
+  // like a dead button: the banner rendered at the top of a scrolled-away page.
+  useEffect(() => {
+    if (saveError) saveErrorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [saveError]);
 
   useEffect(() => {
     // Start fresh every time — no resume prompt, no empty session creation
@@ -144,8 +151,20 @@ export default function AlignmentPage() {
     <div className={`alignment-workspace${currentStep?.id === 'gw' ? ' alignment-workspace--gw' : ''}`}>
       <div className="alignment-shell flex flex-col gap-5">
         {saveError && (
-          <div role="alert" className="mx-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm md:mx-6 xl:mx-8">
-            {saveError}
+          <div
+            ref={saveErrorRef}
+            role="alert"
+            className="sticky top-2 z-30 mx-4 flex items-start justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm md:mx-6 xl:mx-8"
+          >
+            <span>{saveError}</span>
+            <button
+              type="button"
+              onClick={() => setSaveError(null)}
+              aria-label="Tutup pesan kesalahan"
+              className="shrink-0 font-bold text-red-400 hover:text-red-700"
+            >
+              ×
+            </button>
           </div>
         )}
         

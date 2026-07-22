@@ -67,7 +67,7 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
         {/* Clock Tolerance */}
         <div className="border border-gray-200 rounded-xl p-5 hover:border-blue-300 transition-colors bg-gray-50/50">
           <div className="flex justify-between items-start mb-4">
-            <label className="text-sm font-bold text-gray-700">Clock Cost Scale (deg)</label>
+            <label className="text-sm font-bold text-gray-700">Clock Tolerance (deg)</label>
             <span className="bg-white px-2 py-1 rounded text-blue-600 font-mono text-sm shadow-sm border border-gray-100">{clockTol}°</span>
           </div>
           <input 
@@ -75,7 +75,7 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
             value={clockTol} onChange={(e) => setClockTol(parseInt(e.target.value))}
             className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
           />
-          <p className="text-xs text-gray-500">Soft cost only: nilai kecil memperbesar penalti selisih clock, tanpa menolak kandidat.</p>
+          <p className="text-xs text-gray-500">Hard gate circular: kandidat ditolak jika selisih O&apos;Clock melebihi nilai ini. Clock yang kosong tidak otomatis ditolak.</p>
         </div>
 
         {/* US GW Tolerance */}
@@ -134,6 +134,7 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
             value={lengthTol} onChange={(e) => setLengthTol(parseInt(e.target.value))}
             className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
           />
+          <p className="text-xs text-gray-500">Hard gate: kandidat ditolak jika selisih length melebihi nilai ini.</p>
         </div>
 
       </div>

@@ -3,6 +3,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -54,6 +55,50 @@ LEGACY_XLS_MAGIC = bytes.fromhex("D0CF11E0")
 PARSER_VERSION = "agnostic-ili-parser-2026.07"
 SCHEMA_VERSION = "universal-ili-v1"
 QUALITY_GATE_VERSION = "ingestion-quality-gate-2026.07"
+
+_IMPERIAL_DISTANCE_RE = re.compile(
+    r"\b(?:ft|feet|foot)\b|(?<!\w)(?:\(ft\)|\(feet\))", re.IGNORECASE,
+)
+_IMPERIAL_DIMENSION_RE = re.compile(
+    r"\b(?:in|inch|inches)\b|(?<!\w)(?:\(in\)|\(inch\)|\(inches\))", re.IGNORECASE,
+)
+_METRIC_DISTANCE_RE = re.compile(
+    r"(?<!\w)\(m\)|(?<!\w)(?:meters?|metre)\b", re.IGNORECASE,
+)
+_METRIC_DIMENSION_RE = re.compile(
+    r"(?<!\w)\(mm\)|(?<!\w)millimete?r", re.IGNORECASE,
+)
+
+DISTANCE_FIELDS = {"log_distance_m", "dist_to_us_gw_m", "joint_length_m"}
+DIMENSION_FIELDS = {"wall_thickness_mm", "length_mm", "width_mm"}
+
+FT_TO_M = 0.3048
+IN_TO_MM = 25.4
+
+
+def detect_source_units(raw_columns, field_map):
+    """Infer the source unit system from column header text.
+
+    Returns a dict ``{"distances": "imperial"|"metric"|None,
+                       "dimensions": "imperial"|"metric"|None}``.
+    """
+    all_headers = " | ".join(str(c) for c in raw_columns)
+    mapped_headers = " | ".join(str(c) for c in field_map.keys())
+    combined = f"{all_headers} | {mapped_headers}"
+
+    distances = None
+    if _IMPERIAL_DISTANCE_RE.search(combined):
+        distances = "imperial"
+    elif _METRIC_DISTANCE_RE.search(combined):
+        distances = "metric"
+
+    dimensions = None
+    if _IMPERIAL_DIMENSION_RE.search(combined):
+        dimensions = "imperial"
+    elif _METRIC_DIMENSION_RE.search(combined):
+        dimensions = "metric"
+
+    return {"distances": distances, "dimensions": dimensions}
 
 
 def build_quality_gate(audit):
@@ -247,10 +292,14 @@ def summarize_feature_counts(frame):
 
     # Keep the precedence consistent with the legacy browser parser: a metal
     # loss near a weld remains an anomaly, never an anchor.
-    categories.loc[labels.str.contains(r"metal loss|corrosion|\\banom\\b|\\bcocl\\b|\\bcorr\\b|\\bml\\b", regex=True)] = "anomaly"
-    categories.loc[(categories == "other") & labels.str.contains(r"weld|girth|seam|\\bgw\\b", regex=True)] = "weld"
-    categories.loc[(categories == "other") & labels.str.contains(r"valve|\\bvalv\\b", regex=True)] = "valve"
-    categories.loc[(categories == "other") & labels.str.contains(r"offtake|off take|\\bofft\\b", regex=True)] = "offtake"
+    # NOTE: these must be single-backslash \b word boundaries.  Written as \\b
+    # inside a raw string the pattern matches a *literal* backslash-b, so every
+    # POF short code (ANOM, ML, COCL, GW, VALV, OFFT) silently fell through to
+    # "other" and the wizard reported zero anomalies and zero welds.
+    categories.loc[labels.str.contains(r"metal loss|corrosion|\banom\b|\bcocl\b|\bcorr\b|\bml\b", regex=True)] = "anomaly"
+    categories.loc[(categories == "other") & labels.str.contains(r"weld|girth|seam|\bgw\b", regex=True)] = "weld"
+    categories.loc[(categories == "other") & labels.str.contains(r"valve|\bvalv\b", regex=True)] = "valve"
+    categories.loc[(categories == "other") & labels.str.contains(r"offtake|off take|\bofft\b", regex=True)] = "offtake"
     categories.loc[(categories == "other") & labels.str.contains(r"tee", regex=True)] = "tee"
     categories.loc[(categories == "other") & labels.str.contains(r"bend|elbow", regex=True)] = "bend"
 
@@ -314,6 +363,21 @@ def normalize_ingestion_frame(raw, field_map):
             numeric_coercions[field] = coerced_count
         universal[field] = converted.where(finite, np.nan)
 
+    source_units = detect_source_units(raw.columns, field_map)
+    unit_conversions = {}
+    if source_units["distances"] == "imperial":
+        for field in DISTANCE_FIELDS:
+            mask = universal[field].notna()
+            if mask.any():
+                universal.loc[mask, field] = universal.loc[mask, field] * FT_TO_M
+                unit_conversions[field] = "ft_to_m"
+    if source_units["dimensions"] == "imperial":
+        for field in DIMENSION_FIELDS:
+            mask = universal[field].notna()
+            if mask.any():
+                universal.loc[mask, field] = universal.loc[mask, field] * IN_TO_MM
+                unit_conversions[field] = "in_to_mm"
+
     universal["clock_position"] = universal["clock_position"].apply(
         lambda value: None if pd.isna(value) else normalize_clock(value)
     )
@@ -352,6 +416,8 @@ def normalize_ingestion_frame(raw, field_map):
         "rejected_rows": rejected_rows,
         "rejection_reasons": {"invalid_log_distance_m": rejected_rows} if rejected_rows else {},
         "numeric_coercions": numeric_coercions,
+        "unit_conversions": unit_conversions,
+        "source_units": source_units,
         "quality_warnings": quality_warnings,
         "feature_counts": summarize_feature_counts(universal),
     }
@@ -428,7 +494,9 @@ def ingest_csv(
 ):
     synonym_lookup = load_field_synonym_lookup()
     if not synonym_lookup:
-        raise RuntimeError("Kamus sinonim parser kosong; jalankan seed_dictionary.py terlebih dahulu.")
+        error = RuntimeError("Kamus sinonim parser kosong; jalankan seed_dictionary.py terlebih dahulu.")
+        error.code = "PARSER_DICTIONARY_UNAVAILABLE"
+        raise error
 
     feature_type_map = load_feature_type_normalization()
     if feature_type_map:
@@ -521,7 +589,11 @@ def main():
         print("JSON_OUTPUT:" + json.dumps(result))
         return 0
     except Exception as error:
-        print("JSON_OUTPUT:" + json.dumps({"status": "error", "message": str(error)}))
+        payload = {"status": "error", "message": str(error)}
+        error_code = getattr(error, "code", None)
+        if error_code:
+            payload["code"] = error_code
+        print("JSON_OUTPUT:" + json.dumps(payload))
         return 1
 
 

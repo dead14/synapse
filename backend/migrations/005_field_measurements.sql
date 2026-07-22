@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE TABLE IF NOT EXISTS field_measurements (
     id BIGSERIAL PRIMARY KEY,
     organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -31,5 +29,3 @@ CREATE INDEX IF NOT EXISTS ix_field_measurements_org_case_id
 CREATE INDEX IF NOT EXISTS ix_field_measurements_feature
     ON field_measurements (ili_feature_id, observed_at DESC)
     WHERE ili_feature_id IS NOT NULL;
-
-COMMIT;

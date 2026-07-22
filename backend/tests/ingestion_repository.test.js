@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const {
     ensureOwnedPipeline,
     findOwnedPersistedRunByChecksum,
+    isParserDictionaryReady,
+    updateIngestionJob,
 } = require('../src/modules/ingestion/ingestionRepository');
 
 function recordingPool(rows = []) {
@@ -51,4 +53,30 @@ test('finds a matching persisted run by organization, pipeline, and source check
     assert.match(pool.calls[0].text, /lower\(p\.name\) = lower\(\$2\)/i);
     assert.match(pool.calls[0].text, /sr\.source_sha256 = \$3/i);
     assert.deepEqual(pool.calls[0].values, [9, 'North Line', 'abc123']);
+});
+
+test('reports parser readiness only when both dictionaries contain records', async () => {
+    const readyPool = recordingPool([{ field_ready: true, feature_ready: true }]);
+    const incompletePool = recordingPool([{ field_ready: true, feature_ready: false }]);
+
+    assert.equal(await isParserDictionaryReady(readyPool), true);
+    assert.equal(await isParserDictionaryReady(incompletePool), false);
+    assert.match(readyPool.calls[0].text, /field_synonym_dictionary/i);
+    assert.match(readyPool.calls[0].text, /feature_type_synonym/i);
+});
+
+test('successful retries can clear stale errors and completion timestamps', async () => {
+    const pool = recordingPool([{ job_id: 'job-1' }]);
+
+    await updateIngestionJob(pool, 'job-1', {
+        state: 'active',
+        errorCode: null,
+        errorMessage: null,
+        completedAt: null,
+    });
+
+    assert.match(pool.calls[0].text, /error_code = \$2/i);
+    assert.match(pool.calls[0].text, /error_message = \$3/i);
+    assert.match(pool.calls[0].text, /completed_at = \$4/i);
+    assert.deepEqual(pool.calls[0].values.slice(0, 4), ['active', null, null, null]);
 });

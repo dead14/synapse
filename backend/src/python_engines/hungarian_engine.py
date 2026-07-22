@@ -4,9 +4,15 @@ import os
 import pandas as pd
 import numpy as np
 import bisect
+import math
+import re
 from dataclasses import dataclass
 from models import SessionLocal, ILIFeature, AlignmentResult, AlignmentSession
 from tiein_transform import map_old_to_new, validated_tiein_knots
+
+
+class EmptyDatasetError(RuntimeError):
+    """Raised when a run has no comparable anomalies on one or both sides."""
 
 
 @dataclass(frozen=True)
@@ -17,6 +23,36 @@ class SectionCompilation:
     @property
     def is_valid(self) -> bool:
         return not self.errors
+
+_THOUSANDS_SEPARATED = re.compile(r"^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$")
+
+
+def _coerce_distance(value):
+    """Parse an odometer value, or return None when it is not a real number.
+
+    Returning None rather than 0.0 is the whole point: a feature whose distance
+    could not be read must be excluded from matching, not silently placed at
+    chainage zero.  Excel error values ("#N/A"), blanks and text all yield None.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if math.isfinite(float(value)) else None
+
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "nan", "n/a", "na", "-", "#n/a", "null"}:
+        return None
+    # "12,345.6" is a thousands-separated metre value, not a European decimal.
+    if _THOUSANDS_SEPARATED.match(text):
+        text = text.replace(",", "")
+    try:
+        parsed = float(text)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
 
 def safe_int(val):
     try:
@@ -390,6 +426,52 @@ class HungarianAnomalyAlignmentEngine:
             return stored_new, stored_old, True
         return stored_old, stored_new, False
 
+    def _canonical_locked_pairs(self, gw_matches_final: list[dict]) -> list[dict]:
+        """Order locked GW pairs exactly the way ``get_gw_matches`` orders them.
+
+        ``seg_id`` is an index into the segments derived from ``get_gw_matches``
+        (swap-normalised, filtered to MATCH/MATCHED, sorted by OLD odometer),
+        while section boundaries are indices into this list.  Building this list
+        any other way — unfiltered, or sorted by NEW odometer — puts the two in
+        different index spaces, so a BYPASS/REVIEW section silently applies to a
+        different physical stretch of pipe.
+        """
+        canonical = []
+        for persisted_pair in gw_matches_final:
+            logical = self._logical_gw_pair(persisted_pair)
+            if str(logical.get("status", "MATCHED")).upper() not in {"MATCH", "MATCHED"}:
+                continue
+            old_odometer = _coerce_distance(logical.get("old_odometer"))
+            new_odometer = _coerce_distance(logical.get("new_odometer"))
+            if old_odometer is None or new_odometer is None:
+                continue
+            logical["old_odometer"] = old_odometer
+            logical["new_odometer"] = new_odometer
+            canonical.append(logical)
+        return sorted(canonical, key=lambda pair: pair["old_odometer"])
+
+    @staticmethod
+    def _assert_monotonic_gw_pairs(gw_pairs: list[dict]) -> None:
+        """Segment boundaries must increase strictly on both axes.
+
+        ``run2_boundaries`` is built from a list sorted by OLD odometer and then
+        fed to ``bisect_right``.  One crossed GW lock (NEW order disagreeing with
+        OLD order, which a manual GW edit can easily produce) makes it
+        non-monotonic, and bisect then returns a meaningless index: a whole block
+        of NEW anomalies lands in the wrong segment and is reported as "Only
+        NEW" while its OLD partners become "Only OLD".  Silent and wrong, so it
+        must be checked unconditionally rather than only when sections exist.
+        """
+        for previous, current in zip(gw_pairs, gw_pairs[1:]):
+            if float(current["oldVal"]) <= float(previous["oldVal"]) or \
+                    float(current["newVal"]) <= float(previous["newVal"]):
+                raise ValueError(
+                    "Locked GW pairs must increase strictly on both OLD and NEW; "
+                    f"pair at OLD={previous['oldVal']}/NEW={previous['newVal']} is "
+                    f"followed by OLD={current['oldVal']}/NEW={current['newVal']}. "
+                    "Re-run GW matching or correct the crossed lock."
+                )
+
     def _logical_gw_pair(self, pair: dict) -> dict:
         if not getattr(self, "swap_persisted_runs", False):
             return dict(pair)
@@ -500,10 +582,26 @@ class HungarianAnomalyAlignmentEngine:
             
             # Map them into the format expected by the engine (abs_distance_m, id, depth_pct, length_mm, width_mm)
             mapped = []
+            invalid_distance_count = 0
             for f in features:
-                # Need to handle string " " and None gracefully
-                try:
-                    abs_dist = float(f.get("log_distance_m") or f.get("dist") or 0.0)
+                # Distance is the one load-bearing field in this engine.  A
+                # fallback of 0.0 is never physically valid: it silently
+                # relocates the feature to the pipe head, where it lands in
+                # segment 0 and can be matched against an unrelated anomaly.
+                # Unparseable rows are flagged and routed to the Filtered
+                # buckets instead, which preserves row conservation while
+                # keeping them out of the cost matrix.
+                abs_dist = _coerce_distance(f.get("log_distance_m"))
+                if abs_dist is None:
+                    abs_dist = _coerce_distance(f.get("dist"))
+                invalid_distance = abs_dist is None
+                tiein_outside_domain = False
+
+                if invalid_distance:
+                    invalid_distance_count += 1
+                    abs_dist = 0.0
+                    source_abs_dist = 0.0
+                else:
                     source_abs_dist = abs_dist
                     if is_old_run and tie_in_knots:
                         master_distance = map_old_to_new(abs_dist, tie_in_knots)
@@ -512,14 +610,7 @@ class HungarianAnomalyAlignmentEngine:
                             abs_dist = master_distance
                     elif not tie_in_knots and not is_old_run and tie_in_offset != 0.0:
                         abs_dist += tie_in_offset
-                        tiein_outside_domain = False
-                    else:
-                        tiein_outside_domain = False
-                except:
-                    abs_dist = 0.0
-                    source_abs_dist = 0.0
-                    tiein_outside_domain = False
-                    
+
                 depth = f.get("depth_pct") or f.get("depth")
                 try:
                     depth = float(depth) if str(depth).strip() else None
@@ -565,6 +656,8 @@ class HungarianAnomalyAlignmentEngine:
                     "abs_distance_m": abs_dist,
                     "source_abs_distance_m": source_abs_dist,
                     "tiein_outside_domain": tiein_outside_domain,
+                    "invalid_distance": invalid_distance,
+                    "filter_reason": "unparseable_log_distance" if invalid_distance else None,
                     "depth_pct": depth,
                     "length_mm": length,
                     "width_mm": width,
@@ -574,10 +667,20 @@ class HungarianAnomalyAlignmentEngine:
                     "raw": f
                 })
                 
+            if invalid_distance_count:
+                print(
+                    f"[WARN] {invalid_distance_count} feature(s) had an unparseable "
+                    f"log distance and were routed to the Filtered bucket",
+                    file=sys.stderr,
+                )
+
             return sorted(mapped, key=lambda x: x["abs_distance_m"])
         except Exception as e:
-            print(f"[ERROR] Failed to read run data: {e}")
-            return []
+            # Never swallow this.  Returning [] here printed to stdout and let
+            # the process exit 0, so Node stored an empty comparison as a
+            # *successful* alignment — a silently blank report.
+            print(f"[ERROR] Failed to read run data: {e}", file=sys.stderr)
+            raise
 
     def get_gw_matches(self) -> list[dict]:
         """
@@ -642,8 +745,10 @@ class HungarianAnomalyAlignmentEngine:
                 key=lambda x: float(x["oldVal"])
             )
         except Exception as e:
-            print(f"[ERROR] Failed to fetch from DB: {e}")
-            return []
+            # Same reasoning as fetch_data: an unreadable GW lock set must fail
+            # the run, not quietly degrade it to "no locks".
+            print(f"[ERROR] Failed to fetch GW matches: {e}", file=sys.stderr)
+            raise
 
     def _build_offset_table(self, gw_pairs: list[dict]) -> list[tuple[float, float]]:
         if not gw_pairs:
@@ -680,11 +785,17 @@ class HungarianAnomalyAlignmentEngine:
         eligible, _filtered = self._partition_scenario_features(features)
         return eligible
 
+    @staticmethod
+    def _is_filtered_feature(feature: dict) -> bool:
+        # A feature is excluded from matching when the tie-in transform cannot
+        # place it, or when its odometer could not be read at all.
+        return bool(feature.get("tiein_outside_domain") or feature.get("invalid_distance"))
+
     def _partition_scenario_features(self, features: list[dict]):
         """Depth is post-match physics evidence, never a candidate filter."""
         return (
-            [feature for feature in features if not feature.get("tiein_outside_domain")],
-            [feature for feature in features if feature.get("tiein_outside_domain")],
+            [feature for feature in features if not self._is_filtered_feature(feature)],
+            [feature for feature in features if self._is_filtered_feature(feature)],
         )
 
     @staticmethod
@@ -760,16 +871,60 @@ class HungarianAnomalyAlignmentEngine:
         return feature_type in {"anomaly", "metal loss", "metal_loss"} or raw_type == "anomaly"
 
     @staticmethod
-    def _is_gw_feature(feature: dict) -> bool:
-        """Return whether Phase 1 owns this feature as a physical GW/anchor."""
+    def _gw_feature_labels(feature: dict) -> tuple[str, str]:
         raw = feature.get("raw", {})
-        feature_types = {
-            str(feature.get("originalType", "")).strip().lower(),
-            str(raw.get("type", "")).strip().lower(),
-            str(raw.get("feature_type", "")).strip().lower(),
-            str(raw.get("originalType", "")).strip().lower(),
-        }
-        return bool(feature_types & {"weld", "girth weld", "valve", "tee", "flange"})
+        primary = str(
+            feature.get("originalType")
+            or raw.get("feature_type")
+            or raw.get("type")
+            or raw.get("originalType")
+            or ""
+        ).strip().lower()
+        identification = str(raw.get("feature_identification") or "").strip().lower()
+        if not primary or primary in {"other", "unknown", "unclassified"}:
+            primary = identification
+        return primary, identification
+
+    @classmethod
+    def _is_dtw_anchor_feature(cls, feature: dict) -> bool:
+        """Tier-1/Tier-2 anchors that Phase 1 (DTW) is actually able to match.
+
+        Must stay in step with ``dtw_engine.process_request``'s
+        ``gw_types = {'weld', 'valve', 'tee'}`` and its ``_alignment_feature_kind``
+        normalisation.  If a feature is in this set and Phase 1 did not consume
+        it, that is genuine missing evidence.
+        """
+        primary, _identification = cls._gw_feature_labels(feature)
+        return bool(re.search(
+            r"\b(?:weld|girth|seam|valve|tee|offtake|branch(?:\s+connection)?)\b",
+            primary,
+        ))
+
+    @classmethod
+    def _is_structural_feature(cls, feature: dict) -> bool:
+        """Physical fittings that are neither anomalies nor DTW anchors.
+
+        DTW deliberately excludes these ("strict Tier-1/Tier-2 anchors only"),
+        so they can never be consumed by Phase 1.  Reporting them as unmatched
+        girth welds turned every bend and flange into permanent phantom missing
+        evidence — a pipeline with 200 bends showed 400 unmatched GWs on every
+        single run.  They are conserved as bypass rows instead.
+        """
+        primary, identification = cls._gw_feature_labels(feature)
+        if re.search(r"\bflang(?:e|ed)\b", primary) or re.search(
+            r"\bflang(?:e|ed)\b", identification
+        ):
+            return True
+        return bool(re.search(r"\b(?:bend|elbow|launcher|receiver)\b", primary))
+
+    @classmethod
+    def _is_gw_feature(cls, feature: dict) -> bool:
+        """Whether Phase 1 owns this feature, i.e. it is not an anomaly.
+
+        Union of the two sets above.  Both are kept out of the Hungarian cost
+        matrix; they differ only in how an unconsumed one is reported.
+        """
+        return cls._is_dtw_anchor_feature(feature) or cls._is_structural_feature(feature)
 
     @classmethod
     def _partition_hungarian_features(cls, features: list[dict], locked_ids: set[str]):
@@ -854,9 +1009,8 @@ class HungarianAnomalyAlignmentEngine:
                     # 2. Clock Penalty
                     cd = self._clock_diff(f1.get("clock_position"), f2.get("clock_position"))
                     if cd is not None:
-                        # Clock is soft identity evidence. A large circular
-                        # difference raises ranking cost but never removes an
-                        # otherwise physically plausible candidate.
+                        if cd > clock_tolerance:
+                            continue
                         base_cost += w_clock * (cd / max(clock_tolerance, 1.0))
                         
                     # 3. Length Penalty. Depth is deliberately excluded from
@@ -865,6 +1019,8 @@ class HungarianAnomalyAlignmentEngine:
                     l1, l2 = f1.get("length_mm"), f2.get("length_mm")
                     if l1 is not None and l2 is not None:
                         length_difference = abs(l1 - l2)
+                        if length_difference > length_tolerance:
+                            continue
                         base_cost += w_length * (length_difference / max(length_tolerance, 1.0))
                         
                     # 4. Width Penalty
@@ -889,8 +1045,12 @@ class HungarianAnomalyAlignmentEngine:
         self._ensure_source_keys(anomalies_2_all, "NEW")
 
         if not anomalies_1_all or not anomalies_2_all:
-            print("[ERROR] Dataset kosong, abort.")
-            return []
+            # Exiting 0 here emitted no result markers at all, and Node's
+            # brace-scanning fallback then stored an empty comparison as a
+            # completed alignment.  Fail loudly instead.
+            raise EmptyDatasetError(
+                f"Dataset kosong: OLD={len(anomalies_1_all)} NEW={len(anomalies_2_all)}"
+            )
 
         print("[2/5] Loading GW Matches from DB & Creating Segments...")
         gw_pairs = self.get_gw_matches()
@@ -972,10 +1132,22 @@ class HungarianAnomalyAlignmentEngine:
         except Exception as e:
             print(f"[ERROR] Legacy fallback failed: {e}", file=sys.stderr)
 
-        locked_gw_pairs = sorted(
-            gw_matches_final,
-            key=lambda pair: float(pair.get("new_odometer", 0.0)),
-        )
+        # Same filter, same swap normalisation and same ordering as gw_pairs, so
+        # a section's start_index/end_index address the same pairs that seg_id
+        # is derived from.
+        locked_gw_pairs = self._canonical_locked_pairs(gw_matches_final)
+
+        # Boundaries feed bisect_right on both axes; a crossed lock must fail
+        # the run rather than scatter anomalies into the wrong segments.
+        self._assert_monotonic_gw_pairs(gw_pairs)
+
+        if len(locked_gw_pairs) != len(gw_pairs):
+            raise ValueError(
+                "Locked GW pair set is inconsistent with the segment boundaries "
+                f"({len(locked_gw_pairs)} sectionable vs {len(gw_pairs)} segments). "
+                "Recalculate the canonical GW matching result."
+            )
+
         compiled_sections = self.compile_sections(
             params_json.get("matchingSections", []),
             locked_gw_pairs,
@@ -1321,18 +1493,36 @@ class HungarianAnomalyAlignmentEngine:
 
         # Phase 1 can come from an older cached DTW result that did not know
         # every vendor-specific anchor label.  Conserve any remaining typed GW
-        # here as an orphan instead of dropping it from both phases.
+        # here instead of dropping it from both phases.
+        #
+        # Structural fittings (bends, flanges, launchers) are split out: DTW is
+        # never able to match them, so an unconsumed one is expected, not
+        # missing evidence.  They pass through as bypass rows.
+        structural_old = []
+        structural_new = []
         for feature in anomalies_1_all:
-            if self._is_gw_feature(feature) and feature["source_key"] not in consumed_gw_old:
-                consumed_gw_old.add(feature["source_key"])
+            if not self._is_gw_feature(feature) or feature["source_key"] in consumed_gw_old:
+                continue
+            consumed_gw_old.add(feature["source_key"])
+            if self._is_dtw_anchor_feature(feature):
                 gw_unmatched.append(format_row(
                     feature["id"], None, "ONLY_OLD", "GW", old_feature=feature,
                 ))
+            else:
+                structural_old.append(format_row(
+                    feature["id"], None, "Bypassed OLD", "BYPASSED", old_feature=feature,
+                ))
         for feature in anomalies_2_all:
-            if self._is_gw_feature(feature) and feature["source_key"] not in consumed_gw_new:
-                consumed_gw_new.add(feature["source_key"])
+            if not self._is_gw_feature(feature) or feature["source_key"] in consumed_gw_new:
+                continue
+            consumed_gw_new.add(feature["source_key"])
+            if self._is_dtw_anchor_feature(feature):
                 gw_unmatched.append(format_row(
                     None, feature["id"], "ONLY_NEW", "GW", new_feature=feature,
+                ))
+            else:
+                structural_new.append(format_row(
+                    None, feature["id"], "Bypassed NEW", "BYPASSED", new_feature=feature,
                 ))
 
         anomaly_matched = []
@@ -1370,6 +1560,10 @@ class HungarianAnomalyAlignmentEngine:
             elif r.match_status == "Filtered NEW":
                 filtered_new_rows.append(row)
 
+        # Structural fittings swept up above are bypass rows, not GW evidence.
+        bypassed_old.extend(structural_old)
+        bypassed_new.extend(structural_new)
+
         output_rows = [
             *gw_locked,
             *gw_unmatched,
@@ -1398,24 +1592,43 @@ class HungarianAnomalyAlignmentEngine:
             ),
         }
 
-        print("___RESULT_JSON_BEGIN___")
-        print(json.dumps(json_output))
-        print("___RESULT_JSON_END___")
+        result_path = os.environ.get("ALIGNMENT_RESULT_FILE")
+        if result_path:
+            with open(result_path, "w", encoding="utf-8") as fh:
+                json.dump(json_output, fh)
+            print(f"___RESULT_FILE___{result_path}")
+        else:
+            print("___RESULT_JSON_BEGIN___")
+            print(json.dumps(json_output))
+            print("___RESULT_JSON_END___")
         
         print(f"\n[5/5] Selesai! Matched: {total_matched} | New: {total_new} | Missing: {total_missing}")
         return results
 
-if __name__ == "__main__":
-    session_id = None
-    if len(sys.argv) > 1:
-        session_id = int(sys.argv[1])
-        
+def main(argv=None):
+    argv = sys.argv if argv is None else argv
+    session_id = int(argv[1]) if len(argv) > 1 else None
+
     if not session_id:
-        print("[ERROR] No session_id provided")
-        sys.exit(1)
-        
+        print("[ERROR] No session_id provided", file=sys.stderr)
+        return 1
+
     engine = HungarianAnomalyAlignmentEngine(
         session_id=session_id,
         distance_tolerance_m=0.5,
     )
-    engine.perform_alignment()
+    try:
+        engine.perform_alignment()
+    except Exception as error:
+        # Every failure must reach Node as a non-zero exit with a stderr
+        # message; the worker only rejects on exit code.
+        import traceback
+
+        traceback.print_exc(file=sys.stderr)
+        print(f"[ERROR] Alignment failed: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

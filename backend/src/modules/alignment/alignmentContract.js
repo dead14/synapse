@@ -395,21 +395,44 @@ function readMatchStatus(row) {
     ).trim().toLowerCase();
 }
 
+function readResultGroup(row) {
+    return String(
+        row?.['Result Group']
+        ?? row?.result_group
+        ?? row?.resultGroup
+        ?? '',
+    ).trim().toUpperCase();
+}
+
+// A row is anomaly evidence only when the engine classified it as such.  Rows
+// with no group at all are treated as anomalies so that callers passing a plain
+// list of anomaly rows (and the older engine payloads) keep working.
+function isAnomalyRow(row) {
+    const group = readResultGroup(row);
+    return group === '' || group === 'ANOMALY';
+}
+
 function summarizeComparison(comparison) {
     if (!Array.isArray(comparison)) {
         throw new TypeError('Comparison must be an array');
     }
 
+    // `total` counts every emitted row, which is the conservation figure.
+    // Anomaly metrics must exclude GW locks and the bypass/filter buckets:
+    // counting those reported "48,000 anomalies" for a run with a few hundred,
+    // and diluted matchRate with rows that were never matching candidates.
     const total = comparison.length;
-    const matched = comparison.filter((row) => readMatchStatus(row) === 'matched').length;
-    const unmatched = total - matched;
+    const anomalyRows = comparison.filter(isAnomalyRow);
+    const anomaliesFound = anomalyRows.length;
+    const matched = anomalyRows.filter((row) => readMatchStatus(row) === 'matched').length;
+    const unmatched = anomaliesFound - matched;
 
     return {
         total,
         matched,
         unmatched,
-        matchRate: total ? Number(((matched / total) * 100).toFixed(1)) : 0,
-        anomaliesFound: total,
+        matchRate: anomaliesFound ? Number(((matched / anomaliesFound) * 100).toFixed(1)) : 0,
+        anomaliesFound,
     };
 }
 

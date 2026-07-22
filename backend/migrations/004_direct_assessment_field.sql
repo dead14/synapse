@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE TABLE IF NOT EXISTS direct_assessment_projects (
     id BIGSERIAL PRIMARY KEY,
     organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -45,5 +43,3 @@ CREATE TABLE IF NOT EXISTS field_packages (
 CREATE INDEX IF NOT EXISTS ix_da_projects_org_phase ON direct_assessment_projects (organization_id, phase, id DESC);
 CREATE INDEX IF NOT EXISTS ix_cp_surveys_da_date ON cp_surveys (direct_assessment_id, survey_date DESC);
 CREATE INDEX IF NOT EXISTS ix_field_packages_org_sync ON field_packages (organization_id, sync_status, id DESC);
-
-COMMIT;

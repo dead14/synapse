@@ -7,6 +7,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "python_engines"))
 
+import hungarian_engine
 from hungarian_engine import HungarianAnomalyAlignmentEngine
 
 
@@ -85,7 +86,7 @@ class HungarianToleranceTests(unittest.TestCase):
 
         self.assertLess(cost, self.engine.INF_COST)
 
-    def test_clock_difference_is_a_soft_cost_not_a_hard_gate(self):
+    def test_rejects_pair_when_circular_clock_difference_exceeds_tolerance(self):
         old = self.feature(100.0, clock_position="12:00")
         near_clock_new = self.feature(100.1, clock_position="12:15")
         far_clock_new = self.feature(100.1, clock_position="06:00")
@@ -93,10 +94,10 @@ class HungarianToleranceTests(unittest.TestCase):
         near_cost = self.engine.build_cost_matrix([old], [near_clock_new], [], [])[0][0]
         far_cost = self.engine.build_cost_matrix([old], [far_clock_new], [], [])[0][0]
 
-        self.assertLess(near_cost, far_cost)
-        self.assertLess(far_cost, self.engine.INF_COST)
+        self.assertLess(near_cost, self.engine.INF_COST)
+        self.assertEqual(far_cost, self.engine.INF_COST)
 
-    def test_clock_scale_slider_changes_the_soft_cost(self):
+    def test_clock_tolerance_override_controls_the_hard_gate(self):
         old = self.feature(100.0, clock_position="12:00")
         new = self.feature(100.1, clock_position="01:00")
 
@@ -107,7 +108,78 @@ class HungarianToleranceTests(unittest.TestCase):
             [old], [new], [], [], {"clock_tolerance": 30}
         )[0][0]
 
-        self.assertGreater(strict_scale_cost, forgiving_scale_cost)
+        self.assertEqual(strict_scale_cost, self.engine.INF_COST)
+        self.assertLess(forgiving_scale_cost, self.engine.INF_COST)
+
+    def test_clock_tolerance_uses_the_shortest_distance_across_twelve_oclock(self):
+        old = self.feature(100.0, clock_position="11:50")
+        new = self.feature(100.1, clock_position="12:10")
+
+        cost = self.engine.build_cost_matrix(
+            [old], [new], [], [], {"clock_tolerance": 15}
+        )[0][0]
+
+        self.assertLess(cost, self.engine.INF_COST)
+
+    def test_missing_clock_evidence_does_not_reject_an_otherwise_valid_pair(self):
+        old = self.feature(100.0, clock_position=None)
+        new = self.feature(100.1, clock_position="04:00")
+
+        cost = self.engine.build_cost_matrix([old], [new], [], [])[0][0]
+
+        self.assertLess(cost, self.engine.INF_COST)
+
+    def test_rejects_pair_when_length_difference_exceeds_tolerance(self):
+        old = self.feature(100.0, length_mm=10.0)
+        new = self.feature(100.1, length_mm=61.0)
+
+        cost = self.engine.build_cost_matrix([old], [new], [], [])[0][0]
+
+        self.assertEqual(cost, self.engine.INF_COST)
+
+    def test_length_difference_at_tolerance_boundary_remains_eligible(self):
+        old = self.feature(100.0, length_mm=10.0)
+        new = self.feature(100.1, length_mm=60.0)
+
+        cost = self.engine.build_cost_matrix([old], [new], [], [])[0][0]
+
+        self.assertLess(cost, self.engine.INF_COST)
+
+    def test_dense_and_sparse_solvers_cannot_force_a_length_invalid_match(self):
+        old = self.feature(100.0, length_mm=10.0)
+        new = self.feature(100.1, length_mm=61.0)
+
+        matrix = self.engine.build_cost_matrix([old], [new], [], [])
+        edges = self.engine.build_sparse_cost_edges([old], [new], [], [])
+
+        self.assertEqual(self.engine.solve_monotonic_assignment(matrix), [])
+        self.assertEqual(edges, [])
+        self.assertEqual(self.engine.solve_sparse_monotonic_assignment(1, 1, edges), [])
+
+    def test_dense_and_sparse_candidate_builders_apply_every_hard_tolerance(self):
+        invalid_pairs = [
+            (self.feature(100.0), self.feature(99.7)),
+            (self.feature(100.0), self.feature(100.5)),
+            (
+                self.feature(100.0, dist_to_us_gw_m=2.0),
+                self.feature(100.1, dist_to_us_gw_m=2.3),
+            ),
+            (
+                self.feature(100.0, clock_position="12:00"),
+                self.feature(100.1, clock_position="01:00"),
+            ),
+            (
+                self.feature(100.0, length_mm=10.0),
+                self.feature(100.1, length_mm=61.0),
+            ),
+        ]
+
+        for old, new in invalid_pairs:
+            with self.subTest(old=old, new=new):
+                matrix = self.engine.build_cost_matrix([old], [new], [], [])
+                edges = self.engine.build_sparse_cost_edges([old], [new], [], [])
+                self.assertEqual(matrix[0][0], self.engine.INF_COST)
+                self.assertEqual(edges, [])
 
     def test_reads_common_upstream_gw_distance_column_alias(self):
         value = self.engine._read_us_gw_distance({"Dist. to U/S GW (m)": "2.35"})
@@ -433,6 +505,11 @@ class HungarianGwLockTests(unittest.TestCase):
         features = [
             {"id": "gw-matched", "originalType": "weld"},
             {"id": "gw-unmatched", "originalType": "tee"},
+            {"id": "offtake-unmatched", "originalType": "offtake"},
+            {"id": "bend-unmatched", "originalType": "bend"},
+            {"id": "launcher-unmatched", "originalType": "launcher"},
+            {"id": "receiver-unmatched", "originalType": "receiver"},
+            {"id": "branch-unmatched", "originalType": "tee / branch connection"},
             {"id": "defect", "originalType": "metal loss"},
             {"id": "support", "originalType": "support"},
         ]
@@ -603,6 +680,152 @@ class OrderedAnomalyMatchingTests(unittest.TestCase):
 
         self.assertFalse(result.is_valid)
         self.assertIn("strictly", " ".join(result.errors))
+
+
+class GwAnchorPartitionTests(unittest.TestCase):
+    """Only DTW-eligible anchors may be reported as missing GW evidence.
+
+    dtw_engine restricts anchors to {'weld','valve','tee'} on purpose ("strict
+    Tier-1/Tier-2 anchors only"), so bends, elbows, flanges, launchers and
+    receivers can never be consumed by Phase 1.  Sweeping them into
+    gw_unmatched turned every one of them into permanent phantom missing
+    evidence on every run.
+    """
+
+    @staticmethod
+    def feature(feature_type, identification=""):
+        return {
+            "originalType": feature_type,
+            "raw": {"feature_identification": identification},
+        }
+
+    def test_tier_one_and_two_labels_are_dtw_anchors(self):
+        for label in ["weld", "girth weld", "seam", "valve", "tee",
+                      "offtake", "branch connection"]:
+            with self.subTest(label=label):
+                item = self.feature(label)
+                self.assertTrue(HungarianAnomalyAlignmentEngine._is_dtw_anchor_feature(item))
+                self.assertFalse(HungarianAnomalyAlignmentEngine._is_structural_feature(item))
+
+    def test_structural_fittings_are_not_dtw_anchors(self):
+        for label in ["bend", "elbow", "launcher", "receiver", "flange"]:
+            with self.subTest(label=label):
+                item = self.feature(label)
+                self.assertFalse(
+                    HungarianAnomalyAlignmentEngine._is_dtw_anchor_feature(item),
+                    f"{label} is not a DTW anchor and must not be reported as a missing GW",
+                )
+                self.assertTrue(HungarianAnomalyAlignmentEngine._is_structural_feature(item))
+
+    def test_flange_is_detected_from_the_identification_column(self):
+        item = self.feature("other", identification="joint flange")
+        self.assertTrue(HungarianAnomalyAlignmentEngine._is_structural_feature(item))
+        self.assertFalse(HungarianAnomalyAlignmentEngine._is_dtw_anchor_feature(item))
+
+    def test_both_sets_stay_out_of_the_anomaly_matrix(self):
+        # _is_gw_feature is the union, so partitioning behaviour is unchanged.
+        for label in ["weld", "valve", "bend", "flange", "launcher"]:
+            with self.subTest(label=label):
+                self.assertTrue(
+                    HungarianAnomalyAlignmentEngine._is_gw_feature(self.feature(label))
+                )
+        self.assertFalse(
+            HungarianAnomalyAlignmentEngine._is_gw_feature(self.feature("metal loss"))
+        )
+
+
+class SectionIndexSpaceTests(unittest.TestCase):
+    """Section boundaries and segment ids must index the same list.
+
+    seg_id comes from get_gw_matches (filtered to MATCH/MATCHED, sorted by OLD
+    odometer).  locked_gw_pairs used to be gw_matches_final sorted by NEW
+    odometer and unfiltered -- a different length and a different order, so a
+    BYPASS/REVIEW policy landed on the wrong stretch of pipe.
+    """
+
+    def engine(self):
+        engine = HungarianAnomalyAlignmentEngine.__new__(HungarianAnomalyAlignmentEngine)
+        engine.swap_persisted_runs = False
+        return engine
+
+    def test_non_matched_pairs_are_excluded(self):
+        pairs = [
+            {"old_id": "a", "new_id": "a2", "old_odometer": 10.0, "new_odometer": 110.0, "status": "MATCHED"},
+            {"old_id": "b", "new_id": None, "old_odometer": 20.0, "new_odometer": None, "status": "ONLY_OLD"},
+            {"old_id": "c", "new_id": "c2", "old_odometer": 30.0, "new_odometer": 130.0, "status": "MATCH"},
+        ]
+        canonical = self.engine()._canonical_locked_pairs(pairs)
+        self.assertEqual([p["old_id"] for p in canonical], ["a", "c"])
+
+    def test_ordering_follows_old_odometer_not_new(self):
+        # A pair whose NEW order disagrees with its OLD order: sorting by NEW
+        # would swap positions 1 and 2 and shift every section boundary.
+        pairs = [
+            {"old_id": "a", "new_id": "a2", "old_odometer": 10.0, "new_odometer": 300.0, "status": "MATCHED"},
+            {"old_id": "b", "new_id": "b2", "old_odometer": 20.0, "new_odometer": 100.0, "status": "MATCHED"},
+        ]
+        canonical = self.engine()._canonical_locked_pairs(pairs)
+        self.assertEqual([p["old_id"] for p in canonical], ["a", "b"])
+
+    def test_unparseable_odometers_are_dropped(self):
+        pairs = [
+            {"old_id": "a", "new_id": "a2", "old_odometer": 10.0, "new_odometer": 110.0, "status": "MATCHED"},
+            {"old_id": "bad", "new_id": "b2", "old_odometer": "N/A", "new_odometer": 120.0, "status": "MATCHED"},
+        ]
+        canonical = self.engine()._canonical_locked_pairs(pairs)
+        self.assertEqual([p["old_id"] for p in canonical], ["a"])
+
+
+class GwMonotonicityTests(unittest.TestCase):
+    """A crossed GW lock must fail the run, not scramble the segments."""
+
+    @staticmethod
+    def pairs(*values):
+        return [{"oldVal": old, "newVal": new} for old, new in values]
+
+    def test_strictly_increasing_pairs_are_accepted(self):
+        HungarianAnomalyAlignmentEngine._assert_monotonic_gw_pairs(
+            self.pairs((10.0, 110.0), (20.0, 125.0), (30.0, 140.0))
+        )
+
+    def test_crossed_lock_is_rejected(self):
+        # Sorted by OLD, but NEW goes backwards -- run2_boundaries would be
+        # non-monotonic and bisect_right would return a meaningless index.
+        with self.assertRaises(ValueError) as ctx:
+            HungarianAnomalyAlignmentEngine._assert_monotonic_gw_pairs(
+                self.pairs((10.0, 110.0), (20.0, 105.0), (30.0, 140.0))
+            )
+        self.assertIn("strictly", str(ctx.exception))
+
+    def test_duplicate_boundary_is_rejected(self):
+        with self.assertRaises(ValueError):
+            HungarianAnomalyAlignmentEngine._assert_monotonic_gw_pairs(
+                self.pairs((10.0, 110.0), (10.0, 120.0))
+            )
+
+    def test_empty_and_single_pair_are_trivially_monotonic(self):
+        HungarianAnomalyAlignmentEngine._assert_monotonic_gw_pairs([])
+        HungarianAnomalyAlignmentEngine._assert_monotonic_gw_pairs(self.pairs((10.0, 110.0)))
+
+
+class DistanceCoercionTests(unittest.TestCase):
+    """An unreadable odometer must never become chainage 0.0."""
+
+    def test_real_values_parse(self):
+        self.assertEqual(hungarian_engine._coerce_distance(1234.5), 1234.5)
+        self.assertEqual(hungarian_engine._coerce_distance("1234.5"), 1234.5)
+        self.assertEqual(hungarian_engine._coerce_distance("  88.2 "), 88.2)
+        # A genuine zero is a valid chainage and must survive.
+        self.assertEqual(hungarian_engine._coerce_distance("0"), 0.0)
+
+    def test_thousands_separator_is_not_a_decimal_comma(self):
+        self.assertEqual(hungarian_engine._coerce_distance("12,345.6"), 12345.6)
+
+    def test_unreadable_values_return_none_rather_than_zero(self):
+        for value in ["N/A", "#N/A", "", "   ", None, "-", "abc",
+                      float("nan"), float("inf"), True]:
+            with self.subTest(value=value):
+                self.assertIsNone(hungarian_engine._coerce_distance(value))
 
 
 if __name__ == "__main__":

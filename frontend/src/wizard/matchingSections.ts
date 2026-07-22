@@ -83,6 +83,48 @@ export function validateSectionOrder(sections: MatchingSection[], lockedGws: Loc
   return null;
 }
 
+export function saveSectionRange(
+  current: MatchingSection[],
+  nextSection: MatchingSection,
+  lockedGws: LockedGwPair[],
+): MatchingSection[] {
+  const indexByKey = new Map(lockedGws.map((pair, index) => [pair.key, index]));
+  const first = indexByKey.get(nextSection.startGwKey);
+  const second = indexByKey.get(nextSection.endGwKey);
+  if (first === undefined || second === undefined || first === second) return current;
+
+  const start = Math.min(first, second);
+  const end = Math.max(first, second);
+  const retained = current.filter((section) => section.id !== nextSection.id);
+  const result: MatchingSection[] = [];
+
+  for (const section of retained) {
+    const sectionStart = indexByKey.get(section.startGwKey);
+    const sectionEnd = indexByKey.get(section.endGwKey);
+    if (sectionStart === undefined || sectionEnd === undefined || sectionEnd <= start || sectionStart >= end) {
+      result.push(section);
+      continue;
+    }
+    if (sectionStart < start) {
+      result.push({ ...section, id: `${section.id}-left-${nextSection.id}`, endGwKey: lockedGws[start].key });
+    }
+    if (sectionEnd > end) {
+      result.push({ ...section, id: `${section.id}-right-${nextSection.id}`, startGwKey: lockedGws[end].key });
+    }
+  }
+
+  result.push({
+    ...nextSection,
+    startGwKey: lockedGws[start].key,
+    endGwKey: lockedGws[end].key,
+  });
+  return result.sort((left, right) => indexByKey.get(left.startGwKey)! - indexByKey.get(right.startGwKey)!);
+}
+
+export function deleteMatchingSection(sections: MatchingSection[], sectionId: string): MatchingSection[] {
+  return sections.filter((section) => section.id !== sectionId);
+}
+
 export function resolveSectionDistances(
   section: MatchingSection,
   lockedGws: LockedGwPair[],

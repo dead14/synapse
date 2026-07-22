@@ -1,7 +1,9 @@
 const { Queue, Worker } = require('bullmq');
 const { spawn } = require('child_process');
+const fs = require('fs').promises;
+const os = require('os');
 const path = require('path');
-const { connection } = require('../../config/redis');
+const { connection, createWorkerConnection } = require('../../config/redis');
 const pool = require('../../config/db');
 const socketConfig = require('../../socket');
 const {
@@ -13,6 +15,8 @@ const {
     normalizeComparisonResult,
     summarizeComparison,
 } = require('./alignmentContract');
+const { ALIGNMENT_ENGINE_VERSION } = require('./alignmentExecution');
+const { pythonExecutable, pythonSpawnOptions } = require('../../config/python');
 
 const alignmentQueue = new Queue('ili-alignment', {
     connection,
@@ -37,42 +41,45 @@ function emitProgress(job, progress, message) {
     });
 }
 
-function runPythonAlignment(sessionId, algorithm) {
-    return new Promise((resolve, reject) => {
-        const engineScript = algorithm === 'manual'
-            ? 'src/python_engines/manual_alignment_engine.py'
-            : 'src/python_engines/hungarian_engine.py';
-        const child = spawn('python', [engineScript, String(sessionId)], {
-            cwd: path.join(__dirname, '../../..'),
+async function runPythonAlignment(sessionId, algorithm) {
+    const resultFile = path.join(os.tmpdir(), `synapse-alignment-${sessionId}-${Date.now()}.json`);
+    try {
+        const result = await new Promise((resolve, reject) => {
+            const engineScript = algorithm === 'manual'
+                ? 'src/python_engines/manual_alignment_engine.py'
+                : 'src/python_engines/hungarian_engine.py';
+            const child = spawn(pythonExecutable, [engineScript, String(sessionId)], pythonSpawnOptions({
+                cwd: path.join(__dirname, '../../..'),
+                env: { ALIGNMENT_RESULT_FILE: resultFile },
+            }));
+            let errorOutput = '';
+            const timeoutMs = Number(process.env.ALIGNMENT_PROCESS_TIMEOUT_MS) || 30 * 60 * 1000;
+            const timeout = setTimeout(() => {
+                child.kill();
+                const error = new Error(`Alignment process exceeded ${timeoutMs} ms`);
+                error.code = 'ALIGNMENT_PROCESS_TIMEOUT';
+                reject(error);
+            }, timeoutMs);
+            child.stdout.resume();
+            child.stderr.on('data', (data) => { errorOutput += data.toString(); });
+            child.on('error', (error) => { clearTimeout(timeout); reject(error); });
+            child.on('close', async (code) => {
+                clearTimeout(timeout);
+                if (code !== 0) return reject(new Error(errorOutput || `Alignment exited with code ${code}`));
+                try {
+                    const raw = await fs.readFile(resultFile, 'utf8');
+                    return resolve(JSON.parse(raw));
+                } catch (error) { return reject(error); }
+            });
         });
-        let output = '';
-        let errorOutput = '';
-        const timeoutMs = Number(process.env.ALIGNMENT_PROCESS_TIMEOUT_MS) || 30 * 60 * 1000;
-        const timeout = setTimeout(() => {
-            child.kill();
-            const error = new Error(`Alignment process exceeded ${timeoutMs} ms`);
-            error.code = 'ALIGNMENT_PROCESS_TIMEOUT';
-            reject(error);
-        }, timeoutMs);
-        child.stdout.on('data', (data) => { output += data.toString(); });
-        child.stderr.on('data', (data) => { errorOutput += data.toString(); });
-        child.on('error', (error) => { clearTimeout(timeout); reject(error); });
-        child.on('close', (code) => {
-            clearTimeout(timeout);
-            if (code !== 0) return reject(new Error(errorOutput || `Alignment exited with code ${code}`));
-            try {
-                const marked = output.match(/___RESULT_JSON_BEGIN___([\s\S]*?)___RESULT_JSON_END___/);
-                const first = output.indexOf('{');
-                const last = output.lastIndexOf('}');
-                const raw = marked?.[1] || (first >= 0 && last > first ? output.slice(first, last + 1) : '{}');
-                return resolve(JSON.parse(raw));
-            } catch (error) { return reject(error); }
-        });
-    });
+        return result;
+    } finally {
+        await fs.rm(resultFile, { force: true }).catch(() => {});
+    }
 }
 
 async function processAlignmentJob(job) {
-    const { sessionId, algorithm } = job.data;
+    const { sessionId, algorithm, configFingerprint } = job.data;
     await updateAlignmentJob(pool, job.id, { state: 'active', progress: 5, startedAt: new Date() });
     try {
         await emitProgress(job, 15, 'Alignment job started');
@@ -84,7 +91,8 @@ async function processAlignmentJob(job) {
             comparison: normalized.comparison,
             groups: normalized.groups,
             sessionId,
-            engineVersion: process.env.ALIGNMENT_ENGINE_VERSION || 'queue-v1',
+            engineVersion: job.data.engineVersion || ALIGNMENT_ENGINE_VERSION,
+            configFingerprint: configFingerprint || null,
         };
         await updateAlignmentJob(pool, job.id, {
             state: 'completed', progress: 100, result: resultPayload, completedAt: new Date(),
@@ -108,7 +116,7 @@ async function processAlignmentJob(job) {
 
 function startAlignmentWorker() {
     const worker = new Worker('ili-alignment', processAlignmentJob, {
-        connection,
+        connection: createWorkerConnection('alignment-worker'),
         concurrency: Number(process.env.ALIGNMENT_WORKER_CONCURRENCY) || 1,
     });
     worker.on('completed', (job) => console.log(JSON.stringify({ event: 'ili_alignment_completed', jobId: job.id })));

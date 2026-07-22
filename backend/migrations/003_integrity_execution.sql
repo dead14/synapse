@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE TABLE IF NOT EXISTS integrity_cases (
     id BIGSERIAL PRIMARY KEY,
     organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -109,5 +107,3 @@ CREATE INDEX IF NOT EXISTS ix_integrity_evidence_case_status
     ON integrity_evidence (integrity_case_id, status, id DESC);
 CREATE INDEX IF NOT EXISTS ix_compliance_requirements_org
     ON compliance_requirements (organization_id, category, active);
-
-COMMIT;

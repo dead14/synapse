@@ -1,6 +1,6 @@
-import React from 'react';
 import type { SectionDef } from './types';
 import { FiX } from 'react-icons/fi';
+import { sectionColor } from './sectionColors';
 
 interface SectionListProps {
   sections: SectionDef[];
@@ -15,7 +15,7 @@ export default function SectionList({ sections, totalLength, onDelete }: Section
       <div className="section-register-list__items">
         {sections.map(sec => (
           <article key={sec.id} className="section-register-item">
-            <div className="section-register-item__marker" style={{ backgroundColor: getSectionColor(sec.type) }} />
+            <div className="section-register-item__marker" style={{ backgroundColor: sectionColor(sec.type) }} />
             <div className="section-register-item__body">
               <div className="section-register-item__title"><strong>{sec.name}</strong><span>{sec.type}</span></div>
               <div className="section-register-item__range">
@@ -34,17 +34,4 @@ export default function SectionList({ sections, totalLength, onDelete }: Section
       </div>
     </div>
   );
-}
-
-// Helper (duplicated from Schematic for simplicity, usually put in a shared utils file)
-function getSectionColor(type: string) {
-  switch (type) {
-    case 'RL': return '#2dd4bf';
-    case 'AL': return '#60a5fa';
-    case 'RIS': return '#ef4444';
-    case 'ROC': return '#fb923c';
-    case 'BUR': return '#a3e635';
-    case 'CAS': return '#94a3b8';
-    default: return '#c084fc';
-  }
 }

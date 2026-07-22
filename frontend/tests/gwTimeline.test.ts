@@ -7,6 +7,7 @@ import {
   buildTimelineSummary,
   calculateViewportWindow,
   classifyTimelineMatch,
+  rawLdForTimelineMarker,
   readMatchConfidence,
 } from '../src/domain/gwTimeline.ts';
 
@@ -75,6 +76,19 @@ test('classifyTimelineMatch preserves review decisions and missing sides', () =>
   assert.equal(classifyTimelineMatch(matched, 'review'), 'review');
   assert.equal(classifyTimelineMatch(matched, 'excluded'), 'missing');
   assert.equal(classifyTimelineMatch({ status: 'Skipped', oldId: 'old-2', newId: null }), 'missing');
+});
+
+test('rawLdForTimelineMarker keeps the source LD instead of the mapped master coordinate', () => {
+  const match = {
+    oldVal: 1_868.81,
+    newVal: 1_868.81,
+    originalOldVal: 4.243,
+    originalNewVal: 1_868.81,
+  };
+
+  assert.equal(rawLdForTimelineMarker(4.243, match, 'old'), 4.243);
+  assert.equal(rawLdForTimelineMarker(null, match, 'old'), 4.243);
+  assert.equal(rawLdForTimelineMarker(null, match, 'new'), 1_868.81);
 });
 
 test('buildTimelineSummary reports health and offsets from canonical pairs', () => {

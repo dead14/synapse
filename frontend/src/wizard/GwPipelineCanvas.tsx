@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   calculateViewportWindow,
+  rawLdForTimelineMarker,
   type GwTimelineMatch,
   type TimelineFeatureEvidence,
   type TimelineGeometry,
@@ -55,10 +56,7 @@ const matchForFeature = (
 });
 
 const sourceDistance = (match: GwTimelineMatch, side: 'old' | 'new') => {
-  const preferred = side === 'old' ? match.originalOldVal : match.originalNewVal;
-  const master = side === 'old' ? match.oldVal : match.newVal;
-  const value = Number(preferred ?? master);
-  return Number.isFinite(value) ? value : null;
+  return rawLdForTimelineMarker(null, match, side);
 };
 
 const spacingBetween = (left: GwTimelineMatch, right: GwTimelineMatch, side: 'old' | 'new') => {
@@ -74,6 +72,7 @@ function TrackMarker({
   sourcePosition,
   domain,
   match,
+  side,
   status,
   selected,
   onSelect,
@@ -82,15 +81,14 @@ function TrackMarker({
   sourcePosition?: number | null;
   domain: TimelineGeometry['domain'];
   match?: GwTimelineMatch;
+  side: 'old' | 'new';
   status: TimelineStatus;
   selected: boolean;
   onSelect: (match: GwTimelineMatch) => void;
 }) {
   const label = distanceLabel(position);
-  const rawSource = Number(sourcePosition);
-  const rawSourceLabel = Number.isFinite(rawSource) && !sameDistance(rawSource, position)
-    ? `; source raw ${distanceLabel(rawSource)}`
-    : '';
+  const rawLd = rawLdForTimelineMarker(sourcePosition, match, side);
+  const rawSourceLabel = rawLd === null ? ' · LD asli tidak tersedia' : ` · LD asli ${distanceLabel(rawLd)}`;
   const markerLabel = `${label} · ${status}${match ? ' pair' : ' feature'}${rawSourceLabel}`;
 
   return (
@@ -98,13 +96,13 @@ function TrackMarker({
       type="button"
       className={`gw-pipeline-marker is-${status}${selected ? ' is-selected' : ''}`}
       style={{ insetInlineStart: `${distancePercent(position, domain)}%` }}
-      disabled={!match}
       aria-label={markerLabel}
-      aria-pressed={selected}
+      aria-pressed={match ? selected : undefined}
       onClick={() => match && onSelect(match)}
     >
       <span aria-hidden="true" />
       <small>{label}</small>
+      <span className="gw-pipeline-marker__raw-label" aria-hidden="true">{rawLd === null ? 'LD asli tidak tersedia' : `LD asli ${distanceLabel(rawLd)}`}</span>
     </button>
   );
 }
@@ -143,8 +141,28 @@ export default function GwPipelineCanvas({
     () => Array.from({ length: 7 }, (_, index) => domain.startM + (domainSpan / 6) * index),
     [domain.startM, domainSpan],
   );
-  const oldGwFeatures = timeline.oldFeatures.filter((feature) => featureKind(feature) === 'weld');
-  const newGwFeatures = timeline.newFeatures.filter((feature) => featureKind(feature) === 'weld');
+  const oldGwFeatures = useMemo(
+    () => timeline.oldFeatures.filter((feature) => featureKind(feature) === 'weld'),
+    [timeline.oldFeatures],
+  );
+  const newGwFeatures = useMemo(
+    () => timeline.newFeatures.filter((feature) => featureKind(feature) === 'weld'),
+    [timeline.newFeatures],
+  );
+  const matchByOldId = useMemo(() => {
+    const map = new Map<string, GwTimelineMatch>();
+    for (const m of matches) {
+      if (m.oldId != null) map.set(String(m.oldId), m);
+    }
+    return map;
+  }, [matches]);
+  const matchByNewId = useMemo(() => {
+    const map = new Map<string, GwTimelineMatch>();
+    for (const m of matches) {
+      if (m.newId != null) map.set(String(m.newId), m);
+    }
+    return map;
+  }, [matches]);
   const coverageStyle = (coverage: TimelineGeometry['oldCoverage']) => {
     if (!coverage) return { display: 'none' };
     const startPercent = distancePercent(coverage.startM, domain);
@@ -262,9 +280,10 @@ export default function GwPipelineCanvas({
             <FeatureMarkers values={timeline.newTees} type="tee" domain={domain} />
             {newGwFeatures.map((feature, index) => {
               const position = feature.displayDistanceM;
-              const match = matchForFeature(matches, feature, 'new');
+              const match = (feature.id != null ? matchByNewId.get(String(feature.id)) : undefined)
+                ?? matchForFeature(matches, feature, 'new');
               const status = match ? statusFor(match) : 'missing';
-              return <TrackMarker key={`new-${String(feature.id ?? position)}-${index}`} position={position} sourcePosition={feature.sourceDistanceM} domain={domain} match={match} status={status} selected={Boolean(match && String(match.id) === selectedId)} onSelect={onSelectMatch} />;
+              return <TrackMarker key={`new-${String(feature.id ?? position)}-${index}`} position={position} sourcePosition={feature.sourceDistanceM} domain={domain} match={match} side="new" status={status} selected={Boolean(match && String(match.id) === selectedId)} onSelect={onSelectMatch} />;
             })}
           </div>
 
@@ -287,9 +306,10 @@ export default function GwPipelineCanvas({
             <FeatureMarkers values={timeline.oldTees} type="tee" domain={domain} />
             {oldGwFeatures.map((feature, index) => {
               const position = feature.displayDistanceM;
-              const match = matchForFeature(matches, feature, 'old');
+              const match = (feature.id != null ? matchByOldId.get(String(feature.id)) : undefined)
+                ?? matchForFeature(matches, feature, 'old');
               const status = match ? statusFor(match) : 'missing';
-              return <TrackMarker key={`old-${String(feature.id ?? position)}-${index}`} position={position} sourcePosition={feature.sourceDistanceM} domain={domain} match={match} status={status} selected={Boolean(match && String(match.id) === selectedId)} onSelect={onSelectMatch} />;
+              return <TrackMarker key={`old-${String(feature.id ?? position)}-${index}`} position={position} sourcePosition={feature.sourceDistanceM} domain={domain} match={match} side="old" status={status} selected={Boolean(match && String(match.id) === selectedId)} onSelect={onSelectMatch} />;
             })}
           </div>
 

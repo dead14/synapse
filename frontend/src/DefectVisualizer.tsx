@@ -5,6 +5,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Text } from '@react-three/drei';
 import { FiBox, FiX } from 'react-icons/fi';
 import { apiFetch } from './utils/api';
+import { extentOf } from './utils/numericRange.ts';
 
 interface DefectVisualizerProps {
   data: any[];
@@ -389,8 +390,9 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
   const availableDistances = parsedData
     .flatMap(d => [d?.dist1, d?.dist2])
     .filter((d): d is number => Number.isFinite(d));
-  const minDistance = availableDistances.length > 0 ? Math.min(...availableDistances) : 0;
-  const maxDistance = availableDistances.length > 0 ? Math.max(...availableDistances) : 0;
+  const distanceExtent = extentOf(availableDistances);
+  const minDistance = distanceExtent.min;
+  const maxDistance = distanceExtent.max;
   const totalLength = Math.max(10, maxDistance - minDistance + 20);
   const startDist = Math.max(0, minDistance - 10);
 

@@ -6,6 +6,7 @@ interface SectionModalProps {
   endGw: any;
   autoStartCoords?: {lat: number, lng: number};
   autoEndCoords?: {lat: number, lng: number};
+  error?: string | null;
   onClose: () => void;
   onSave: (section: Partial<SectionDef>) => void;
 }
@@ -20,7 +21,7 @@ const SECTION_TYPES = [
   { id: 'OTH', label: 'OTH - Lainnya' }
 ];
 
-export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndCoords, onClose, onSave }: SectionModalProps) {
+export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndCoords, error, onClose, onSave }: SectionModalProps) {
   const [name, setName] = useState('');
   const [type, setType] = useState('RL');
   const [physicalType, setPhysicalType] = useState('Buried');
@@ -164,6 +165,10 @@ export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndC
             />
           </div>
         </div>
+
+        {error && (
+          <p role="alert" className="mt-5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{error}</p>
+        )}
 
         {/* ACTIONS */}
         <div className="flex justify-end gap-3 mt-8 pt-4 border-t border-gray-100">
