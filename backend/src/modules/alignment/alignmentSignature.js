@@ -15,9 +15,15 @@ function canonicalSignature(payload, { oldRunId, newRunId }) {
     });
 }
 
+// Must match ACCEPTED_TIEIN_DECISION_STATUSES in alignmentContract.js and
+// `usesTransform` in the wizard's tie-in step. If any of the three disagrees
+// about whether an acknowledged decision carries a transform, the client and
+// server compute different signatures and every saved review is rejected.
+const ACCEPTED_TIEIN_STATUSES = new Set(['AUTO_ACCEPTED', 'REVIEW_ACKNOWLEDGED']);
+
 function canonicalSignatureForConfig(config, references) {
     const hasCanonicalTieIn = config?.tieInTransform?.direction === 'OLD_TO_NEW'
-        && config?.tieInDecision?.status === 'AUTO_ACCEPTED';
+        && ACCEPTED_TIEIN_STATUSES.has(config?.tieInDecision?.status);
     return canonicalSignature({
         ota: config?.ota,
         strictPenalty: config?.strictPenalty,
@@ -33,6 +39,7 @@ function canonicalSignatureForConfig(config, references) {
 }
 
 module.exports = {
+    ACCEPTED_TIEIN_STATUSES,
     canonicalSignature,
     canonicalSignatureForConfig,
 };

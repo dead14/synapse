@@ -1,11 +1,22 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { FiArrowRight, FiArrowLeft, FiCheckCircle, FiTarget, FiActivity, FiPlus, FiTrash2 } from 'react-icons/fi';
 import { apiFetch } from '../utils/api';
+import { pairTieIn, primaryRunPair, resolveRunPairs } from '../domain/runPairs';
 
 interface StepTieInConfigProps {
   onNext: (data: any) => void;
   onBack: () => void;
   config: any;
+}
+
+interface TieInDecision {
+  status: 'AUTO_ACCEPTED' | 'REVIEW_REQUIRED' | 'REVIEW_ACKNOWLEDGED';
+  reasons: string[];
+  requiresHumanReview: boolean;
+  evidenceScore: number;
+  isProbability: false;
+  originalStatus?: 'REVIEW_REQUIRED';
+  acknowledgedBy?: number;
 }
 
 interface TieInMetrics {
@@ -45,12 +56,15 @@ interface TieInMetrics {
     newStartM: number;
     newEndM: number;
   };
-  decision: {
-    status: 'AUTO_ACCEPTED' | 'REVIEW_REQUIRED';
-    reasons: string[];
-    requiresHumanReview: boolean;
-    evidenceScore: number;
-    isProbability: false;
+  decision: TieInDecision;
+  /**
+   * Present only when the estimate is REVIEW_REQUIRED. Partial Run refuses to
+   * fall back to a scalar offset, so this server-signed decision is the only
+   * way an engineer can proceed on evidence that failed a gate.
+   */
+  reviewAcknowledgement?: {
+    decision: TieInDecision;
+    evidenceToken: string;
   };
   tieIn: {
     oldDistanceM: number;
@@ -99,91 +113,117 @@ const reviewReasonLabels: Record<string, string> = {
   HIGH_SPAN_RESIDUAL: 'residual panjang spool terlalu tinggi',
 };
 
-export default function StepTieInConfig({ onNext, onBack, config }: StepTieInConfigProps) {
-  const [loading, setLoading] = useState(true);
-  const [autoOffset, setAutoOffset] = useState<number | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [manualOffset, setManualOffset] = useState<number | ''>('');
-  const [useAuto, setUseAuto] = useState(true);
-  const [excludedRanges, setExcludedRanges] = useState<Array<{ run: 'OLD' | 'NEW'; startM: number; endM: number }>>(
-    Array.isArray(config?.tieInExcludedRanges) ? config.tieInExcludedRanges : [],
-  );
-  const [rangeDraft, setRangeDraft] = useState<{ run: 'OLD' | 'NEW'; startM: number | ''; endM: number | '' }>({ run: 'NEW', startM: '', endM: '' });
+type TieInSelection = 'auto' | 'acknowledged' | 'manual';
+type ExcludedRange = { run: 'OLD' | 'NEW'; startM: number; endM: number };
 
-  const [tieInMetrics, setTieInMetrics] = useState<TieInMetrics | null>(null);
+/**
+ * Everything the operator decided about one run pair. A chain session aligns
+ * N-1 pairs and each needs its own overlap, transform, and sign-off — a single
+ * shared set of these fields only ever described the last pair, and the wizard
+ * then applied that pair's transform to all the others.
+ */
+type PairTieInState = {
+  loading: boolean;
+  metrics: TieInMetrics | null;
+  autoOffset: number | null;
+  errorMessage: string | null;
+  selection: TieInSelection | null;
+  manualOffset: number | '';
+  acknowledgementNote: string;
+  excludedRanges: ExcludedRange[];
+};
+
+const emptyPairState = (excludedRanges: ExcludedRange[] = []): PairTieInState => ({
+  loading: true,
+  metrics: null,
+  autoOffset: null,
+  errorMessage: null,
+  selection: null,
+  manualOffset: '',
+  acknowledgementNote: '',
+  excludedRanges,
+});
+
+export default function StepTieInConfig({ onNext, onBack, config }: StepTieInConfigProps) {
+  const pairs = useMemo(() => resolveRunPairs(config?.summaryData), [config?.summaryData]);
+  const primaryPair = useMemo(() => primaryRunPair(config?.summaryData), [config?.summaryData]);
+  const [activePairKey, setActivePairKey] = useState<string | null>(null);
+  const activePair = pairs.find((pair) => pair.key === activePairKey) ?? pairs[0] ?? null;
+
+  const [pairStates, setPairStates] = useState<Record<string, PairTieInState>>(() => (
+    Object.fromEntries(resolveRunPairs(config?.summaryData).map((pair) => {
+      const stored = pairTieIn(config, pair);
+      return [pair.key, emptyPairState(
+        Array.isArray(stored?.tieInExcludedRanges) ? stored.tieInExcludedRanges : [],
+      )];
+    }))
+  ));
+
+  const active = (activePair && pairStates[activePair.key]) || emptyPairState();
+  const patchActive = (patch: Partial<PairTieInState>) => {
+    if (!activePair) return;
+    setPairStates((current) => ({
+      ...current,
+      [activePair.key]: { ...(current[activePair.key] ?? emptyPairState()), ...patch },
+    }));
+  };
+
+  const { loading, metrics: tieInMetrics, autoOffset, errorMessage, selection, manualOffset, acknowledgementNote, excludedRanges } = active;
+  const setSelection = (next: TieInSelection) => patchActive({ selection: next });
+  const setManualOffset = (next: number | '') => patchActive({ manualOffset: next });
+  const setAcknowledgementNote = (next: string) => patchActive({ acknowledgementNote: next });
+  const setExcludedRanges = (next: ExcludedRange[] | ((current: ExcludedRange[]) => ExcludedRange[])) => patchActive({
+    excludedRanges: typeof next === 'function' ? next(excludedRanges) : next,
+  });
+
+  const [rangeDraft, setRangeDraft] = useState<{ run: 'OLD' | 'NEW'; startM: number | ''; endM: number | '' }>({ run: 'NEW', startM: '', endM: '' });
   const requestRevision = useRef(0);
+  const activeExcludedKey = JSON.stringify(excludedRanges);
 
   useEffect(() => {
+    if (!activePair) return;
+    const pairKey = activePair.key;
     const controller = new AbortController();
     const currentRequest = ++requestRevision.current;
+    const patch = (patchValue: Partial<PairTieInState>) => setPairStates((current) => ({
+      ...current,
+      [pairKey]: { ...(current[pairKey] ?? emptyPairState()), ...patchValue },
+    }));
 
     const fetchMachineGuess = async () => {
-      setLoading(true);
-      setTieInMetrics(null);
-      setAutoOffset(null);
-      setUseAuto(false);
+      patch({ loading: true, metrics: null, autoOffset: null, selection: null });
       try {
-        const selectAnchors = (features: any[]) => features
-          .filter((feature) => [
-            feature.type,
-            feature.feature_type,
-            feature.feature_identification,
-            feature.originalType,
-          ].filter((value) => value !== null && value !== undefined)
-            .some((value) => /\b(?:weld|girth|flange|valve|tee|offtake|branch|bend|elbow|launcher|receiver)\b/.test(String(value).toLowerCase())))
-          .map((feature) => {
-            const candidates = [feature.dist, feature.log_distance_m, feature.logDistance, feature.distance, feature.chainage, feature.odometer];
-            const dist = candidates.map((value) => {
-              const raw = String(value ?? '').trim();
-              return raw ? Number(raw.replace(/,/g, '')) : Number.NaN;
-            }).find(Number.isFinite);
-            return { ...feature, dist };
-          })
-          .filter((feature) => feature.dist !== undefined);
-        const oldRunReference = Number(config?.summaryData?.oldRun?.runId);
-        const newRunReference = Number(config?.summaryData?.newRun?.runId);
-        const hasPersistedRuns = Number.isSafeInteger(oldRunReference)
-          && oldRunReference > 0
-          && Number.isSafeInteger(newRunReference)
-          && newRunReference > 0;
-        const oldRun = selectAnchors(config?.summaryData?.oldRun?.rawFeatures || []);
-        const newRun = selectAnchors(config?.summaryData?.newRun?.rawFeatures || []);
-        if (!hasPersistedRuns && (oldRun.length === 0 || newRun.length === 0)) {
-          if (currentRequest !== requestRevision.current) return;
-          setAutoOffset(0);
-          setErrorMessage('Data anchor belum tersedia pada kedua file ILI.');
-          return;
-        }
+        // resolveRunPairs only yields pairs whose two runs are both persisted, so
+        // the server always reads the anchors from the database and the old
+        // raw-feature upload path is no longer reachable from here.
         const data = await apiFetch<TieInMetrics & { success: boolean; offset: number; error?: string }>('/api/estimate-tiein-offset', {
           method: 'POST',
           body: JSON.stringify({
-            ...(hasPersistedRuns
-              ? { oldRunId: oldRunReference, newRunId: newRunReference }
-              : { oldRun, newRun }),
+            oldRunId: activePair.oldRunId,
+            newRunId: activePair.newRunId,
             excludedRanges,
           }),
           signal: controller.signal
         });
         if (currentRequest !== requestRevision.current) return;
-        
+
         if (data.success && Number.isFinite(Number(data.offset))) {
-          const roundedOffset = Math.round(data.offset * 1000) / 1000;
-          setAutoOffset(roundedOffset);
-          setErrorMessage(null);
-          setTieInMetrics(data);
-          setUseAuto(data.decision?.status === 'AUTO_ACCEPTED');
+          patch({
+            autoOffset: Math.round(data.offset * 1000) / 1000,
+            errorMessage: null,
+            metrics: data,
+            selection: data.decision?.status === 'AUTO_ACCEPTED' ? 'auto' : null,
+          });
         } else {
           console.error("Tie-in estimation failed:", data.error);
-          setErrorMessage(data.error || "Engine failed to return a valid offset.");
-          setAutoOffset(0);
+          patch({ errorMessage: data.error || 'Engine failed to return a valid offset.', autoOffset: 0 });
         }
       } catch (err: any) {
         if (err.name === 'AbortError' || currentRequest !== requestRevision.current) return;
         console.error("Failed to fetch tie-in offset:", err);
-        setErrorMessage(err.message || "Network error while connecting to engine.");
-        setAutoOffset(0);
+        patch({ errorMessage: err.message || 'Network error while connecting to engine.', autoOffset: 0 });
       } finally {
-        if (currentRequest === requestRevision.current) setLoading(false);
+        if (currentRequest === requestRevision.current) patch({ loading: false });
       }
     };
 
@@ -192,30 +232,72 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
       requestRevision.current += 1;
       controller.abort();
     };
-  }, [config, excludedRanges]);
+    // Keyed on identity rather than object references: `activePair.key` fully
+    // determines the pair, and `activeExcludedKey` is the serialized content of
+    // `excludedRanges`. Depending on the objects themselves re-estimates the
+    // tie-in on every render, which is what made this step re-request in a loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePair?.key, activeExcludedKey]);
 
   const partialRunEnabled = Boolean(config?.enablePartialRun);
   const manualAllowed = !partialRunEnabled;
+  const autoAccepted = tieInMetrics?.decision?.status === 'AUTO_ACCEPTED';
+  const acknowledgement = tieInMetrics?.reviewAcknowledgement ?? null;
 
-  const handleContinue = () => {
-    if (!useAuto && !manualAllowed) return;
-    const finalOffset = useAuto ? autoOffset : Number(manualOffset);
-    onNext({
-      globalOffset: finalOffset,
-      tieInExcludedRanges: excludedRanges,
-      tieInMetrics,
-      tieInEvidenceToken: useAuto ? tieInMetrics?.evidenceToken : null,
-      tieInMethodVersion: useAuto ? tieInMetrics?.methodVersion : null,
-      tieInTransform: useAuto ? tieInMetrics?.transform : null,
-      tieInDecision: useAuto
-        ? tieInMetrics?.decision
-        : { status: 'MANUAL_OVERRIDE', reasons: ['USER_SUPPLIED_LEGACY_OFFSET'] },
-    });
+  const pairIsResolved = (state: PairTieInState | undefined) => {
+    if (!state) return false;
+    if (state.selection === 'auto') return state.metrics?.decision?.status === 'AUTO_ACCEPTED';
+    if (state.selection === 'acknowledged') return Boolean(state.metrics?.reviewAcknowledgement);
+    if (state.selection === 'manual') return manualAllowed && state.manualOffset !== '';
+    return false;
+  };
+  const activeResolved = pairIsResolved(pairStates[activePair?.key ?? '']);
+  // Every pair in the chain feeds the same final comparison, so leaving one
+  // unresolved would silently fall back to another pair's transform.
+  const unresolvedPairs = pairs.filter((pair) => !pairIsResolved(pairStates[pair.key]));
+  const canContinue = pairs.length > 0 && unresolvedPairs.length === 0;
+
+  /** The wizard fields describing one pair's accepted tie-in evidence. */
+  const tieInEvidenceFor = (state: PairTieInState) => {
+    const usesTransform = state.selection === 'auto' || state.selection === 'acknowledged';
+    // The evidence token is an HMAC over the decision, so an acknowledged
+    // decision has to travel back exactly as the server signed it. The
+    // engineer's note is audit context, persisted alongside it, never inside it.
+    const decision = state.selection === 'auto'
+      ? state.metrics?.decision
+      : state.selection === 'acknowledged'
+        ? state.metrics!.reviewAcknowledgement!.decision
+        : { status: 'MANUAL_OVERRIDE', reasons: ['USER_SUPPLIED_LEGACY_OFFSET'] };
+    return {
+      globalOffset: usesTransform ? state.autoOffset : Number(state.manualOffset),
+      tieInExcludedRanges: state.excludedRanges,
+      tieInMetrics: state.metrics,
+      tieInAcknowledgementNote: state.selection === 'acknowledged' && state.acknowledgementNote.trim()
+        ? state.acknowledgementNote.trim().slice(0, 500)
+        : null,
+      tieInEvidenceToken: state.selection === 'acknowledged'
+        ? state.metrics!.reviewAcknowledgement!.evidenceToken
+        : state.selection === 'auto' ? state.metrics?.evidenceToken : null,
+      tieInMethodVersion: usesTransform ? state.metrics?.methodVersion : null,
+      tieInTransform: usesTransform ? state.metrics?.transform : null,
+      tieInDecision: decision,
+    };
   };
 
-  const autoAccepted = tieInMetrics?.decision?.status === 'AUTO_ACCEPTED';
+  const handleContinue = () => {
+    if (!canContinue) return;
+    const pairTieIns = Object.fromEntries(
+      pairs.map((pair) => [pair.key, tieInEvidenceFor(pairStates[pair.key])]),
+    );
+    // The primary pair's evidence is also written unscoped, so the engines and
+    // any session saved by an older client keep resolving a transform.
+    const primaryEvidence = primaryPair ? pairTieIns[primaryPair.key] : undefined;
+    onNext({ pairTieIns, ...(primaryEvidence || {}) });
+  };
+
   const transformDomain = tieInMetrics?.transform?.domain ?? tieInMetrics?.overlap;
-  const manualSelected = !useAuto && manualAllowed;
+  const useAuto = selection === 'auto';
+  const manualSelected = selection === 'manual' && manualAllowed;
 
   return (
     <div className="alignment-surface bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex flex-col h-full animate-fade-in">
@@ -228,7 +310,41 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
             Temukan overlap fisik, lalu petakan run historis ke sumbu master terbaru.
           </p>
         </div>
+        {pairs.length > 1 && (
+          <div className="text-right text-xs font-semibold text-gray-500">
+            {pairs.length - unresolvedPairs.length} / {pairs.length} pasangan siap
+          </div>
+        )}
       </div>
+
+      {/* One tie-in per chain transition. Each pair has its own overlap, so each
+          needs its own transform and its own sign-off. */}
+      {pairs.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 bg-brand-50/60 px-6 py-3">
+          <span className="text-xs font-bold uppercase tracking-wide text-brand-700">Run pair</span>
+          {pairs.map((pair) => {
+            const state = pairStates[pair.key];
+            const resolved = pairIsResolved(state);
+            const isActive = pair.key === activePair?.key;
+            return (
+              <button
+                key={pair.key}
+                type="button"
+                aria-pressed={isActive}
+                onClick={() => setActivePairKey(pair.key)}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  isActive
+                    ? 'bg-brand-600 text-white shadow-sm'
+                    : 'border border-brand-200 bg-white text-brand-700 hover:bg-brand-100'
+                }`}
+              >
+                {resolved ? <FiCheckCircle aria-hidden="true" /> : <span aria-hidden="true">•</span>}
+                {pair.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       <div className="p-8 flex-1">
         {loading ? (
@@ -245,7 +361,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
             {/* Auto Guess Card */}
             <div 
               className={`p-6 rounded-xl border-2 transition-all cursor-pointer ${useAuto ? 'border-brand-500 bg-brand-50 shadow-md' : 'border-gray-200 hover:border-brand-300'}`}
-              onClick={() => { if (autoAccepted) setUseAuto(true); }}
+              onClick={() => { if (autoAccepted) setSelection('auto'); }}
             >
               <div className="flex items-start gap-4">
                 <button
@@ -253,7 +369,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                   aria-label="Gunakan rekomendasi engineering otomatis"
                   aria-pressed={useAuto}
                   disabled={!autoAccepted}
-                  onClick={(event) => { event.stopPropagation(); setUseAuto(true); }}
+                  onClick={(event) => { event.stopPropagation(); setSelection('auto'); }}
                   className={`mt-1 rounded-full p-2 ${useAuto ? 'bg-brand-500 text-white' : 'bg-gray-100 text-gray-400'}`}
                 >
                   <FiActivity size={20} />
@@ -305,9 +421,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                     <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
                       <strong>Auto-apply diblokir:</strong>{' '}
                       {tieInMetrics.decision.reasons.map((reason) => reviewReasonLabels[reason] ?? reason).join('; ')}.
-                      {partialRunEnabled
-                        ? ' Periksa kandidat overlap, source anchor, atau excluded range sampai engineering gate terpenuhi.'
-                        : ' Periksa kandidat overlap atau gunakan mode legacy bila memang diperlukan.'}
+                      {' '}Perbaiki kandidat overlap, source anchor, atau excluded range sampai engineering gate terpenuhi — atau setujui transform ini secara sadar di bawah.
                     </div>
                   )}
                   {transformDomain && !errorMessage && (
@@ -357,10 +471,54 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
               {excludedRanges.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{excludedRanges.map((range, index) => <span key={`${range.run}-${range.startM}-${range.endM}-${index}`} className="rounded-full border border-amber-200 bg-white px-3 py-1 text-xs font-semibold text-amber-800">{range.run} {Math.min(range.startM, range.endM)}–{Math.max(range.startM, range.endM)} m <button type="button" aria-label={`Hapus excluded range ${range.run} ${range.startM} sampai ${range.endM} meter`} onClick={() => setExcludedRanges((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="ml-2 text-red-600"><FiTrash2 className="inline" /></button></span>)}</div>}
             </div>
 
+            {/* Engineer sign-off on evidence that failed a gate. Partial Run has
+                no scalar fallback, so without this the wizard dead-ends. */}
+            {acknowledgement && !errorMessage && (
+              <div
+                className={`p-6 rounded-xl border-2 transition-all cursor-pointer ${selection === 'acknowledged' ? 'border-amber-500 bg-amber-50 shadow-md' : 'border-amber-200 hover:border-amber-400'}`}
+                onClick={() => setSelection('acknowledged')}
+              >
+                <div className="flex items-start gap-4">
+                  <button
+                    type="button"
+                    aria-label="Setujui transform tie-in dengan catatan review"
+                    aria-pressed={selection === 'acknowledged'}
+                    onClick={(event) => { event.stopPropagation(); setSelection('acknowledged'); }}
+                    className={`mt-1 flex h-5 w-5 items-center justify-center rounded-full border-2 ${selection === 'acknowledged' ? 'border-amber-600' : 'border-amber-300'}`}
+                  >
+                    {selection === 'acknowledged' && <div className="h-2.5 w-2.5 rounded-full bg-amber-600" />}
+                  </button>
+                  <div className="flex-1">
+                    <div className="mb-2 flex items-center justify-between">
+                      <h3 className="text-lg font-bold text-gray-800">Terima dengan Review Sign-off</h3>
+                      {selection === 'acknowledged' && <span className="rounded-full bg-amber-600 px-2 py-1 text-xs font-bold uppercase tracking-wider text-white">Selected</span>}
+                    </div>
+                    <p className="mb-4 text-sm text-gray-600">
+                      Transform piecewise OLD → NEW tetap dipakai apa adanya — bukan scalar offset. Yang berubah hanya
+                      statusnya: alignment berjalan atas tanggung jawab engineering, dan alasan gate di atas ikut
+                      tercatat di audit trail hasil.
+                    </p>
+                    {selection === 'acknowledged' && (
+                      <label className="block animate-fade-in text-xs font-semibold text-gray-600">
+                        Catatan review (opsional, masuk audit)
+                        <textarea
+                          value={acknowledgementNote}
+                          onChange={(event) => setAcknowledgementNote(event.target.value.slice(0, 500))}
+                          rows={2}
+                          placeholder="Contoh: overlap pendek karena partial run 2012 hanya mencakup segmen hilir; anchor sudah diverifikasi manual."
+                          className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm font-normal"
+                        />
+                      </label>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Manual Override Card */}
             <div 
               className={`p-6 rounded-xl border-2 transition-all ${manualAllowed ? 'cursor-pointer hover:border-gray-300' : 'cursor-not-allowed opacity-60'} ${manualSelected ? 'border-gray-800 bg-gray-50 shadow-md' : 'border-gray-200'}`}
-              onClick={() => { if (manualAllowed) setUseAuto(false); }}
+              onClick={() => { if (manualAllowed) setSelection('manual'); }}
             >
               <div className="flex items-start gap-4">
                 <button
@@ -368,7 +526,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                   aria-label="Gunakan manual override"
                   aria-pressed={manualSelected}
                   disabled={!manualAllowed}
-                  onClick={(event) => { event.stopPropagation(); setUseAuto(false); }}
+                  onClick={(event) => { event.stopPropagation(); setSelection('manual'); }}
                   className={`mt-1 flex h-5 w-5 items-center justify-center rounded-full border-2 ${manualSelected ? 'border-gray-800' : 'border-gray-300'}`}
                 >
                   {manualSelected && <div className="w-2.5 h-2.5 bg-gray-800 rounded-full"></div>}
@@ -409,16 +567,29 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
         )}
       </div>
 
-      <div className="p-6 bg-gray-50 border-t border-gray-200 flex justify-between items-center">
-        <button 
+      <div className="p-6 bg-gray-50 border-t border-gray-200 flex justify-between items-center gap-4">
+        <button
           onClick={onBack}
           className="flex items-center gap-2 px-6 py-2.5 text-gray-600 hover:text-gray-900 font-medium transition-colors"
         >
           <FiArrowLeft /> Back
         </button>
-        <button 
+        {/* A disabled Confirm button with no explanation reads as a broken app,
+            which is exactly how the old dead-end presented itself. */}
+        {!loading && !canContinue && (
+          <p className="flex-1 text-right text-sm text-gray-500" role="status">
+            {!activeResolved && selection === null
+              ? 'Pilih salah satu opsi di atas untuk melanjutkan.'
+              : !activeResolved && selection === 'manual' && manualOffset === ''
+                ? 'Masukkan nilai offset manual terlebih dahulu.'
+                : unresolvedPairs.length > 0
+                  ? `Masih perlu diselesaikan: ${unresolvedPairs.map((pair) => pair.label).join(', ')}.`
+                  : 'Opsi yang dipilih belum memiliki evidence yang sah.'}
+          </p>
+        )}
+        <button
           onClick={handleContinue}
-          disabled={loading || (useAuto && !autoAccepted) || (!useAuto && (!manualAllowed || manualOffset === ''))}
+          disabled={loading || !canContinue}
           className="flex items-center gap-2 px-8 py-2.5 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Confirm & Continue <FiArrowRight />

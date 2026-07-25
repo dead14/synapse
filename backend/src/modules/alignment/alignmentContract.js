@@ -45,11 +45,69 @@ function validateDtwPayload(payload, {
     validateTieInTransform(payload);
 }
 
+// A transform whose evidence gates all passed, or one an engineer explicitly
+// signed off on despite a gate warning.  Partial Run deliberately refuses to
+// fall back to a scalar offset, so without the acknowledged status a
+// REVIEW_REQUIRED estimate would leave the operator with no way forward at all.
+const ACCEPTED_TIEIN_DECISION_STATUSES = new Set(['AUTO_ACCEPTED', 'REVIEW_ACKNOWLEDGED']);
+
+// Per-span geometry gate. These constants describe ILI measurement physics
+// rather than any one pipeline, so one rule holds for a 0.2 m fitting gap, a
+// 10 m joint, and a 25 m multi-joint span. Mirrored exactly in
+// `backend/src/python_engines/tiein_engine.py` — change both together.
+const MIN_PIPE_GEOMETRY_SPAN_M = 2.0;
+const GEOMETRY_NOISE_FLOOR_M = 1.0;
+const LOCAL_SCALE_MINIMUM = 0.80;
+const LOCAL_SCALE_MAXIMUM = 1.20;
+const GEOMETRY_BASELINE_WINDOW_KNOTS = 4;
+const GEOMETRY_BASELINE_SHIFT_M = 1.0;
+
+function median(values) {
+    const ordered = [...values].sort((left, right) => left - right);
+    const middle = ordered.length >> 1;
+    return ordered.length % 2 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2;
+}
+
+/**
+ * How far the OLD→NEW offset baseline moves across the span at `index`.
+ *
+ * A missing or mis-stitched weld displaces every knot downstream of it, so the
+ * baseline steps and stays there. A fitting that two vendors report slightly
+ * differently makes one knot wobble while the baseline either side is unchanged.
+ * A single-span threshold cannot tell those apart; this can. Medians keep the
+ * excursion from dragging the window it sits in.
+ */
+function offsetBaselineShiftM(offsets, index, window = GEOMETRY_BASELINE_WINDOW_KNOTS) {
+    const before = offsets.slice(Math.max(0, index - window), index);
+    const after = offsets.slice(index, index + window);
+    if (before.length === 0 || after.length === 0) return 0;
+    return Math.abs(median(after) - median(before));
+}
+
+/**
+ * Whether the span at `index` changed more than measurement error can explain.
+ * Mirrors `geometry_gate_breaches` in tiein_engine.py.
+ */
+function breachesGeometryGate(knots, offsets, index) {
+    const oldSpan = Number(knots[index].oldDistanceM) - Number(knots[index - 1].oldDistanceM);
+    const newSpan = Number(knots[index].newDistanceM) - Number(knots[index - 1].newDistanceM);
+    const deviation = Math.abs(newSpan - oldSpan);
+    const scale = oldSpan > 0 ? newSpan / oldSpan : Infinity;
+    const breachedScale = oldSpan >= MIN_PIPE_GEOMETRY_SPAN_M
+        && (scale < LOCAL_SCALE_MINIMUM || scale > LOCAL_SCALE_MAXIMUM)
+        && deviation > GEOMETRY_NOISE_FLOOR_M;
+    // The local delta pins the breach to the span that caused it; the baseline
+    // shift is what proves it is a real displacement rather than reporting noise.
+    const breachedStep = Math.abs(offsets[index] - offsets[index - 1]) > GEOMETRY_BASELINE_SHIFT_M
+        && offsetBaselineShiftM(offsets, index) > GEOMETRY_BASELINE_SHIFT_M;
+    return breachedScale || breachedStep;
+}
+
 function validateTieInTransform(payload, { maxKnots = 10_000 } = {}) {
     if (payload?.tieInTransform === undefined) return;
     const transform = payload.tieInTransform;
     if (!isRecord(transform)
-        || payload?.tieInDecision?.status !== 'AUTO_ACCEPTED'
+        || !ACCEPTED_TIEIN_DECISION_STATUSES.has(payload?.tieInDecision?.status)
         || transform.direction !== 'OLD_TO_NEW'
         || transform.model !== 'MONOTONIC_PIECEWISE_LINEAR'
         || transform.allowExtrapolation !== false
@@ -59,6 +117,15 @@ function validateTieInTransform(payload, { maxKnots = 10_000 } = {}) {
         || !isRecord(transform.domain)) {
         throw validationError('INVALID_TIEIN_TRANSFORM', 'Accepted OLD-to-NEW piecewise tie-in evidence is invalid');
     }
+    // Two different kinds of check live below.  Strict monotonicity is a
+    // structural invariant: a non-monotonic mapping is not a function and every
+    // downstream consumer would silently produce garbage, so nobody may waive
+    // it.  The spool scale/offset gate is a plausibility heuristic — a spool
+    // cannot really change length by 20%, so tripping it usually means a missing
+    // weld was stitched to the wrong partner.  That judgement is an engineer's
+    // to make, so an explicitly acknowledged decision is allowed past it while
+    // the reasons stay recorded on the decision for the audit trail.
+    const enforcesPlausibilityGate = payload.tieInDecision.status === 'AUTO_ACCEPTED';
     let previous = null;
     for (const knot of transform.knots) {
         const oldDistance = Number(knot?.oldDistanceM);
@@ -67,15 +134,15 @@ function validateTieInTransform(payload, { maxKnots = 10_000 } = {}) {
             || (previous && (oldDistance <= previous.oldDistance || newDistance <= previous.newDistance))) {
             throw validationError('INVALID_TIEIN_TRANSFORM', 'Tie-in knots must increase strictly on OLD and NEW');
         }
-        if (previous) {
-            const oldSpan = oldDistance - previous.oldDistance;
-            const newSpan = newDistance - previous.newDistance;
-            if ((oldSpan >= 2 && (newSpan / oldSpan < 0.80 || newSpan / oldSpan > 1.20))
-                || Math.abs(newSpan - oldSpan) > 1.5) {
+        previous = { oldDistance, newDistance };
+    }
+    if (enforcesPlausibilityGate) {
+        const offsets = transform.knots.map((knot) => Number(knot.newDistanceM) - Number(knot.oldDistanceM));
+        for (let index = 1; index < transform.knots.length; index += 1) {
+            if (breachesGeometryGate(transform.knots, offsets, index)) {
                 throw validationError('INVALID_TIEIN_TRANSFORM', 'Tie-in transform exceeds the engineering scale/offset gate');
             }
         }
-        previous = { oldDistance, newDistance };
     }
     const first = transform.knots[0];
     const last = transform.knots[transform.knots.length - 1];
@@ -115,8 +182,24 @@ function validateMatchingSections(config, { maxSections = 500 } = {}) {
         );
     }
 
-    const lockedPairs = Array.isArray(config?.gwMatchesFinal)
-        ? [...config.gwMatchesFinal].sort(
+    // Sections are scoped to the run pair whose locked GWs bound them. Grouping
+    // by that scope first is what lets a chain session hold sections for several
+    // pairs at once: validated against one flat lock list, a section from any
+    // other pair looks like it references a boundary that does not exist.
+    const pairKeys = new Set(sections.map((section) => String(section?.pairKey ?? '')));
+    for (const pairKey of pairKeys) {
+        validateSectionsForPair(
+            sections.filter((section) => String(section?.pairKey ?? '') === pairKey),
+            pairKey && isRecord(config?.pairGwResults?.[pairKey])
+                ? config.pairGwResults[pairKey].gwMatchesFinal
+                : config?.gwMatchesFinal,
+        );
+    }
+}
+
+function validateSectionsForPair(sections, gwMatchesFinal) {
+    const lockedPairs = Array.isArray(gwMatchesFinal)
+        ? [...gwMatchesFinal].sort(
             (left, right) => Number(left.new_odometer) - Number(right.new_odometer),
         )
         : [];
@@ -337,6 +420,59 @@ function normalizeAlignmentReviewForPersistence(config, {
     return normalized;
 }
 
+/**
+ * Validate and normalize each run pair's GW review against that pair's own
+ * canonical locks.
+ *
+ * A chain session reviews every pair separately. Checking all of them against a
+ * single shared lock set — the only thing the unscoped path can do — rejects
+ * every pair but one, because a lock from the 2012→2024 pair is legitimately
+ * absent from the 2024→2026 result.
+ */
+function normalizePairGwResultsForPersistence(config, {
+    pairGwEvidence = {},
+    reviewedAt = new Date().toISOString(),
+} = {}) {
+    const pairResults = config?.pairGwResults;
+    if (pairResults === undefined) return undefined;
+    if (!isRecord(pairResults)) {
+        throw validationError('INVALID_ALIGNMENT_REVIEW', 'Per-pair GW results must be an object');
+    }
+
+    const normalized = {};
+    for (const [pairKey, pairResult] of Object.entries(pairResults)) {
+        if (!isRecord(pairResult)) {
+            throw validationError('INVALID_ALIGNMENT_REVIEW', `GW result for pair ${pairKey} must be an object`);
+        }
+        if (pairResult.gwReview === undefined) {
+            normalized[pairKey] = pairResult;
+            continue;
+        }
+        validateAlignmentReview({ gwReview: pairResult.gwReview });
+        const locks = normalizeCanonicalGwLocks(pairGwEvidence?.[pairKey]?.canonicalGwLocks);
+        const knownKeys = new Set(locks.map(reviewPairKey));
+        for (const key of Object.keys(pairResult.gwReview)) {
+            if (!knownKeys.has(key)) {
+                throw validationError(
+                    'INVALID_ALIGNMENT_REVIEW',
+                    `GW review for pair ${pairKey} references a pair outside its canonical matching result`,
+                );
+            }
+        }
+        const review = Object.fromEntries(Object.entries(pairResult.gwReview).map(([key, decision]) => [key, {
+            disposition: decision.disposition,
+            note: decision.note,
+            reviewedAt,
+        }]));
+        normalized[pairKey] = {
+            ...pairResult,
+            gwReview: review,
+            gwMatchesFinal: locks.filter((lock) => review[reviewPairKey(lock)]?.disposition !== 'excluded'),
+        };
+    }
+    return normalized;
+}
+
 function normalizeInterventionEvent(event) {
     if (!event || typeof event !== 'object' || Array.isArray(event)) {
         throw validationError('INVALID_INTERVENTION', 'Intervention event must be an object');
@@ -437,6 +573,7 @@ function summarizeComparison(comparison) {
 }
 
 module.exports = {
+    ACCEPTED_TIEIN_DECISION_STATUSES,
     COMPARISON_GROUP_ORDER,
     normalizeComparisonResult,
     summarizeComparison,
@@ -447,4 +584,5 @@ module.exports = {
     normalizeCanonicalGwLocks,
     normalizeAlignmentReviewForPersistence,
     normalizeInterventionEvent,
+    normalizePairGwResultsForPersistence,
 };

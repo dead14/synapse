@@ -454,7 +454,7 @@ def linear_referencing(old_features, new_features, gw_matches):
         new_len = new_end - new_start
         
         # Find features in this segment
-        segment_features = [f for f in old_features if old_start <= f['dist'] < old_end and f['type'] != 'weld']
+        segment_features = [f for f in old_features if old_start <= f['dist'] < old_end and _alignment_feature_kind(f) != 'weld']
         
         for f in segment_features:
             if old_len > 0:

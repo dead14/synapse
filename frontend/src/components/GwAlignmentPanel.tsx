@@ -30,7 +30,7 @@ interface GwAlignmentPanelProps {
 
 export default function GwAlignmentPanel({ gwData }: GwAlignmentPanelProps) {
   const [zoom, setZoom] = useState(1);
-  const [ota, setOta] = useState(1.6);
+  const [ota, setOta] = useState(1.5);
   const [activeTab, setActiveTab] = useState('GW Offset');
 
   const tabs = ['GW Offset', 'Table GW Unmatched', 'Table GW Matched', 'Table GW'];

@@ -91,6 +91,33 @@ test('persists every selected inspection run before forming the master and histo
   assert.deepEqual(pair.historicalRuns.map((run) => run.runId), [21]);
 });
 
+test('builds chronological sequential pairs for every persisted inspection run', async () => {
+  const datasets = [
+    { file: { name: 'north-line-2026.xlsx' }, vendor: 'Vendor A', year: '2026', tool: 'MFL' },
+    { file: { name: 'north-line-2021.xlsx' }, vendor: 'Vendor A', year: '2021', tool: 'MFL' },
+    { file: { name: 'north-line-2023.xlsx' }, vendor: 'Vendor A', year: '2023', tool: 'MFL' },
+  ];
+
+  const pair = await ingestPersistedInspectionRunPair({
+    datasets,
+    masterIndex: 0,
+    ingest: async (dataset) => buildPersistedIliRun({
+      pipeline_run_id: Number(dataset.year),
+      run_summary: { total: 10, welds: 2, gw_anchors: 2 },
+    }, {
+      name: dataset.file.name,
+      vendor: dataset.vendor,
+      year: dataset.year,
+      tool: dataset.tool,
+    }),
+  });
+
+  assert.deepEqual(
+    pair.runPairs.map(({ oldRun, newRun }) => [oldRun.year, newRun.year]),
+    [['2021', '2023'], ['2023', '2026']],
+  );
+});
+
 test('starts every selected run ingestion before waiting for the first completion', async () => {
   const selectedRuns = [
     { file: { name: 'north-line-2021.xlsx' }, vendor: 'Vendor A', year: '2021', tool: 'MFL' },

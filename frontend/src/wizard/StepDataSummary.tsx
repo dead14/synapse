@@ -90,12 +90,18 @@ export default function StepDataSummary({ onNext, onBack, config }: StepDataSumm
   const summary = config?.summaryData ?? {};
   const masterRun = reviewRun(summary.newRun);
   const historicalRun = reviewRun(summary.oldRun);
+  const additionalHistoricalRuns: ReviewRun[] = (summary.historicalRuns ?? [])
+    .slice(1)
+    .map((r: any) => reviewRun(r))
+    .filter((r: ReviewRun) => r.total > 0);
   const hasPersistedRunPair = Number.isSafeInteger(Number(summary.newRun?.runId))
     && Number(summary.newRun?.runId) > 0
     && Number.isSafeInteger(Number(summary.oldRun?.runId))
     && Number(summary.oldRun?.runId) > 0
     && Number(summary.newRun?.runId) !== Number(summary.oldRun?.runId);
   const hasRunPair = masterRun.total > 0 && historicalRun.total > 0 && hasPersistedRunPair;
+  const runPairs = summary.runPairs ?? [];
+  const hasMultipleRuns = runPairs.length > 1;
   const [acknowledged, setAcknowledged] = useState(config?.dataReview?.status === 'acknowledged');
 
   const inventory = useMemo(() => {
@@ -129,7 +135,23 @@ export default function StepDataSummary({ onNext, onBack, config }: StepDataSumm
         <div className="alignment-review-empty" role="status"><FiAlertTriangle aria-hidden="true" /><div><strong>Two persisted inspection runs are required</strong><span>Return to Inspection data and import one master and one historical run before continuing.</span></div></div>
       ) : (
         <>
-          <div className="alignment-review-run-grid"><RunEvidenceCard label="Master run" tone="master" run={masterRun} /><RunEvidenceCard label="Historical run" tone="historical" run={historicalRun} /></div>
+          <div className="alignment-review-run-grid">
+            <RunEvidenceCard label="Master run" tone="master" run={masterRun} />
+            <RunEvidenceCard label="Historical run" tone="historical" run={historicalRun} />
+            {additionalHistoricalRuns.map((run, idx) => (
+              <RunEvidenceCard key={idx} label={`Historical run ${idx + 2}`} tone="historical" run={run} />
+            ))}
+          </div>
+          {hasMultipleRuns && (
+            <section className="rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">
+              <strong>Pairwise chain alignment</strong> — {runPairs.length} sequential pairs will be aligned:
+              {' '}{runPairs.map((p: any, i: number) => (
+                <span key={i} className="inline-block rounded bg-brand-100 px-2 py-0.5 text-xs font-semibold mx-0.5">
+                  {p.oldRun?.year || '?'} → {p.newRun?.year || '?'}
+                </span>
+              ))}
+            </section>
+          )}
 
           <section className={`alignment-review-readiness ${hasQualityWarning ? 'is-warning' : 'is-ready'}`} aria-label="Evidence readiness">
             {hasQualityWarning ? <FiAlertTriangle aria-hidden="true" /> : <FiCheckCircle aria-hidden="true" />}

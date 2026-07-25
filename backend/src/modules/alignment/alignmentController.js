@@ -29,8 +29,13 @@ const {
     normalizeCanonicalGwLocks,
     normalizeAlignmentReviewForPersistence,
     normalizeInterventionEvent,
+    normalizePairGwResultsForPersistence,
 } = require('./alignmentContract');
-const { buildRunEndpointRejection } = require('./alignmentStrategyCapabilities');
+const {
+    buildRunEndpointRejection,
+    getAlignmentStrategyCapability,
+    listAlignmentStrategyCapabilities,
+} = require('./alignmentStrategyCapabilities');
 const { buildTieInEvidence, signTieInEvidence, verifyTieInEvidence } = require('./tieInEvidence');
 const { OwnedJobStore } = require('./ownedJobStore');
 const ingestionController = require('../ingestion/ingestionController');
@@ -46,15 +51,25 @@ const {
 const {
     ALIGNMENT_ENGINE_VERSION,
     alignmentConfigFingerprint,
+    buildReusableAlignmentJobResponse,
     isReusableAlignmentJob,
 } = require('./alignmentExecution');
+const {
+    parseAlignmentResultPageQuery,
+} = require('./alignmentResultPaging');
+const {
+    findSessionRunPair,
+    primarySessionRunPair,
+    runPairKey,
+} = require('./runPairIdentity');
 
 // Local execution remains intentionally bounded and owner-scoped. A shared
 // queue can replace this store later without changing the public job contract.
 const localJobs = new OwnedJobStore({
     ttlMs: Number(process.env.JOB_RESULT_TTL_MS) || 60 * 60 * 1000,
 });
-const resultsCache = new Map(); // sessionId -> cached result
+const DTW_WORKER_TIMEOUT_MS = Number(process.env.DTW_WORKER_TIMEOUT_MS) || 60_000;
+const TIEIN_WORKER_TIMEOUT_MS = Number(process.env.TIEIN_WORKER_TIMEOUT_MS) || 30_000;
 
 const MAX_EXPORT_ROWS = Number(process.env.MAX_EXPORT_ROWS) || 100_000;
 const MAX_DTW_ANCHORS = Number(process.env.MAX_DTW_RECORDS) || 25_000;
@@ -89,6 +104,35 @@ function getPersistedRunReferences(config) {
     return { oldRunId, newRunId };
 }
 
+/**
+ * The run pair a GW matching request is asking for.
+ *
+ * Chain alignment gives a session N-1 pairs, and the wizard switches between
+ * them, so the session's `oldRun`/`newRun` fields cannot be forced onto every
+ * request — doing that silently recomputed the same pair no matter which one the
+ * operator selected. The requested pair is still resolved against the session's
+ * own chain rather than trusted, because run ids arriving from a client must
+ * never be able to reach another organization's persisted features.
+ */
+function resolveRequestedRunPair(config, body) {
+    const requestedOldRunId = parsePositiveId(body?.oldRunId);
+    const requestedNewRunId = parsePositiveId(body?.newRunId);
+    if (!requestedOldRunId || !requestedNewRunId) {
+        return getPersistedRunReferences(config);
+    }
+    const pair = findSessionRunPair(config, {
+        oldRunId: requestedOldRunId,
+        newRunId: requestedNewRunId,
+    });
+    if (!pair) {
+        throw reviewPersistenceError(
+            'The requested inspection run pair does not belong to this alignment session.',
+            'UNKNOWN_ALIGNMENT_RUN_PAIR',
+        );
+    }
+    return { oldRunId: pair.oldRunId, newRunId: pair.newRunId };
+}
+
 async function countOwnedRunFeatures({ oldRunId, newRunId }, orgId) {
     const result = await pool.query(
         `SELECT f.run_id, COUNT(*)::integer AS feature_count
@@ -108,7 +152,33 @@ async function countOwnedRunFeatures({ oldRunId, newRunId }, orgId) {
 }
 
 function hasReviewEvidence(config) {
-    return config?.dataReview !== undefined || config?.gwReview !== undefined;
+    return config?.dataReview !== undefined
+        || config?.gwReview !== undefined
+        || Object.values(config?.pairGwResults || {}).some((result) => result?.gwReview !== undefined);
+}
+
+/**
+ * The settings a given run pair's GW matching actually ran under.
+ *
+ * Each pair carries its own tie-in transform and its own OTA, so signing a
+ * pair's review with the session-level fields would compare it against settings
+ * that belong to a different pair.
+ */
+function pairScopedSignatureConfig(config, pairKey) {
+    const pairTieIn = config?.pairTieIns?.[pairKey];
+    const pairResult = config?.pairGwResults?.[pairKey];
+    return {
+        ota: pairResult?.ota ?? config?.ota,
+        strictPenalty: pairResult?.strictPenalty ?? config?.strictPenalty,
+        useValveAnchor: pairResult?.useValveAnchor ?? config?.useValveAnchor,
+        dtwOn: pairResult?.dtwOn ?? config?.dtwOn,
+        globalOffset: pairTieIn?.globalOffset ?? config?.globalOffset,
+        tieInTransform: pairTieIn?.tieInTransform ?? config?.tieInTransform,
+        tieInDecision: pairTieIn?.tieInDecision ?? config?.tieInDecision,
+        tieInEvidenceToken: pairTieIn?.tieInEvidenceToken ?? config?.tieInEvidenceToken,
+        tieInMethodVersion: pairTieIn?.tieInMethodVersion ?? config?.tieInMethodVersion,
+        tieInExcludedRanges: pairTieIn?.tieInExcludedRanges ?? config?.tieInExcludedRanges,
+    };
 }
 
 function requireServerTieInEvidence(payload, organizationId) {
@@ -287,6 +357,14 @@ exports.uploadCsv = async (req, res) => {
     }
 };
 
+// The wizard used to hard-code its strategy dropdown, so an operator could pick
+// an unvalidated engine, complete every remaining step, and only discover the
+// rejection at execution.  Serving the capability table lets the picker close
+// that dead end at the point of choice.
+exports.listAlignmentStrategies = (_req, res) => {
+    return res.json({ strategies: listAlignmentStrategyCapabilities() });
+};
+
 exports.runAlignment = (req, res) => {
     const rejection = buildRunEndpointRejection(req.body?.algorithm);
     return res.status(422).json(rejection);
@@ -315,19 +393,19 @@ exports.getAlignmentResults = async (req, res) => {
 exports.getAlignmentResultsPage = async (req, res) => {
     const sessionId = parsePositiveId(req.params.runId);
     if (!sessionId) return res.status(400).json({ error: 'Invalid session ID' });
-    const limit = req.query.limit === undefined ? 1000 : Number(req.query.limit);
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 5000) {
-        return res.status(400).json({ error: 'limit must be an integer between 1 and 5000' });
-    }
-    let after = null;
-    if (req.query.cursor !== undefined && req.query.cursor !== '') {
-        after = Number(req.query.cursor);
-        if (!Number.isSafeInteger(after) || after < 0) {
-            return res.status(400).json({ error: 'cursor must be a non-negative result ordinal' });
-        }
+    let pageQuery;
+    try {
+        pageQuery = parseAlignmentResultPageQuery(req.query);
+    } catch (error) {
+        return res.status(400).json({ error: error.message });
     }
     try {
-        const page = await listOwnedAlignmentResultPage(pool, sessionId, req.user.orgId, { limit, after });
+        const page = await listOwnedAlignmentResultPage(
+            pool,
+            sessionId,
+            req.user.orgId,
+            pageQuery,
+        );
         return res.json({
             items: page.rows,
             nextCursor: page.nextCursor === null ? null : String(page.nextCursor),
@@ -427,7 +505,7 @@ exports.runDtwAlignment = async (req, res) => {
             if (!session) {
                 throw reviewPersistenceError('Alignment session not found', 'ALIGNMENT_SESSION_NOT_FOUND');
             }
-            persistedReferences = getPersistedRunReferences(session.params_json || {});
+            persistedReferences = resolveRequestedRunPair(session.params_json || {}, req.body);
         }
         payload = await hydrateRunReferences({
             ...req.body,
@@ -442,8 +520,6 @@ exports.runDtwAlignment = async (req, res) => {
             code: err.code || 'INVALID_ALIGNMENT_PAYLOAD',
         });
     }
-    // require('fs').writeFileSync('debug_payload.json', JSON.stringify(payload));
-    
     const requestId = ++dtwRequestCounter;
     payload.requestId = requestId;
     
@@ -460,14 +536,13 @@ exports.runDtwAlignment = async (req, res) => {
             
             dtwPythonProcess.stdin.write(JSON.stringify(payload) + '\n');
             
-            // 60 seconds timeout for full DTW
             setTimeout(() => {
                 if (dtwPendingRequests.has(requestId)) {
                     dtwPendingRequests.delete(requestId);
                     console.error(`[DTW] Request ${requestId} timeout!`);
                     reject(new Error('Python worker timeout'));
                 }
-            }, 60000);
+            }, DTW_WORKER_TIMEOUT_MS);
         });
         
         if (result.success) {
@@ -475,17 +550,47 @@ exports.runDtwAlignment = async (req, res) => {
                 const canonicalGwLocks = normalizeCanonicalGwLocks(result.gwMatchesFinal);
                 const current = await findOwnedSession(pool, session.id, req.user.orgId);
                 if (!current) return res.status(404).json({ error: 'Alignment session not found' });
-                const currentReferences = getPersistedRunReferences(current.params_json || {});
-                if (currentReferences.oldRunId !== persistedReferences.oldRunId
-                    || currentReferences.newRunId !== persistedReferences.newRunId) {
+                // The pair must still be part of this session's chain. Comparing
+                // against the session's single oldRun/newRun instead would reject
+                // every pair except the last one the moment chains got longer.
+                if (!findSessionRunPair(current.params_json || {}, persistedReferences)) {
                     return res.status(409).json({ error: 'Inspection runs changed while GW matching was running. Refresh and try again.' });
                 }
                 const signature = canonicalSignature(payload, persistedReferences);
-                const config = { ...(current.params_json || {}), canonicalGwLocks, gwCanonicalSignature: signature };
-                if (current.params_json?.gwCanonicalSignature !== signature) {
-                    delete config.gwReview;
-                    delete config.gwMatchesFinal;
-                    delete config.matchingSections;
+                const pairKey = runPairKey(persistedReferences.oldRunId, persistedReferences.newRunId);
+                const isPrimaryPair = primarySessionRunPair(current.params_json || {})?.key === pairKey;
+                const previousPairEvidence = current.params_json?.pairGwEvidence?.[pairKey];
+                const config = {
+                    ...(current.params_json || {}),
+                    // Every pair keeps its own canonical locks. One shared field
+                    // meant matching a second pair overwrote the first pair's
+                    // evidence, and its saved review then failed validation.
+                    pairGwEvidence: {
+                        ...(current.params_json?.pairGwEvidence || {}),
+                        [pairKey]: { canonicalGwLocks, gwCanonicalSignature: signature },
+                    },
+                };
+                // Legacy single-pair consumers still read the unscoped fields.
+                if (isPrimaryPair) {
+                    config.canonicalGwLocks = canonicalGwLocks;
+                    config.gwCanonicalSignature = signature;
+                }
+                if (previousPairEvidence?.gwCanonicalSignature !== signature) {
+                    // Settings changed for this pair only, so only this pair's
+                    // downstream review and sections become stale.
+                    if (config.pairGwResults?.[pairKey]) {
+                        const { [pairKey]: _stale, ...remaining } = config.pairGwResults;
+                        config.pairGwResults = remaining;
+                    }
+                    if (Array.isArray(config.matchingSections)) {
+                        config.matchingSections = config.matchingSections.filter((section) => (
+                            section?.pairKey ? section.pairKey !== pairKey : !isPrimaryPair
+                        ));
+                    }
+                    if (isPrimaryPair) {
+                        delete config.gwReview;
+                        delete config.gwMatchesFinal;
+                    }
                 }
                 const updated = await updateOwnedSessionConfig(pool, session.id, req.user.orgId, config);
                 if (!updated) return res.status(409).json({ error: 'GW matching result could not be saved. Refresh and try again.' });
@@ -591,7 +696,7 @@ exports.estimateTieInOffset = async (req, res) => {
                     tieInPendingRequests.delete(requestId);
                     reject(new Error('TieIn Python worker timeout'));
                 }
-            }, 30000);
+            }, TIEIN_WORKER_TIMEOUT_MS);
         });
         
         if (result.success && result.transform && result.decision) {
@@ -600,6 +705,28 @@ exports.estimateTieInOffset = async (req, res) => {
                 decision: result.decision,
                 transform: result.transform,
             }, req.user.orgId, result.methodVersion));
+
+            // Partial Run cannot fall back to a scalar offset, so a
+            // REVIEW_REQUIRED estimate would otherwise dead-end the wizard.  The
+            // server decides what an acknowledged decision looks like and signs
+            // it here; the client can only replay it, never author it.
+            if (result.decision.status === 'REVIEW_REQUIRED') {
+                const acknowledgedDecision = {
+                    ...result.decision,
+                    status: 'REVIEW_ACKNOWLEDGED',
+                    originalStatus: 'REVIEW_REQUIRED',
+                    requiresHumanReview: true,
+                    acknowledgedBy: Number(req.user.id),
+                };
+                result.reviewAcknowledgement = {
+                    decision: acknowledgedDecision,
+                    evidenceToken: signTieInEvidence(buildTieInEvidence({
+                        ...payload,
+                        decision: acknowledgedDecision,
+                        transform: result.transform,
+                    }, req.user.orgId, result.methodVersion)),
+                };
+            }
         }
         res.json(result);
     } catch (err) {
@@ -642,6 +769,30 @@ exports.saveWizardState = async (req, res) => {
                         canonicalGwLocks: session.params_json?.canonicalGwLocks,
                         existingDataReview: session.params_json?.dataReview,
                     });
+                    for (const [pairKey, pairResult] of Object.entries(config.pairGwResults || {})) {
+                        if (pairResult?.gwReview === undefined) continue;
+                        const pair = findSessionRunPair(session.params_json || {}, {
+                            oldRunId: Number(pairKey.split('->')[0]),
+                            newRunId: Number(pairKey.split('->')[1]),
+                        });
+                        if (!pair) {
+                            throw reviewPersistenceError(
+                                `Run pair ${pairKey} does not belong to this alignment session.`,
+                                'UNKNOWN_ALIGNMENT_RUN_PAIR',
+                            );
+                        }
+                        const expected = canonicalSignatureForConfig(
+                            pairScopedSignatureConfig(config, pairKey),
+                            { oldRunId: pair.oldRunId, newRunId: pair.newRunId },
+                        );
+                        if (session.params_json?.pairGwEvidence?.[pairKey]?.gwCanonicalSignature !== expected) {
+                            throw reviewPersistenceError(`GW matching settings changed for pair ${pairKey}. Recalculate that pair before saving its review decisions.`);
+                        }
+                    }
+                    const pairGwResults = normalizePairGwResultsForPersistence(configToPersist, {
+                        pairGwEvidence: session.params_json?.pairGwEvidence,
+                    });
+                    if (pairGwResults !== undefined) configToPersist.pairGwResults = pairGwResults;
                     if (Array.isArray(session.params_json?.canonicalGwLocks)) {
                         configToPersist.canonicalGwLocks = session.params_json.canonicalGwLocks;
                         configToPersist.gwCanonicalSignature = session.params_json.gwCanonicalSignature;
@@ -671,10 +822,6 @@ exports.saveWizardState = async (req, res) => {
                     error: requiresReviewBoundary ? 'This review changed in another session. Refresh before saving.' : 'Session not found',
                 });
             }
-            // GW alignment and Hungarian tolerances are part of this config.
-            // A saved change must force a fresh Hungarian run rather than
-            // returning the previous comparison for the same session.
-            resultsCache.delete(parsedSessionId);
             res.json({ success: true, sessionId: parsedSessionId, sessionRevision: updated.revision });
         } else {
             if (hasReviewEvidence(config)) {
@@ -871,7 +1018,9 @@ exports.getIliResults = async (req, res) => {
 
         const previousJob = await getLatestAlignmentJob(pool, resolvedSessionId, req.user.orgId);
         if (isReusableAlignmentJob(previousJob, session.params_json)) {
-            return res.status(previousJob.state === 'completed' ? 200 : 202).json({ jobId: previousJob.job_id });
+            return res
+                .status(previousJob.state === 'completed' ? 200 : 202)
+                .json(buildReusableAlignmentJobResponse(previousJob));
         }
 
         const jobId = randomUUID();
@@ -879,6 +1028,14 @@ exports.getIliResults = async (req, res) => {
         const configuredAlgorithm = session.params_json?.algorithm
             || session.params_json?.summaryData?.algorithm
             || 'dtw_hungarian';
+        const strategyCapability = getAlignmentStrategyCapability(configuredAlgorithm);
+        if (!strategyCapability.available) {
+            return res.status(422).json({
+                error: `Alignment strategy "${strategyCapability.id}" is not available for execution.`,
+                code: 'ALIGNMENT_STRATEGY_NOT_AVAILABLE',
+                strategy: strategyCapability.id,
+            });
+        }
         await createAlignmentJob(pool, {
             jobId,
             sessionId: resolvedSessionId,
@@ -896,7 +1053,13 @@ exports.getIliResults = async (req, res) => {
             engineVersion: ALIGNMENT_ENGINE_VERSION,
             configFingerprint,
         }, { jobId });
-        return res.status(202).json({ success: true, jobId, message: 'Alignment job queued' });
+        return res.status(202).json({
+            success: true,
+            jobId,
+            state: 'queued',
+            progress: 0,
+            message: 'Alignment job queued',
+        });
 
 
     } catch (err) {
@@ -935,7 +1098,6 @@ exports.deletePipelineRun = async (req, res) => {
     try {
         const deleted = await deleteOwnedSession(pool, sessionId, req.user.orgId);
         if (!deleted) return res.status(404).json({ error: 'Session not found' });
-        resultsCache.delete(sessionId);
         return res.status(204).send();
     } catch (err) {
         console.error('Delete pipeline run error:', err);

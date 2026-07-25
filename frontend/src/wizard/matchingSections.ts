@@ -18,6 +18,13 @@ export interface SectionTolerances {
 export interface MatchingSection {
   id: string;
   name: string;
+  /**
+   * The run pair whose locked GWs bound this section. Chain alignment sections
+   * one pair at a time, and a boundary from another pair does not exist in this
+   * pair's lock list. Absent on sections saved before chain support, which are
+   * read as belonging to the primary pair.
+   */
+  pairKey?: string;
   sectionType?: string;
   policy: SectionPolicy;
   startGwKey: string;
@@ -29,6 +36,7 @@ export interface MatchingSection {
   oldStartM?: number;
   oldEndM?: number;
   tolerances?: SectionTolerances;
+  ota?: number;
 }
 
 export function gwPairKey(pair: any): string {

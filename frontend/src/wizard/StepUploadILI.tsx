@@ -11,6 +11,47 @@ interface StepUploadILIProps {
   onNext: (data?: any) => void;
 }
 
+type StrategyCapability = {
+  id: string;
+  available: boolean;
+  validated: boolean;
+  reasonCode: string | null;
+};
+
+const STRATEGY_LABELS: Record<string, string> = {
+  dtw_hungarian_onedirection: 'DTW + Ordered Match (OneDirection)',
+  dtw_hungarian: 'DTW + Hungarian Match (Legacy)',
+  traditional_hungarian: 'Traditional Hungarian',
+  manual: 'Manual Algorithm',
+  phylogenetic: 'Phylogenetic Algorithm',
+};
+
+const STRATEGY_ORDER = [
+  'dtw_hungarian_onedirection',
+  'dtw_hungarian',
+  'traditional_hungarian',
+  'manual',
+  'phylogenetic',
+];
+
+const UNAVAILABLE_REASONS: Record<string, string> = {
+  MOCK_ENGINE_NOT_VALIDATED: 'engine belum divalidasi',
+  UNKNOWN_STRATEGY: 'strategi tidak dikenal',
+};
+
+// Until the capability table arrives, only offer the engines the server is
+// known to accept.  Guessing optimistically here would recreate the dead end
+// this list exists to prevent: the wizard would take the operator through
+// every remaining step before the execution endpoint rejects the choice.
+const FALLBACK_AVAILABLE = new Set(['dtw_hungarian_onedirection', 'manual', 'phylogenetic']);
+
+function strategyLabel(capability: StrategyCapability): string {
+  const name = STRATEGY_LABELS[capability.id] || capability.id;
+  if (capability.available) return name;
+  const reason = capability.reasonCode ? UNAVAILABLE_REASONS[capability.reasonCode] : null;
+  return `${name} — tidak tersedia${reason ? ` (${reason})` : ''}`;
+}
+
 function fileStem(fileName: string): string {
   const stem = fileName.replace(/\.[^.]+$/, '').trim();
   return stem || 'ILI Alignment';
@@ -49,25 +90,64 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingLabel, setProcessingLabel] = useState('');
   const [sessionName, setSessionName] = useState('');
+  const [strategies, setStrategies] = useState<StrategyCapability[]>(() =>
+    STRATEGY_ORDER.map((id) => ({
+      id,
+      available: FALLBACK_AVAILABLE.has(id),
+      validated: FALLBACK_AVAILABLE.has(id),
+      reasonCode: FALLBACK_AVAILABLE.has(id) ? null : 'MOCK_ENGINE_NOT_VALIDATED',
+    })),
+  );
+
+  useEffect(() => {
+    let active = true;
+    apiFetch<{ strategies?: StrategyCapability[] }>('/api/alignment/strategies')
+      .then((payload) => {
+        if (!active || !Array.isArray(payload.strategies) || payload.strategies.length === 0) return;
+        const known = new Map(payload.strategies.map((item) => [item.id, item]));
+        const ordered = STRATEGY_ORDER.filter((id) => known.has(id)).map((id) => known.get(id)!);
+        const extra = payload.strategies.filter((item) => !STRATEGY_ORDER.includes(item.id));
+        setStrategies([...ordered, ...extra]);
+      })
+      .catch(() => {
+        // Keep the conservative fallback list; it never offers an engine the
+        // execution endpoint would reject.
+      });
+    return () => { active = false; };
+  }, []);
+
+  // A capability can go unavailable between page loads.  Never leave a rejected
+  // engine selected, or the wizard would advance on a choice that cannot run.
+  useEffect(() => {
+    const selected = strategies.find((item) => item.id === algorithm);
+    if (selected && !selected.available) {
+      const firstAvailable = strategies.find((item) => item.available);
+      if (firstAvailable) setAlgorithm(firstAvailable.id);
+    }
+  }, [strategies, algorithm]);
 
   useEffect(() => {
     if (algorithm === 'phylogenetic') {
-      setDatasets([
-        { id: 1, year: '2020', vendor: 'Rosen', file: null, phyloLabel: 'Ancestor Data' },
-        { id: 2, year: '2023', vendor: 'Baker Hughes', file: null, phyloLabel: 'ILI Alignment 1' },
-        { id: 3, year: '2026', vendor: 'NDT Global', file: null, phyloLabel: 'ILI Alignment 2' }
-      ]);
+      setDatasets((prev) => {
+        if (prev.length >= 3 && !prev[0].phyloLabel) {
+          return prev.map((ds, i) => ({ ...ds, phyloLabel: i === 0 ? 'Ancestor Data' : `ILI Alignment ${i}` }));
+        }
+        if (prev.length < 3 || prev[0].phyloLabel) return prev;
+        return [
+          { id: 1, year: '', vendor: '', file: null, phyloLabel: 'Ancestor Data' },
+          { id: 2, year: '', vendor: '', file: null, phyloLabel: 'ILI Alignment 1' },
+          { id: 3, year: '', vendor: '', file: null, phyloLabel: 'ILI Alignment 2' },
+        ];
+      });
       setMasterIndex(0);
     } else {
-      setMasterIndex(1);
-      setDatasets((currentDatasets) => (
-        currentDatasets.length === 3 && currentDatasets[0].phyloLabel
-          ? [
-              { id: 1, year: '2020', vendor: 'Rosen', file: null },
-              { id: 2, year: '2023', vendor: 'Baker Hughes', file: null }
-            ]
-          : currentDatasets
-      ));
+      setMasterIndex((prev) => (prev === 0 ? 1 : prev));
+      setDatasets((currentDatasets) => {
+        if (currentDatasets[0]?.phyloLabel) {
+          return currentDatasets.map(({ phyloLabel: _phyloLabel, ...rest }) => rest);
+        }
+        return currentDatasets;
+      });
     }
   }, [algorithm]);
 
@@ -85,78 +165,52 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         algorithm: algorithm,
         enablePartialRun: enablePartialRun
       };
-      if (algorithm === 'phylogenetic') {
-        summaryData.ancestorRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
-        summaryData.run1 = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
-        summaryData.run2 = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
-      } else {
-        summaryData.newRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
-        summaryData.oldRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
-      }
+      summaryData.newRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
+      summaryData.oldRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
 
-      if (algorithm !== 'phylogenetic') {
-        const runPair = await ingestPersistedInspectionRunPair({
-          datasets: datasets.map((dataset) => ({
-            file: dataset.file as File,
-            vendor: String(dataset.vendor || ''),
-            year: String(dataset.year || ''),
-            tool: String(dataset.tool || ''),
-          })),
-          masterIndex,
-          ingest: async (dataset, index) => {
-            setProcessingLabel(`Importing ${index + 1} of ${datasets.length}: ${dataset.file.name}`);
-            const formData = new FormData();
-            formData.append('file', dataset.file);
-            formData.append('pipelineName', pipelineName);
-            formData.append('surveyYear', dataset.year);
-            formData.append('vendor', dataset.vendor);
-            const queued = await apiFetch<IngestionResponse>('/api/upload-csv', {
-              method: 'POST',
-              body: formData,
-            });
-            const response = queued.jobId
-              ? await waitForIngestion(String(queued.jobId), dataset.file.name, setProcessingLabel)
-              : queued;
-            return buildPersistedIliRun(response, {
-              name: dataset.file.name,
-              vendor: dataset.vendor,
-              year: dataset.year,
-              tool: dataset.tool,
-            });
-          },
-        });
-        Object.assign(summaryData, runPair);
-        onNext({ summaryData, algorithm, enablePartialRun });
-        return;
-      }
-
-      for (let i = 0; i < datasets.length; i += 1) {
-        const ds = datasets[i];
-        if (!ds.file) continue;
-        setProcessingLabel(`Importing ${i + 1} of ${datasets.length}: ${ds.file.name}`);
-        const runKey = i === 0 ? 'ancestorRun' : i === 1 ? 'run1' : 'run2';
-
+      const ingestCallback = async (dataset: any, index: number) => {
+        setProcessingLabel(`Importing ${index + 1} of ${datasets.length}: ${dataset.file.name}`);
         const formData = new FormData();
-        formData.append('file', ds.file);
+        formData.append('file', dataset.file);
         formData.append('pipelineName', pipelineName);
-        formData.append('surveyYear', String(ds.year || ''));
-        formData.append('vendor', String(ds.vendor || ''));
+        formData.append('surveyYear', dataset.year);
+        formData.append('vendor', dataset.vendor);
         const queued = await apiFetch<IngestionResponse>('/api/upload-csv', {
           method: 'POST',
           body: formData,
         });
         const response = queued.jobId
-          ? await waitForIngestion(String(queued.jobId), ds.file.name, setProcessingLabel)
+          ? await waitForIngestion(String(queued.jobId), dataset.file.name, setProcessingLabel)
           : queued;
-        const parsedRun = buildPersistedIliRun(response, {
-          name: ds.file.name,
-          vendor: String(ds.vendor || ''),
-          year: String(ds.year || ''),
-          tool: String(ds.tool || ''),
+        return buildPersistedIliRun(response, {
+          name: dataset.file.name,
+          vendor: dataset.vendor,
+          year: dataset.year,
+          tool: dataset.tool,
         });
-        summaryData[runKey] = parsedRun;
+      };
+
+      const runPair = await ingestPersistedInspectionRunPair({
+        datasets: datasets.map((dataset) => ({
+          file: dataset.file as File,
+          vendor: String(dataset.vendor || ''),
+          year: String(dataset.year || ''),
+          tool: String(dataset.tool || ''),
+        })),
+        masterIndex,
+        ingest: ingestCallback,
+      });
+      Object.assign(summaryData, runPair);
+
+      if (algorithm === 'phylogenetic') {
+        const sorted = [...runPair.historicalRuns, runPair.masterRun]
+          .sort((a, b) => Number(a.year || 0) - Number(b.year || 0));
+        summaryData.ancestorRun = sorted[0];
+        for (let i = 1; i < sorted.length; i++) {
+          summaryData[`run${i}`] = sorted[i];
+        }
       }
-      
+
       onNext({ summaryData, algorithm, enablePartialRun });
     } catch (err) {
       console.error(err);
@@ -358,9 +412,9 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                     <FiShield className="text-brand-600" /> ILI data configuration
                   </h3>
                 </div>
-                {algorithm !== 'phylogenetic' && datasets.length < 5 && (
-                  <button 
-                    onClick={() => setDatasets([...datasets, { id: Date.now(), year: '', vendor: 'Rosen', file: null }])}
+                {datasets.length < 6 && (
+                  <button
+                    onClick={() => setDatasets([...datasets, { id: Date.now(), year: '', vendor: '', file: null }])}
                     className="alignment-add-run"
                   >
                     <FiPlus size={14} /> Add another ILI data
@@ -369,16 +423,20 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
               </div>
               <div className="flex items-center gap-3">
                 <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Strategy</label>
-                <select 
+                <select
                   className="alignment-strategy-select"
                   value={algorithm}
                   onChange={(e) => setAlgorithm(e.target.value)}
                 >
-                  <option value="dtw_hungarian_onedirection">DTW + Ordered Match (OneDirection)</option>
-                  <option value="dtw_hungarian">DTW + Hungarian Match (Legacy)</option>
-                  <option value="traditional_hungarian">Traditional Hungarian</option>
-                  <option value="manual">Manual Algorithm</option>
-                  <option value="phylogenetic">Phylogenetic Algorithm</option>
+                  {strategies.map((capability) => (
+                    <option
+                      key={capability.id}
+                      value={capability.id}
+                      disabled={!capability.available}
+                    >
+                      {strategyLabel(capability)}
+                    </option>
+                  ))}
                 </select>
               </div>
               {algorithm !== 'phylogenetic' && (

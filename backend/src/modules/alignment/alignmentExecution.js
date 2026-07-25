@@ -42,8 +42,23 @@ function isReusableAlignmentJob(job, config) {
         && metadata?.configFingerprint === alignmentConfigFingerprint(config);
 }
 
+function buildReusableAlignmentJobResponse(job) {
+    const metadata = jobExecutionMetadata(job);
+    const response = {
+        jobId: job.job_id,
+        state: job.state,
+        progress: Number(job.progress || 0),
+    };
+    const audit = metadata?.groups?.audit;
+    if (job.state === 'completed' && audit) {
+        response.groups = { audit };
+    }
+    return response;
+}
+
 module.exports = {
     ALIGNMENT_ENGINE_VERSION,
     alignmentConfigFingerprint,
+    buildReusableAlignmentJobResponse,
     isReusableAlignmentJob,
 };

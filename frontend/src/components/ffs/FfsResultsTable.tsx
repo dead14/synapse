@@ -1,0 +1,365 @@
+import { useMemo, useState } from 'react';
+import { FiChevronDown, FiChevronUp, FiSearch } from 'react-icons/fi';
+import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
+import { Callout, Panel, PriorityLabel, SeverityBadge, formatErf } from './FfsPrimitives';
+
+const PAGE_SIZE = 100;
+
+type SortKey =
+  | 'ld'
+  | 'section'
+  | 'surface'
+  | 'depth'
+  | 'length'
+  | 'erf'
+  | 'conservativeErf'
+  | 'safePressure'
+  | 'acceptance'
+  | 'expectedLife'
+  | 'yearService'
+  | 'failureCriteria'
+  | 'priority';
+
+interface Column {
+  key: SortKey;
+  header: string;
+  align: 'left' | 'right' | 'center';
+  value: (item: FfsScreenedResult) => number | string;
+}
+
+const PRIORITY_RANK = { High: 3, Medium: 2, Routine: 1 } as const;
+
+const COLUMNS: Column[] = [
+  { key: 'ld', header: 'LD [m]', align: 'right', value: (i) => Number(i.nominal.ld) || 0 },
+  { key: 'section', header: 'Section', align: 'left', value: (i) => i.nominal.section },
+  { key: 'surface', header: 'Surface', align: 'left', value: (i) => i.nominal.surface },
+  { key: 'depth', header: 'Depth [%]', align: 'right', value: (i) => i.nominal.maxDepthPct },
+  { key: 'length', header: 'Length [mm]', align: 'right', value: (i) => i.nominal.length },
+  { key: 'erf', header: 'ERF', align: 'right', value: (i) => i.nominal.ERF },
+  { key: 'conservativeErf', header: 'ERF cons.', align: 'right', value: (i) => i.conservative.ERF },
+  { key: 'safePressure', header: 'P_safe [MPa]', align: 'right', value: (i) => i.nominal.safePressure },
+  { key: 'acceptance', header: 'Acceptance', align: 'center', value: (i) => i.nominal.acceptance },
+  { key: 'expectedLife', header: 'Life [y]', align: 'right', value: (i) => i.nominal.expectedLife },
+  { key: 'yearService', header: 'Service limit', align: 'center', value: (i) => i.nominal.yearService },
+  { key: 'failureCriteria', header: 'Criterion', align: 'left', value: (i) => i.nominal.failureCriteria },
+  { key: 'priority', header: 'Priority', align: 'center', value: (i) => PRIORITY_RANK[i.priority] },
+];
+
+/**
+ * The assessment register: every feature with its nominal and conservative
+ * result, sortable and filterable, with rows below the life threshold flagged.
+ */
+export default function FfsResultsTable({
+  items,
+  config,
+  screening,
+  onSelect,
+}: {
+  items: FfsScreenedResult[];
+  config: FfsConfig;
+  screening: FfsScreeningConfig;
+  onSelect: (item: FfsScreenedResult) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [acceptance, setAcceptance] = useState('All');
+  const [criterion, setCriterion] = useState('All');
+  const [priority, setPriority] = useState('All');
+  const [sortKey, setSortKey] = useState<SortKey>('erf');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [page, setPage] = useState(1);
+
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    const column = COLUMNS.find((c) => c.key === sortKey)!;
+    const direction = sortDir === 'asc' ? 1 : -1;
+
+    return items
+      .filter((item) => {
+        if (query) {
+          const haystack = `${item.nominal.ld} ${item.nominal.section} ${item.nominal.surface} ${item.nominal.orient}`;
+          if (!haystack.toLowerCase().includes(query)) return false;
+        }
+        if (acceptance !== 'All' && item.nominal.acceptance !== acceptance) return false;
+        if (criterion !== 'All' && !item.nominal.failureCriteria.includes(criterion)) return false;
+        if (priority !== 'All' && item.priority !== priority) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const av = column.value(a);
+        const bv = column.value(b);
+        if (typeof av === 'number' && typeof bv === 'number') {
+          // Push non-finite ERF values (no remaining capacity) to the severe end.
+          const safeA = Number.isFinite(av) ? av : Number.MAX_VALUE;
+          const safeB = Number.isFinite(bv) ? bv : Number.MAX_VALUE;
+          return (safeA - safeB) * direction;
+        }
+        return String(av).localeCompare(String(bv)) * direction;
+      });
+  }, [items, search, acceptance, criterion, priority, sortKey, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageRows = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const highlighted = filtered.filter((item) => item.nominal.expectedLife < config.highlightYears).length;
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((dir) => (dir === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir(key === 'ld' || key === 'section' ? 'asc' : 'desc');
+    }
+    setPage(1);
+  };
+
+  const selectClass =
+    'rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200';
+
+  return (
+    <div className="space-y-4">
+      {/* Controls */}
+      <Panel className="!p-3.5">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative min-w-[200px] flex-1">
+            <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(1);
+              }}
+              placeholder="Search log distance, section, surface, or orientation"
+              aria-label="Search features"
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            />
+          </div>
+
+          <select
+            value={acceptance}
+            onChange={(event) => {
+              setAcceptance(event.target.value);
+              setPage(1);
+            }}
+            aria-label="Filter by acceptance"
+            className={selectClass}
+          >
+            <option value="All">All acceptance</option>
+            <option value="Acceptable">Acceptable</option>
+            <option value="Un-Acceptable">Not acceptable</option>
+          </select>
+
+          <select
+            value={criterion}
+            onChange={(event) => {
+              setCriterion(event.target.value);
+              setPage(1);
+            }}
+            aria-label="Filter by governing criterion"
+            className={selectClass}
+          >
+            <option value="All">All criteria</option>
+            <option value="ERF">ERF = 1</option>
+            <option value="Depth">Depth limit</option>
+            <option value="N/A">Beyond horizon</option>
+          </select>
+
+          <select
+            value={priority}
+            onChange={(event) => {
+              setPriority(event.target.value);
+              setPage(1);
+            }}
+            aria-label="Filter by priority"
+            className={selectClass}
+          >
+            <option value="All">All priorities</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Routine">Routine</option>
+          </select>
+
+          {highlighted > 0 && (
+            <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-400">
+              {highlighted} row{highlighted === 1 ? '' : 's'} under {config.highlightYears} y
+            </span>
+          )}
+        </div>
+      </Panel>
+
+      {/* Table */}
+      <Panel padded={false} className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1180px] border-collapse text-xs">
+            <thead>
+              <tr className="bg-slate-50 dark:bg-slate-900/60">
+                {COLUMNS.map((column) => {
+                  const active = sortKey === column.key;
+                  return (
+                    <th
+                      key={column.key}
+                      scope="col"
+                      className={`whitespace-nowrap border-b border-slate-200 px-3 py-2.5 text-${column.align} dark:border-slate-700`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(column.key)}
+                        className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide transition-colors ${
+                          active
+                            ? 'text-indigo-600 dark:text-indigo-400'
+                            : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                        }`}
+                      >
+                        {column.header}
+                        {active &&
+                          (sortDir === 'asc' ? (
+                            <FiChevronUp className="h-3 w-3" />
+                          ) : (
+                            <FiChevronDown className="h-3 w-3" />
+                          ))}
+                      </button>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-700/70">
+              {pageRows.map((item) => {
+                const n = item.nominal;
+                const belowThreshold = n.expectedLife < config.highlightYears;
+                const failed = n.acceptance === 'Un-Acceptable';
+
+                return (
+                  <tr
+                    key={item.key}
+                    onClick={() => onSelect(item)}
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onSelect(item);
+                      }
+                    }}
+                    className={`cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 ${
+                      belowThreshold
+                        ? 'bg-amber-50/60 hover:bg-amber-100/60 dark:bg-amber-950/20 dark:hover:bg-amber-950/40'
+                        : 'hover:bg-slate-50 dark:hover:bg-slate-700/40'
+                    }`}
+                  >
+                    <td
+                      className={`whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums text-slate-800 dark:text-slate-100 ${
+                        failed ? 'border-l-[3px] border-l-rose-500' : 'border-l-[3px] border-l-emerald-500'
+                      }`}
+                    >
+                      {Number(n.ld).toLocaleString(undefined, { maximumFractionDigits: 3 })}
+                    </td>
+                    <td className="max-w-[160px] truncate px-3 py-2 text-slate-600 dark:text-slate-300">
+                      {n.section}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">{n.surface}</td>
+                    <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-800 dark:text-slate-100">
+                      {n.maxDepthPct.toFixed(1)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-600 dark:text-slate-300">
+                      {n.length.toFixed(0)}
+                    </td>
+                    <td
+                      className={`px-3 py-2 text-right font-bold tabular-nums ${
+                        n.ERF > 1
+                          ? 'text-rose-600 dark:text-rose-400'
+                          : n.ERF >= screening.reviewBandErf
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'text-slate-800 dark:text-slate-100'
+                      }`}
+                    >
+                      {formatErf(n.ERF)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-amber-600 dark:text-amber-400">
+                      {formatErf(item.conservative.ERF)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-600 dark:text-slate-300">
+                      {n.safePressure.toFixed(3)}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <SeverityBadge
+                        severity={failed ? 'fail' : 'pass'}
+                        label={failed ? 'Not acceptable' : 'Acceptable'}
+                      />
+                    </td>
+                    <td
+                      className={`px-3 py-2 text-right font-semibold tabular-nums ${
+                        belowThreshold ? 'text-amber-600 dark:text-amber-400' : 'text-slate-700 dark:text-slate-200'
+                      }`}
+                    >
+                      {n.expectedLife >= 200 ? '>200' : n.expectedLife.toFixed(1)}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-center tabular-nums text-slate-500 dark:text-slate-400">
+                      {n.yearService}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-slate-500 dark:text-slate-400">
+                      {n.failureCriteria}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <PriorityLabel priority={item.priority} />
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {!pageRows.length && (
+                <tr>
+                  <td colSpan={COLUMNS.length} className="px-3 py-12 text-center text-slate-400">
+                    No feature matches the current filters.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+
+      {/* Pagination */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          Showing{' '}
+          <span className="font-semibold tabular-nums text-slate-700 dark:text-slate-200">
+            {filtered.length ? (safePage - 1) * PAGE_SIZE + 1 : 0}–
+            {Math.min(safePage * PAGE_SIZE, filtered.length)}
+          </span>{' '}
+          of <span className="font-semibold tabular-nums">{filtered.length.toLocaleString()}</span> features
+          {filtered.length !== items.length && ` (${items.length.toLocaleString()} total)`}
+        </p>
+
+        {totalPages > 1 && (
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={safePage === 1}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors enabled:hover:border-indigo-400 enabled:hover:text-indigo-600 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300"
+            >
+              Previous
+            </button>
+            <span className="px-2 text-xs tabular-nums text-slate-500 dark:text-slate-400">
+              {safePage} / {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage === totalPages}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors enabled:hover:border-indigo-400 enabled:hover:text-indigo-600 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300"
+            >
+              Next
+            </button>
+          </div>
+        )}
+      </div>
+
+      <Callout>
+        Select any row to open the full calculation trace. <strong>ERF cons.</strong> applies the ILI depth and
+        length tolerance; where it crosses {screening.reviewBandErf.toFixed(2)} the disposition depends on
+        inspection accuracy rather than the reported dimensions.
+      </Callout>
+    </div>
+  );
+}

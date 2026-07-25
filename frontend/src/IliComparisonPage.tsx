@@ -1,6 +1,7 @@
-import { useState, useEffect, lazy, Suspense } from 'react';
+import { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import ResultsPanel from './ResultsPanel';
 import { fetchAlignmentResult, type ComparisonRow, type ConservationAudit } from './utils/alignment';
+import { RUN_PAIR_COLUMN, runPairLabels, withRunPairColumn } from './utils/alignmentDisplay';
 import { apiFetch } from './utils/api';
 import { applyInterventions, type InterventionEvent } from './utils/interventions';
 
@@ -26,7 +27,7 @@ const JobProgressBar = ({ progress, message }: { progress: number; message: stri
       <div className="h-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
     </div>
     <span className="text-blue-600 font-bold text-lg">{progress}%</span>
-    <p className="text-gray-400 text-xs">Algoritma Hungarian sedang memproses data ILI di background...</p>
+    <p className="text-gray-400 text-xs">Status diperbarui otomatis dari server. Halaman hasil akan terbuka setelah siap.</p>
   </div>
 );
 
@@ -42,6 +43,20 @@ export default function IliComparisonPage() {
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState('');
   const [audit, setAudit] = useState<ConservationAudit | undefined>();
+  const [pairFilter, setPairFilter] = useState<string | null>(null);
+
+  // A chain result concatenates every pair's rows. Without a way to isolate one
+  // transition they read as a single undifferentiated comparison.
+  const pairLabels = useMemo(() => runPairLabels(data), [data]);
+  // Interventions address rows by index into `data`, so a filtered view has to
+  // carry the mapping back — otherwise reassigning a match while a pair is
+  // selected would rewrite whichever unrelated rows sit at those offsets.
+  const visibleRows = useMemo(() => {
+    const indexed = data.map((row, index) => ({ row, index }));
+    return pairFilter ? indexed.filter(({ row }) => row[RUN_PAIR_COLUMN] === pairFilter) : indexed;
+  }, [data, pairFilter]);
+  const visibleData = useMemo(() => visibleRows.map(({ row }) => row), [visibleRows]);
+  const toSourceIndex = (visibleIndex: number) => visibleRows[visibleIndex]?.index ?? visibleIndex;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -54,7 +69,8 @@ export default function IliComparisonPage() {
         setSessionId(sessionId);
 
         setIsProcessing(true);
-        setJobProgress(10);
+        setJobProgress(5);
+        setJobMessage('Memeriksa status alignment...');
         const [alignment, session] = await Promise.all([
           fetchAlignmentResult(sessionId, (progress, message) => {
             setJobProgress(progress);
@@ -66,7 +82,9 @@ export default function IliComparisonPage() {
           ),
         ]);
         setAudit(alignment.audit);
-        setData(applyInterventions(alignment.comparison, session.config?.interventions || []));
+        setData(withRunPairColumn(
+          applyInterventions(alignment.comparison, session.config?.interventions || []),
+        ));
       } catch (caughtError) {
         if ((caughtError as Error).name !== 'AbortError') {
           setError(caughtError instanceof Error ? caughtError.message : 'Gagal memuat hasil ILI.');
@@ -83,7 +101,11 @@ export default function IliComparisonPage() {
     return () => controller.abort();
   }, []);
 
-  const handleUpdateMatch = async (sourceIdx: number, targetIdx: number, evidenceScore = 0) => {
+  const handleUpdateMatch = async (visibleSourceIdx: number, visibleTargetIdx: number, evidenceScore = 0) => {
+    // ResultsPanel reports indexes into the rows it was given, which are the
+    // filtered ones; every mutation below addresses the full `data` array.
+    const sourceIdx = toSourceIndex(visibleSourceIdx);
+    const targetIdx = toSourceIndex(visibleTargetIdx);
     const sourceBefore = data[sourceIdx];
     const targetBefore = data[targetIdx];
     const sourceNewKey = String(sourceBefore?.['Source Key NEW'] || '');
@@ -156,9 +178,40 @@ export default function IliComparisonPage() {
             <JobProgressBar progress={jobProgress} message={jobMessage} />
           </div>
         ) : (
-          <div className="mt-2 h-[calc(100vh-120px)]">
+          <div className="mt-2 flex h-[calc(100vh-120px)] flex-col gap-3">
+            {pairLabels.length > 1 && (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-2.5">
+                <span className="text-xs font-bold uppercase tracking-wide text-blue-700">Run pair</span>
+                <button
+                  type="button"
+                  aria-pressed={pairFilter === null}
+                  onClick={() => setPairFilter(null)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    pairFilter === null ? 'bg-blue-600 text-white shadow-sm' : 'border border-blue-200 bg-white text-blue-700 hover:bg-blue-100'
+                  }`}
+                >
+                  Semua ({data.length.toLocaleString()})
+                </button>
+                {pairLabels.map((label) => {
+                  const count = data.filter((row) => row[RUN_PAIR_COLUMN] === label).length;
+                  return (
+                    <button
+                      key={label}
+                      type="button"
+                      aria-pressed={pairFilter === label}
+                      onClick={() => { setPairFilter(label); setSelectedRowIdx(null); }}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                        pairFilter === label ? 'bg-blue-600 text-white shadow-sm' : 'border border-blue-200 bg-white text-blue-700 hover:bg-blue-100'
+                      }`}
+                    >
+                      {label} ({count.toLocaleString()})
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             <ResultsPanel
-              data={data}
+              data={visibleData}
               loading={loading}
               onOpenAnalytics={() => setShowAdvancedCharts(true)}
               selectedRowIdx={selectedRowIdx}
@@ -169,7 +222,7 @@ export default function IliComparisonPage() {
           </div>
         )}
 
-        {data.length > 0 && !isProcessing && (
+        {visibleData.length > 0 && !isProcessing && (
           <div>
             {!showVisualizer ? (
               <button
@@ -187,7 +240,7 @@ export default function IliComparisonPage() {
                   Sembunyikan Chart
                 </button>
                 <Suspense fallback={<LoadingSpinner label="Memuat Alignment Timeline Viewer..." />}>
-                  <DefectVisualizer data={data} selectedRowIdx={selectedRowIdx} onSelectRowIdx={setSelectedRowIdx} />
+                  <DefectVisualizer data={visibleData} selectedRowIdx={selectedRowIdx} onSelectRowIdx={setSelectedRowIdx} />
                 </Suspense>
               </div>
             )}
@@ -197,7 +250,7 @@ export default function IliComparisonPage() {
 
       {showAdvancedCharts && (
         <Suspense fallback={<LoadingSpinner label="Memuat Advanced Analytics..." />}>
-          <AdvancedCharts data={data} onClose={() => setShowAdvancedCharts(false)} />
+          <AdvancedCharts data={visibleData} onClose={() => setShowAdvancedCharts(false)} />
         </Suspense>
       )}
     </div>

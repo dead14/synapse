@@ -26,6 +26,7 @@ const upload = multer({
 });
 
 router.post('/upload-csv', authMiddleware, upload.single('file'), alignmentController.uploadCsv);
+router.get('/alignment/strategies', authMiddleware, alignmentController.listAlignmentStrategies);
 router.post('/run', authMiddleware, alignmentController.runAlignment);
 router.post('/align-dtw', authMiddleware, alignmentController.runDtwAlignment);
 router.post('/estimate-tiein-offset', authMiddleware, alignmentController.estimateTieInOffset);

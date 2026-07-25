@@ -1,8 +1,11 @@
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 
+import ErrorBoundary from '../components/common/ErrorBoundary';
 import AppHeader from './AppHeader';
 
 function LayoutContent() {
+  const location = useLocation();
+
   return (
     <div className="syn-app engine-app">
       <a href="#main-content" className="syn-action syn-action--signal syn-skip-link">
@@ -15,7 +18,12 @@ function LayoutContent() {
           tabIndex={-1}
           className="engine-main"
         >
-          <Outlet />
+          {/* Keyed by path so the boundary clears when the operator navigates
+              away, and so a failed workspace never blanks the header they
+              would use to leave it. */}
+          <ErrorBoundary key={location.pathname} scope="Workspace ini">
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
     </div>

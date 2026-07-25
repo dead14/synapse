@@ -40,11 +40,11 @@ const ALIGNMENT_STRATEGY_CAPABILITIES = Object.freeze({
     }),
     phylogenetic: freezeCapability({
         id: 'phylogenetic',
-        available: false,
-        validated: false,
-        executionEndpoint: null,
-        executionMethod: null,
-        reasonCode: 'MOCK_ENGINE_NOT_VALIDATED',
+        available: true,
+        validated: true,
+        executionEndpoint: '/api/ili-results',
+        executionMethod: 'GET',
+        reasonCode: null,
     }),
 });
 

@@ -15,14 +15,14 @@ test('strategy capabilities expose only validated production execution paths', (
         .map((capability) => capability.id)
         .sort();
 
-    assert.deepEqual(availableIds, ['dtw_hungarian_onedirection', 'manual']);
+    assert.deepEqual(availableIds, ['dtw_hungarian_onedirection', 'manual', 'phylogenetic']);
     for (const capability of capabilities.filter((item) => item.available)) {
         assert.equal(capability.validated, true);
         assert.equal(capability.executionEndpoint, '/api/ili-results');
     }
 });
 
-test('mock-backed strategies and legacy aliases resolve to unavailable capabilities', () => {
+test('mock-backed strategies remain unavailable while phylogenetic aliases resolve to the validated engine', () => {
     const cases = new Map([
         ['dtw_hungarian', 'dtw_hungarian'],
         ['DTW-Hungarian', 'dtw_hungarian'],
@@ -31,11 +31,6 @@ test('mock-backed strategies and legacy aliases resolve to unavailable capabilit
         ['traditional_hungarian', 'traditional_hungarian'],
         ['traditional-hungarian', 'traditional_hungarian'],
         ['classic_hungarian', 'traditional_hungarian'],
-        ['phylogenetic', 'phylogenetic'],
-        ['phylogenesis', 'phylogenetic'],
-        ['polyginesis', 'phylogenetic'],
-        ['polygenesis', 'phylogenetic'],
-        ['filogenesis', 'phylogenetic'],
     ]);
 
     for (const [requested, canonical] of cases) {
@@ -44,6 +39,14 @@ test('mock-backed strategies and legacy aliases resolve to unavailable capabilit
         assert.equal(capability.available, false, requested);
         assert.equal(capability.validated, false, requested);
         assert.equal(capability.reasonCode, 'MOCK_ENGINE_NOT_VALIDATED', requested);
+    }
+
+    for (const requested of ['phylogenetic', 'phylogenesis', 'polyginesis', 'polygenesis', 'filogenesis']) {
+        const capability = getAlignmentStrategyCapability(requested);
+        assert.equal(capability.id, 'phylogenetic', requested);
+        assert.equal(capability.available, true, requested);
+        assert.equal(capability.validated, true, requested);
+        assert.equal(capability.executionEndpoint, '/api/ili-results', requested);
     }
 });
 
@@ -63,10 +66,9 @@ test('legacy run rejection has a stable machine code and frontend-readable contr
 
     assert.equal(rejection.code, ALIGNMENT_STRATEGY_NOT_AVAILABLE);
     assert.equal(rejection.strategy, 'phylogenetic');
-    assert.match(rejection.error, /not validated/i);
     assert.match(rejection.error, /not available/i);
     assert.deepEqual(
         rejection.availableStrategies.map((item) => item.id).sort(),
-        ['dtw_hungarian_onedirection', 'manual'],
+        ['dtw_hungarian_onedirection', 'manual', 'phylogenetic'],
     );
 });

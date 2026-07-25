@@ -9,11 +9,13 @@ interface StepExecutionProps {
   config: any;
 }
 
-export default function StepExecution({ onBack: _onBack, config }: StepExecutionProps) {
+export default function StepExecution({ onBack, config }: StepExecutionProps) {
   const navigate = useNavigate();
   const [terminalLines, setTerminalLines] = useState<string[]>([]);
   const [progress, setProgress] = useState(0);
   const [showValidation, setShowValidation] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
   const startedRef = useRef(false);
   const jobIdRef = useRef<string | null>(null);
   const completedRef = useRef(false);
@@ -22,9 +24,10 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
+    completedRef.current = false;
 
     if (config.sessionStatus === 'completed'
-      && !['dtw_hungarian_onedirection', 'manual'].includes(configuredAlgorithm)) {
+      && !['dtw_hungarian_onedirection', 'manual', 'phylogenetic'].includes(configuredAlgorithm)) {
       setTerminalLines(['Session alignment sebelumnya sudah selesai.', '✅ All done! Results are ready.']);
       setProgress(100);
       setShowValidation(true);
@@ -36,6 +39,8 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
     let requestController: AbortController | null = null;
     let requestTimeout: ReturnType<typeof setTimeout> | null = null;
     setTerminalLines(["Connecting to Alignment Server..."]);
+    setFailure(null);
+    setProgress(0);
 
     const finish = () => {
       if (!mounted || completedRef.current) return;
@@ -46,7 +51,10 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
     };
 
     const fail = (message: string) => {
-      if (mounted) setTerminalLines(prev => [...prev, `[ERROR] ${message}`]);
+      if (mounted) {
+        setTerminalLines(prev => [...prev, `[ERROR] ${message}`]);
+        setFailure(message);
+      }
       if (pollTimer) clearInterval(pollTimer);
     };
 
@@ -78,7 +86,7 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
         requestController = new AbortController();
         requestTimeout = setTimeout(() => requestController?.abort(), 15000);
         const algorithm = config.algorithm || config.summaryData?.algorithm || 'dtw_hungarian';
-        const usesResultPipeline = ['dtw_hungarian_onedirection', 'manual'].includes(algorithm);
+        const usesResultPipeline = ['dtw_hungarian_onedirection', 'manual', 'phylogenetic'].includes(algorithm);
         const data = await apiFetch<{ success?: boolean; jobId?: string; error?: string }>(
           usesResultPipeline
             ? `/api/ili-results?sessionId=${encodeURIComponent(String(config.sessionId))}`
@@ -105,14 +113,26 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
           if (mounted) setTerminalLines(prev => [...prev, `[ERROR] Failed to queue job: ${data.error}`]);
         }
       } catch (err: any) {
-        if (err instanceof ApiError && err.status === 401) {
-          fail('Sesi login sudah kedaluwarsa. Silakan masuk kembali untuk menjalankan alignment.');
+        if (err.name === 'AbortError') {
+          fail('Server tidak merespons dalam 15 detik. Periksa backend pada port 8000 lalu coba lagi.');
           return;
         }
 
-        fail(err.name === 'AbortError'
-          ? 'Server did not respond within 15 seconds. Check backend port 8000 and sign in again.'
-          : `Could not reach server: ${err.message}`);
+        // An ApiError means the server answered — reporting it as unreachable
+        // sends the operator to check ports and connectivity when the real
+        // cause is a rejected request they can act on.
+        if (err instanceof ApiError) {
+          if (err.status === 401) {
+            fail('Sesi login sudah kedaluwarsa. Silakan masuk kembali untuk menjalankan alignment.');
+          } else if (err.status === 422) {
+            fail(`${err.message} Kembali ke langkah Inspection data dan pilih strategi yang tersedia.`);
+          } else {
+            fail(`Server menolak permintaan (${err.status}): ${err.message}`);
+          }
+          return;
+        }
+
+        fail(`Tidak dapat menghubungi server: ${err.message}`);
       }
     };
 
@@ -156,7 +176,7 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
       socket.off('alignment_complete', handleComplete);
       socket.off('alignment_error', handleError);
     };
-  }, [config.algorithm, config.sessionId, config.sessionStatus, config.summaryData?.algorithm, configuredAlgorithm]);
+  }, [config.algorithm, config.sessionId, config.sessionStatus, config.summaryData?.algorithm, configuredAlgorithm, retryToken]);
 
   return (
     <div className="alignment-surface bg-white rounded-2xl p-6 sm:p-8 shadow-sm border border-gray-100 animate-fade-in flex flex-col gap-8">
@@ -203,6 +223,31 @@ export default function StepExecution({ onBack: _onBack, config }: StepExecution
         </div>
       </div>
       
+      {/* A failed job used to leave the operator on a dead terminal with no
+          way back to the step that caused it. */}
+      {failure && !showValidation && (
+        <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-5">
+          <h3 className="font-bold text-red-800">Alignment tidak dapat dijalankan</h3>
+          <p className="mt-1 text-sm text-red-700">{failure}</p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={onBack}
+              className="rounded-xl border border-red-300 bg-white px-5 py-2.5 font-semibold text-red-700 transition-colors hover:bg-red-100"
+            >
+              Kembali ke langkah sebelumnya
+            </button>
+            <button
+              type="button"
+              onClick={() => setRetryToken((token) => token + 1)}
+              className="rounded-xl bg-red-600 px-5 py-2.5 font-semibold text-white transition-colors hover:bg-red-700"
+            >
+              Coba jalankan lagi
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Physics Validation Results (Shows up when progress is 100%) */}
       {showValidation && (
         <div className="animate-fade-in-up">

@@ -61,8 +61,6 @@ function createResponseRecorder() {
 test('legacy run endpoint rejects every mock route before lookup, job creation, or spawn', async () => {
     const cases = [
         ['traditional_hungarian', 'traditional_hungarian'],
-        ['phylogenetic', 'phylogenetic'],
-        ['polyginesis', 'phylogenetic'],
         ['dtw_hungarian', 'dtw_hungarian'],
         [undefined, 'dtw_hungarian'],
         ['future-experimental-model', 'future_experimental_model'],

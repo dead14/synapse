@@ -7,8 +7,9 @@ import { downloadCsvTemplate } from '../../lib/ffs/csvTemplate';
 import { validateHeaders, validateData } from '../../lib/ffs/validation';
 import type { ValidationError } from '../../lib/ffs/validation';
 import { processAllRows } from '../../lib/ffs/calcEngine';
-import type { FfsConfig } from '../../lib/ffs/types';
+import { DEFAULT_SCREENING_CONFIG, type FfsConfig, type FfsScreeningConfig } from '../../lib/ffs/types';
 import SynButton from '../../components/ui/SynButton';
+import { NumberField } from '../../components/ffs/FfsPrimitives';
 import { apiFetch } from '../../utils/api';
 import { fetchAlignmentResult, type ComparisonRow } from '../../utils/alignment';
 import { getAlignmentImportReadiness, mapAlignmentRowsToFfs } from '../../lib/ffs/alignmentImport';
@@ -33,7 +34,9 @@ export default function FfsSetupPage() {
   const [modifiedSa, setModifiedSa] = useState<'smys69' | 'smys11'>('smys69');
   const [iliDate, setIliDate] = useState('');
   const [highlightYears, setHighlightYears] = useState(5);
-  
+  const [screening, setScreening] = useState<FfsScreeningConfig>(DEFAULT_SCREENING_CONFIG);
+  const [screeningOpen, setScreeningOpen] = useState(false);
+
   // File State
   const [file, setFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -155,7 +158,7 @@ export default function FfsSetupPage() {
         });
 
         // Store results in location state (or a context if preferred) and navigate
-        navigate('/ffs/results', { state: { results: ffsResults, config } });
+        navigate('/ffs/results', { state: { results: ffsResults, config, screening } });
       },
       error: (err) => {
         alert('CSV parse error: ' + err.message);
@@ -220,6 +223,7 @@ export default function FfsSetupPage() {
         state: {
           results: ffsResults,
           config,
+          screening,
           alignmentImport: {
             sessionId: selectedRunId,
             accepted: imported.accepted.map((item) => item.provenance),
@@ -343,7 +347,95 @@ export default function FfsSetupPage() {
             </div>
             
             <div className="h-px bg-slate-200 dark:bg-slate-700 my-4"></div>
-            
+
+            {/* Screening assumptions — project decisions, not code requirements */}
+            <div>
+              <button
+                type="button"
+                onClick={() => setScreeningOpen((open) => !open)}
+                aria-expanded={screeningOpen}
+                className="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2.5 text-left transition-colors hover:border-indigo-300 dark:border-slate-700 dark:hover:border-indigo-700"
+              >
+                <span className="min-w-0">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
+                    Screening assumptions
+                  </span>
+                  <span className="mt-0.5 block text-[11px] text-slate-500 dark:text-slate-400">
+                    ILI tolerance, growth rate, forecast horizon, review band
+                  </span>
+                </span>
+                <span className="shrink-0 text-[11px] font-medium text-indigo-600 dark:text-indigo-400">
+                  {screeningOpen ? 'Hide' : 'Adjust'}
+                </span>
+              </button>
+
+              {screeningOpen && (
+                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3.5 dark:border-slate-700 dark:bg-slate-900/40">
+                  <div className="grid grid-cols-2 gap-3">
+                    <NumberField
+                      label="ILI depth tolerance"
+                      value={screening.depthTolerancePct}
+                      onChange={(depthTolerancePct) => setScreening((s) => ({ ...s, depthTolerancePct }))}
+                      unit="% WT"
+                      min={0}
+                      step={0.5}
+                    />
+                    <NumberField
+                      label="ILI length tolerance"
+                      value={screening.lengthToleranceMm}
+                      onChange={(lengthToleranceMm) => setScreening((s) => ({ ...s, lengthToleranceMm }))}
+                      unit="mm/end"
+                      min={0}
+                      step={1}
+                    />
+                    <NumberField
+                      label="Growth rate"
+                      value={screening.growthRateMmPerYear}
+                      onChange={(growthRateMmPerYear) => setScreening((s) => ({ ...s, growthRateMmPerYear }))}
+                      unit="mm/y"
+                      min={0}
+                      step={0.01}
+                    />
+                    <NumberField
+                      label="Forecast horizon"
+                      value={screening.forecastYears}
+                      onChange={(forecastYears) => setScreening((s) => ({ ...s, forecastYears }))}
+                      unit="years"
+                      min={1}
+                      max={50}
+                      step={1}
+                    />
+                    <NumberField
+                      label="Review band"
+                      value={screening.reviewBandErf}
+                      onChange={(reviewBandErf) => setScreening((s) => ({ ...s, reviewBandErf }))}
+                      unit="ERF"
+                      min={0.5}
+                      max={1}
+                      step={0.01}
+                    />
+                    <NumberField
+                      label="Interaction spacing"
+                      value={screening.interactionSpacingFactor}
+                      onChange={(interactionSpacingFactor) =>
+                        setScreening((s) => ({ ...s, interactionSpacingFactor }))
+                      }
+                      unit="× t"
+                      min={1}
+                      max={20}
+                      step={1}
+                    />
+                  </div>
+                  <p className="mt-3 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                    These are project screening decisions, not ASME B31G requirements. They can also be retuned
+                    on the results page without re-running the parse.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="h-px bg-slate-200 dark:bg-slate-700 my-4"></div>
+
             <div>
               <p className="text-xs text-slate-500 mb-2">Download the required CSV template with all 14 column headers and a sample data row.</p>
               <SynButton type="button" variant="outline" size="sm" onClick={downloadCsvTemplate} className="inline-flex items-center gap-2">

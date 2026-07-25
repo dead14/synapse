@@ -8,6 +8,7 @@ export type GwReviewTransitionInput = {
   gwReview: unknown;
   gwReviewSignature: string | null;
   sessionRevision?: string;
+  sectionOtaOverrides?: Record<string, number>;
 };
 
 /**
@@ -28,5 +29,6 @@ export function buildGwReviewTransitionPayload(input: GwReviewTransitionInput) {
     gwReview: input.gwReview,
     gwReviewSignature: input.gwReviewSignature,
     sessionRevision: input.sessionRevision,
+    sectionOtaOverrides: input.sectionOtaOverrides,
   };
 }

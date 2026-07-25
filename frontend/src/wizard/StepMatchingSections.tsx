@@ -20,6 +20,7 @@ import {
   validateSectionOrder,
 } from './matchingSections';
 import { fetchSectioningAnchors } from './sectioningEvidence';
+import { pairGwResult, primaryRunPair, resolveRunPairs, sectionsForPair } from '../domain/runPairs';
 
 interface Props {
   config: any;
@@ -37,9 +38,16 @@ const EMPTY_RUN: Record<string, unknown> = {};
 const lockedKey = (feature: SpatialFeature) => String(feature.rawData.lockedKey ?? '');
 
 export default function StepMatchingSections({ config, onBack, onNext }: Props) {
+  const pairs = useMemo(() => resolveRunPairs(config?.summaryData), [config?.summaryData]);
+  const primaryPair = useMemo(() => primaryRunPair(config?.summaryData), [config?.summaryData]);
+  const [activePairKey, setActivePairKey] = useState<string | null>(null);
+  const activePair = pairs.find((pair) => pair.key === activePairKey) ?? primaryPair ?? pairs[0] ?? null;
+
+  // Sections are drawn against the NEW side of the pair being sectioned, which in
+  // an intermediate chain transition is not the master run.
   const masterRun = useMemo(
-    () => config?.summaryData?.masterRun || config?.summaryData?.newRun || EMPTY_RUN,
-    [config?.summaryData?.masterRun, config?.summaryData?.newRun],
+    () => activePair?.newRun || config?.summaryData?.masterRun || config?.summaryData?.newRun || EMPTY_RUN,
+    [activePair, config?.summaryData?.masterRun, config?.summaryData?.newRun],
   );
   const masterRunId = Number(masterRun.runId);
   const rawMasterRows = useMemo(
@@ -48,7 +56,10 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
   );
   const [persistedMasterRows, setPersistedMasterRows] = useState<any[]>([]);
   const [isLoadingMasterEvidence, setIsLoadingMasterEvidence] = useState(false);
-  const lockedGws = useMemo(() => normalizeLockedGws(config?.gwMatchesFinal || []), [config?.gwMatchesFinal]);
+  const lockedGws = useMemo(
+    () => normalizeLockedGws(pairGwResult(config, activePair)?.gwMatchesFinal || []),
+    [config, activePair],
+  );
 
   useEffect(() => {
     if (!Number.isSafeInteger(masterRunId) || masterRunId < 1) {
@@ -84,11 +95,21 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
     gwOrphans: config?.gwOrphans,
     route: Array.isArray(config?.pipelineRoute) ? config.pipelineRoute : [],
   }), [config?.gwOrphans, config?.pipelineRoute, config?.summaryData?.historicalRuns, config?.summaryData?.oldRun, lockedGws, masterRun, persistedMasterRows, rawMasterRows]);
-  const initialSections = useMemo<MatchingSection[]>(() => {
-    if (Array.isArray(config?.matchingSections) && config.matchingSections.length > 0) return config.matchingSections;
-    return [];
-  }, [config?.matchingSections]);
-  const [sections, setSections] = useState<MatchingSection[]>(initialSections);
+  // Every pair's sections live in one saved array, so this step edits the slice
+  // belonging to the pair on screen and carries the rest through untouched.
+  const [allSections, setAllSections] = useState<MatchingSection[]>(
+    () => (Array.isArray(config?.matchingSections) ? config.matchingSections : []),
+  );
+  const sections = useMemo(
+    () => sectionsForPair(allSections, activePair, primaryPair),
+    [allSections, activePair, primaryPair],
+  );
+  const setSections = (update: MatchingSection[] | ((current: MatchingSection[]) => MatchingSection[])) => {
+    const next = (typeof update === 'function' ? update(sections) : update)
+      .map((section) => ({ ...section, pairKey: activePair?.key ?? section.pairKey }));
+    const otherPairs = allSections.filter((section) => !sections.some((mine) => mine.id === section.id));
+    setAllSections([...otherPairs, ...next]);
+  };
   const [selectedGws, setSelectedGws] = useState<SpatialFeature[]>([]);
   const [inspectedGw, setInspectedGw] = useState<SpatialFeature | null>(null);
   const [viewMode, setViewMode] = useState<'schematic' | 'map'>('schematic');
@@ -186,8 +207,31 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
         </div>
       </div>
 
+      {pairs.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 bg-brand-50/60 px-5 py-3">
+          <span className="text-xs font-bold uppercase tracking-wide text-brand-700">Section untuk pasangan</span>
+          {pairs.map((pair) => {
+            const count = sectionsForPair(allSections, pair, primaryPair).length;
+            const isActive = pair.key === activePair?.key;
+            return (
+              <button
+                key={pair.key}
+                type="button"
+                aria-pressed={isActive}
+                onClick={() => { setActivePairKey(pair.key); setSelectedGws([]); setEditingSectionId(null); }}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  isActive ? 'bg-brand-600 text-white shadow-sm' : 'border border-brand-200 bg-white text-brand-700 hover:bg-brand-100'
+                }`}
+              >
+                {pair.label} <span className={isActive ? 'opacity-80' : 'text-gray-400'}>({count})</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div className="sectioning-light-stats">
-        <span>Master NEW: <strong>{config?.summaryData?.masterRun?.year || config?.summaryData?.newRun?.year || '-'}</strong></span>
+        <span>NEW axis: <strong>{activePair?.newRun?.year || config?.summaryData?.masterRun?.year || '-'}</strong></span>
         <span>Locked GW: <strong>{lockedGws.length}</strong></span>
         <span>Bend inferred: <strong className="is-warning">{features.stats.bendCount}</strong></span>
         <span>Missing di NEW: <strong className="is-danger">{features.stats.missingGwCount}</strong></span>
@@ -257,7 +301,14 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
       {validationError && <p role="alert" className="mx-5 mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{validationError}</p>}
       <div className="sectioning-light-footer">
         <button onClick={onBack} className="flex items-center gap-2 rounded-xl px-5 py-3 font-medium text-gray-600 hover:bg-gray-50"><FiChevronLeft /> GW Matching</button>
-        <button disabled={Boolean(validationError)} onClick={() => onNext({ matchingSections: sections.map((section) => resolveSectionDistances(section, lockedGws)) })} className="flex items-center gap-2 rounded-xl bg-gray-900 px-6 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">Simpan & Lanjut <FiChevronRight /></button>
+        <button disabled={Boolean(validationError)} onClick={() => onNext({
+          matchingSections: allSections.map((section) => {
+            const isActivePair = sections.some((mine) => mine.id === section.id);
+            // Only the pair on screen has its boundaries resolvable right now;
+            // other pairs keep the distances resolved when they were edited.
+            return isActivePair ? resolveSectionDistances(section, lockedGws) : section;
+          }),
+        })} className="flex items-center gap-2 rounded-xl bg-gray-900 px-6 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">Simpan &amp; Lanjut <FiChevronRight /></button>
       </div>
     </div>
   );

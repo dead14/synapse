@@ -29,6 +29,17 @@ FACILITY_BOUNDARY_MAX_DISTANCE_M = 10.0
 MAX_THEIL_SEN_PAIRS = 100_000
 SPAN_P95_REVIEW_THRESHOLD_M = 1.5
 
+# Engineering gate for per-span geometry change.  These constants describe
+# measurement physics, not any one pipeline, so the same gate holds for a 0.2 m
+# fitting gap, a 10 m joint, and a 25 m multi-joint span.  Mirrored exactly in
+# `backend/src/modules/alignment/alignmentContract.js` — change both together.
+MIN_PIPE_GEOMETRY_SPAN_M = 2.0
+GEOMETRY_NOISE_FLOOR_M = 1.0
+LOCAL_SCALE_MINIMUM = 0.80
+LOCAL_SCALE_MAXIMUM = 1.20
+GEOMETRY_BASELINE_WINDOW_KNOTS = 4
+GEOMETRY_BASELINE_SHIFT_M = 1.0
+
 
 @dataclass
 class Anchor:
@@ -474,7 +485,7 @@ def _local_scale_range(knots):
     for left, right in zip(knots, knots[1:]):
         old_span = right["oldDistanceM"] - left["oldDistanceM"]
         new_span = right["newDistanceM"] - left["newDistanceM"]
-        if old_span >= 2.0 and new_span > 0.0:
+        if old_span >= MIN_PIPE_GEOMETRY_SPAN_M and new_span > 0.0:
             scales.append(new_span / old_span)
     if not scales:
         return {"minimum": 1.0, "maximum": 1.0}
@@ -488,6 +499,82 @@ def _maximum_offset_step(knots):
         right_offset = right["newDistanceM"] - right["oldDistanceM"]
         changes.append(abs(right_offset - left_offset))
     return float(max(changes, default=0.0))
+
+
+def offset_baseline_shift_m(offsets, index, window=GEOMETRY_BASELINE_WINDOW_KNOTS):
+    """How far the OLD->NEW offset baseline moves across the span at ``index``.
+
+    This is the check that separates the two failure modes a single-span
+    threshold cannot tell apart.  A missing or mis-stitched weld displaces every
+    knot downstream of it, so the baseline steps and stays there.  A fitting
+    reported slightly differently by two vendors makes one knot wobble and the
+    baseline is unchanged either side of it.  Medians are used so the excursion
+    itself cannot drag the window it sits in.
+    """
+    before = offsets[max(0, index - window):index]
+    after = offsets[index:index + window]
+    if not before or not after:
+        return 0.0
+    return float(abs(np.median(after) - np.median(before)))
+
+
+def geometry_gate_breaches(knots):
+    """Spans whose geometry change cannot be explained by measurement error.
+
+    Two independent gates.  ``breachedOffsetStep`` fires on a persistent shift of
+    the offset baseline — the signature of a missing weld, and the reason the gate
+    exists at all.  ``breachedScale`` fires when a pipe-length ratio is
+    implausible; it only applies above ``MIN_PIPE_GEOMETRY_SPAN_M``, because below
+    that a span is fitting spacing on one joint rather than steel length, and it
+    additionally requires the absolute disagreement to clear the noise floor:
+    demanding +/-20 % of a 2.4 m span means demanding +/-0.48 m, tighter than the
+    tools resolve, which would reject real short pups.
+    """
+    offsets = [knot["newDistanceM"] - knot["oldDistanceM"] for knot in knots]
+    breaches = []
+    for index in range(1, len(knots)):
+        left, right = knots[index - 1], knots[index]
+        old_span = right["oldDistanceM"] - left["oldDistanceM"]
+        new_span = right["newDistanceM"] - left["newDistanceM"]
+        deviation = abs(new_span - old_span)
+        scale = new_span / old_span if old_span > 0.0 else float("inf")
+        baseline_shift = offset_baseline_shift_m(offsets, index)
+
+        # Both conditions are needed, and each fixes a different failure of the
+        # old flat threshold.  The local delta pins the breach to the span that
+        # actually caused it — a window alone smears the report across its
+        # neighbours, sending the operator to inspect the wrong spool.  The
+        # baseline shift is what makes it a real defect rather than reporting
+        # noise, because only a genuine missing weld keeps the offset displaced.
+        local_delta = abs(offsets[index] - offsets[index - 1])
+        breached_step = (
+            local_delta > GEOMETRY_BASELINE_SHIFT_M
+            and baseline_shift > GEOMETRY_BASELINE_SHIFT_M
+        )
+        breached_scale = (
+            old_span >= MIN_PIPE_GEOMETRY_SPAN_M
+            and (scale < LOCAL_SCALE_MINIMUM or scale > LOCAL_SCALE_MAXIMUM)
+            and deviation > GEOMETRY_NOISE_FLOOR_M
+        )
+        if not breached_scale and not breached_step:
+            continue
+        breaches.append(
+            {
+                "oldStartM": left["oldDistanceM"],
+                "oldEndM": right["oldDistanceM"],
+                "newStartM": left["newDistanceM"],
+                "newEndM": right["newDistanceM"],
+                "oldSpanM": float(old_span),
+                "newSpanM": float(new_span),
+                "scale": float(scale),
+                "deviationM": float(deviation),
+                "baselineShiftM": baseline_shift,
+                "localOffsetDeltaM": float(local_delta),
+                "breachedScale": bool(breached_scale),
+                "breachedOffsetStep": bool(breached_step),
+            }
+        )
+    return breaches
 
 
 def _public_candidate(candidate, rank):
@@ -604,6 +691,7 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
     span_quality = _span_residual_quality(inlier_pairs)
     scale_range = _local_scale_range(knots)
     maximum_offset_step = _maximum_offset_step(knots)
+    gate_breaches = geometry_gate_breaches(knots)
     overlap_length = min(
         inlier_pairs[-1][0].dist - inlier_pairs[0][0].dist,
         inlier_pairs[-1][1].dist - inlier_pairs[0][1].dist,
@@ -626,9 +714,9 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
         reasons.append("LOW_INLIER_RATIO")
     if canonical_scale <= 0.0:
         reasons.append("NON_MONOTONIC_TRANSFORM")
-    if scale_range["minimum"] < 0.80 or scale_range["maximum"] > 1.20:
+    if any(breach["breachedScale"] for breach in gate_breaches):
         reasons.append("LOCAL_SCALE_OUTSIDE_ENGINEERING_GATE")
-    if maximum_offset_step > 1.5:
+    if any(breach["breachedOffsetStep"] for breach in gate_breaches):
         reasons.append("ABRUPT_OFFSET_CHANGE")
     if span_quality["p95AbsM"] > SPAN_P95_REVIEW_THRESHOLD_M:
         reasons.append("HIGH_SPAN_RESIDUAL")
@@ -716,6 +804,11 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
             "knotCount": len(knots),
             "knots": knots,
         },
+        # Named spans behind LOCAL_SCALE_OUTSIDE_ENGINEERING_GATE and
+        # ABRUPT_OFFSET_CHANGE.  A bare reason code tells an operator that
+        # something is wrong somewhere along 4 km of pipe; these let them go look
+        # at the actual spool before deciding.
+        "gateBreaches": gate_breaches,
         "comparisonCoordinates": comparison_coordinates,
         "robustFit": {
             "method": ROBUST_FIT_METHOD,

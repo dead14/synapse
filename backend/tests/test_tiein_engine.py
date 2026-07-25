@@ -201,6 +201,56 @@ class TieInEngineTests(unittest.TestCase):
         self.assertIn("ABRUPT_OFFSET_CHANGE", result["decision"]["reasons"])
         self.assertAlmostEqual(result["transform"]["maximumOffsetStepM"], 2.0)
 
+    def test_reverting_fitting_excursion_does_not_block_auto_apply(self):
+        """A fitting the two vendors place differently must not reject a run.
+
+        Modelled on HU_CPA 2012 -> 2024: one 0.18 m gap between two fittings maps
+        onto a 2.04 m gap, so the single-span deviation is large, but the offset
+        baseline either side of it is identical. Under the old flat 1.5 m rule
+        this alone rejected an otherwise excellent 277-pair, 0.238 m RMSE fit.
+        """
+        old_distances = [0, 12, 24, 36, 36.18, 48, 60, 72, 84]
+        new_distances = [0, 12, 24, 36, 38.04, 48, 60, 72, 84]
+        old = [self.feature(f"o-{i}", "weld", value) for i, value in enumerate(old_distances)]
+        new = [self.feature(f"n-{i}", "weld", value) for i, value in enumerate(new_distances)]
+
+        result = tiein_engine.calculate_tiein_offset(old, new)
+
+        self.assertEqual(result["gateBreaches"], [])
+        self.assertNotIn("ABRUPT_OFFSET_CHANGE", result["decision"]["reasons"])
+        self.assertNotIn("LOCAL_SCALE_OUTSIDE_ENGINEERING_GATE", result["decision"]["reasons"])
+
+    def test_long_span_tolerates_a_proportionally_small_disagreement(self):
+        """2.2 m across a 24 m multi-joint span is 9 % — inside odometer drift.
+
+        The flat 1.5 m threshold flagged this while accepting a 20 % change on a
+        10 m joint, which is backwards: tolerance has to grow with span.
+        """
+        old_distances = [0, 24.21, 48, 72, 96, 120, 144]
+        new_distances = [0, 26.45, 50.24, 74.24, 98.24, 122.24, 146.24]
+        old = [self.feature(f"o-{i}", "weld", value) for i, value in enumerate(old_distances)]
+        new = [self.feature(f"n-{i}", "weld", value) for i, value in enumerate(new_distances)]
+
+        result = tiein_engine.calculate_tiein_offset(old, new)
+
+        self.assertNotIn("ABRUPT_OFFSET_CHANGE", result["decision"]["reasons"])
+
+    def test_gate_breaches_name_the_offending_span(self):
+        """A bare reason code cannot be acted on across 4 km of pipe."""
+        old_distances = [0, 12, 24, 25, 37, 49, 61, 73]
+        new_distances = [0, 12, 24, 27, 39, 51, 63, 75]
+        old = [self.feature(f"o-{i}", "weld", value) for i, value in enumerate(old_distances)]
+        new = [self.feature(f"n-{i}", "weld", value) for i, value in enumerate(new_distances)]
+
+        result = tiein_engine.calculate_tiein_offset(old, new)
+
+        breaches = result["gateBreaches"]
+        self.assertTrue(breaches)
+        self.assertTrue(all(breach["breachedOffsetStep"] for breach in breaches))
+        self.assertAlmostEqual(breaches[0]["oldStartM"], 24.0)
+        self.assertAlmostEqual(breaches[0]["oldEndM"], 25.0)
+        self.assertGreater(breaches[0]["baselineShiftM"], 1.0)
+
     def test_missed_anchor_is_preserved_in_skip_audit(self):
         old = [
             self.feature(f"o-{i}", "weld", distance)

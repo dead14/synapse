@@ -1,6 +1,14 @@
+import sys
 import unittest
+from pathlib import Path
 
-from backend.src.python_engines.growth_analysis import estimate_growth_rate
+
+# Match the other engine tests: resolve the module through the engine directory
+# rather than a "backend." package root, which only exists when the suite is
+# invoked from the repository root and so kept this file out of the gate.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "python_engines"))
+
+from growth_analysis import estimate_growth_rate
 
 
 class GrowthAnalysisTests(unittest.TestCase):

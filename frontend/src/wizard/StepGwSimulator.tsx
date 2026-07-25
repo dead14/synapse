@@ -9,6 +9,8 @@ import { extentOf, maxOf, minOf } from '../utils/numericRange.ts';
 import { gwReviewKey, normalizeGwReview, selectReviewedGwLocks, type GwReviewDisposition, type GwReviewState } from '../domain/alignmentReview';
 import { buildTimelineModel, sourceOdometerOffset, type TimelineEvidence, type TimelineGeometry } from '../domain/gwTimeline';
 import { buildGwReviewTransitionPayload } from './gwReviewTransition';
+import { pairGwResult, pairTieIn, primaryRunPair, resolveRunPairs } from '../domain/runPairs';
+import type { MatchingSection } from './matchingSections';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip);
 
@@ -47,7 +49,44 @@ function buildReviewSignature(config: any, settings: {
   });
 }
 
-export default function StepGwSimulator({ initialOta, onNext, onBack, config }: StepGwSimulatorProps) {
+/** One run pair's matching result and the operator's review of it. */
+type PairGwState = {
+  gwMatchesFinal: any[];
+  gwOrphans: any[];
+  gwReview: GwReviewState;
+  reviewSignature: string | null;
+  sessionRevision?: string;
+  ota: number;
+  dtwOn: boolean;
+  useValveAnchor: boolean;
+  strictPenalty: boolean;
+};
+
+export default function StepGwSimulator({ initialOta, onNext, onBack, config: rawConfig }: StepGwSimulatorProps) {
+  const runPairs = useMemo(() => resolveRunPairs(rawConfig?.summaryData), [rawConfig?.summaryData]);
+  const primaryPair = useMemo(() => primaryRunPair(rawConfig?.summaryData), [rawConfig?.summaryData]);
+  const hasMultiplePairs = runPairs.length > 1;
+  const [activePairKey, setActivePairKey] = useState<string | null>(null);
+  const activePair = runPairs.find((pair) => pair.key === activePairKey) ?? runPairs[0] ?? null;
+
+  // Each pair carries its own tie-in transform. Injecting it here means every
+  // downstream read of `config.tieInTransform` resolves the transform for the
+  // pair actually on screen — previously they all read the one transform the
+  // tie-in step happened to compute, so a chain applied the wrong mapping.
+  const config = useMemo(() => {
+    if (!activePair) return rawConfig;
+    const scopedTieIn = pairTieIn(rawConfig, activePair) || {};
+    return {
+      ...rawConfig,
+      ...scopedTieIn,
+      summaryData: {
+        ...rawConfig?.summaryData,
+        oldRun: activePair.oldRun,
+        newRun: activePair.newRun,
+      },
+    };
+  }, [rawConfig, activePair]);
+
   const initialSettings = {
     ota: initialOta,
     strictPenalty: Boolean(config?.strictPenalty),
@@ -55,7 +94,18 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
     dtwOn: config?.dtwOn ?? true,
   };
   const initialReviewSignature = buildReviewSignature(config, initialSettings);
-  const [ota, setOta] = useState(initialOta); // Preserve the accepted OTA when navigating back.
+  const [ota, setOta] = useState(initialOta);
+  const sections = useMemo<MatchingSection[]>(() => config?.matchingSections ?? [], [config]);
+  const [perSectionOtaEnabled, setPerSectionOtaEnabled] = useState(() =>
+    sections.some((s: MatchingSection) => s.ota != null),
+  );
+  const [sectionOtaOverrides, setSectionOtaOverrides] = useState<Record<string, number>>(() => {
+    const init: Record<string, number> = {};
+    for (const s of sections) {
+      if (s.ota != null) init[s.id] = s.ota;
+    }
+    return init;
+  });
   const [zoom, setZoom] = useState(100);
   const [selectedGWs, setSelectedGWs] = useState<number[]>([]);
   const [selectedMatch, setSelectedMatch] = useState<any | null>(null);
@@ -120,6 +170,48 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
     config?.gwReviewSignature === initialReviewSignature ? initialReviewSignature : null,
   );
 
+  // Reviews for pairs that are not on screen. Holding one live set of these
+  // fields meant switching pairs silently destroyed the previous pair's review
+  // and Continue only ever saved whichever pair happened to be visible.
+  const parkedPairs = useRef<Record<string, PairGwState>>({});
+  const liveSnapshot = (): PairGwState => ({
+    gwMatchesFinal, gwOrphans, gwReview,
+    reviewSignature: reviewSignature.current,
+    sessionRevision, ota, dtwOn, useValveAnchor, strictPenalty,
+  });
+
+  const switchPair = (nextKey: string) => {
+    if (!activePair || nextKey === activePair.key) return;
+    parkedPairs.current[activePair.key] = liveSnapshot();
+    const stored = parkedPairs.current[nextKey] ?? (() => {
+      const pair = runPairs.find((item) => item.key === nextKey) ?? null;
+      const persisted = pairGwResult(rawConfig, pair);
+      return persisted
+        ? {
+            gwMatchesFinal: persisted.gwMatchesFinal ?? [],
+            gwOrphans: persisted.gwOrphans ?? [],
+            gwReview: normalizeGwReview(persisted.gwReview),
+            reviewSignature: persisted.gwReviewSignature ?? null,
+            sessionRevision: rawConfig?.sessionRevision,
+            ota: persisted.ota ?? initialOta,
+            dtwOn: persisted.dtwOn ?? true,
+            useValveAnchor: persisted.useValveAnchor ?? true,
+            strictPenalty: Boolean(persisted.strictPenalty),
+          }
+        : null;
+    })();
+    setGwMatchesFinal(stored?.gwMatchesFinal ?? []);
+    setGwOrphans(stored?.gwOrphans ?? []);
+    setGwReview(stored?.gwReview ?? {});
+    reviewSignature.current = stored?.reviewSignature ?? null;
+    setOta(stored?.ota ?? initialOta);
+    setDtwOn(stored?.dtwOn ?? true);
+    setUseValveAnchor(stored?.useValveAnchor ?? true);
+    setStrictPenalty(Boolean(stored?.strictPenalty));
+    setSelectedMatch(null);
+    setActivePairKey(nextKey);
+  };
+
   useEffect(() => {
     const controller = new AbortController();
     const currentCalculation = ++calculationRevision.current;
@@ -143,8 +235,11 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
         const tieInDecision = config?.tieInDecision;
         const tieInEvidenceToken = config?.tieInEvidenceToken;
         const tieInMethodVersion = config?.tieInMethodVersion;
+        // Mirrors ACCEPTED_TIEIN_STATUSES on the server. An acknowledged
+        // decision still carries a real piecewise transform — Partial Run has no
+        // scalar fallback — so it must map the same way an auto-accepted one does.
         const hasCanonicalTieIn = tieInTransform?.direction === 'OLD_TO_NEW'
-          && tieInDecision?.status === 'AUTO_ACCEPTED';
+          && (tieInDecision?.status === 'AUTO_ACCEPTED' || tieInDecision?.status === 'REVIEW_ACKNOWLEDGED');
         const partialRunEnabled = Boolean(config?.enablePartialRun);
         if (partialRunEnabled && !hasCanonicalTieIn) {
           setLoadError('Partial Run aktif, tetapi TIE IN canonical belum diterapkan. Kembali ke Tie-In Setup dan gunakan rekomendasi yang accepted. Raw 0 m tidak akan dipakai untuk matching.');
@@ -254,10 +349,10 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
           const newTees = hasPersistedRuns ? [] : adjustedNewRun.filter((f: any) => featureTypeText(f).includes('tee')).map((f: any) => f.dist);
           
           const oldFeatureById = new Map(
-            (config?.summaryData?.oldRun?.rawFeatures || []).map((f: any) => [f.id, f]),
+            ((config?.summaryData?.oldRun?.rawFeatures || []) as any[]).map((f: any) => [f.id, f]),
           );
           const newFeatureById = new Map(
-            (config?.summaryData?.newRun?.rawFeatures || []).map((f: any) => [f.id, f]),
+            ((config?.summaryData?.newRun?.rawFeatures || []) as any[]).map((f: any) => [f.id, f]),
           );
           const formattedMatches = data.gwMatches.map((m: any, idx: number) => {
               const isMatch = m && m.status === 'Match';
@@ -423,17 +518,31 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
     note: '',
     reviewedAt: '',
   };
+  const resolveOtaForMatch = useMemo(() => {
+    if (!perSectionOtaEnabled || sections.length === 0) return () => ota;
+    return (match: any) => {
+      const newDist = Number(match.newDist ?? match.newVal);
+      if (!Number.isFinite(newDist)) return ota;
+      for (const s of sections) {
+        const sOta = sectionOtaOverrides[s.id];
+        if (sOta == null) continue;
+        const start = s.newStartM ?? s.startM ?? -Infinity;
+        const end = s.newEndM ?? s.endM ?? Infinity;
+        if (newDist >= start && newDist <= end) return sOta;
+      }
+      return ota;
+    };
+  }, [perSectionOtaEnabled, sections, sectionOtaOverrides, ota]);
   const timelineMatches = useMemo(() => matches.map((match) => {
     const deviationPct = Number.isFinite(Number(match.deviationRatio))
       ? Math.abs(Number(match.deviationRatio)) * 100
       : Number(match.rawVarPct);
+    const effectiveOta = resolveOtaForMatch(match);
     return {
       ...match,
-      // Match health must reflect the currently selected OTA, not the flag
-      // returned by a previous calculation.
-      flagged: Number.isFinite(deviationPct) ? deviationPct > ota : Boolean(match.flagged),
+      flagged: Number.isFinite(deviationPct) ? deviationPct > effectiveOta : Boolean(match.flagged),
     };
-  }), [matches, ota]);
+  }), [matches, resolveOtaForMatch]);
   const timelineDispositions = useMemo(() => timelineMatches.reduce<Record<string, GwReviewDisposition>>((dispositions, match) => {
     dispositions[String(match.id)] = gwReview[gwReviewKey(match)]?.disposition ?? defaultDisposition(match);
     return dispositions;
@@ -449,21 +558,55 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
     () => selectReviewedGwLocks(gwMatchesFinal, gwReview),
     [gwMatchesFinal, gwReview],
   );
+  /** Pairs still waiting for a matching result the operator has looked at. */
+  const unreviewedPairs = runPairs.filter((pair) => {
+    if (pair.key === activePair?.key) return gwMatchesFinal.length === 0;
+    const parked = parkedPairs.current[pair.key];
+    if (parked) return parked.gwMatchesFinal.length === 0;
+    return (pairGwResult(rawConfig, pair)?.gwMatchesFinal?.length ?? 0) === 0;
+  });
+
   const saveReviewAndContinue = async () => {
     if (isSavingReview) return;
     setIsSavingReview(true);
     try {
-      await onNext(buildGwReviewTransitionPayload({
-        ota,
-        strictPenalty,
-        useValveAnchor,
-        dtwOn,
-        gwMatchesFinal: reviewedLocks,
-        gwOrphans,
-        gwReview,
-        gwReviewSignature: reviewSignature.current,
-        sessionRevision,
-      }));
+      // Every pair's locks travel together; sectioning and the final comparison
+      // need the whole chain, not just the pair last displayed.
+      const pairGwResults: Record<string, any> = {};
+      for (const pair of runPairs) {
+        const state = pair.key === activePair?.key
+          ? { ...liveSnapshot(), gwMatchesFinal: reviewedLocks }
+          : parkedPairs.current[pair.key];
+        if (!state) continue;
+        pairGwResults[pair.key] = {
+          gwMatchesFinal: state.gwMatchesFinal,
+          gwOrphans: state.gwOrphans,
+          gwReview: state.gwReview,
+          gwReviewSignature: state.reviewSignature,
+          ota: state.ota,
+          dtwOn: state.dtwOn,
+          useValveAnchor: state.useValveAnchor,
+          strictPenalty: state.strictPenalty,
+        };
+      }
+      const primary = primaryPair ? pairGwResults[primaryPair.key] : undefined;
+      await onNext({
+        ...buildGwReviewTransitionPayload({
+          // The unscoped fields keep describing the primary pair so the engines
+          // and older saved sessions still resolve one canonical lock set.
+          ota: primary?.ota ?? ota,
+          strictPenalty: primary?.strictPenalty ?? strictPenalty,
+          useValveAnchor: primary?.useValveAnchor ?? useValveAnchor,
+          dtwOn: primary?.dtwOn ?? dtwOn,
+          gwMatchesFinal: primary?.gwMatchesFinal ?? reviewedLocks,
+          gwOrphans: primary?.gwOrphans ?? gwOrphans,
+          gwReview: primary?.gwReview ?? gwReview,
+          gwReviewSignature: primary?.gwReviewSignature ?? reviewSignature.current,
+          sessionRevision,
+          sectionOtaOverrides: perSectionOtaEnabled ? sectionOtaOverrides : undefined,
+        }),
+        pairGwResults,
+      });
     } finally {
       setIsSavingReview(false);
     }
@@ -515,6 +658,36 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
 
   return (
     <div className="gw-matching-workspace bg-transparent text-gray-800 font-sans flex flex-col gap-6 animate-fade-in">
+      {hasMultiplePairs && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3">
+          <span className="text-xs font-bold uppercase tracking-wide text-brand-700">Run Pair</span>
+          <div className="flex flex-wrap gap-1">
+            {runPairs.map((pair) => {
+              const isActive = pair.key === activePair?.key;
+              const pending = unreviewedPairs.some((item) => item.key === pair.key);
+              return (
+                <button
+                  key={pair.key}
+                  onClick={() => switchPair(pair.key)}
+                  aria-pressed={isActive}
+                  title={pending ? 'Pasangan ini belum punya hasil matching' : 'Hasil matching tersimpan'}
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    isActive
+                      ? 'bg-brand-600 text-white shadow-sm'
+                      : 'bg-white text-brand-700 border border-brand-200 hover:bg-brand-100'
+                  }`}
+                >
+                  <span aria-hidden="true" className={pending ? 'text-amber-500' : 'text-emerald-500'}>●</span>
+                  {pair.label}
+                </button>
+              );
+            })}
+          </div>
+          <span className="ml-auto text-xs text-brand-600">
+            {runPairs.length - unreviewedPairs.length} / {runPairs.length} pasangan sudah dicocokkan
+          </span>
+        </div>
+      )}
       {loadError && (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 shadow-sm">
           <span>{loadError}</span>
@@ -538,8 +711,13 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
             dispositionsById={timelineDispositions}
             timeline={timelineGeometry}
             zoom={zoom}
-            oldRunLabel={config?.summaryData?.oldRun?.year ? `${config.summaryData.oldRun.year} (Historical OLD)` : 'Historical OLD'}
-            newRunLabel={config?.summaryData?.newRun?.year ? `${config.summaryData.newRun.year} (Master NEW)` : 'Master NEW'}
+            /* In a chain, the NEW side of an intermediate pair is not the master
+               run — labelling it "Master NEW" made a 2012→2024 comparison read as
+               though 2024 were the master when 2026 was. */
+            oldRunLabel={activePair?.oldRun?.year ? `${activePair.oldRun.year} (OLD)` : 'Historical OLD'}
+            newRunLabel={activePair?.newRun?.year
+              ? `${activePair.newRun.year}${activePair.key === primaryPair?.key ? ' (Master NEW)' : ' (NEW)'}`
+              : 'Master NEW'}
             selectedMatch={selectedMatch}
             selectedDecision={selectedMatch ? decisionFor(selectedMatch) : null}
             isLoading={isCalculating}
@@ -770,11 +948,53 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
                
                <div className="mt-6 space-y-4">
                  <label className="flex items-center justify-between text-sm font-bold text-gray-700">
-                   <span>Slippage Tolerance</span>
+                   <span>Slippage Tolerance {perSectionOtaEnabled ? '(Global Default)' : ''}</span>
                    <span className="font-mono bg-white px-2 py-1 rounded shadow-sm border border-gray-200 text-blue-600">{ota}%</span>
                  </label>
                  <input type="range" min="0.1" max="10" step="0.1" value={ota} onChange={e => setOta(parseFloat(e.target.value))} className="w-full accent-blue-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer" />
                </div>
+
+               {sections.length > 0 && (
+                 <div className="mt-4 flex items-center justify-between bg-amber-50/50 px-4 py-3 rounded-xl border border-amber-200">
+                   <div>
+                     <span className="font-bold text-sm text-amber-900">Per-Section OTA</span>
+                     <p className="text-[10px] text-amber-700/80 font-medium mt-0.5">Override OTA threshold for individual pipeline sections</p>
+                   </div>
+                   <button onClick={() => setPerSectionOtaEnabled(!perSectionOtaEnabled)} className={`w-12 h-6 rounded-full transition-colors relative shadow-inner ${perSectionOtaEnabled ? 'bg-amber-500' : 'bg-gray-300'}`}>
+                     <div className={`w-4 h-4 bg-white rounded-full absolute left-1 top-1 transition-transform shadow-md ${perSectionOtaEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                   </button>
+                 </div>
+               )}
+
+               {perSectionOtaEnabled && sections.length > 0 && (
+                 <div className="mt-3 space-y-3 max-h-48 overflow-y-auto pr-1">
+                   {sections.map((s) => {
+                     const sOta = sectionOtaOverrides[s.id] ?? ota;
+                     return (
+                       <div key={s.id} className="bg-amber-50/30 border border-amber-100 rounded-lg px-4 py-3">
+                         <div className="flex items-center justify-between mb-2">
+                           <span className="text-xs font-bold text-gray-700 truncate max-w-[60%]">{s.name}</span>
+                           <div className="flex items-center gap-2">
+                             <span className="font-mono text-xs bg-white px-1.5 py-0.5 rounded border border-amber-200 text-amber-700">{sOta}%</span>
+                             {sectionOtaOverrides[s.id] != null && (
+                               <button
+                                 onClick={() => setSectionOtaOverrides((prev) => { const next = { ...prev }; delete next[s.id]; return next; })}
+                                 className="text-[10px] text-gray-400 hover:text-red-500"
+                                 title="Reset to global"
+                               >reset</button>
+                             )}
+                           </div>
+                         </div>
+                         <input
+                           type="range" min="0.1" max="10" step="0.1" value={sOta}
+                           onChange={(e) => setSectionOtaOverrides((prev) => ({ ...prev, [s.id]: parseFloat(e.target.value) }))}
+                           className="w-full accent-amber-500 h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                         />
+                       </div>
+                     );
+                   })}
+                 </div>
+               )}
              </div>
 
              <div className="flex items-center justify-between bg-blue-50/50 px-5 py-4 rounded-xl border border-blue-100 w-full mb-3">
@@ -861,16 +1081,23 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config }: 
         <OdometerDashboard matches={matchedOnly} ota={ota} setOta={setOta} dtwOn={dtwOn} setDtwOn={setDtwOn} />
       </div>
 
-      <div className="flex justify-between mt-4">
-        <button 
+      <div className="flex flex-wrap items-center justify-between gap-3 mt-4">
+        <button
           onClick={() => onBack({ sessionRevision })}
           className="px-6 py-3 rounded-xl font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors flex items-center gap-2"
         >
           <FiChevronLeft /> Adjust Scenarios
         </button>
-        <button 
+        {/* Sectioning and the final comparison consume the whole chain, so
+            advancing with a pair still unmatched would drop it from the results. */}
+        {unreviewedPairs.length > 0 && !isCalculating && (
+          <p role="status" className="flex-1 text-right text-sm text-amber-700">
+            Masih perlu dicocokkan: {unreviewedPairs.map((pair) => pair.label).join(', ')}.
+          </p>
+        )}
+        <button
           type="button"
-          disabled={isCalculating || isSavingReview || Boolean(loadError) || matches.length === 0 || gwMatchesFinal.length === 0}
+          disabled={isCalculating || isSavingReview || Boolean(loadError) || matches.length === 0 || unreviewedPairs.length > 0}
           onClick={() => { void saveReviewAndContinue(); }}
           className="bg-white hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 text-black px-8 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-lg shadow-white/10"
         >

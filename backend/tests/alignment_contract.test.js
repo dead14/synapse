@@ -157,6 +157,17 @@ test('validateTieInTransform accepts only bounded accepted monotonic evidence', 
         },
     };
     assert.doesNotThrow(() => validateTieInTransform(valid));
+    assert.doesNotThrow(
+        () => validateTieInTransform({
+            ...valid,
+            tieInDecision: {
+                status: 'REVIEW_ACKNOWLEDGED',
+                originalStatus: 'REVIEW_REQUIRED',
+                requiresHumanReview: true,
+                acknowledgedBy: 42,
+            },
+        }),
+    );
     assert.throws(
         () => validateTieInTransform({
             ...valid,

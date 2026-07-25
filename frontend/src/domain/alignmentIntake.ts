@@ -54,11 +54,17 @@ export interface PersistedInspectionDataset<TFile = unknown> {
   tool: string;
 }
 
+export interface RunPair {
+  oldRun: PersistedIliRun;
+  newRun: PersistedIliRun;
+}
+
 export interface PersistedInspectionRunPair {
   masterRun: PersistedIliRun;
   historicalRuns: PersistedIliRun[];
   newRun: PersistedIliRun;
   oldRun: PersistedIliRun;
+  runPairs: RunPair[];
 }
 
 function nonNegativeCount(value: unknown): number {
@@ -138,5 +144,14 @@ export async function ingestPersistedInspectionRunPair<TFile>({
     throw new Error('One persisted master run and one persisted historical run are required.');
   }
 
-  return { masterRun, historicalRuns, newRun: masterRun, oldRun };
+  // Build pairwise chain sorted by year ascending
+  const sorted = [...runs].sort(
+    (a, b) => Number(a.year || 0) - Number(b.year || 0),
+  );
+  const runPairs: RunPair[] = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    runPairs.push({ oldRun: sorted[i], newRun: sorted[i + 1] });
+  }
+
+  return { masterRun, historicalRuns, newRun: masterRun, oldRun, runPairs };
 }

@@ -8,6 +8,7 @@ import math
 import re
 from dataclasses import dataclass
 from models import SessionLocal, ILIFeature, AlignmentResult, AlignmentSession
+from datetime import datetime
 from tiein_transform import map_old_to_new, validated_tiein_knots
 
 
@@ -60,7 +61,7 @@ def safe_int(val):
         if not v or v.lower() == 'none' or v.lower() == 'nan':
             return None
         return int(float(v))
-    except:
+    except (TypeError, ValueError):
         return None
 
 
@@ -384,19 +385,23 @@ class HungarianAnomalyAlignmentEngine:
         self.use_us_gw_distance = True
         self.length_tolerance = 400.0
         self.session = SessionLocal()
-        
+
         # Resolve chronology from survey years. Older wizard sessions stored
         # the newest upload in ``oldRun``; logical OLD/NEW must never inherit
         # that legacy field-name inversion.
-        sess = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
-        if sess and sess.params_json:
-            old_run, new_run, self.swap_persisted_runs = self._resolve_run_bindings(sess.params_json)
-            self.run_1_year = int(old_run.get("year") or 2020)
-            self.run_2_year = int(new_run.get("year") or 2025)
+        self._cached_session = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
+        self._effective_params = None
+        params_json = self._session_params()
+        if params_json:
+            old_run, new_run, self.swap_persisted_runs = self._resolve_run_bindings(params_json)
+            current_year = datetime.now().year
+            self.run_1_year = int(old_run.get("year") or (current_year - 5))
+            self.run_2_year = int(new_run.get("year") or current_year)
         else:
             self.swap_persisted_runs = False
-            self.run_1_year = 2020
-            self.run_2_year = 2025
+            current_year = datetime.now().year
+            self.run_1_year = current_year - 5
+            self.run_2_year = current_year
 
     @staticmethod
     def _run_year(run: dict) -> int | None:
@@ -494,7 +499,7 @@ class HungarianAnomalyAlignmentEngine:
             h = int(p[0]) % 12
             m = int(p[1]) if len(p) > 1 else 0
             return h * 30 + m * 0.5
-        except: return None
+        except (TypeError, ValueError): return None
 
     def _clock_diff(self, cn, co):
         an = self._clock_to_deg(cn)
@@ -554,13 +559,43 @@ class HungarianAnomalyAlignmentEngine:
             })
         return records
 
+    def _get_session(self) -> AlignmentSession | None:
+        if not hasattr(self, '_cached_session') or self._cached_session is None:
+            self._cached_session = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
+        return self._cached_session
+
+    def _session_params(self) -> dict:
+        """The configuration this run must use.
+
+        Chain alignment runs this engine once per run pair, each with its own
+        tie-in transform, GW locks and sections.  The worker hands that over in a
+        file instead of rewriting the shared ``alignment_sessions`` row, which
+        every pair would otherwise contend for and which stayed corrupted if a
+        pair crashed mid-loop.  The ORM row is deliberately never mutated here:
+        this engine commits results, and a dirty ``params_json`` would be flushed
+        along with them.
+        """
+        if getattr(self, "_effective_params", None) is not None:
+            return self._effective_params
+
+        override_path = os.environ.get("ALIGNMENT_PAIR_CONFIG_FILE")
+        if override_path:
+            # Falling back to the session row here would align the pair the row
+            # happens to describe while reporting it as this pair's result.
+            with open(override_path, "r", encoding="utf-8") as handle:
+                self._effective_params = json.load(handle)
+        else:
+            sess = self._get_session()
+            self._effective_params = dict(sess.params_json) if sess and sess.params_json else {}
+        return self._effective_params
+
     def fetch_data(self, is_old_run: bool) -> list[dict]:
         try:
-            sess = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
-            if not sess or not sess.params_json:
+            params_json = self._session_params()
+            if not params_json:
                 return []
-            
-            old_run, new_run, swap_persisted_runs = self._resolve_run_bindings(sess.params_json)
+
+            old_run, new_run, swap_persisted_runs = self._resolve_run_bindings(params_json)
             self.swap_persisted_runs = swap_persisted_runs
             run = old_run if is_old_run else new_run
             run_id = safe_int(run.get("runId"))
@@ -569,16 +604,16 @@ class HungarianAnomalyAlignmentEngine:
                 if run_id is not None and run_id > 0
                 else run.get("rawFeatures", [])
             )
-            
+
             # The wizard persists globalOffset. Keep tieInOffset as a legacy
             # fallback so older saved sessions still map into the same space.
             tie_in_offset = float(
-                sess.params_json.get(
+                params_json.get(
                     "globalOffset",
-                    sess.params_json.get("tieInOffset", 0.0),
+                    params_json.get("tieInOffset", 0.0),
                 )
             )
-            tie_in_knots = validated_tiein_knots(sess.params_json)
+            tie_in_knots = validated_tiein_knots(params_json)
             
             # Map them into the format expected by the engine (abs_distance_m, id, depth_pct, length_mm, width_mm)
             mapped = []
@@ -614,19 +649,19 @@ class HungarianAnomalyAlignmentEngine:
                 depth = f.get("depth_pct") or f.get("depth")
                 try:
                     depth = float(depth) if str(depth).strip() else None
-                except:
+                except (TypeError, ValueError):
                     depth = None
                     
                 length = f.get("length_mm") or f.get("length")
                 try:
                     length = float(length) if str(length).strip() else None
-                except:
+                except (TypeError, ValueError):
                     length = None
                     
                 width = f.get("width_mm") or f.get("width")
                 try:
                     width = float(width) if str(width).strip() else None
-                except:
+                except (TypeError, ValueError):
                     width = None
                     
                 dist_gw = self._read_us_gw_distance(f)
@@ -695,12 +730,12 @@ class HungarianAnomalyAlignmentEngine:
                 print("[WARN] No session_id provided, returning empty GW matches")
                 return []
                 
-            sess = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
-            if not sess or not sess.params_json:
+            params_json = self._session_params()
+            if not params_json:
                 print(f"[WARN] No AlignmentSession found for id={self.session_id}")
                 return []
-                
-            gw_pairs_final = sess.params_json.get("gwMatchesFinal", [])
+
+            gw_pairs_final = params_json.get("gwMatchesFinal", [])
             if gw_pairs_final:
                 gw_pairs = [
                     {
@@ -728,7 +763,7 @@ class HungarianAnomalyAlignmentEngine:
                         "offset": None if getattr(self, "swap_persisted_runs", False) else pair.get("offset"),
                         "status": pair.get("status", "Match"),
                     }
-                    for pair in sess.params_json.get("gwMatches", [])
+                    for pair in params_json.get("gwMatches", [])
                 ]
                 for pair in gw_pairs:
                     if pair.get("offset") is None and pair.get("oldVal") is not None and pair.get("newVal") is not None:
@@ -952,11 +987,10 @@ class HungarianAnomalyAlignmentEngine:
         m = len(anomalies_2)
         cost = np.full((n, m), self.INF_COST, dtype=float)
 
-        # Physics penalty weights from Algoritma.py
-        w_gw = 3.0
-        w_clock = 2.0
-        w_length = 1.0
-        w_width = 0.5
+        w_gw = float(getattr(self, 'w_gw', 3.0))
+        w_clock = float(getattr(self, 'w_clock', 2.0))
+        w_length = float(getattr(self, 'w_length', 1.0))
+        w_width = float(getattr(self, 'w_width', 0.5))
         overrides = tolerance_overrides or {}
         clock_tolerance = float(overrides.get("clock_tolerance", self.clock_tolerance))
         us_distance_tolerance = float(overrides.get(
@@ -1057,14 +1091,9 @@ class HungarianAnomalyAlignmentEngine:
         offset_table = self._build_offset_table(gw_pairs)
         offset_keys = [x[0] for x in offset_table] if offset_table else []
 
-        # The Node worker invokes this script with a session id only.  Its
-        # persisted params_json is therefore the authoritative configuration.
-        try:
-            sess = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
-        except Exception:
-            sess = None
-
-        params_json = sess.params_json if sess and sess.params_json else {}
+        # The Node worker invokes this script with a session id only, so the
+        # persisted (or per-pair overridden) configuration is authoritative.
+        params_json = self._session_params()
         self.hidden_features = [
             name for name, is_hidden in params_json.get("hiddenFeatures", {}).items()
             if is_hidden
@@ -1086,30 +1115,28 @@ class HungarianAnomalyAlignmentEngine:
         )
         if "length_tolerance" in tol_config:
             self.length_tolerance = float(tol_config["length_tolerance"])
+        if "w_gw" in tol_config:
+            self.w_gw = float(tol_config["w_gw"])
+        if "w_clock" in tol_config:
+            self.w_clock = float(tol_config["w_clock"])
+        if "w_length" in tol_config:
+            self.w_length = float(tol_config["w_length"])
+        if "w_width" in tol_config:
+            self.w_width = float(tol_config["w_width"])
 
-        try:
-            sess = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
-            if sess and sess.params_json:
-                gw_matches_final = [
-                    self._logical_gw_pair(pair)
-                    for pair in sess.params_json.get("gwMatchesFinal", [])
-                ]
-                gw_orphans = [
-                    self._logical_gw_pair(pair)
-                    for pair in sess.params_json.get("gwOrphans", [])
-                ]
-            else:
-                gw_matches_final = []
-                gw_orphans = []
-        except Exception:
-            gw_matches_final = []
-            gw_orphans = []
+        gw_matches_final = [
+            self._logical_gw_pair(pair)
+            for pair in params_json.get("gwMatchesFinal", [])
+        ]
+        gw_orphans = [
+            self._logical_gw_pair(pair)
+            for pair in params_json.get("gwOrphans", [])
+        ]
 
         # Legacy Fallback: If gwMatchesFinal is empty, try to reconstruct from gwMatches
         try:
-            sess = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
-            if not gw_matches_final and sess and sess.params_json and "gwMatches" in sess.params_json:
-                legacy_gws = sess.params_json["gwMatches"]
+            if not gw_matches_final and "gwMatches" in params_json:
+                legacy_gws = params_json["gwMatches"]
                 for m in legacy_gws:
                     if m.get("status") == "Match":
                         gw_matches_final.append(self._logical_gw_pair({
@@ -1620,13 +1647,13 @@ def main(argv=None):
     try:
         engine.perform_alignment()
     except Exception as error:
-        # Every failure must reach Node as a non-zero exit with a stderr
-        # message; the worker only rejects on exit code.
         import traceback
 
         traceback.print_exc(file=sys.stderr)
         print(f"[ERROR] Alignment failed: {error}", file=sys.stderr)
         return 1
+    finally:
+        engine.session.close()
     return 0
 
 
