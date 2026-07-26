@@ -741,13 +741,18 @@ def _timeline_feature(feature, display_distance, *, in_overlap=True, reason=None
     return item
 
 
-def _build_timeline_evidence(data, mapped_old_run, knots):
+def _build_timeline_evidence(data, knots):
     """Describe both physical run coverages on the NEW-master coordinate.
 
     Matching is intentionally limited to the accepted TIE IN overlap, but the
-    review timeline must retain the complete NEW inspection. Otherwise a
-    partial OLD run appears to have the same length as the full master run and
-    NEW-only girth welds disappear from the missing-evidence count.
+    review timeline must retain BOTH complete inspections. Whichever run reaches
+    beyond the overlap, the operator has to see the part that was not compared.
+
+    Only the NEW side used to be kept whole. That covered a partial OLD run
+    against a full master, but not the mirror case, and the mirror case is just
+    as real: a full 2012 run against a partial 2024 master silently lost 1.8 km
+    of OLD pipe. Both lanes then rendered as fully covered, which flatly
+    contradicted the tie-in card that stated the domain started at OLD 1869.77 m.
     """
     timeline_kinds = {'weld', 'valve', 'tee'}
 
@@ -764,15 +769,41 @@ def _build_timeline_evidence(data, mapped_old_run, knots):
 
     raw_old = finite_features([dict(feature) for feature in data.get('oldRun', [])])
     raw_new = finite_features([dict(feature) for feature in data.get('newRun', [])])
-    mapped_old = finite_features(mapped_old_run)
 
     if knots:
         old_source_start, new_target_start = knots[0]
         old_source_end, new_target_end = knots[-1]
-        old_features = [
-            _timeline_feature(feature, feature['dist'])
-            for feature in mapped_old
-        ]
+
+        def old_display_distance(source_distance):
+            """Where an OLD feature sits on the master axis, for display only.
+
+            Inside the knot domain this is the accepted piecewise mapping. Beyond
+            either end there is no accepted mapping, so the offset at the nearest
+            knot is carried outward — the surveyor's assumption that no further
+            drift is known past the last common point. These positions never
+            reach the matcher, which still runs strictly inside the domain, so
+            `allowExtrapolation: false` on the transform is untouched.
+            """
+            if source_distance < old_source_start:
+                return new_target_start - (old_source_start - source_distance)
+            if source_distance > old_source_end:
+                return new_target_end + (source_distance - old_source_end)
+            return map_old_to_new(source_distance, knots)
+
+        old_features = []
+        for feature in raw_old:
+            source_distance = float(feature['dist'])
+            in_domain = old_source_start <= source_distance <= old_source_end
+            display_distance = old_display_distance(source_distance)
+            if display_distance is None:
+                continue
+            old_features.append(_timeline_feature(
+                dict(feature, sourceDist=source_distance),
+                display_distance,
+                in_overlap=in_domain,
+                reason=None if in_domain else 'OUTSIDE_ACCEPTED_TIEIN_DOMAIN',
+            ))
+        old_features.sort(key=lambda item: item['displayDistanceM'])
         new_features = [
             _timeline_feature(
                 feature,
@@ -855,7 +886,7 @@ def process_request(data):
         }
     tie_in_knot_records = validated_tiein_knot_records(data)
     old_run, new_run, tie_in_transform_applied, tie_in_excluded_old, tie_in_excluded_new = _prepare_runs_in_master_space(data)
-    timeline = _build_timeline_evidence(data, old_run, validated_tiein_knots(data))
+    timeline = _build_timeline_evidence(data, validated_tiein_knots(data))
     use_valve_anchor = data.get('useValveAnchor', False)
     apply_dtw_correction = data.get('applyDtwCorrection', True)
     request_id = data.get('requestId')

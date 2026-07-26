@@ -447,6 +447,65 @@ class DtwEngineRegressionTests(unittest.TestCase):
             [2000.0, 2012.0, 2024.0],
         )
 
+    def test_old_pipe_beyond_the_tiein_domain_stays_visible(self):
+        """A full OLD run against a partial master must show its uncovered part.
+
+        Only the NEW side was ever kept whole, so a 2012 run compared against a
+        partial 2024 master lost 1.8 km of OLD pipe from the timeline: both lanes
+        rendered as fully covered even though the tie-in card itself reported the
+        domain starting at OLD 1869.77 m. The two directions have to behave the
+        same way, otherwise the picture contradicts the tie-in evidence.
+        """
+        result = dtw_engine.process_request(
+            {
+                "requestId": 1,
+                "ota": 1.5,
+                "oldRun": [
+                    self.weld("old-before-0", 0.0),
+                    self.weld("old-before-12", 12.0),
+                    self.weld("old-in-24", 24.0),
+                    self.weld("old-in-36", 36.0),
+                    self.weld("old-in-48", 48.0),
+                ],
+                "newRun": [
+                    self.weld("new-0", 0.0),
+                    self.weld("new-12", 12.0),
+                    self.weld("new-24", 24.0),
+                ],
+                "tieInDecision": {"status": "AUTO_ACCEPTED"},
+                "tieInTransform": {
+                    "direction": "OLD_TO_NEW",
+                    "model": "MONOTONIC_PIECEWISE_LINEAR",
+                    "allowExtrapolation": False,
+                    "domain": {"oldStartM": 24.0, "oldEndM": 48.0,
+                               "newStartM": 0.0, "newEndM": 24.0},
+                    "knots": [
+                        {"oldDistanceM": 24.0, "newDistanceM": 0.0},
+                        {"oldDistanceM": 36.0, "newDistanceM": 12.0},
+                        {"oldDistanceM": 48.0, "newDistanceM": 24.0},
+                    ],
+                },
+            }
+        )
+
+        self.assertTrue(result["success"])
+        timeline = result["timeline"]
+        # The axis has to stretch back to cover the OLD pipe nobody compared.
+        self.assertEqual(timeline["domain"], {"startM": -24.0, "endM": 24.0})
+
+        outside = [f for f in timeline["oldFeatures"] if not f["inOverlap"]]
+        self.assertEqual([f["id"] for f in outside], ["old-before-0", "old-before-12"])
+        self.assertEqual([f["displayDistanceM"] for f in outside], [-24.0, -12.0])
+        # Source odometer must survive so the operator can find the real pipe.
+        self.assertEqual([f["sourceDistanceM"] for f in outside], [0.0, 12.0])
+        self.assertTrue(all(f["reason"] == "OUTSIDE_ACCEPTED_TIEIN_DOMAIN" for f in outside))
+
+        # Matching itself is unchanged: it still runs strictly inside the domain.
+        self.assertEqual(
+            [match["new_id"] for match in result["gwMatchesFinal"]],
+            ["new-0", "new-12", "new-24"],
+        )
+
     def test_ota_uses_raw_source_spool_lengths_after_tiein_mapping(self):
         matches = [
             {
