@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { FiSliders, FiChevronRight, FiChevronLeft, FiAward } from 'react-icons/fi';
+import { primaryRunPair, resolveRunPairs } from '../domain/runPairs';
 
 interface StepAnomalyTolerancesProps {
   onNext: (config: any) => void;
@@ -7,30 +8,96 @@ interface StepAnomalyTolerancesProps {
   config?: any;
 }
 
+type ToleranceValues = {
+  clock_tolerance: number;
+  us_gw_distance_tolerance: number;
+  ds_gw_distance_tolerance: number;
+  use_us_gw_distance: boolean;
+  length_tolerance: number;
+};
+
+const RECOMMENDED: ToleranceValues = {
+  clock_tolerance: 15,
+  us_gw_distance_tolerance: 0.2,
+  ds_gw_distance_tolerance: 0.2,
+  use_us_gw_distance: true,
+  length_tolerance: 50,
+};
+
+function toleranceValues(source: any, fallbackDistThresh: unknown): ToleranceValues {
+  return {
+    clock_tolerance: source?.clock_tolerance ?? RECOMMENDED.clock_tolerance,
+    us_gw_distance_tolerance: source?.us_gw_distance_tolerance ?? fallbackDistThresh ?? RECOMMENDED.us_gw_distance_tolerance,
+    ds_gw_distance_tolerance: source?.ds_gw_distance_tolerance ?? fallbackDistThresh ?? RECOMMENDED.ds_gw_distance_tolerance,
+    use_us_gw_distance: source?.use_us_gw_distance !== false,
+    length_tolerance: source?.length_tolerance ?? RECOMMENDED.length_tolerance,
+  } as ToleranceValues;
+}
+
 export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAnomalyTolerancesProps) {
-  const [clockTol, setClockTol] = useState(config?.ToleranceConfig?.clock_tolerance ?? 15);
-  const [usGwTol, setUsGwTol] = useState(config?.ToleranceConfig?.us_gw_distance_tolerance ?? config?.scenario?.distThresh ?? 0.2);
-  const [dsGwTol, setDsGwTol] = useState(config?.ToleranceConfig?.ds_gw_distance_tolerance ?? config?.scenario?.distThresh ?? 0.2);
-  const [useUsGwDistance, setUseUsGwDistance] = useState(config?.ToleranceConfig?.use_us_gw_distance !== false);
-  const [lengthTol, setLengthTol] = useState(config?.ToleranceConfig?.length_tolerance ?? 50);
-  
-  const applyRecommended = () => {
-    setClockTol(15);
-    setUsGwTol(0.2);
-    setDsGwTol(0.2);
-    setUseUsGwDistance(true);
-    setLengthTol(50);
+  const pairs = useMemo(() => resolveRunPairs(config?.summaryData), [config?.summaryData]);
+  const primaryPair = useMemo(() => primaryRunPair(config?.summaryData), [config?.summaryData]);
+  const hasMultiplePairs = pairs.length > 1;
+
+  const [activePairKey, setActivePairKey] = useState<string | null>(null);
+  const activePair = pairs.find((pair) => pair.key === activePairKey) ?? primaryPair ?? pairs[0] ?? null;
+
+  // Most operators want one setting for the whole session, so per-pair editing
+  // stays off until it is needed — otherwise a 5-run chain would demand five
+  // identical set-ups before the wizard could continue.
+  const storedPerPair = config?.pairToleranceConfigs;
+  const [perPairEnabled, setPerPairEnabled] = useState(
+    () => Object.keys(storedPerPair || {}).length > 1,
+  );
+
+  const [byPair, setByPair] = useState<Record<string, ToleranceValues>>(() => {
+    const shared = toleranceValues(config?.ToleranceConfig, config?.scenario?.distThresh);
+    return Object.fromEntries(
+      resolveRunPairs(config?.summaryData).map((pair) => [
+        pair.key,
+        toleranceValues(storedPerPair?.[pair.key] ?? config?.ToleranceConfig, config?.scenario?.distThresh) ?? shared,
+      ]),
+    );
+  });
+
+  const activeKey = activePair?.key ?? '';
+  const current = byPair[activeKey] ?? toleranceValues(config?.ToleranceConfig, config?.scenario?.distThresh);
+
+  /** Write a field to the active pair, or to every pair while sharing is on. */
+  const patch = (change: Partial<ToleranceValues>) => {
+    setByPair((currentMap) => {
+      if (!perPairEnabled) {
+        return Object.fromEntries(
+          Object.entries(currentMap).map(([key, value]) => [key, { ...value, ...change }]),
+        );
+      }
+      return { ...currentMap, [activeKey]: { ...(currentMap[activeKey] ?? current), ...change } };
+    });
   };
 
+  const clockTol = current.clock_tolerance;
+  const usGwTol = current.us_gw_distance_tolerance;
+  const dsGwTol = current.ds_gw_distance_tolerance;
+  const useUsGwDistance = current.use_us_gw_distance;
+  const lengthTol = current.length_tolerance;
+
+  const setClockTol = (value: number) => patch({ clock_tolerance: value });
+  const setUsGwTol = (value: number) => patch({ us_gw_distance_tolerance: value });
+  const setDsGwTol = (value: number) => patch({ ds_gw_distance_tolerance: value });
+  const setUseUsGwDistance = (value: boolean) => patch({ use_us_gw_distance: value });
+  const setLengthTol = (value: number) => patch({ length_tolerance: value });
+
+  const applyRecommended = () => patch({ ...RECOMMENDED });
+
   const handleNext = () => {
+    const primaryValues = (primaryPair && byPair[primaryPair.key]) || current;
     onNext({
-      ToleranceConfig: {
-        clock_tolerance: clockTol,
-        us_gw_distance_tolerance: usGwTol,
-        ds_gw_distance_tolerance: dsGwTol,
-        use_us_gw_distance: useUsGwDistance,
-        length_tolerance: lengthTol
-      }
+      // The unscoped field still describes the primary pair, so the engines and
+      // any session saved by an older client keep resolving one tolerance set.
+      ToleranceConfig: primaryValues,
+      pairToleranceConfigs: pairs.length > 0
+        ? Object.fromEntries(pairs.map((pair) => [pair.key, byPair[pair.key] ?? current]))
+        : undefined,
     });
   };
 
@@ -45,6 +112,54 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
           <p className="text-sm text-gray-500">Configure parameters for the Hungarian Anomaly matcher.</p>
         </div>
       </div>
+
+      {/* A 14-year interval and a 2-year interval rarely deserve the same
+          tolerances, but demanding a separate set-up per pair by default would
+          be busywork on a chain of five runs. */}
+      {hasMultiplePairs && (
+        <div className="mb-6 rounded-xl border border-brand-200 bg-brand-50/60 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold text-gray-800">Toleransi per pasangan run</h3>
+              <p className="mt-0.5 text-xs text-gray-600">
+                {perPairEnabled
+                  ? 'Tiap pasangan memakai toleransinya sendiri. Pilih pasangan di bawah untuk mengaturnya.'
+                  : `Satu set toleransi dipakai untuk ${pairs.length} pasangan. Aktifkan bila rentang tahunnya berbeda jauh.`}
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={perPairEnabled}
+              aria-label="Atur toleransi terpisah untuk tiap pasangan run"
+              onClick={() => setPerPairEnabled((value) => !value)}
+              className={`relative h-6 w-12 shrink-0 rounded-full shadow-inner transition-colors ${perPairEnabled ? 'bg-brand-500' : 'bg-gray-300'}`}
+            >
+              <span className={`absolute left-1 top-1 h-4 w-4 rounded-full bg-white shadow-md transition-transform ${perPairEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+            </button>
+          </div>
+
+          {perPairEnabled && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {pairs.map((pair) => (
+                <button
+                  key={pair.key}
+                  type="button"
+                  aria-pressed={pair.key === activePair?.key}
+                  onClick={() => setActivePairKey(pair.key)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    pair.key === activePair?.key
+                      ? 'bg-brand-600 text-white shadow-sm'
+                      : 'border border-brand-200 bg-white text-brand-700 hover:bg-brand-100'
+                  }`}
+                >
+                  {pair.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-5 mb-8 flex justify-between items-center">
         <div className="flex gap-3 items-center">

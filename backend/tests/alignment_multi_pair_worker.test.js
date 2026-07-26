@@ -116,3 +116,33 @@ test('each pair runs on its own tie-in transform, locks and sections', () => {
     assert.equal(sessionConfig.globalOffset, 999);
     assert.equal(sessionConfig.matchingSections.length, 2);
 });
+
+test('each pair may carry its own anomaly tolerances', () => {
+    // A 14-year interval and a 2-year interval do not deserve the same gates,
+    // and a shared ToleranceConfig silently applied one run's judgement to both.
+    const sessionConfig = {
+        ToleranceConfig: { clock_tolerance: 15, length_tolerance: 50 },
+        pairToleranceConfigs: {
+            '1->2': { clock_tolerance: 30, length_tolerance: 120 },
+        },
+        summaryData: {
+            oldRun: { runId: 2 },
+            newRun: { runId: 3 },
+            runPairs: [
+                { oldRun: { runId: 1 }, newRun: { runId: 2 } },
+                { oldRun: { runId: 2 }, newRun: { runId: 3 } },
+            ],
+        },
+    };
+
+    const wide = __testables.buildPairSessionConfig(sessionConfig, {
+        oldRun: { runId: 1 }, newRun: { runId: 2 },
+    });
+    assert.deepEqual(wide.ToleranceConfig, { clock_tolerance: 30, length_tolerance: 120 });
+
+    // A pair with no override keeps the session-wide configuration.
+    const untouched = __testables.buildPairSessionConfig(sessionConfig, {
+        oldRun: { runId: 2 }, newRun: { runId: 3 },
+    });
+    assert.deepEqual(untouched.ToleranceConfig, { clock_tolerance: 15, length_tolerance: 50 });
+});
