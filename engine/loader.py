@@ -172,13 +172,18 @@ def load_ili_universal(file_path, field_map=None, survey_year=None, vendor=None,
             df_uni[uc] = df_raw[mc].values
             if sim < 0.9: print(f"   Fuzzy: '{vc}'→'{mc}' (sim={sim:.2f})→{uc}")
 
+    # Last-resort binder for columns the FIELD_MAP did not cover.  0.5 was low
+    # enough to bind loosely related headers to the wrong universal field
+    # (e.g. a "(mm)" column onto a percentage field), so the floor is 0.75 and
+    # every fallback binding is logged with its similarity score.
+    FALLBACK_SIM_FLOOR = 0.75
     for uc in UNIVERSAL_COLS[:17]:
         if df_uni[uc].notna().sum() > 0: continue
         for rc in df_raw.columns:
-            _, s = find_best_col(uc, [rc], 0.5)
-            if s >= 0.5:
+            _, s = find_best_col(uc, [rc], FALLBACK_SIM_FLOOR)
+            if s >= FALLBACK_SIM_FLOOR:
                 df_uni[uc] = df_raw[rc].values
-                print(f"   Fallback: '{rc}'→{uc}")
+                print(f"   Fallback: '{rc}'→{uc} (sim={s:.2f})")
                 break
 
     df_uni["clock_position"]   = df_uni["clock_position"].apply(normalize_clock)

@@ -3,7 +3,6 @@ import numpy as np
 import os
 import sys
 from .constants import *
-from .constants import *
 from .loader import *
 from .math_utils import *
 from .math_utils import match_welds_by_spool_variance
@@ -330,11 +329,20 @@ def main(clockTol=None, distGwTol=None, depthGrowthMax=None, ota=None, runOldId=
               f"{100*nm/max(min(len(df_new),len(df_old)),1):.1f}%")
         print(f"{'='*80}")
     except Exception as e:
-        print(f"ERROR: {e}")
-        session_record = db_session.query(AlignmentSession).filter(AlignmentSession.id == sessionId).first()
-        if session_record:
-            session_record.status = "failed"
-            db_session.commit()
+        # Swallowing this returned exit code 0, so Node recorded a failed
+        # alignment as a success.  Report to stderr and re-raise so the
+        # process exits non-zero after the finally cleanup.
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        print(f"ERROR: {e}", file=sys.stderr)
+        try:
+            session_record = db_session.query(AlignmentSession).filter(AlignmentSession.id == sessionId).first()
+            if session_record:
+                session_record.status = "failed"
+                db_session.commit()
+        except Exception as mark_error:
+            print(f"ERROR: could not mark session failed: {mark_error}", file=sys.stderr)
+        raise
     finally:
         db_session.close()
 
