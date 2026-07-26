@@ -30,6 +30,17 @@ function validateDtwPayload(payload, {
 
     const oldCount = payload.oldRun.length;
     const newCount = payload.newRun.length;
+    // The size guard only ever had an upper bound, so an empty run satisfied
+    // it (0 * 0 is below any cell limit) and reached the engine, which
+    // truthfully reported zero matches.  Nothing downstream could tell that
+    // apart from a matcher that had simply not run yet.
+    if (oldCount === 0 || newCount === 0) {
+        throw validationError(
+            'NO_ALIGNMENT_ANCHORS',
+            'Alignment needs at least one anchor in each run; '
+            + `received ${oldCount} for oldRun and ${newCount} for newRun.`,
+        );
+    }
     if (oldCount > maxRecords || newCount > maxRecords || oldCount * newCount > maxCells) {
         throw validationError(
             'DTW_INPUT_TOO_LARGE',

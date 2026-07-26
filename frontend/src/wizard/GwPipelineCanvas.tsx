@@ -313,8 +313,27 @@ export default function GwPipelineCanvas({
             })}
           </div>
 
+          {/* A degenerate domain means nothing ever populated the extent, so the
+              matcher has not produced evidence.  A real domain with no matches
+              is a genuine result — the runs were compared and nothing paired —
+              and telling the operator to "run the matcher" there sends them to
+              re-run a job that already completed. */}
           {!isLoading && matches.length === 0 && (
-            <div className="gw-pipeline-empty" role="status"><strong>No match evidence yet</strong><span>Run the matcher or adjust the source inspections to populate this timeline.</span></div>
+            domain.endM > domain.startM ? (
+              <div className="gw-pipeline-empty" role="status">
+                <strong>Matcher selesai tanpa satu pun pasangan</strong>
+                <span>
+                  Anchor kedua run terbaca, tetapi tidak ada yang berpasangan dalam toleransi saat ini.
+                  Longgarkan OTA, periksa hasil Tie-in setup, atau pastikan kedua run benar-benar
+                  mencakup ruas pipa yang sama.
+                </span>
+              </div>
+            ) : (
+              <div className="gw-pipeline-empty" role="status">
+                <strong>No match evidence yet</strong>
+                <span>Run the matcher or adjust the source inspections to populate this timeline.</span>
+              </div>
+            )
           )}
           {isLoading && <div className="gw-pipeline-loading" role="status" aria-live="polite"><span aria-hidden="true" />Updating alignment…</div>}
         </div>
