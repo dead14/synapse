@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const pool = require('../../config/db');
+const { invalidatePrincipal } = require('../../middlewares/principalCache');
 const { validateEmail } = require('../auth/authValidation');
 const {
     buildUserMutationScope,
@@ -95,13 +96,16 @@ exports.resetPassword = async (req, res) => {
     try {
         const passwordHash = await bcrypt.hash(newPassword, 12);
         const scope = buildUserMutationScope(req.user, id, 2);
+        // Credential rotation also bumps token_version: sessions issued with
+        // the old password must not survive the reset.
         const result = await pool.query(
-            `UPDATE users SET password_hash = $1, updated_at = NOW() WHERE ${scope.clause} RETURNING id`,
+            `UPDATE users SET password_hash = $1, token_version = COALESCE(token_version, 0) + 1, updated_at = NOW() WHERE ${scope.clause} RETURNING id`,
             [passwordHash, ...scope.values],
         );
         if (result.rowCount === 0) {
             return res.status(404).json({ error: 'User not found' });
         }
+        invalidatePrincipal(id);
         return res.json({ message: 'Password reset successful' });
     } catch (err) {
         console.error('Reset password error:', err);
@@ -120,13 +124,17 @@ exports.toggleStatus = async (req, res) => {
     }
     try {
         const scope = buildUserMutationScope(req.user, id, 2);
+        // Bump token_version on both transitions: deactivation revokes the
+        // user's live sessions, and reactivation must not resurrect tokens
+        // that were issued before the account was disabled.
         const result = await pool.query(
-            `UPDATE users SET is_active = $1, updated_at = NOW() WHERE ${scope.clause} RETURNING id`,
+            `UPDATE users SET is_active = $1, token_version = COALESCE(token_version, 0) + 1, updated_at = NOW() WHERE ${scope.clause} RETURNING id`,
             [is_active, ...scope.values],
         );
         if (result.rowCount === 0) {
             return res.status(404).json({ error: 'User not found' });
         }
+        invalidatePrincipal(id);
         return res.json({ message: 'User status updated' });
     } catch (err) {
         console.error('Update status error:', err);

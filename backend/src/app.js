@@ -5,6 +5,11 @@ const { getJwtSecret } = require('./config/auth');
 const { healthHandler, createReadinessHandler } = require('./config/health');
 const { createCorsOptions, resolveTrustProxy, securityHeaders } = require('./config/security');
 const { authMiddleware } = require('./middlewares/authMiddleware');
+const {
+    authenticatedUserKey,
+    createRedisRateLimiter,
+    integerFromEnv,
+} = require('./middlewares/redisRateLimit');
 const metrics = require('./observability/metrics');
 const app = express();
 
@@ -62,6 +67,19 @@ app.get('/api/health', healthHandler);
 // detail when degraded.  The plain /api/health payload above stays fixed for
 // the deploy gate.
 app.get('/api/health/ready', createReadinessHandler());
+
+// Global per-user API budget, registered after the health endpoints (which
+// stay unlimited for the deploy gate) and before every authenticated route.
+// It is keyed by the verified JWT identity: anonymous or invalid-token
+// requests are skipped here — they either hit the dedicated auth limiter or
+// fail authentication downstream.  Redis outages fail open (see
+// middlewares/redisRateLimit.js).
+app.use('/api', createRedisRateLimiter({
+    prefix: 'rl:api',
+    windowMs: integerFromEnv('RATE_LIMIT_GLOBAL_WINDOW_MS', 60_000),
+    max: integerFromEnv('RATE_LIMIT_GLOBAL_MAX', 600),
+    keyGenerator: authenticatedUserKey,
+}));
 
 app.get('/api/metrics', authMiddleware, (_req, res) => {
     res.type('text/plain').send(metrics.prometheus());

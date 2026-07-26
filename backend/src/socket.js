@@ -2,6 +2,10 @@ let io;
 
 const { createCorsOptions } = require('./config/security');
 const { extractAuthToken, verifyAuthToken } = require('./middlewares/authMiddleware');
+const {
+  defaultPrincipalCache,
+  tokenVersionFromClaims,
+} = require('./middlewares/principalCache');
 
 function authenticationError() {
   const error = new Error('Authentication required');
@@ -9,22 +13,43 @@ function authenticationError() {
   return error;
 }
 
-function authenticateSocket(socket, next) {
-  const handshake = socket.handshake || {};
-  const token = extractAuthToken({
-    auth: handshake.auth,
-    headers: handshake.headers,
-  });
+// Handshakes get the same revocation check as HTTP requests: a deactivated
+// user or a bumped token_version cannot open a socket, and the database role
+// overrides the token claim (same staleness bound as principalCache.js).
+function createSocketAuthenticator({ principalCache = defaultPrincipalCache } = {}) {
+  return async function authenticateSocket(socket, next) {
+    const handshake = socket.handshake || {};
+    const token = extractAuthToken({
+      auth: handshake.auth,
+      headers: handshake.headers,
+    });
 
-  if (!token) return next(authenticationError());
+    if (!token) return next(authenticationError());
 
-  try {
-    socket.user = verifyAuthToken(token);
-    return next();
-  } catch {
-    return next(authenticationError());
-  }
+    let decoded;
+    try {
+      decoded = verifyAuthToken(token);
+    } catch {
+      return next(authenticationError());
+    }
+
+    try {
+      const principal = await principalCache.load(Number(decoded.id));
+      if (!principal.exists || !principal.isActive
+          || principal.tokenVersion !== tokenVersionFromClaims(decoded)) {
+        return next(authenticationError());
+      }
+      socket.user = { ...decoded, role: principal.role || decoded.role };
+      return next();
+    } catch {
+      // Fail closed: socket clients reconnect on their own, so a database
+      // blip is a delayed connection rather than a stuck session.
+      return next(authenticationError());
+    }
+  };
 }
+
+const authenticateSocket = createSocketAuthenticator();
 
 function getSocketRooms(user) {
   const rooms = [`user_${user.id}`];
@@ -62,5 +87,6 @@ module.exports = {
     return io;
   },
   authenticateSocket,
+  createSocketAuthenticator,
   getSocketRooms,
 };
