@@ -23,39 +23,43 @@ interface DepthVsDistanceChartProps {
   };
 }
 
+const asNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '-') return null;
+  const parsed = parseFloat(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const isMatchedRow = (row: any) => row['Match/Unmatch'] === 'Matched' || row['Match/Unmatch'] === 'Match';
+
 export default function DepthVsDistanceChart({ data, filters }: DepthVsDistanceChartProps) {
   const chartRef = useRef<any>(null);
 
   // Parse data
   const chartData = useMemo(() => {
-    const validData = data.slice(1);
-
     const run1Matched: any[] = [];
     const run1Unmatched: any[] = [];
     const run2Matched: any[] = [];
     const run2Unmatched: any[] = [];
     const lines: any[] = [];
 
-    validData.forEach(row => {
-      // Run 1 Data
-      const dist1 = typeof row['DATA LAMA 2020 (Vendor Lama)  >'] === 'number' 
-        ? row['DATA LAMA 2020 (Vendor Lama)  >'] - 0.1
-        : null;
-      const depth1Abs = parseFloat(row['Unnamed: 37']);
-      const depth1Pct = parseFloat(row['Unnamed: 35']);
-      const depth1 = filters.depthType === 'Percentage' ? depth1Pct : depth1Abs;
+    data.forEach(row => {
+      // Depths arrive as %WT; the absolute view converts through wall thickness.
+      const toDepth = (pct: number | null, wt: number | null) => {
+        if (filters.depthType === 'Percentage') return pct;
+        return pct !== null && wt !== null ? (pct / 100) * wt : null;
+      };
 
-      // Run 2 Data
-      const dist2 = typeof row['<  DATA BARU 2025 (Vendor Baru)'] === 'number'
-        ? row['<  DATA BARU 2025 (Vendor Baru)']
-        : null;
-      const depth2Abs = parseFloat(row['Unnamed: 10']);
-      const depth2Pct = parseFloat(row['Unnamed: 8']);
-      const depth2 = filters.depthType === 'Percentage' ? depth2Pct : depth2Abs;
+      // Run 1 (OLD) data
+      const dist1 = asNumber(row['Log Dist OLD (m)']);
+      const depth1 = toDepth(asNumber(row['Depth OLD (%WT)']), asNumber(row['Wall WT OLD (mm)']));
 
-      const isMatched = row['Match/Unmatch'] === 'Matched';
+      // Run 2 (NEW) data
+      const dist2 = asNumber(row['Log Dist NEW (m)']);
+      const depth2 = toDepth(asNumber(row['Depth NEW (%WT)']), asNumber(row['Wall WT NEW (mm)']));
 
-      if (dist1 !== null && !isNaN(depth1)) {
+      const isMatched = isMatchedRow(row);
+
+      if (dist1 !== null && depth1 !== null) {
         const pt = { x: dist1, y: depth1, raw: row, isRun1: true };
         if (isMatched) {
           if (filters.matched === 'Both' || filters.matched === 'Run 1') run1Matched.push(pt);
@@ -64,7 +68,7 @@ export default function DepthVsDistanceChart({ data, filters }: DepthVsDistanceC
         }
       }
 
-      if (dist2 !== null && !isNaN(depth2)) {
+      if (dist2 !== null && depth2 !== null) {
         const pt = { x: dist2, y: depth2, raw: row, isRun1: false };
         if (isMatched) {
           if (filters.matched === 'Both' || filters.matched === 'Run 2') run2Matched.push(pt);
@@ -74,13 +78,16 @@ export default function DepthVsDistanceChart({ data, filters }: DepthVsDistanceC
       }
 
       // Add line if matched
-      if (isMatched && dist1 !== null && !isNaN(depth1) && dist2 !== null && !isNaN(depth2)) {
+      if (isMatched && dist1 !== null && depth1 !== null && dist2 !== null && depth2 !== null) {
         lines.push({ x1: dist1, y1: depth1, x2: dist2, y2: depth2, color: '#cbd5e1' });
       }
     });
 
     return { run1Matched, run1Unmatched, run2Matched, run2Unmatched, lines };
   }, [data, filters]);
+
+  const hasPoints = chartData.run1Matched.length + chartData.run1Unmatched.length
+    + chartData.run2Matched.length + chartData.run2Unmatched.length > 0;
 
   const matchLinesPlugin: Plugin = {
     id: 'matchLinesPlugin',
@@ -190,10 +197,15 @@ export default function DepthVsDistanceChart({ data, filters }: DepthVsDistanceC
 
   return (
     <div className="w-full h-full relative" style={{ minHeight: '400px' }}>
-      <Scatter 
+      {!hasPoints && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-gray-400">
+          No depth/distance values available in this result set
+        </div>
+      )}
+      <Scatter
         ref={chartRef}
-        data={{ datasets }} 
-        options={options} 
+        data={{ datasets }}
+        options={options}
         plugins={[matchLinesPlugin]}
       />
     </div>

@@ -112,6 +112,23 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
   const [show3DViewer, setShow3DViewer] = useState(false);
   const [tooltipState, setTooltipState] = useState<{ x: number, y: number, row: any } | null>(null);
 
+  // The All-GWs table is unvirtualized, so committing tooltip state on every
+  // raw mousemove re-rendered this whole component per mouse event. Keep the
+  // latest payload in a ref and commit at most once per animation frame.
+  const tooltipFrameRef = useRef<number | null>(null);
+  const pendingTooltipRef = useRef<{ x: number, y: number, row: any } | null>(null);
+  const queueTooltipUpdate = (next: { x: number, y: number, row: any } | null) => {
+    pendingTooltipRef.current = next;
+    if (tooltipFrameRef.current !== null) return;
+    tooltipFrameRef.current = window.requestAnimationFrame(() => {
+      tooltipFrameRef.current = null;
+      setTooltipState(pendingTooltipRef.current);
+    });
+  };
+  useEffect(() => () => {
+    if (tooltipFrameRef.current !== null) window.cancelAnimationFrame(tooltipFrameRef.current);
+  }, []);
+
   const [activeTab, setActiveTab] = useState<'offset' | 'unmatched' | 'matched' | 'table' | 'odometer' | 'all'>('all');
 
   const handleDownloadExcel = async () => {
@@ -875,7 +892,10 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                         )}
                         {matches.map((row) => (
                           <tr key={row.id} 
-                            ref={(el: HTMLTableRowElement | null) => { if (el) tableRowRefs.current[row.id] = el; }}
+                            ref={(el: HTMLTableRowElement | null) => {
+                              if (el) tableRowRefs.current[row.id] = el;
+                              else delete tableRowRefs.current[row.id];
+                            }}
                             className={`transition-colors cursor-pointer group ${
                               selectedMatch?.id === row.id
                                 ? 'bg-blue-100 hover:bg-blue-100'
@@ -888,8 +908,8 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                                     ? 'bg-amber-50 hover:bg-amber-100'
                                     : 'hover:bg-blue-50/50'
                             }`}
-                            onMouseMove={(e) => setTooltipState({ x: e.clientX, y: e.clientY, row: row })}
-                            onMouseLeave={() => setTooltipState(null)}
+                            onMouseMove={(e) => queueTooltipUpdate({ x: e.clientX, y: e.clientY, row: row })}
+                            onMouseLeave={() => queueTooltipUpdate(null)}
                             onClick={() => {
                               setSelectedMatch(row);
                               if (row.oldVal === null) return;

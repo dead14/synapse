@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettings, FiShield, FiPlus } from 'react-icons/fi';
 import { apiFetch, apiUrl } from '../utils/api';
 import {
@@ -57,13 +57,39 @@ function fileStem(fileName: string): string {
   return stem || 'ILI Alignment';
 }
 
-function wait(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+function abortError(): Error {
+  return new DOMException('Aborted', 'AbortError');
 }
 
-async function waitForIngestion(jobId: string, fileName: string, setLabel: (value: string) => void) {
+function wait(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(abortError());
+    };
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    signal?.addEventListener('abort', onAbort);
+  });
+}
+
+async function waitForIngestion(
+  jobId: string,
+  fileName: string,
+  setLabel: (value: string) => void,
+  signal?: AbortSignal,
+) {
   for (let attempt = 0; attempt < 900; attempt += 1) {
-    const job = await apiFetch<IngestionResponse>(`/api/ingestion-jobs/${encodeURIComponent(jobId)}`);
+    // An unmounted uploader must stop polling immediately instead of keeping
+    // this loop alive for up to 15 minutes.
+    if (signal?.aborted) throw abortError();
+    const job = await apiFetch<IngestionResponse>(`/api/ingestion-jobs/${encodeURIComponent(jobId)}`, { signal });
     setLabel(`Processing ${fileName}: ${Number(job.progress || 0)}%`);
     if (job.state === 'completed') {
       return {
@@ -76,7 +102,7 @@ async function waitForIngestion(jobId: string, fileName: string, setLabel: (valu
     if (job.state === 'failed') {
       throw new Error(job.errorMessage || 'Ingestion failed.');
     }
-    await wait(1_000);
+    await wait(1_000, signal);
   }
   throw new Error('Ingestion job timed out. Reopen the session to check its status.');
 }
@@ -90,6 +116,9 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingLabel, setProcessingLabel] = useState('');
   const [sessionName, setSessionName] = useState('');
+  // Aborts in-flight ingestion work (upload + status polling) on unmount and
+  // suppresses state updates that would otherwise land after navigation.
+  const unmountAbortRef = useRef<AbortController | null>(null);
   const [strategies, setStrategies] = useState<StrategyCapability[]>(() =>
     STRATEGY_ORDER.map((id) => ({
       id,
@@ -98,6 +127,12 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
       reasonCode: FALLBACK_AVAILABLE.has(id) ? null : 'MOCK_ENGINE_NOT_VALIDATED',
     })),
   );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    unmountAbortRef.current = controller;
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -156,6 +191,10 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   ));
 
   const handleInitialize = async () => {
+    const signal = unmountAbortRef.current?.signal;
+    const setLabelIfMounted = (value: string) => {
+      if (!signal?.aborted) setProcessingLabel(value);
+    };
     setIsProcessing(true);
     try {
       const masterFile = datasets[masterIndex]?.file as File | null;
@@ -169,7 +208,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
       summaryData.oldRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
 
       const ingestCallback = async (dataset: any, index: number) => {
-        setProcessingLabel(`Importing ${index + 1} of ${datasets.length}: ${dataset.file.name}`);
+        setLabelIfMounted(`Importing ${index + 1} of ${datasets.length}: ${dataset.file.name}`);
         const formData = new FormData();
         formData.append('file', dataset.file);
         formData.append('pipelineName', pipelineName);
@@ -178,9 +217,10 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         const queued = await apiFetch<IngestionResponse>('/api/upload-csv', {
           method: 'POST',
           body: formData,
+          signal,
         });
         const response = queued.jobId
-          ? await waitForIngestion(String(queued.jobId), dataset.file.name, setProcessingLabel)
+          ? await waitForIngestion(String(queued.jobId), dataset.file.name, setLabelIfMounted, signal)
           : queued;
         return buildPersistedIliRun(response, {
           name: dataset.file.name,
@@ -211,14 +251,19 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         }
       }
 
+      if (signal?.aborted) return;
       onNext({ summaryData, algorithm, enablePartialRun });
     } catch (err) {
+      // Unmounted mid-flight: the abort is intentional, keep quiet.
+      if (signal?.aborted) return;
       console.error(err);
       const detail = err instanceof Error && err.message ? `\n\nDetail: ${err.message}` : '';
       alert(`Gagal mengimpor file ILI. Pastikan format, tahun, vendor, dan header valid.${detail}`);
     } finally {
-      setIsProcessing(false);
-      setProcessingLabel('');
+      if (!signal?.aborted) {
+        setIsProcessing(false);
+        setProcessingLabel('');
+      }
     }
   };
 

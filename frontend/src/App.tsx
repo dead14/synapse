@@ -57,6 +57,23 @@ function RequireAuth() {
   return <Outlet />;
 }
 
+// Keep in sync with the Administration group in layout/navigation.ts.
+const ADMIN_ROLES = ['admin', 'super_admin'];
+
+/** Route-level role enforcement: navigation only hides the links, so any
+ * authenticated user could still deep-link into the admin workspaces. */
+function RequireRole({ roles }: { roles: string[] }) {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) return <WorkspaceLoading label="Checking your session" />;
+
+  if (!user || !roles.includes(user.role)) {
+    return <Navigate to="/" replace />;
+  }
+
+  return <Outlet />;
+}
+
 function NotFoundPage() {
   return (
     <div className="syn-page">
@@ -97,11 +114,13 @@ export default function App() {
             <Route path="/pipeline-risk" element={<RiskWhatIfPage />} />
             <Route path="/direct-assessment" element={<DirectAssessmentPage />} />
             <Route path="/submission" element={<SubmissionAdditionalInfoPage />} />
-            <Route path="/users" element={<UserList />} />
-            <Route path="/users/add" element={<AddUser />} />
-            <Route path="/roles" element={<Roles />} />
-            <Route path="/activity-logs" element={<ActivityLogs />} />
-            <Route path="/organizations" element={<Organizations />} />
+            <Route element={<RequireRole roles={ADMIN_ROLES} />}>
+              <Route path="/users" element={<UserList />} />
+              <Route path="/users/add" element={<AddUser />} />
+              <Route path="/roles" element={<Roles />} />
+              <Route path="/activity-logs" element={<ActivityLogs />} />
+              <Route path="/organizations" element={<Organizations />} />
+            </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Route>

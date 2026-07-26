@@ -6,6 +6,7 @@ import { OrbitControls, Text } from '@react-three/drei';
 import { FiBox, FiX } from 'react-icons/fi';
 import { apiFetch } from './utils/api';
 import { extentOf } from './utils/numericRange.ts';
+import { parseClockToDegrees } from './utils/clock';
 
 interface DefectVisualizerProps {
   data: any[];
@@ -16,6 +17,13 @@ interface DefectVisualizerProps {
 const MAX_TIMELINE_FEATURES = 2_500;
 const MAX_TIMELINE_GWS = 1_500;
 const MAX_SPOOL_FEATURES = 2_000;
+
+/** True when the vendor surface/side column marks the defect as external
+ * (accepts "External", "EXT", "EXTERNAL"; anything else defaults to internal,
+ * matching the '- / Internal' fallback used by the results table). */
+function isExternalSurface(value: unknown): boolean {
+  return String(value ?? '').toUpperCase().includes('EXT');
+}
 
 function sampleEvenly<T>(items: T[], limit: number, keep?: (item: T) => boolean): T[] {
   if (items.length <= limit) return items;
@@ -147,10 +155,11 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { 
         });
         
         if (maxDepth > 0) {
-          if (maxDepth > 1.5) color.set('#991b1b'); 
-          else if (maxDepth > 1.0) color.set('#ef4444'); 
-          else if (maxDepth > 0.5) color.set('#f97316'); 
-          else color.set('#eab308'); 
+          // Depth is %WT (0-100), so band the heat map on wall-loss severity.
+          if (maxDepth > 50) color.set('#991b1b');
+          else if (maxDepth > 25) color.set('#ef4444');
+          else if (maxDepth > 10) color.set('#f97316');
+          else color.set('#eab308');
         }
       }
       
@@ -340,8 +349,10 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
       
       const r1Depth = parseFloat(item['Depth OLD (%WT)']) || 0;
       const r2Depth = parseFloat(item['Depth NEW (%WT)']) || 0;
-      const isExt1 = r1Depth > 1.0;
-      const isExt2 = r2Depth > 1.0;
+      // The legend distinguishes internal vs external defects; that comes from
+      // the vendor Int/Ext (surface location) column, not from the depth value.
+      const isExt1 = isExternalSurface(item['Int/Ext OLD'] ?? item['Surface OLD']);
+      const isExt2 = isExternalSurface(item['Int/Ext NEW'] ?? item['Surface NEW']);
       
       const isWeld1 = String(item['Feature Type OLD'] || '').toLowerCase().includes('weld');
       const isWeld2 = String(item['Feature Type NEW'] || '').toLowerCase().includes('weld');
@@ -355,7 +366,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
         dist1: isNaN(r1Dist) ? null : r1Dist,
         len1: parseFloat(item['Length OLD (mm)']) || 10,
         wid1: parseFloat(item['Width OLD (mm)']) || 10,
-        orient1: (() => { const v = item["O'Clock OLD"]; if (v == null || v === '-') return 0; const s = String(v); if (s.includes(':')) { const [h, m] = s.split(':').map(Number); return (h % 12) + (m || 0) / 60; } const n = parseFloat(s); if (isNaN(n)) return 0; return (n > 0 && n < 1) ? (n * 24) % 12 : n % 12; })(),
+        orient1: parseClockToDegrees(item["O'Clock OLD"]),
         depth1: r1Depth,
         isExt1,
         isWeld1,
@@ -366,7 +377,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
         dist2: isNaN(r2Dist) ? null : r2Dist,
         len2: parseFloat(item['Length NEW (mm)']) || 10,
         wid2: parseFloat(item['Width NEW (mm)']) || 10,
-        orient2: (() => { const v = item["O'Clock NEW"]; if (v == null || v === '-') return 0; const s = String(v); if (s.includes(':')) { const [h, m] = s.split(':').map(Number); return (h % 12) + (m || 0) / 60; } const n = parseFloat(s); if (isNaN(n)) return 0; return (n > 0 && n < 1) ? (n * 24) % 12 : n % 12; })(),
+        orient2: parseClockToDegrees(item["O'Clock NEW"]),
         depth2: r2Depth,
         isExt2,
         isWeld2,

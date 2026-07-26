@@ -90,6 +90,25 @@ function formatClockDisplay(val: unknown): string {
   return s;
 }
 
+// Footer showing total row count (replaces pagination). Kept at module scope:
+// declaring it inside ResultsPanel gave it a new component identity every
+// render, remounting the subtree each time.
+const PaginationFooter = ({ totalRows, hasActiveFilters, onClearFilters }: {
+  totalRows: number;
+  hasActiveFilters: boolean;
+  onClearFilters: () => void;
+}) => (
+  <div className="bg-gray-100 border-t border-gray-200 p-2 flex justify-between items-center text-sm text-gray-600">
+    <span className="text-gray-500">Total: {totalRows} baris</span>
+    {hasActiveFilters && (
+      <button
+        onClick={onClearFilters}
+        className="text-xs text-red-500 hover:underline"
+      >Clear all filters</button>
+    )}
+  </div>
+);
+
 const ProbabilityModal = ({ sourceRow, targetRow, onConfirm, onCancel }: { sourceRow: any, targetRow: any, onConfirm: () => void, onCancel: () => void }) => {
   if (!sourceRow || !targetRow) return null;
   
@@ -189,6 +208,11 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
           ...(rawData.bypassed_new || []).map((row: any) => ({ ...row, __resultGroup: 'BYPASSED' }))
        ];
     }
+    // Tag every row with its index in the incoming (unsorted) array BEFORE any
+    // sorting. This is the row's stable identity: selection, defect-viewer
+    // highlighting, and onUpdateMatch all report it, and the parent
+    // (IliComparisonPage) maps it straight back onto the rows it passed in.
+    flattened.forEach((row, idx) => { row.__origIdx = idx; });
     // NEW is the spatial master. Keep the default order consistent with the
     // source NEW log distance rendered in the table; OLD-only rows follow it.
     return sortAlignmentRowsByDisplayedLogDistance(flattened);
@@ -259,6 +283,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   // Virtual scroll state
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
+  const [containerHeight, setContainerHeight] = useState(800); // fallback until measured
   const ROW_HEIGHT = 28; // px per row
   const OVERSCAN = 10; // extra rows to render above/below viewport
 
@@ -268,6 +293,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
       const keys = Object.keys(data[0]).filter(k =>
         k !== 'Match/Unmatch'
         && k !== '__resultGroup'
+        && k !== '__origIdx'
         && !isAlignmentDisplayMetadata(k)
       );
       // Add computed columns at the end
@@ -381,9 +407,9 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   };
 
   
-  // 1. Process alignment data
+  // 1. Process alignment data (rows already carry their stable __origIdx)
   const processedData = useMemo(() => {
-    return (data || []).map((row: any, idx: number) => {
+    return (data || []).map((row: any) => {
       const d1 = parseFloat(row['Depth OLD (%WT)']);
       const d2 = parseFloat(row['Depth NEW (%WT)']);
       const oldYear = Number(row['Run Year OLD']);
@@ -422,7 +448,6 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
         'Depth Growth (%WT/yr)': depthGrowth,
         'Length Growth (mm/yr)': lengthGrowth,
         'Section': sectionName,
-        __origIdx: idx
       };
     });
   }, [data, sections]);
@@ -522,14 +547,43 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
     });
   }, [filteredData, sortConfig]);
 
-  // Virtual scroll calculation
+  // The ILI Run tabs only render rows present in that run; windowing needs the
+  // filtered list up front so the spacer math stays exact.
+  const iliRows = useMemo(() => {
+    const idKey = activeTab === 'ILI Run 1' ? 'Identif. OLD' : 'Identif. NEW';
+    return sortedData.filter((row: any) => row[idKey] && row[idKey] !== '-');
+  }, [sortedData, activeTab]);
+
+  // Measure the scroll container so tall displays don't get blank rows below a
+  // hardcoded window. Re-observe when the container remounts (chart view,
+  // full-screen portal, tab switches).
+  useEffect(() => {
+    const container = tableContainerRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver((entries) => {
+      const measured = entries[0]?.contentRect?.height;
+      if (measured) setContainerHeight(measured);
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [radioFilter, isFullScreen, activeTab]);
+
+  // Each tab is a different virtual list; a stale scroll offset from the
+  // previous tab would window past the end of the new one.
+  useEffect(() => {
+    if (tableContainerRef.current) tableContainerRef.current.scrollTop = 0;
+    setScrollTop(0);
+  }, [activeTab]);
+
+  // Virtual scroll calculation (shared by the Results and ILI Run tabs)
+  const virtualRowCount = (activeTab === 'ILI Run 1' || activeTab === 'ILI Run 2')
+    ? iliRows.length
+    : sortedData.length;
   const visibleRows = useMemo(() => {
-    // Dynamic height: full screen uses window height (or 1200 fallback), normal uses 800
-    const containerHeight = isFullScreen ? (typeof window !== 'undefined' ? window.innerHeight : 1200) : 800;
     const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
-    const endIdx = Math.min(sortedData.length - 1, Math.ceil((scrollTop + containerHeight) / ROW_HEIGHT) + OVERSCAN);
-    return { startIdx, endIdx, totalHeight: sortedData.length * ROW_HEIGHT };
-  }, [scrollTop, sortedData.length, ROW_HEIGHT, OVERSCAN, isFullScreen]);
+    const endIdx = Math.min(virtualRowCount - 1, Math.ceil((scrollTop + containerHeight) / ROW_HEIGHT) + OVERSCAN);
+    return { startIdx, endIdx, totalHeight: virtualRowCount * ROW_HEIGHT };
+  }, [scrollTop, virtualRowCount, ROW_HEIGHT, OVERSCAN, containerHeight]);
 
   // Auto scroll when selectedRowIdx changes
   useEffect(() => {
@@ -578,19 +632,6 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
       setIsExporting(false);
     }
   };
-
-  // Footer showing total row count (replaces pagination)
-  const PaginationFooter = () => (
-    <div className="bg-gray-100 border-t border-gray-200 p-2 flex justify-between items-center text-sm text-gray-600">
-      <span className="text-gray-500">Total: {sortedData.length} baris</span>
-      {Object.values(filterInput).some(v => v) && (
-        <button 
-          onClick={() => { setFilterInput({}); setFilterConfig({}); }}
-          className="text-xs text-red-500 hover:underline"
-        >Clear all filters</button>
-      )}
-    </div>
-  );
 
   const panelContent = (
     <div className={isFullScreen ? "fixed inset-0 z-[999999] bg-white flex flex-col overflow-hidden" : "bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden"}>
@@ -890,6 +931,8 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                   <tbody>
                     {loading ? (
                       <tr><td colSpan={visibleColumns.length} className="p-8 text-center text-gray-400">Loading data...</td></tr>
+                    ) : sortedData.length === 0 ? (
+                      <tr><td colSpan={visibleColumns.length} className="p-8 text-center text-gray-400">Tidak ada data yang cocok dengan filter</td></tr>
                     ) : (
                       <>
                         {/* Spacer top */}
@@ -1016,13 +1059,17 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                   <tbody className="divide-y divide-gray-100">
                       {loading ? (
                         <tr><td colSpan={12} className="p-8 text-center text-gray-400">Loading data...</td></tr>
+                      ) : iliRows.length === 0 ? (
+                        <tr><td colSpan={12} className="p-8 text-center text-gray-400">Tidak ada data yang cocok dengan filter</td></tr>
                       ) : (
-                        sortedData.map((row: any, i: number) => {
+                        <>
+                        {/* Spacer top */}
+                        <tr style={{ height: visibleRows.startIdx * ROW_HEIGHT }}><td /></tr>
+                        {iliRows.slice(visibleRows.startIdx, visibleRows.endIdx + 1).map((row: any, i: number) => {
                           const isOld = activeTab === 'ILI Run 1';
-                          
+
                           const defectId = row[isOld ? 'Identif. OLD' : 'Identif. NEW'];
-                          if (!defectId || defectId === '-') return null;
-                          
+
                           const distance = row[isOld ? 'Log Dist OLD (m)' : 'Log Dist NEW (m)'];
                           const distGw = row[isOld ? 'Dist GW OLD (m)' : 'Dist GW NEW (m)'];
                           const wt = row[isOld ? 'Wall WT OLD (mm)' : 'Wall WT NEW (mm)'];
@@ -1056,7 +1103,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                             : '';
 
                           return (
-                            <tr key={i} className="hover:bg-blue-50/50 transition-colors">
+                            <tr key={visibleRows.startIdx + i} style={{ height: ROW_HEIGHT }} className="hover:bg-blue-50/50 transition-colors">
                               <td className="px-1 py-1 border-r border-gray-100">{defectId}</td>
                               <td className="px-1 py-1 border-r border-gray-100">{distFormatted}</td>
                               <td className="px-1 py-1 border-r border-gray-100 bg-gray-50">{distAdj}</td>
@@ -1071,7 +1118,10 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                               <td className="px-1 py-1 text-blue-600 font-medium">{surface}</td>
                             </tr>
                           );
-                        })
+                        })}
+                        {/* Spacer bottom */}
+                        <tr style={{ height: Math.max(0, (iliRows.length - visibleRows.endIdx - 1) * ROW_HEIGHT) }}><td /></tr>
+                        </>
                       )}
                   </tbody>
                 </table>
@@ -1079,7 +1129,13 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
             </div>
           )}
           
-          {radioFilter !== 'Chart' && <PaginationFooter />}
+          {radioFilter !== 'Chart' && (
+            <PaginationFooter
+              totalRows={sortedData.length}
+              hasActiveFilters={Object.values(filterInput).some(v => v)}
+              onClearFilters={() => { setFilterInput({}); setFilterConfig({}); }}
+            />
+          )}
         </div>
       )}
 

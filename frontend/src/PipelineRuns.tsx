@@ -1,8 +1,16 @@
 import { useState, useEffect } from 'react';
 import { FiEye, FiSettings, FiBell, FiActivity, FiClock, FiCheckCircle, FiTrash2 } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
-import { format } from 'date-fns';
+import { format, isValid } from 'date-fns';
 import { apiFetch } from './utils/api';
+
+/** date-fns v4 format() throws a RangeError on invalid dates; one malformed
+ * run date must not take down the whole history page. */
+function formatRunDate(value: string): string {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  return isValid(parsed) ? format(parsed, 'dd MMM yyyy') : '-';
+}
 
 interface PipelineRun {
   id: string;
@@ -118,7 +126,7 @@ export default function PipelineRuns() {
                     </td>
                     <td className="px-6 py-5">
                       <div className="text-sm font-medium text-gray-700">
-                        {run.date ? format(new Date(run.date), 'dd MMM yyyy') : '-'}
+                        {formatRunDate(run.date)}
                       </div>
                       <div className="text-xs text-gray-400">Total Anomalies: {run.anomaliesFound}</div>
                     </td>
