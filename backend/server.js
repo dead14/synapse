@@ -5,7 +5,7 @@ const pool = require('./src/config/db');
 const { ensureDatabaseSchema } = require('./src/config/schema');
 const { startIngestionWorker } = require('./src/workers/ingestionWorker');
 const { startAlignmentWorker } = require('./src/modules/alignment/alignmentWorker');
-const { startPythonWorkers, stopPythonWorkers } = require('./src/modules/alignment/alignmentController');
+const { startPythonWorkers, stopPythonWorkers } = require('./src/modules/alignment/pythonWorkers');
 const { startConfiguredWorkers } = require('./src/config/workerStartup');
 const { fatal } = require('./src/config/processLifecycle');
 
