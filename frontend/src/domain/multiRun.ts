@@ -10,7 +10,7 @@
 // superset of the pairwise behaviour rather than a replacement for it.
 
 // Explicit extension so `node --test` resolves this the same way Vite does.
-import { runPairKey, type RunPairRef } from './runPairs.ts';
+import { primaryRunPair, resolveRunPairs, runPairKey, type RunPairRef } from './runPairs.ts';
 
 export interface InspectionRun {
   runId: number;
@@ -90,6 +90,32 @@ export function resolveReferenceRun(summaryData: any, preferredRunId?: unknown):
     if (chosen) return chosen;
   }
   return runs[runs.length - 1];
+}
+
+/**
+ * The single decision point every wizard step routes through.
+ *
+ * Two-run sessions keep resolving exactly the chain pair they resolve today —
+ * for N=2 both topologies produce the same pair anyway — so the existing path is
+ * untouched. Only a third run switches the session to star anchoring.
+ */
+export function resolveWizardRunPairs(summaryData: any, preferredReferenceRunId?: unknown): RunPairRef[] {
+  return isMultiRunSession(summaryData)
+    ? resolveStarRunPairs(summaryData, preferredReferenceRunId)
+    : resolveRunPairs(summaryData);
+}
+
+/**
+ * The pair owning the session's unscoped, top-level evidence.
+ *
+ * Under star anchoring that is the most recent historical run: the shortest
+ * interval to the reference, and so the pair a consumer that only understands a
+ * single OLD/NEW comparison should be shown.
+ */
+export function primaryWizardRunPair(summaryData: any, preferredReferenceRunId?: unknown): RunPairRef | null {
+  if (!isMultiRunSession(summaryData)) return primaryRunPair(summaryData);
+  const pairs = resolveStarRunPairs(summaryData, preferredReferenceRunId);
+  return pairs.length > 0 ? pairs[pairs.length - 1] : null;
 }
 
 /**

@@ -9,7 +9,8 @@ import { extentOf, maxOf, minOf } from '../utils/numericRange.ts';
 import { gwReviewKey, normalizeGwReview, selectReviewedGwLocks, type GwReviewDisposition, type GwReviewState } from '../domain/alignmentReview';
 import { buildTimelineModel, sourceOdometerOffset, type TimelineEvidence, type TimelineGeometry } from '../domain/gwTimeline';
 import { buildGwReviewTransitionPayload } from './gwReviewTransition';
-import { pairGwResult, pairTieIn, primaryRunPair, resolveRunPairs } from '../domain/runPairs';
+import { pairGwResult, pairTieIn } from '../domain/runPairs';
+import { primaryWizardRunPair, resolveWizardRunPairs } from '../domain/multiRun';
 import type { MatchingSection } from './matchingSections';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip);
@@ -63,8 +64,8 @@ type PairGwState = {
 };
 
 export default function StepGwSimulator({ initialOta, onNext, onBack, config: rawConfig }: StepGwSimulatorProps) {
-  const runPairs = useMemo(() => resolveRunPairs(rawConfig?.summaryData), [rawConfig?.summaryData]);
-  const primaryPair = useMemo(() => primaryRunPair(rawConfig?.summaryData), [rawConfig?.summaryData]);
+  const runPairs = useMemo(() => resolveWizardRunPairs(rawConfig?.summaryData), [rawConfig?.summaryData]);
+  const primaryPair = useMemo(() => primaryWizardRunPair(rawConfig?.summaryData), [rawConfig?.summaryData]);
   const hasMultiplePairs = runPairs.length > 1;
   const [activePairKey, setActivePairKey] = useState<string | null>(null);
   const activePair = runPairs.find((pair) => pair.key === activePairKey) ?? runPairs[0] ?? null;

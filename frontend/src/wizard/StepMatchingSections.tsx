@@ -20,7 +20,8 @@ import {
   validateSectionOrder,
 } from './matchingSections';
 import { fetchSectioningAnchors } from './sectioningEvidence';
-import { pairGwResult, primaryRunPair, resolveRunPairs, sectionsForPair } from '../domain/runPairs';
+import { pairGwResult, sectionsForPair } from '../domain/runPairs';
+import { primaryWizardRunPair, resolveWizardRunPairs } from '../domain/multiRun';
 
 interface Props {
   config: any;
@@ -38,8 +39,8 @@ const EMPTY_RUN: Record<string, unknown> = {};
 const lockedKey = (feature: SpatialFeature) => String(feature.rawData.lockedKey ?? '');
 
 export default function StepMatchingSections({ config, onBack, onNext }: Props) {
-  const pairs = useMemo(() => resolveRunPairs(config?.summaryData), [config?.summaryData]);
-  const primaryPair = useMemo(() => primaryRunPair(config?.summaryData), [config?.summaryData]);
+  const pairs = useMemo(() => resolveWizardRunPairs(config?.summaryData), [config?.summaryData]);
+  const primaryPair = useMemo(() => primaryWizardRunPair(config?.summaryData), [config?.summaryData]);
   const [activePairKey, setActivePairKey] = useState<string | null>(null);
   const activePair = pairs.find((pair) => pair.key === activePairKey) ?? primaryPair ?? pairs[0] ?? null;
 

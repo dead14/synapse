@@ -17,6 +17,7 @@ const {
 } = require('./alignmentContract');
 const { ALIGNMENT_ENGINE_VERSION } = require('./alignmentExecution');
 const { pairKeyOf } = require('./runPairIdentity');
+const { isMultiRunSession, resolveStarRunPairs } = require('./multiRunIdentity');
 const { pythonExecutable, pythonSpawnOptions } = require('../../config/python');
 
 const alignmentQueue = new Queue('ili-alignment', {
@@ -96,6 +97,18 @@ async function runPythonAlignment(sessionId, algorithm, pairConfig = null) {
 }
 
 function resolveRunPairs(sessionConfig) {
+    // Three or more inspections anchor every historical run straight to one
+    // reference run instead of chaining. A chain makes each link depend on the
+    // weakest run in the middle, so a sparse or partial inspection would break
+    // the trail for every year after it — fatal for growth analysis, which needs
+    // the oldest run to reach the newest one directly.
+    if (isMultiRunSession(sessionConfig)) {
+        const starPairs = resolveStarRunPairs(sessionConfig);
+        if (starPairs.length > 0) {
+            return starPairs.map((pair) => ({ oldRun: pair.oldRun, newRun: pair.newRun }));
+        }
+    }
+
     const summary = sessionConfig?.summaryData || {};
     const pairs = summary.runPairs;
     if (Array.isArray(pairs) && pairs.length > 0) return pairs;

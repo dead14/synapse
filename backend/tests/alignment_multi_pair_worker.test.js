@@ -146,3 +146,41 @@ test('each pair may carry its own anomaly tolerances', () => {
     });
     assert.deepEqual(untouched.ToleranceConfig, { clock_tolerance: 15, length_tolerance: 50 });
 });
+
+test('three or more runs are aligned against one reference, not chained', () => {
+    // Chain would give 2012->2024 and 2024->2026, leaving the 2012 run unable to
+    // reach 2026 wherever the 2024 inspection is sparse or partial. Growth
+    // analysis needs the oldest run anchored to the newest directly.
+    const pairs = __testables.resolveRunPairs({
+        summaryData: {
+            masterRun: { runId: 30, year: '2026' },
+            oldRun: { runId: 20, year: '2024' },
+            newRun: { runId: 30, year: '2026' },
+            runPairs: [
+                { oldRun: { runId: 10, year: '2012' }, newRun: { runId: 20, year: '2024' } },
+                { oldRun: { runId: 20, year: '2024' }, newRun: { runId: 30, year: '2026' } },
+            ],
+        },
+    });
+
+    assert.deepEqual(
+        pairs.map((pair) => [pair.oldRun.runId, pair.newRun.runId]),
+        [[10, 30], [20, 30]],
+    );
+});
+
+test('a two-run session keeps resolving exactly the pair it resolves today', () => {
+    // The promise that guards the existing path: nothing about a two-run session
+    // may change when the multi-run layer is introduced.
+    const twoRun = {
+        summaryData: {
+            oldRun: { runId: 10, year: '2012' },
+            newRun: { runId: 30, year: '2026' },
+            runPairs: [{ oldRun: { runId: 10, year: '2012' }, newRun: { runId: 30, year: '2026' } }],
+        },
+    };
+    assert.deepEqual(
+        __testables.resolveRunPairs(twoRun).map((pair) => [pair.oldRun.runId, pair.newRun.runId]),
+        [[10, 30]],
+    );
+});

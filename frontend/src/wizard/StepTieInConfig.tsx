@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { FiArrowRight, FiArrowLeft, FiCheckCircle, FiTarget, FiActivity, FiPlus, FiTrash2 } from 'react-icons/fi';
 import { apiFetch } from '../utils/api';
-import { pairTieIn, primaryRunPair, resolveRunPairs } from '../domain/runPairs';
+import { pairTieIn } from '../domain/runPairs';
+import { primaryWizardRunPair, resolveWizardRunPairs } from '../domain/multiRun';
 
 interface StepTieInConfigProps {
   onNext: (data: any) => void;
@@ -145,13 +146,13 @@ const emptyPairState = (excludedRanges: ExcludedRange[] = []): PairTieInState =>
 });
 
 export default function StepTieInConfig({ onNext, onBack, config }: StepTieInConfigProps) {
-  const pairs = useMemo(() => resolveRunPairs(config?.summaryData), [config?.summaryData]);
-  const primaryPair = useMemo(() => primaryRunPair(config?.summaryData), [config?.summaryData]);
+  const pairs = useMemo(() => resolveWizardRunPairs(config?.summaryData), [config?.summaryData]);
+  const primaryPair = useMemo(() => primaryWizardRunPair(config?.summaryData), [config?.summaryData]);
   const [activePairKey, setActivePairKey] = useState<string | null>(null);
   const activePair = pairs.find((pair) => pair.key === activePairKey) ?? pairs[0] ?? null;
 
   const [pairStates, setPairStates] = useState<Record<string, PairTieInState>>(() => (
-    Object.fromEntries(resolveRunPairs(config?.summaryData).map((pair) => {
+    Object.fromEntries(resolveWizardRunPairs(config?.summaryData).map((pair) => {
       const stored = pairTieIn(config, pair);
       return [pair.key, emptyPairState(
         Array.isArray(stored?.tieInExcludedRanges) ? stored.tieInExcludedRanges : [],

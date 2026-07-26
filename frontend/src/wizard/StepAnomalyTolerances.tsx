@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { FiSliders, FiChevronRight, FiChevronLeft, FiAward } from 'react-icons/fi';
-import { primaryRunPair, resolveRunPairs } from '../domain/runPairs';
+import { primaryWizardRunPair, resolveWizardRunPairs } from '../domain/multiRun';
 
 interface StepAnomalyTolerancesProps {
   onNext: (config: any) => void;
@@ -35,8 +35,8 @@ function toleranceValues(source: any, fallbackDistThresh: unknown): ToleranceVal
 }
 
 export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAnomalyTolerancesProps) {
-  const pairs = useMemo(() => resolveRunPairs(config?.summaryData), [config?.summaryData]);
-  const primaryPair = useMemo(() => primaryRunPair(config?.summaryData), [config?.summaryData]);
+  const pairs = useMemo(() => resolveWizardRunPairs(config?.summaryData), [config?.summaryData]);
+  const primaryPair = useMemo(() => primaryWizardRunPair(config?.summaryData), [config?.summaryData]);
   const hasMultiplePairs = pairs.length > 1;
 
   const [activePairKey, setActivePairKey] = useState<string | null>(null);
@@ -53,7 +53,7 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
   const [byPair, setByPair] = useState<Record<string, ToleranceValues>>(() => {
     const shared = toleranceValues(config?.ToleranceConfig, config?.scenario?.distThresh);
     return Object.fromEntries(
-      resolveRunPairs(config?.summaryData).map((pair) => [
+      resolveWizardRunPairs(config?.summaryData).map((pair) => [
         pair.key,
         toleranceValues(storedPerPair?.[pair.key] ?? config?.ToleranceConfig, config?.scenario?.distThresh) ?? shared,
       ]),
