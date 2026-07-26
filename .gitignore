@@ -48,13 +48,18 @@ npm-debug.log*
 .codex/
 .codex/synapse-pgdata/
 .tmp-chrome/
+.agents/
+.hallmark/
+.zcode/
 tmp/
 tasks/
+scratch/
 
 # Data and scratch files in root
 /*.xlsx
 /*.pdf
 /*.rar
+/*.zip
 /out.json
 /ffs d.html
 /Algoritma.py
@@ -64,3 +69,8 @@ tasks/
 /split_script.py
 /study.py
 /test_clock.js
+/generate_ili.py
+/x/
+
+# Vendored third-party template (reference only, never track)
+free-react-tailwind-admin-dashboard-main/
