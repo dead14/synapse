@@ -1,3 +1,5 @@
+const metrics = require('../../observability/metrics');
+
 function toJson(value) {
     return JSON.stringify(value ?? {});
 }
@@ -288,4 +290,3 @@ module.exports = {
     serializeAlignmentJob,
     updateAlignmentJob,
 };
-const metrics = require('../../observability/metrics');

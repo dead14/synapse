@@ -14,6 +14,7 @@ const {
 const {
     getAllowedOrigins,
     isOriginAllowed,
+    resolveTrustProxy,
 } = require('../src/config/security');
 const {
     createRateLimiter,
@@ -106,6 +107,25 @@ test('production requires an explicit CORS allowlist', () => {
     assert.throws(
         () => getAllowedOrigins({ NODE_ENV: 'production' }),
         /ALLOWED_ORIGINS/,
+    );
+});
+
+test('TRUST_PROXY accepts hop counts, booleans, and express preset strings', () => {
+    // Unset or blank leaves the express default untouched.
+    assert.equal(resolveTrustProxy(undefined), undefined);
+    assert.equal(resolveTrustProxy(''), undefined);
+    assert.equal(resolveTrustProxy('   '), undefined);
+    // Hop counts keep their previous numeric behaviour.
+    assert.equal(resolveTrustProxy('2'), 2);
+    // Booleans and express presets/CIDRs must not be silently ignored, or
+    // req.ip stays the proxy address and the login rate limiter locks out
+    // every user behind it at once.
+    assert.equal(resolveTrustProxy('true'), true);
+    assert.equal(resolveTrustProxy('false'), false);
+    assert.equal(resolveTrustProxy('loopback'), 'loopback');
+    assert.equal(
+        resolveTrustProxy('10.0.0.0/8, 172.16.0.0/12'),
+        '10.0.0.0/8, 172.16.0.0/12',
     );
 });
 

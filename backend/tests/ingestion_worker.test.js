@@ -61,6 +61,34 @@ test('ingestion worker preserves a structured importer error code', () => {
     });
 });
 
+test('structured importer failure keeps its message and carries stderr as diagnostic', () => {
+    assert.throws(() => resolveIngestionExit({
+        code: 1,
+        errorOutput: 'Traceback (most recent call last):\n  boom',
+        output: 'JSON_OUTPUT:{"status":"error","code":"MISSING_COLUMNS","message":"Kolom wajib hilang."}',
+    }), (error) => {
+        assert.equal(error.message, 'Kolom wajib hilang.');
+        assert.equal(error.code, 'MISSING_COLUMNS');
+        assert.match(error.diagnostic, /Traceback/);
+        return true;
+    });
+});
+
+test('the last JSON_OUTPUT marker wins when stdout contains several', () => {
+    const result = resolveIngestionExit({
+        code: 0,
+        errorOutput: '',
+        output: [
+            'JSON_OUTPUT:{"status":"error","message":"partial attempt"}',
+            'retrying after transient failure',
+            'JSON_OUTPUT:{"status":"success","run_id":7,"row_count":3}',
+        ].join('\n'),
+    });
+
+    assert.equal(result.status, 'success');
+    assert.equal(result.run_id, 7);
+});
+
 test('ingestion throughput is concurrency-bound unless an explicit rate limit is configured', () => {
     assert.equal(ingestionLimiter({}), null);
     assert.equal(ingestionLimiter({ INGESTION_RATE_MAX: '0' }), null);

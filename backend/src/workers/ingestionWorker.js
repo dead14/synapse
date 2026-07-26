@@ -13,7 +13,7 @@ const metrics = require('../observability/metrics');
 const { buildIngestionArguments, ingestionWorkerCwd } = require('./ingestionCommand');
 const { resolveIngestionExit } = require('./ingestionOutcome');
 const { ingestionLimiter, isUnrecoverableIngestionError } = require('./ingestionPolicy');
-const { pythonExecutable, pythonSpawnOptions } = require('../config/python');
+const { pythonExecutable, pythonSpawnOptions, killPythonProcess } = require('../config/python');
 
 function runIngestionProcess({ inputPath, pipelineName, surveyYear, vendor, organizationId, userId, sourceFile, objectKey }) {
     return new Promise((resolve, reject) => {
@@ -34,7 +34,7 @@ function runIngestionProcess({ inputPath, pipelineName, surveyYear, vendor, orga
         // slots with no error surfaced.  Mirrors runPythonAlignment.
         const timeoutMs = Number(process.env.INGESTION_PROCESS_TIMEOUT_MS) || 30 * 60 * 1000;
         const timeout = setTimeout(() => {
-            child.kill();
+            killPythonProcess(child);
             const error = new Error(`Ingestion process exceeded ${timeoutMs} ms`);
             error.code = 'INGESTION_PROCESS_TIMEOUT';
             reject(error);
@@ -99,6 +99,15 @@ async function processIngestionJob(job) {
         metrics.observe('ili_upload_ingest', performance.now() - startedAt, { state: 'completed' });
         return storedResult;
     } catch (error) {
+        // Structured importer errors carry stderr separately; surface it in
+        // the log without letting it replace the operator-facing message.
+        if (error.diagnostic) {
+            console.error(JSON.stringify({
+                event: 'ili_ingestion_stderr',
+                jobId: payload.jobId,
+                stderr: error.diagnostic,
+            }));
+        }
         const unrecoverable = isUnrecoverableIngestionError(error);
         const isFinalAttempt = unrecoverable
             || (job.attemptsMade + 1) >= (job.opts.attempts || 1);

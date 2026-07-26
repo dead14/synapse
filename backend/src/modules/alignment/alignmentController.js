@@ -19,6 +19,7 @@ const {
     getOwnedAlignmentJob,
     listOwnedAlignmentResultPage,
     serializeAlignmentJob,
+    updateAlignmentJob,
 } = require('./alignmentRepository');
 const {
     normalizeComparisonResult,
@@ -301,7 +302,18 @@ exports.uploadCsv = async (req, res) => {
     }
 
     try {
-        const prefix = fs.readFileSync(file.path).subarray(0, 512);
+        // Only the first 512 bytes matter for the magic-byte check; reading
+        // the whole upload (up to 25 MB) synchronously blocked the event loop.
+        let prefix;
+        let handle;
+        try {
+            handle = await fsPromises.open(file.path, 'r');
+            const header = Buffer.alloc(512);
+            const { bytesRead } = await handle.read(header, 0, header.length, 0);
+            prefix = header.subarray(0, bytesRead);
+        } finally {
+            await handle?.close().catch(() => {});
+        }
         const extension = path.extname(file.originalname || '').toLowerCase();
         const isZipWorkbook = prefix.length >= 2 && prefix[0] === 0x50 && prefix[1] === 0x4B;
         const looksBinaryCsv = extension === '.csv' && prefix.includes(0);
@@ -446,68 +458,177 @@ let tieInPendingRequests = new Map();
 let tieInRequestCounter = 0;
 let tieInRestartTimer = null;
 let workersShuttingDown = false;
-const { pythonExecutable, pythonSpawnOptions } = require('../../config/python');
+const { pythonExecutable, pythonSpawnOptions, killPythonProcess } = require('../../config/python');
 
-function scheduleWorkerRestart(startWorker, getTimer, setTimer) {
+// Restart backoff: a worker that dies on startup (bad PYTHON_EXECUTABLE,
+// missing dependency) used to be respawned every 1000 ms forever.  Failures
+// now back off exponentially and the counter resets once a worker proves
+// healthy — by surviving WORKER_HEALTHY_AFTER_MS or completing a request.
+const WORKER_RESTART_BASE_DELAY_MS = Number(process.env.WORKER_RESTART_BASE_DELAY_MS) || 1000;
+const WORKER_RESTART_MAX_DELAY_MS = Number(process.env.WORKER_RESTART_MAX_DELAY_MS) || 60_000;
+const WORKER_HEALTHY_AFTER_MS = Number(process.env.WORKER_HEALTHY_AFTER_MS) || 60_000;
+
+const dtwWorkerHealth = { consecutiveFailures: 0, healthyTimer: null };
+const tieInWorkerHealth = { consecutiveFailures: 0, healthyTimer: null };
+
+function workerRestartDelayMs(consecutiveFailures) {
+    return Math.min(
+        WORKER_RESTART_BASE_DELAY_MS * 2 ** Math.max(0, consecutiveFailures - 1),
+        WORKER_RESTART_MAX_DELAY_MS,
+    );
+}
+
+function armWorkerHealthyReset(health) {
+    if (health.healthyTimer) clearTimeout(health.healthyTimer);
+    health.healthyTimer = setTimeout(() => {
+        health.healthyTimer = null;
+        health.consecutiveFailures = 0;
+    }, WORKER_HEALTHY_AFTER_MS);
+    health.healthyTimer.unref?.();
+}
+
+function recordWorkerFailure(health) {
+    if (health.healthyTimer) {
+        clearTimeout(health.healthyTimer);
+        health.healthyTimer = null;
+    }
+    health.consecutiveFailures += 1;
+}
+
+// Removes a pending request and clears its timeout so a settled request never
+// leaves a live timer behind (previously every request held its timer for the
+// full 60 s even after responding).
+function settlePendingRequest(pendingRequests, requestId) {
+    const pending = pendingRequests.get(requestId);
+    if (!pending) return null;
+    pendingRequests.delete(requestId);
+    clearTimeout(pending.timeout);
+    return pending;
+}
+
+function rejectAllPendingRequests(pendingRequests, error) {
+    for (const pending of pendingRequests.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(error);
+    }
+    pendingRequests.clear();
+}
+
+function scheduleWorkerRestart(startWorker, getTimer, setTimer, health) {
     if (workersShuttingDown || getTimer()) return;
     setTimer(setTimeout(() => {
         setTimer(null);
         if (!workersShuttingDown) startWorker();
-    }, 1000));
+    }, workerRestartDelayMs(health.consecutiveFailures)));
 }
 
 function stopPythonWorkers() {
     workersShuttingDown = true;
     if (dtwRestartTimer) clearTimeout(dtwRestartTimer);
     if (tieInRestartTimer) clearTimeout(tieInRestartTimer);
+    if (dtwWorkerHealth.healthyTimer) clearTimeout(dtwWorkerHealth.healthyTimer);
+    if (tieInWorkerHealth.healthyTimer) clearTimeout(tieInWorkerHealth.healthyTimer);
+    rejectAllPendingRequests(dtwPendingRequests, new Error('Python workers are shutting down'));
+    rejectAllPendingRequests(tieInPendingRequests, new Error('Python workers are shutting down'));
     dtwPythonProcess?.kill();
     tieInPythonProcess?.kill();
 }
 
 process.once('exit', stopPythonWorkers);
 
+exports.stopPythonWorkers = stopPythonWorkers;
+
+// Readiness detail for the health endpoint: state only, never process handles.
+function getPythonWorkerStates() {
+    return {
+        dtw: {
+            alive: Boolean(dtwPythonProcess && !dtwPythonProcess.killed && dtwPythonProcess.exitCode === null),
+            restarting: Boolean(dtwRestartTimer),
+            consecutiveFailures: dtwWorkerHealth.consecutiveFailures,
+            pendingRequests: dtwPendingRequests.size,
+        },
+        tieIn: {
+            alive: Boolean(tieInPythonProcess && !tieInPythonProcess.killed && tieInPythonProcess.exitCode === null),
+            restarting: Boolean(tieInRestartTimer),
+            consecutiveFailures: tieInWorkerHealth.consecutiveFailures,
+            pendingRequests: tieInPendingRequests.size,
+        },
+    };
+}
+
+exports.getPythonWorkerStates = getPythonWorkerStates;
+
 function startDtwPythonWorker() {
     console.log("Starting persistent DTW Python worker...");
     if (workersShuttingDown) return;
-    dtwPythonProcess = spawn(pythonExecutable, ['src/python_engines/dtw_engine.py'], pythonSpawnOptions({ cwd: path.join(__dirname, '../../..') }));
-    
+    const child = spawn(pythonExecutable, ['src/python_engines/dtw_engine.py'], pythonSpawnOptions({ cwd: path.join(__dirname, '../../..') }));
+    dtwPythonProcess = child;
+    armWorkerHealthyReset(dtwWorkerHealth);
+
     let buffer = '';
-    dtwPythonProcess.stdout.on('data', (data) => {
+    child.stdout.on('data', (data) => {
         buffer += data.toString();
         let lines = buffer.split('\n');
         buffer = lines.pop(); // keep incomplete line
-        
+
         for (const line of lines) {
             if (!line.trim()) continue;
             try {
                 const result = JSON.parse(line);
                 const { requestId } = result;
-                if (dtwPendingRequests.has(requestId)) {
-                    dtwPendingRequests.get(requestId).resolve(result);
-                    dtwPendingRequests.delete(requestId);
+                const pending = settlePendingRequest(dtwPendingRequests, requestId);
+                if (pending) {
+                    // A completed round-trip proves the worker is healthy.
+                    dtwWorkerHealth.consecutiveFailures = 0;
+                    pending.resolve(result);
                 }
             } catch (e) {
                 console.error('Parse error from DTW worker:', line);
             }
         }
     });
-    
-    dtwPythonProcess.stderr.on('data', (data) => {
+
+    child.stderr.on('data', (data) => {
         console.error('DTW Worker Stderr:', data.toString());
     });
-    
-    dtwPythonProcess.on('close', (code) => {
-        console.error(`DTW Python worker exited (code ${code}).`);
-        for (const { reject } of dtwPendingRequests.values()) {
-            reject(new Error('Python worker crashed'));
-        }
-        dtwPendingRequests.clear();
-        dtwPythonProcess = null;
+
+    // A worker that died mid-write surfaces EPIPE here; with no listener that
+    // is an uncaught 'error' event.  Fail the in-flight requests immediately
+    // instead of letting each wait out its full timeout.
+    child.stdin.on('error', (error) => {
+        console.error('DTW worker stdin error:', error.message);
+        rejectAllPendingRequests(dtwPendingRequests, new Error(`DTW worker unavailable: ${error.message}`));
+    });
+
+    // 'error' (spawn failure such as an ENOENT interpreter) may arrive without
+    // any 'close', and 'close' may follow an 'error'; route both through one
+    // guard so pending rejection and restart scheduling happen exactly once.
+    let exitHandled = false;
+    const handleWorkerExit = (failure) => {
+        if (exitHandled || workersShuttingDown) return;
+        exitHandled = true;
+        recordWorkerFailure(dtwWorkerHealth);
+        rejectAllPendingRequests(dtwPendingRequests, failure);
+        if (dtwPythonProcess === child) dtwPythonProcess = null;
         scheduleWorkerRestart(
             startDtwPythonWorker,
             () => dtwRestartTimer,
             (timer) => { dtwRestartTimer = timer; },
+            dtwWorkerHealth,
         );
+    };
+
+    // Without this listener a spawn failure emits an unhandled 'error' event,
+    // which becomes an uncaughtException and takes the whole API process down
+    // in a supervisor crash-loop.  Mirrors the exportExcel guard.
+    child.on('error', (error) => {
+        console.error('DTW Python worker error:', error.message);
+        handleWorkerExit(new Error(`DTW Python worker failed to start: ${error.message}`));
+    });
+
+    child.on('close', (code) => {
+        console.error(`DTW Python worker exited (code ${code}).`);
+        handleWorkerExit(new Error('Python worker crashed'));
     });
 }
 
@@ -553,20 +674,25 @@ exports.runDtwAlignment = async (req, res) => {
                 reject(new Error('DTW worker is not available. Check the Python runtime and backend logs.'));
                 return;
             }
-            dtwPendingRequests.set(requestId, { resolve, reject });
-            
-            // Log payload length for debugging
-            console.log(`[DTW] Request ${requestId}: oldRun=${payload.oldRun?.length}, newRun=${payload.newRun?.length}`);
-            
-            dtwPythonProcess.stdin.write(JSON.stringify(payload) + '\n');
-            
-            setTimeout(() => {
+            const timeout = setTimeout(() => {
                 if (dtwPendingRequests.has(requestId)) {
                     dtwPendingRequests.delete(requestId);
                     console.error(`[DTW] Request ${requestId} timeout!`);
                     reject(new Error('Python worker timeout'));
                 }
             }, DTW_WORKER_TIMEOUT_MS);
+            dtwPendingRequests.set(requestId, { resolve, reject, timeout });
+
+            // Log payload length for debugging
+            console.log(`[DTW] Request ${requestId}: oldRun=${payload.oldRun?.length}, newRun=${payload.newRun?.length}`);
+
+            // A write into a dying worker (EPIPE) must fail this request now,
+            // not after the full worker timeout.
+            dtwPythonProcess.stdin.write(JSON.stringify(payload) + '\n', (error) => {
+                if (!error) return;
+                const pending = settlePendingRequest(dtwPendingRequests, requestId);
+                if (pending) pending.reject(new Error(`DTW worker write failed: ${error.message}`));
+            });
         });
         
         if (result.success) {
@@ -643,45 +769,66 @@ exports.runDtwAlignment = async (req, res) => {
 function startTieInPythonWorker() {
     console.log("Starting persistent TieIn Python worker...");
     if (workersShuttingDown) return;
-    tieInPythonProcess = spawn(pythonExecutable, ['src/python_engines/tiein_engine.py'], pythonSpawnOptions({ cwd: path.join(__dirname, '../../..') }));
-    
+    const child = spawn(pythonExecutable, ['src/python_engines/tiein_engine.py'], pythonSpawnOptions({ cwd: path.join(__dirname, '../../..') }));
+    tieInPythonProcess = child;
+    armWorkerHealthyReset(tieInWorkerHealth);
+
     let buffer = '';
-    tieInPythonProcess.stdout.on('data', (data) => {
+    child.stdout.on('data', (data) => {
         buffer += data.toString();
         let lines = buffer.split('\n');
         buffer = lines.pop();
-        
+
         for (const line of lines) {
             if (!line.trim()) continue;
             try {
                 const result = JSON.parse(line);
                 const { requestId } = result;
-                if (tieInPendingRequests.has(requestId)) {
-                    tieInPendingRequests.get(requestId).resolve(result);
-                    tieInPendingRequests.delete(requestId);
+                const pending = settlePendingRequest(tieInPendingRequests, requestId);
+                if (pending) {
+                    tieInWorkerHealth.consecutiveFailures = 0;
+                    pending.resolve(result);
                 }
             } catch (e) {
                 console.error('Parse error from TieIn worker:', line);
             }
         }
     });
-    
-    tieInPythonProcess.stderr.on('data', (data) => {
+
+    child.stderr.on('data', (data) => {
         console.error('TieIn Worker Stderr:', data.toString());
     });
-    
-    tieInPythonProcess.on('close', (code) => {
-        console.error(`TieIn Python worker exited (code ${code}).`);
-        for (const { reject } of tieInPendingRequests.values()) {
-            reject(new Error('TieIn Python worker crashed'));
-        }
-        tieInPendingRequests.clear();
-        tieInPythonProcess = null;
+
+    child.stdin.on('error', (error) => {
+        console.error('TieIn worker stdin error:', error.message);
+        rejectAllPendingRequests(tieInPendingRequests, new Error(`TieIn worker unavailable: ${error.message}`));
+    });
+
+    let exitHandled = false;
+    const handleWorkerExit = (failure) => {
+        if (exitHandled || workersShuttingDown) return;
+        exitHandled = true;
+        recordWorkerFailure(tieInWorkerHealth);
+        rejectAllPendingRequests(tieInPendingRequests, failure);
+        if (tieInPythonProcess === child) tieInPythonProcess = null;
         scheduleWorkerRestart(
             startTieInPythonWorker,
             () => tieInRestartTimer,
             (timer) => { tieInRestartTimer = timer; },
+            tieInWorkerHealth,
         );
+    };
+
+    // See startDtwPythonWorker: a missing 'error' listener turns a spawn
+    // failure into an uncaughtException and a supervisor crash-loop.
+    child.on('error', (error) => {
+        console.error('TieIn Python worker error:', error.message);
+        handleWorkerExit(new Error(`TieIn Python worker failed to start: ${error.message}`));
+    });
+
+    child.on('close', (code) => {
+        console.error(`TieIn Python worker exited (code ${code}).`);
+        handleWorkerExit(new Error('TieIn Python worker crashed'));
     });
 }
 
@@ -712,15 +859,18 @@ exports.estimateTieInOffset = async (req, res) => {
                 reject(new Error('Tie-in worker is not available. Check the Python runtime and backend logs.'));
                 return;
             }
-            tieInPendingRequests.set(requestId, { resolve, reject });
-            tieInPythonProcess.stdin.write(JSON.stringify(payload) + '\n');
-            
-            setTimeout(() => {
+            const timeout = setTimeout(() => {
                 if (tieInPendingRequests.has(requestId)) {
                     tieInPendingRequests.delete(requestId);
                     reject(new Error('TieIn Python worker timeout'));
                 }
             }, TIEIN_WORKER_TIMEOUT_MS);
+            tieInPendingRequests.set(requestId, { resolve, reject, timeout });
+            tieInPythonProcess.stdin.write(JSON.stringify(payload) + '\n', (error) => {
+                if (!error) return;
+                const pending = settlePendingRequest(tieInPendingRequests, requestId);
+                if (pending) pending.reject(new Error(`TieIn worker write failed: ${error.message}`));
+            });
         });
         
         if (result.success && result.transform && result.decision) {
@@ -1068,15 +1218,32 @@ exports.getIliResults = async (req, res) => {
             engineVersion: ALIGNMENT_ENGINE_VERSION,
             configFingerprint,
         });
-        await alignmentQueue.add('align-ili', {
-            jobId,
-            sessionId: resolvedSessionId,
-            organizationId: req.user.orgId,
-            userId: req.user.id,
-            algorithm: configuredAlgorithm,
-            engineVersion: ALIGNMENT_ENGINE_VERSION,
-            configFingerprint,
-        }, { jobId });
+        try {
+            await alignmentQueue.add('align-ili', {
+                jobId,
+                sessionId: resolvedSessionId,
+                organizationId: req.user.orgId,
+                userId: req.user.id,
+                algorithm: configuredAlgorithm,
+                engineVersion: ALIGNMENT_ENGINE_VERSION,
+                configFingerprint,
+            }, { jobId });
+        } catch (queueError) {
+            // Mirrors enqueueIngestion: with Redis down the durable row would
+            // otherwise stay 'queued' forever, and the reuse check above would
+            // keep answering 202 for this session with no worker ever coming.
+            console.error('Failed to queue alignment job:', queueError);
+            await updateAlignmentJob(pool, jobId, {
+                state: 'failed',
+                errorCode: 'QUEUE_UNAVAILABLE',
+                errorMessage: 'Alignment queue is unavailable',
+                completedAt: new Date(),
+            });
+            return res.status(503).json({
+                error: 'Alignment queue is unavailable',
+                code: 'ALIGNMENT_QUEUE_UNAVAILABLE',
+            });
+        }
         return res.status(202).json({
             success: true,
             jobId,
@@ -1198,7 +1365,7 @@ exports.exportExcel = async (req, res) => {
         pythonProcess.stderr.on('data', (chunk) => { errorOutput += chunk.toString(); });
 
         const timeout = setTimeout(() => {
-            pythonProcess.kill();
+            killPythonProcess(pythonProcess);
             finish(async () => {
                 await removeQuietly(tempOutputFile);
                 if (!res.headersSent) {

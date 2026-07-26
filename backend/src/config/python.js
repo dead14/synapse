@@ -26,4 +26,21 @@ function pythonSpawnOptions(options = {}) {
     return { ...options, env: pythonEnv(options.env) };
 }
 
-module.exports = { pythonExecutable, pythonEnv, pythonSpawnOptions };
+const KILL_ESCALATION_MS = Number(process.env.PYTHON_KILL_ESCALATION_MS) || 5000;
+
+// child.kill() sends SIGTERM, which a process wedged inside a native call
+// (numpy/scipy busy in C code) never observes.  Escalate to SIGKILL if the
+// process has not exited shortly after; the timer is unref'd so it never
+// keeps the event loop alive on its own.
+function killPythonProcess(child, escalationMs = KILL_ESCALATION_MS) {
+    if (!child) return;
+    let closed = false;
+    child.once('close', () => { closed = true; });
+    child.kill();
+    const escalation = setTimeout(() => {
+        if (!closed) child.kill('SIGKILL');
+    }, escalationMs);
+    escalation.unref?.();
+}
+
+module.exports = { pythonExecutable, pythonEnv, pythonSpawnOptions, killPythonProcess };
