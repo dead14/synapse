@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FiSliders, FiChevronRight, FiChevronLeft, FiAward, FiAlertCircle } from 'react-icons/fi';
+import { FiSliders, FiChevronRight, FiChevronLeft, FiAward } from 'react-icons/fi';
 
 interface StepAnomalyTolerancesProps {
   onNext: (config: any) => void;
@@ -8,25 +8,41 @@ interface StepAnomalyTolerancesProps {
 }
 
 export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAnomalyTolerancesProps) {
-  const [clockTol, setClockTol] = useState(15);
-  const [distGwTol, setDistGwTol] = useState(0.2);
-  const [depthGrowthMax, setDepthGrowthMax] = useState(25); // Max lateral growth %WT
+  const [clockTol, setClockTol] = useState(config?.ToleranceConfig?.clock_tolerance ?? 15);
+  const [usGwTol, setUsGwTol] = useState(config?.ToleranceConfig?.us_gw_distance_tolerance ?? config?.scenario?.distThresh ?? 0.2);
+  const [dsGwTol, setDsGwTol] = useState(config?.ToleranceConfig?.ds_gw_distance_tolerance ?? config?.scenario?.distThresh ?? 0.2);
+  const [useUsGwDistance, setUseUsGwDistance] = useState(config?.ToleranceConfig?.use_us_gw_distance !== false);
+  const [lengthTol, setLengthTol] = useState(config?.ToleranceConfig?.length_tolerance ?? 50);
   
   const applyRecommended = () => {
     setClockTol(15);
-    setDistGwTol(0.2);
-    setDepthGrowthMax(25);
+    setUsGwTol(0.2);
+    setDsGwTol(0.2);
+    setUseUsGwDistance(true);
+    setLengthTol(50);
+  };
+
+  const handleNext = () => {
+    onNext({
+      ToleranceConfig: {
+        clock_tolerance: clockTol,
+        us_gw_distance_tolerance: usGwTol,
+        ds_gw_distance_tolerance: dsGwTol,
+        use_us_gw_distance: useUsGwDistance,
+        length_tolerance: lengthTol
+      }
+    });
   };
 
   return (
-    <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 animate-fade-in">
+    <div className="alignment-surface bg-white rounded-2xl p-6 sm:p-8 shadow-sm border border-gray-100 animate-fade-in">
       <div className="flex items-center gap-3 mb-6">
-        <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
+        <div className="p-3 bg-brand-50 text-brand-600 rounded-xl">
           <FiSliders size={24} />
         </div>
         <div>
           <h2 className="text-xl font-bold text-gray-800">Anomaly Matching Tolerances</h2>
-          <p className="text-sm text-gray-500">Configure parameters for the Hungarian Anomaly matcher and Naive Bayes validation.</p>
+          <p className="text-sm text-gray-500">Configure parameters for the Hungarian Anomaly matcher.</p>
         </div>
       </div>
 
@@ -46,54 +62,86 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
         
         {/* Clock Tolerance */}
         <div className="border border-gray-200 rounded-xl p-5 hover:border-blue-300 transition-colors bg-gray-50/50">
           <div className="flex justify-between items-start mb-4">
-            <label className="text-sm font-bold text-gray-700">Clock Tolerance (± degrees)</label>
+            <label className="text-sm font-bold text-gray-700">Clock Tolerance (deg)</label>
             <span className="bg-white px-2 py-1 rounded text-blue-600 font-mono text-sm shadow-sm border border-gray-100">{clockTol}°</span>
           </div>
           <input 
-            type="range" min="5" max="45" step="5" 
+            type="range" min="5" max="45" step="1" 
             value={clockTol} onChange={(e) => setClockTol(parseInt(e.target.value))}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-4"
+            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
           />
-          <p className="text-xs text-gray-500">Maximum allowed rotation offset between Run 1 and Run 2 anomalies.</p>
-          {clockTol > 20 && (
-            <p className="text-xs text-red-500 mt-2 flex items-center gap-1"><FiAlertCircle/> High risk of false positives</p>
-          )}
+          <p className="text-xs text-gray-500">Hard gate circular: kandidat ditolak jika selisih O&apos;Clock melebihi nilai ini. Clock yang kosong tidak otomatis ditolak.</p>
         </div>
 
-        {/* Dist GW Tolerance */}
+        {/* US GW Tolerance */}
         <div className="border border-gray-200 rounded-xl p-5 hover:border-blue-300 transition-colors bg-gray-50/50">
           <div className="flex justify-between items-start mb-4">
-            <label className="text-sm font-bold text-gray-700">Dist. to GW Tolerance (± m)</label>
-            <span className="bg-white px-2 py-1 rounded text-blue-600 font-mono text-sm shadow-sm border border-gray-100">{distGwTol}m</span>
+            <label className="text-sm font-bold text-gray-700">US GW Distance Tol (± m)</label>
+            <span className={`bg-white px-2 py-1 rounded font-mono text-sm shadow-sm border border-gray-100 ${useUsGwDistance ? 'text-blue-600' : 'text-gray-400'}`}>{usGwTol}m</span>
+          </div>
+          <div className="flex items-center gap-2 mb-3">
+            <input
+              id="use-us-gw-distance"
+              type="checkbox"
+              checked={useUsGwDistance}
+              onChange={(event) => setUseUsGwDistance(event.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              aria-describedby="use-us-gw-distance-help"
+            />
+            <label htmlFor="use-us-gw-distance" className="text-xs font-semibold text-gray-700 cursor-pointer">
+              Gunakan Dist. U/S GW untuk matching
+            </label>
           </div>
           <input 
-            type="range" min="0.05" max="1.0" step="0.05" 
-            value={distGwTol} onChange={(e) => setDistGwTol(parseFloat(e.target.value))}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-4"
+            type="range" min="0.05" max="2.0" step="0.05" 
+            value={usGwTol} onChange={(e) => setUsGwTol(parseFloat(e.target.value))}
+            disabled={!useUsGwDistance}
+            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2 disabled:cursor-not-allowed disabled:opacity-50"
           />
-          <p className="text-xs text-gray-500">Maximum axial distance variation relative to the upstream Girth Weld.</p>
+          <p id="use-us-gw-distance-help" className="text-xs text-gray-500">
+            {useUsGwDistance
+              ? 'Hanya gunakan jika nilai Dist. U/S GW tersedia dan dapat dipercaya.'
+              : 'Nonaktif: nilai Dist. U/S GW diabaikan; batas posisi U/S dan D/S tetap digunakan.'}
+          </p>
         </div>
 
-        {/* Depth Growth Cap */}
+        {/* DS GW Tolerance */}
         <div className="border border-gray-200 rounded-xl p-5 hover:border-blue-300 transition-colors bg-gray-50/50">
           <div className="flex justify-between items-start mb-4">
-            <label className="text-sm font-bold text-gray-700">Max Depth Growth (% WT)</label>
-            <span className="bg-white px-2 py-1 rounded text-blue-600 font-mono text-sm shadow-sm border border-gray-100">{depthGrowthMax}%</span>
+            <label className="text-sm font-bold text-gray-700">DS GW Distance Tol (± m)</label>
+            <span className="bg-white px-2 py-1 rounded text-blue-600 font-mono text-sm shadow-sm border border-gray-100">{dsGwTol}m</span>
           </div>
           <input 
-            type="range" min="10" max="60" step="5" 
-            value={depthGrowthMax} onChange={(e) => setDepthGrowthMax(parseInt(e.target.value))}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-4"
+            type="range" min="0.05" max="2.0" step="0.05" 
+            value={dsGwTol} onChange={(e) => setDsGwTol(parseFloat(e.target.value))}
+            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
           />
-          <p className="text-xs text-gray-500">Threshold for flagging suspicious abnormal lateral growth rates in physics validation.</p>
+        </div>
+
+        {/* Length Tolerance */}
+        <div className="border border-gray-200 rounded-xl p-5 hover:border-blue-300 transition-colors bg-gray-50/50">
+          <div className="flex justify-between items-start mb-4">
+            <label className="text-sm font-bold text-gray-700">Length Tolerance (± mm)</label>
+            <span className="bg-white px-2 py-1 rounded text-blue-600 font-mono text-sm shadow-sm border border-gray-100">{lengthTol}mm</span>
+          </div>
+          <input 
+            type="range" min="5" max="200" step="5" 
+            value={lengthTol} onChange={(e) => setLengthTol(parseInt(e.target.value))}
+            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
+          />
+          <p className="text-xs text-gray-500">Hard gate: kandidat ditolak jika selisih length melebihi nilai ini.</p>
         </div>
 
       </div>
+
+      <p className="mb-8 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        Depth tidak dipakai untuk memilih pasangan. Setelah Hungarian selesai, depth NEW yang lebih kecil dari OLD ditandai sebagai validasi fisika untuk review.
+      </p>
 
       <div className="flex justify-between border-t border-gray-100 pt-6">
         <button 
@@ -103,8 +151,8 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
           <FiChevronLeft /> Simulator Settings
         </button>
         <button 
-          onClick={() => onNext({ clockTol, distGwTol, depthGrowthMax })}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-md shadow-blue-600/20"
+          onClick={handleNext}
+          className="bg-gray-900 hover:bg-gray-800 text-white px-8 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-theme-md"
         >
           Execute Hungarian Matcher <FiChevronRight />
         </button>

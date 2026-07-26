@@ -1,216 +1,386 @@
-import { useState } from 'react';
-import { useLocation, useNavigate, Navigate } from 'react-router-dom';
-import { FiArrowLeft, FiSearch, FiFilter } from 'react-icons/fi';
+import { useCallback, useMemo, useState } from 'react';
+import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import {
+  FiActivity,
+  FiArrowLeft,
+  FiBarChart2,
+  FiDownload,
+  FiFileText,
+  FiGrid,
+  FiSliders,
+  FiTable,
+} from 'react-icons/fi';
 import PageMeta from '../../components/common/PageMeta';
-import type { FfsResult, FfsConfig } from '../../lib/ffs/types';
+import SynButton from '../../components/ui/SynButton';
+import FfsChartsPanel from '../../components/ffs/FfsChartsPanel';
+import FfsDetailModal from '../../components/ffs/FfsDetailModal';
+import FfsIntegrityPanel from '../../components/ffs/FfsIntegrityPanel';
+import FfsNarrativePanel from '../../components/ffs/FfsNarrativePanel';
+import FfsResultsTable from '../../components/ffs/FfsResultsTable';
+import FfsStatisticsPanel from '../../components/ffs/FfsStatisticsPanel';
+import FfsSummaryCards from '../../components/ffs/FfsSummaryCards';
+import { Callout, NumberField, Panel } from '../../components/ffs/FfsPrimitives';
+import { exportResultsWorkbook } from '../../lib/ffs/exports';
+import { screenResults } from '../../lib/ffs/screening';
+import {
+  DEFAULT_SCREENING_CONFIG,
+  type FfsConfig,
+  type FfsResult,
+  type FfsScreenedResult,
+  type FfsScreeningConfig,
+} from '../../lib/ffs/types';
 
+type TabId = 'results' | 'charts' | 'statistics' | 'integrity' | 'narrative';
+
+const TABS: { id: TabId; label: string; icon: typeof FiTable }[] = [
+  { id: 'results', label: 'Results', icon: FiTable },
+  { id: 'charts', label: 'Charts', icon: FiBarChart2 },
+  { id: 'statistics', label: 'Statistics', icon: FiGrid },
+  { id: 'integrity', label: 'Integrity review', icon: FiActivity },
+  { id: 'narrative', label: 'Narrative', icon: FiFileText },
+];
+
+/** Stable empty fallback so the screening memo is not invalidated every render. */
+const NO_RESULTS: FfsResult[] = [];
+
+interface LocationState {
+  results: FfsResult[];
+  config: FfsConfig;
+  screening?: FfsScreeningConfig;
+  alignmentImport?: {
+    sessionId: string;
+    accepted: unknown[];
+    rejected: unknown[];
+    warningCount: number;
+  };
+}
+
+/**
+ * The assessment workspace. The nominal B31G results arrive from the setup page;
+ * the screening tiers are derived here so the engineer can retune the tolerance
+ * and growth assumptions without re-running the parse.
+ */
 export default function FfsResultsPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  
-  const state = location.state as { results: FfsResult[], config: FfsConfig } | null;
-  
-  if (!state || !state.results) {
+  const state = location.state as LocationState | null;
+
+  const [activeTab, setActiveTab] = useState<TabId>('results');
+  const [selected, setSelected] = useState<FfsScreenedResult | null>(null);
+  const [assumptionsOpen, setAssumptionsOpen] = useState(false);
+  const [screening, setScreening] = useState<FfsScreeningConfig>(
+    state?.screening ?? DEFAULT_SCREENING_CONFIG,
+  );
+  // Figures snapshotted by the Charts tab, kept so the narrative can embed them
+  // after that panel unmounts.
+  const [chartImages, setChartImages] = useState<Record<string, string>>({});
+  const handleFiguresCaptured = useCallback((images: Record<string, string>) => {
+    setChartImages((previous) => ({ ...previous, ...images }));
+  }, []);
+
+  const results = state?.results ?? NO_RESULTS;
+  const config = state?.config;
+
+  const screened = useMemo(
+    () => (config ? screenResults(results, config, screening) : []),
+    [results, config, screening],
+  );
+
+  if (!state || !config) {
     return <Navigate to="/ffs" replace />;
   }
 
-  const { results, config } = state;
-  const thresh = config.highlightYears;
-
-  const [search, setSearch] = useState('');
-  const [filterAccept, setFilterAccept] = useState('All');
-  const [sortCol, setSortCol] = useState<keyof FfsResult>('ld');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
-  const [page, setPage] = useState(1);
-  const pageSize = 100;
-
-  // Derive summary stats
-  const okCount = results.filter(r => r.acceptance === 'Acceptable').length;
-  const failCount = results.filter(r => r.acceptance === 'Un-Acceptable').length;
-  const warnCount = results.filter(r => r.expectedLife < thresh).length;
-
-  // Filtering and Sorting
-  const filtered = results.filter(r => {
-    if (search) {
-      const q = search.toLowerCase();
-      if (!String(r.ld).toLowerCase().includes(q) && !String(r.section).toLowerCase().includes(q)) {
-        return false;
-      }
-    }
-    if (filterAccept !== 'All' && r.acceptance !== filterAccept) return false;
-    return true;
-  }).sort((a, b) => {
-    const av = a[sortCol];
-    const bv = b[sortCol];
-    const dir = sortDir === 'asc' ? 1 : -1;
-    
-    if (typeof av === 'number' && typeof bv === 'number') {
-      return (av - bv) * dir;
-    }
-    return String(av).localeCompare(String(bv)) * dir;
-  });
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const startIdx = (page - 1) * pageSize;
-  const paginated = filtered.slice(startIdx, startIdx + pageSize);
-
-  const handleSort = (col: keyof FfsResult) => {
-    if (sortCol === col) {
-      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortCol(col);
-      setSortDir('asc');
-    }
-    setPage(1);
-  };
+  const methodLabel = config.method === 'original' ? 'Original B31G' : 'Modified B31G';
+  const saLabel =
+    config.method === 'original'
+      ? '1.1 × SMYS'
+      : config.modifiedSa === 'smys11'
+        ? '1.1 × SMYS'
+        : 'SMYS + 69 MPa';
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <PageMeta title="FFS Results" description="Assessment Results" />
-      
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800 dark:text-white uppercase">Assessment Results</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Line: {config.lineName} · Method: {config.method === 'modified' ? 'Modified B31G' : 'Original B31G'} · ILI: {config.iliDate.toLocaleDateString()}
+    <div className="syn-page syn-ui-kit">
+      <PageMeta
+        title={`FFS results — ${config.lineName}`}
+        description="ASME B31G fitness-for-service assessment results"
+      />
+
+      {/* Page header */}
+      <div className="syn-page__header">
+        <div className="min-w-0">
+          <p className="syn-eyebrow">Fitness-for-service</p>
+          <h1 className="syn-page__title">Assessment results</h1>
+          <p className="mt-1.5 text-sm text-slate-500 dark:text-slate-400">
+            {config.lineName} · {methodLabel} · S_flow {saLabel} · ILI{' '}
+            {config.iliDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} ·{' '}
+            {results.length.toLocaleString()} features
+            {state.alignmentImport && ' · imported from alignment'}
           </p>
         </div>
-        <button 
-          onClick={() => navigate('/ffs')}
-          className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+
+        <div className="flex flex-wrap items-center gap-2">
+          <SynButton variant="outline" size="sm" onClick={() => navigate('/ffs')}>
+            <span className="inline-flex items-center gap-2">
+              <FiArrowLeft /> New assessment
+            </span>
+          </SynButton>
+          <SynButton
+            variant="lime"
+            size="sm"
+            onClick={() => exportResultsWorkbook(screened, config, screening)}
+          >
+            <span className="inline-flex items-center gap-2">
+              <FiDownload /> Export Excel
+            </span>
+          </SynButton>
+        </div>
+      </div>
+
+      <div className="space-y-5">
+        {/* Summary */}
+        <FfsSummaryCards items={screened} config={config} screening={screening} />
+
+        {/* Screening assumptions */}
+        <Panel className={assumptionsOpen ? '' : '!py-3.5'}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-700 dark:text-slate-200">
+                Screening assumptions
+              </p>
+              <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                ILI tolerance +{screening.depthTolerancePct}% WT and +{screening.lengthToleranceMm} mm/end ·
+                growth {screening.growthRateMmPerYear.toFixed(2)} mm/y over {screening.forecastYears} y · review
+                band ERF {screening.reviewBandErf.toFixed(2)} · interaction{' '}
+                {screening.interactionSpacingFactor}t
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAssumptionsOpen((open) => !open)}
+              aria-expanded={assumptionsOpen}
+              className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                assumptionsOpen
+                  ? 'border-indigo-300 bg-indigo-50 text-indigo-600 dark:border-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-400'
+                  : 'border-slate-200 text-slate-500 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:text-slate-400'
+              }`}
+            >
+              <FiSliders className="h-3.5 w-3.5" /> {assumptionsOpen ? 'Hide' : 'Adjust'}
+            </button>
+          </div>
+
+          {assumptionsOpen && (
+            <div className="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700">
+              <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-7">
+                <NumberField
+                  label="ILI depth tol."
+                  value={screening.depthTolerancePct}
+                  onChange={(depthTolerancePct) => setScreening((s) => ({ ...s, depthTolerancePct }))}
+                  unit="% WT"
+                  min={0}
+                  step={0.5}
+                />
+                <NumberField
+                  label="ILI length tol."
+                  value={screening.lengthToleranceMm}
+                  onChange={(lengthToleranceMm) => setScreening((s) => ({ ...s, lengthToleranceMm }))}
+                  unit="mm"
+                  min={0}
+                  step={1}
+                />
+                <NumberField
+                  label="Growth rate"
+                  value={screening.growthRateMmPerYear}
+                  onChange={(growthRateMmPerYear) => setScreening((s) => ({ ...s, growthRateMmPerYear }))}
+                  unit="mm/y"
+                  min={0}
+                  step={0.01}
+                />
+                <NumberField
+                  label="Forecast horizon"
+                  value={screening.forecastYears}
+                  onChange={(forecastYears) => setScreening((s) => ({ ...s, forecastYears }))}
+                  unit="years"
+                  min={1}
+                  max={50}
+                  step={1}
+                />
+                <NumberField
+                  label="Review band"
+                  value={screening.reviewBandErf}
+                  onChange={(reviewBandErf) => setScreening((s) => ({ ...s, reviewBandErf }))}
+                  unit="ERF"
+                  min={0.5}
+                  max={1}
+                  step={0.01}
+                />
+                <NumberField
+                  label="Interaction"
+                  value={screening.interactionSpacingFactor}
+                  onChange={(interactionSpacingFactor) =>
+                    setScreening((s) => ({ ...s, interactionSpacingFactor }))
+                  }
+                  unit="× t"
+                  min={1}
+                  max={20}
+                  step={1}
+                />
+                <NumberField
+                  label="Depth limit"
+                  value={screening.depthRejectionPct}
+                  onChange={(depthRejectionPct) => setScreening((s) => ({ ...s, depthRejectionPct }))}
+                  unit="% WT"
+                  min={40}
+                  max={100}
+                  step={1}
+                />
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <p className="max-w-2xl text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                  These are project screening decisions, not ASME B31G requirements. Changing them recalculates
+                  the conservative and forecast tiers, remaining life, priorities, and the action register — the
+                  nominal code result is unaffected.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setScreening(DEFAULT_SCREENING_CONFIG)}
+                  className="shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-rose-600 transition-colors hover:border-rose-300 hover:bg-rose-50 dark:border-slate-700 dark:hover:bg-rose-950/30"
+                >
+                  Reset assumptions
+                </button>
+              </div>
+            </div>
+          )}
+        </Panel>
+
+        {/* Alignment provenance */}
+        {state.alignmentImport && (
+          <Callout>
+            Imported from alignment session{' '}
+            <strong className="font-mono">{state.alignmentImport.sessionId}</strong> ·{' '}
+            {state.alignmentImport.accepted.length.toLocaleString()} features accepted
+            {state.alignmentImport.rejected.length > 0 &&
+              ` · ${state.alignmentImport.rejected.length.toLocaleString()} rejected`}
+            {state.alignmentImport.warningCount > 0 &&
+              ` · ${state.alignmentImport.warningCount.toLocaleString()} with warnings`}
+            . Measured NEW-run geometry and corrosion growth carry their session and feature provenance.
+          </Callout>
+        )}
+
+        {/* Tabs */}
+        <div
+          role="tablist"
+          aria-label="Assessment views"
+          className="flex gap-0 overflow-x-auto border-b border-slate-200 dark:border-slate-700"
         >
-          <FiArrowLeft /> New Assessment
-        </button>
-      </div>
+          {TABS.map((tab) => {
+            const Icon = tab.icon;
+            const active = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                role="tab"
+                type="button"
+                aria-selected={active}
+                aria-controls={`ffs-panel-${tab.id}`}
+                id={`ffs-tab-${tab.id}`}
+                onClick={() => setActiveTab(tab.id)}
+                className={`-mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-5 py-3 text-[13px] font-semibold transition-colors ${
+                  active
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm">
-          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-2">Total Defects</div>
-          <div className="text-3xl font-bold text-slate-800 dark:text-white leading-none">{results.length}</div>
-          <div className="text-xs text-slate-500 mt-2">ILI defect records</div>
+        {/* Panels */}
+        <div
+          role="tabpanel"
+          id="ffs-panel-results"
+          aria-labelledby="ffs-tab-results"
+          hidden={activeTab !== 'results'}
+        >
+          <FfsResultsTable
+            items={screened}
+            config={config}
+            screening={screening}
+            onSelect={setSelected}
+          />
         </div>
-        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm">
-          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-2">Acceptable</div>
-          <div className="text-3xl font-bold text-emerald-600 dark:text-emerald-500 leading-none">{okCount}</div>
-          <div className="text-xs text-slate-500 mt-2">ERF &lt; 1 &amp; Depth &lt; 80%</div>
-        </div>
-        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm">
-          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-2">Un-Acceptable</div>
-          <div className="text-3xl font-bold text-red-600 dark:text-red-500 leading-none">{failCount}</div>
-          <div className="text-xs text-slate-500 mt-2">Immediate attention</div>
-        </div>
-        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm">
-          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-2">Below Threshold</div>
-          <div className="text-3xl font-bold text-amber-500 dark:text-amber-500 leading-none">{warnCount}</div>
-          <div className="text-xs text-slate-500 mt-2">Expected life &lt; {thresh} yrs</div>
-        </div>
-      </div>
 
-      {/* Table Section */}
-      <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm overflow-hidden flex flex-col">
-        {/* Controls */}
-        <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex flex-wrap gap-4 items-center bg-slate-50/50 dark:bg-slate-900/50">
-          <div className="relative flex-1 min-w-[200px]">
-            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input 
-              type="text" 
-              placeholder="Search LD or Section..."
-              value={search}
-              onChange={e => { setSearch(e.target.value); setPage(1); }}
-              className="w-full pl-9 pr-4 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
+        <div
+          role="tabpanel"
+          id="ffs-panel-charts"
+          aria-labelledby="ffs-tab-charts"
+          hidden={activeTab !== 'charts'}
+        >
+          {activeTab === 'charts' && (
+            <FfsChartsPanel
+              items={screened}
+              config={config}
+              screening={screening}
+              onSelect={setSelected}
+              onFiguresCaptured={handleFiguresCaptured}
             />
-          </div>
-          <div className="flex items-center gap-2">
-            <FiFilter className="text-slate-400" />
-            <select 
-              value={filterAccept}
-              onChange={e => { setFilterAccept(e.target.value); setPage(1); }}
-              className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
-            >
-              <option value="All">All Status</option>
-              <option value="Acceptable">Acceptable</option>
-              <option value="Un-Acceptable">Un-Acceptable</option>
-            </select>
-          </div>
+          )}
         </div>
 
-        {/* Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 uppercase text-[11px] font-bold tracking-wider">
-              <tr>
-                <th className="px-4 py-3 cursor-pointer hover:text-slate-700 dark:hover:text-slate-300" onClick={() => handleSort('ld')}>LD [m] {sortCol==='ld'&&(sortDir==='asc'?'▲':'▼')}</th>
-                <th className="px-4 py-3 cursor-pointer hover:text-slate-700 dark:hover:text-slate-300" onClick={() => handleSort('section')}>Section {sortCol==='section'&&(sortDir==='asc'?'▲':'▼')}</th>
-                <th className="px-4 py-3 cursor-pointer hover:text-slate-700 dark:hover:text-slate-300" onClick={() => handleSort('maxDepthPct')}>Depth % {sortCol==='maxDepthPct'&&(sortDir==='asc'?'▲':'▼')}</th>
-                <th className="px-4 py-3 cursor-pointer hover:text-slate-700 dark:hover:text-slate-300" onClick={() => handleSort('ERF')}>ERF {sortCol==='ERF'&&(sortDir==='asc'?'▲':'▼')}</th>
-                <th className="px-4 py-3">P_safe [MPa]</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3 cursor-pointer hover:text-slate-700 dark:hover:text-slate-300" onClick={() => handleSort('expectedLife')}>Exp. Life {sortCol==='expectedLife'&&(sortDir==='asc'?'▲':'▼')}</th>
-                <th className="px-4 py-3">Fail Year</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {paginated.length > 0 ? (
-                paginated.map((r, i) => {
-                  const isOk = r.acceptance === 'Acceptable';
-                  const isWarn = r.expectedLife < thresh;
-                  return (
-                    <tr 
-                      key={i} 
-                      className={`hover:bg-slate-50 dark:hover:bg-slate-700/50 cursor-pointer transition-colors ${isWarn ? 'bg-amber-50/50 dark:bg-amber-900/10' : ''}`}
-                    >
-                      <td className={`px-4 py-3 font-medium border-l-4 ${isOk ? 'border-l-emerald-500' : 'border-l-red-500'}`}>{r.ld}</td>
-                      <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{r.section}</td>
-                      <td className={`px-4 py-3 ${r.maxDepthPct >= 80 ? 'text-red-600 font-semibold' : ''}`}>{r.maxDepthPct.toFixed(2)}</td>
-                      <td className={`px-4 py-3 font-medium ${r.ERF >= 1 ? 'text-red-600' : r.ERF > 0.8 ? 'text-amber-500' : 'text-emerald-600'}`}>{r.ERF.toFixed(3)}</td>
-                      <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{r.safePressure.toFixed(3)}</td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-block px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${isOk ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}`}>
-                          {r.acceptance}
-                        </span>
-                      </td>
-                      <td className={`px-4 py-3 font-medium ${r.expectedLife < thresh ? 'text-amber-500' : ''}`}>
-                        {r.expectedLife >= 200 ? '≥200' : r.expectedLife.toFixed(2)}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{r.yearService}</td>
-                    </tr>
-                  )
-                })
-              ) : (
-                <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-slate-500 italic">No defects found matching criteria.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div
+          role="tabpanel"
+          id="ffs-panel-statistics"
+          aria-labelledby="ffs-tab-statistics"
+          hidden={activeTab !== 'statistics'}
+        >
+          {activeTab === 'statistics' && (
+            <FfsStatisticsPanel items={screened} config={config} onSelect={setSelected} />
+          )}
         </div>
 
-        {/* Pagination */}
-        <div className="p-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50 flex items-center justify-between">
-          <span className="text-xs text-slate-500">
-            Showing {startIdx + 1}-{Math.min(startIdx + pageSize, filtered.length)} of {filtered.length} records
-          </span>
-          <div className="flex items-center gap-1">
-            <button 
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page === 1}
-              className="px-3 py-1 rounded border border-slate-200 dark:border-slate-700 text-sm disabled:opacity-50"
-            >
-              Prev
-            </button>
-            <span className="px-3 py-1 text-sm text-slate-600 dark:text-slate-400">{page} / {totalPages}</span>
-            <button 
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-              className="px-3 py-1 rounded border border-slate-200 dark:border-slate-700 text-sm disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
+        <div
+          role="tabpanel"
+          id="ffs-panel-integrity"
+          aria-labelledby="ffs-tab-integrity"
+          hidden={activeTab !== 'integrity'}
+        >
+          {activeTab === 'integrity' && (
+            <FfsIntegrityPanel
+              items={screened}
+              config={config}
+              screening={screening}
+              onSelect={setSelected}
+            />
+          )}
+        </div>
+
+        <div
+          role="tabpanel"
+          id="ffs-panel-narrative"
+          aria-labelledby="ffs-tab-narrative"
+          hidden={activeTab !== 'narrative'}
+        >
+          {activeTab === 'narrative' && (
+            <FfsNarrativePanel
+              items={screened}
+              config={config}
+              screening={screening}
+              chartImages={chartImages}
+              onOpenCharts={() => setActiveTab('charts')}
+            />
+          )}
         </div>
       </div>
+
+      <FfsDetailModal
+        item={selected}
+        config={config}
+        screening={screening}
+        onClose={() => setSelected(null)}
+      />
     </div>
   );
 }

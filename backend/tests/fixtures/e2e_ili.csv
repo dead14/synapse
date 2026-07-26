@@ -1,0 +1,4 @@
+feature_id,log_distance_m,joint_number,dist_to_us_gw_m,joint_length_m,feature_type,feature_identification,dim_classification,clock_position,wall_thickness_mm,length_mm,width_mm,depth_pct,surface_location,erf_asme,psafe_bar,comment
+GW-001,0,1,0,12,Weld,Girth Weld,,12:00,10,,,,Internal,,,start weld
+ML-001,12,2,0,12,Metal Loss,Corrosion,,03:00,10,100,50,20,External,0.8,60,anomaly
+GW-002,24,3,0,12,Weld,Girth Weld,,12:00,10,,,,Internal,,,end weld

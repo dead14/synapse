@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { FiBriefcase, FiEdit, FiPlus } from 'react-icons/fi';
 import PageMeta from '../../components/common/PageMeta';
+import { apiFetch } from '../../utils/api';
 
 interface Organization {
   id: number;
@@ -16,11 +17,7 @@ export default function Organizations() {
   useEffect(() => {
     const fetchOrgs = async () => {
       try {
-        const token = localStorage.getItem('synapse_token');
-        const res = await fetch('http://localhost:8000/api/organizations', {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        const data = await res.json();
+        const data = await apiFetch<Organization[]>('/api/organizations');
         if (Array.isArray(data)) {
           setOrganizations(data);
         } else {

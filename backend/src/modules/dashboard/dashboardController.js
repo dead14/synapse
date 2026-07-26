@@ -1,4 +1,11 @@
 const pool = require('../../config/db');
+const {
+    summarizeComposition,
+    summarizeDashboardOverview,
+    summarizeRecentJob,
+    summarizeGrowthFinding,
+} = require('./dashboardMetrics');
+const { getDashboardOverviewRows } = require('./dashboardRepository');
 
 exports.getActivityLogs = async (req, res) => {
     try {
@@ -18,7 +25,10 @@ exports.getActivityLogs = async (req, res) => {
 };
 
 exports.getDashboardStats = async (req, res) => {
-    const orgId = req.user.orgId;
+    const orgId = Number(req.user?.orgId);
+    if (!Number.isSafeInteger(orgId) || orgId <= 0) {
+        return res.status(403).json({ error: 'Organization context is required for dashboard data' });
+    }
     try {
         // 1. Total ILI Runs Terproses
         const totalRunsRes = await pool.query(
@@ -41,20 +51,7 @@ exports.getDashboardStats = async (req, res) => {
             [orgId]
         );
         
-        let matched = 0, newFeature = 0, oldFeature = 0, totalFeatures = 0;
-        compRes.rows.forEach(r => {
-            const count = parseInt(r.count);
-            totalFeatures += count;
-            if (r.match_status === 'Matched') matched += count;
-            else if (r.match_status === 'Only NEW') newFeature += count;
-            else if (r.match_status === 'Only OLD') oldFeature += count;
-        });
-        
-        const unmatchedFeatures = newFeature + oldFeature;
-        const averageMatchRate = totalFeatures > 0 ? ((matched / totalFeatures) * 100).toFixed(1) : 0;
-        
-        // Mock Confidence Score (since column doesn't exist, we use a random high number or 0 if no features)
-        const averageConfidence = totalFeatures > 0 ? 87.5 : 0; 
+        const composition = summarizeComposition(compRes.rows);
 
         // 3. Growth Analysis Highlights (Top 5 Anomalies by depth_diff)
         const growthRes = await pool.query(
@@ -68,84 +65,94 @@ exports.getDashboardStats = async (req, res) => {
              LIMIT 5`,
             [orgId]
         );
-        const growthAnalysis = growthRes.rows.map(r => ({
-            id: r.id,
-            feature_id: r.feature_id || `Anomaly-${r.id}`,
-            joint_number: r.joint_number || 0,
-            growth_rate: parseFloat(r.depth_diff).toFixed(2),
-            status: r.growth_flag === 'Fast' ? 'Critical' : 'Monitor'
-        }));
+        const growthAnalysis = growthRes.rows.map(summarizeGrowthFinding);
 
         // 4. Recent Alignment Jobs
         const jobsRes = await pool.query(
-            `SELECT s.id, p.name as pipeline, s.status, s.completed_at as date,
+            `SELECT s.id, p.name as pipeline, s.status, s.started_at, s.completed_at,
+                    old_run.survey_year AS old_year,
+                    new_run.survey_year AS new_year,
                     (SELECT COUNT(*) FROM alignment_results WHERE session_id = s.id AND match_status = 'Matched') as matched,
                     (SELECT COUNT(*) FROM alignment_results WHERE session_id = s.id) as total
              FROM alignment_sessions s
              JOIN pipelines p ON s.pipeline_id = p.id
+             LEFT JOIN survey_runs old_run ON old_run.id = s.run_old_id
+             LEFT JOIN survey_runs new_run ON new_run.id = s.run_new_id
              WHERE p.organization_id = $1
              ORDER BY s.started_at DESC
              LIMIT 5`,
             [orgId]
         );
-        const recentJobs = jobsRes.rows.map(j => ({
-            id: j.id,
-            pipeline: j.pipeline,
-            runs: `Run vs Run`,
-            status: j.status,
-            matchRate: j.total > 0 ? ((j.matched / j.total) * 100).toFixed(1) : 0,
-            date: j.date ? j.date.toISOString().split('T')[0] : 'Processing'
-        }));
+        const recentJobs = jobsRes.rows.map(summarizeRecentJob);
 
-        // 5. Alignment Quality Trend (Mocked 6 months trend for simplicity if db is empty)
-        const trendData = [
-            { label: 'Jan', matchRate: 75, confidence: 80 },
-            { label: 'Feb', matchRate: 78, confidence: 82 },
-            { label: 'Mar', matchRate: 82, confidence: 85 },
-            { label: 'Apr', matchRate: 80, confidence: 83 },
-            { label: 'May', matchRate: 85, confidence: 88 },
-            { label: 'Jun', matchRate: parseFloat(averageMatchRate) || 88, confidence: averageConfidence }
-        ];
+        // 5. Measured monthly trend. Empty history remains empty; it is never fabricated.
+        const trendRes = await pool.query(
+            `SELECT date_trunc('month', s.completed_at) AS month,
+                    COUNT(r.id) FILTER (WHERE r.match_status = 'Matched') AS matched,
+                    COUNT(r.id) AS total
+             FROM alignment_sessions s
+             JOIN pipelines p ON s.pipeline_id = p.id
+             LEFT JOIN alignment_results r ON r.session_id = s.id
+             WHERE p.organization_id = $1
+               AND s.completed_at IS NOT NULL
+             GROUP BY date_trunc('month', s.completed_at)
+             ORDER BY month DESC
+             LIMIT 6`,
+            [orgId]
+        );
+        const trendData = trendRes.rows.reverse().map((row) => {
+            const matchedCount = Number.parseInt(row.matched, 10) || 0;
+            const totalCount = Number.parseInt(row.total, 10) || 0;
+            return {
+                month: row.month instanceof Date ? row.month.toISOString() : row.month,
+                matchRate: totalCount > 0 ? Math.round((matchedCount / totalCount) * 1000) / 10 : null,
+                confidence: null,
+                confidenceStatus: 'unavailable',
+            };
+        });
 
         // 6. Map Indicators (Pipelines alignment status)
         const pipelinesRes = await pool.query(
             `SELECT id, name FROM pipelines WHERE organization_id = $1`, [orgId]
         );
-        const mapIndicators = pipelinesRes.rows.map((p, i) => {
+        const mapIndicators = pipelinesRes.rows.map((p) => {
             const hasJob = recentJobs.find(j => j.pipeline === p.name);
-            let status = 'Un-aligned'; // Yellow
+            let status = 'not-assessed';
             if (hasJob) {
-                status = hasJob.status === 'completed' ? 'Aligned' : 'Processing';
+                status = hasJob.status === 'completed' ? 'aligned' : hasJob.status;
             }
-            // Add some mock lat/long for Indonesia based on index
-            const coords = [
-                [-6.2, 106.8], [-1.2, 116.8], [-7.2, 112.7], [1.4, 101.4]
-            ];
             return {
                 id: p.id,
                 name: p.name,
                 status: status,
-                coords: coords[i % coords.length]
+                coords: null,
+                locationStatus: 'unavailable'
             };
         });
+
+        const overview = summarizeDashboardOverview(
+            await getDashboardOverviewRows(pool, orgId),
+        );
 
         res.json({
             kpi: {
                 totalIliRuns,
-                averageMatchRate,
-                unmatchedFeatures,
-                averageConfidence
+                averageMatchRate: composition.averageMatchRate,
+                unmatchedFeatures: composition.unmatchedFeatures,
+                averageConfidence: composition.averageConfidence,
+                confidenceStatus: composition.confidenceStatus,
             },
             featureComposition: {
-                matched,
-                unmatched: unmatchedFeatures,
-                newFeature,
-                removedFeature: oldFeature
+                matched: composition.matched,
+                unmatched: composition.unmatchedFeatures,
+                newFeature: composition.newFeature,
+                removedFeature: composition.oldFeature
             },
             growthAnalysis,
             recentJobs,
             trendData,
-            mapIndicators
+            mapIndicators,
+            overview,
         });
 
     } catch (err) {

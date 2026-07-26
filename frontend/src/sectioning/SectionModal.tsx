@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { SectionDef } from './IliSectioningPage';
+import type { SectionDef } from './types';
 
 interface SectionModalProps {
   startGw: any;
   endGw: any;
   autoStartCoords?: {lat: number, lng: number};
   autoEndCoords?: {lat: number, lng: number};
+  error?: string | null;
   onClose: () => void;
   onSave: (section: Partial<SectionDef>) => void;
 }
@@ -20,9 +21,11 @@ const SECTION_TYPES = [
   { id: 'OTH', label: 'OTH - Lainnya' }
 ];
 
-export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndCoords, onClose, onSave }: SectionModalProps) {
+export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndCoords, error, onClose, onSave }: SectionModalProps) {
   const [name, setName] = useState('');
   const [type, setType] = useState('RL');
+  const [physicalType, setPhysicalType] = useState('Buried');
+  const [policy, setPolicy] = useState('Match');
   const [notes, setNotes] = useState('');
   
   const [latStart, setLatStart] = useState('');
@@ -48,6 +51,8 @@ export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndC
     onSave({
       name,
       type,
+      physicalType,
+      policy,
       notes,
       latStart: latStart ? parseFloat(latStart) : undefined,
       lngStart: lngStart ? parseFloat(lngStart) : undefined,
@@ -76,6 +81,36 @@ export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndC
               placeholder="cth: RC 192, AC 45, Riser Platform A"
               className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-900 placeholder-gray-400"
             />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">JENIS FISIK</label>
+              <select
+                value={physicalType}
+                onChange={(e) => setPhysicalType(e.target.value)}
+                className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-900"
+              >
+                <option value="Buried">Buried</option>
+                <option value="Aerial">Aerial</option>
+                <option value="Cased">Cased</option>
+                <option value="Crossing">Crossing</option>
+                <option value="Riser">Riser</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">POLICY</label>
+              <select
+                value={policy}
+                onChange={(e) => setPolicy(e.target.value)}
+                className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-900"
+              >
+                <option value="Match">Match</option>
+                <option value="Review">Review</option>
+                <option value="Override">Override</option>
+              </select>
+            </div>
           </div>
 
           {/* TIPE SECTION */}
@@ -130,6 +165,10 @@ export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndC
             />
           </div>
         </div>
+
+        {error && (
+          <p role="alert" className="mt-5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{error}</p>
+        )}
 
         {/* ACTIONS */}
         <div className="flex justify-end gap-3 mt-8 pt-4 border-t border-gray-100">

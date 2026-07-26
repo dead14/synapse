@@ -1,6 +1,0 @@
-id,organization_id,username,email,password_hash,role,is_active,created_at
-1,1,Admin,admin@synapse.com,$2b$12$U3aHPR/5ZW1OPKVIgLVCXOqRz3z8zcb0EfnrgCXurG7BiBc6xjftC,super_admin,True,2026-07-08 05:10:47.843569
-2,2,Kidomaru,rizkid39zyplack@gmail.com,$2b$12$s1WujuH9ECHmS77h1MsKiOLdNA9.6/aybPqSvRRAv8Xjf3Y/DRACS,admin,,
-3,3,kiju,beasiswaindonesia80@gmail.com,$2b$12$JIh3zczbVqYkoVQheBXfWeWDHnEiULNUGQZtJYUpeOCmWNRopd3Xq,admin,,
-4,4,kiki1,kiki@mail.comk,$2b$12$tFJFUL8b52xe2saJtN.rzevba8DPIDfT9WvNCbHFBvzjPkL0jQoM.,admin,,
-5,5,kiki123,test3@gmail.com,$2b$12$5Fs8h32F3TpdQ.mxrix5zey4E6jctgq23Q7q5yAKHp3TIWISobmYG,admin,,

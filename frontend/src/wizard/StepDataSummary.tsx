@@ -1,4 +1,7 @@
-import { FiPieChart, FiInfo, FiChevronRight } from 'react-icons/fi';
+import { useMemo, useState } from 'react';
+import { FiAlertTriangle, FiArrowLeft, FiArrowRight, FiCheckCircle, FiDatabase, FiLayers } from 'react-icons/fi';
+
+import { buildDataReview } from '../domain/alignmentReview';
 
 interface StepDataSummaryProps {
   onNext: (data?: any) => void;
@@ -6,97 +9,167 @@ interface StepDataSummaryProps {
   config?: any;
 }
 
+type ReviewRun = {
+  name: string;
+  total: number;
+  anomalies: number;
+  welds: number;
+  valves: number;
+  tees: number;
+  offtakes: number;
+  bends: number;
+  others: number;
+  gwAnchors: number;
+  invalidAnchorDistances: number;
+  rawFeatures: any[];
+};
+
+function numberValue(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : 0;
+}
+
+function reviewRun(value: any): ReviewRun {
+  return {
+    name: typeof value?.name === 'string' && value.name.trim() ? value.name : 'Not recorded',
+    total: numberValue(value?.total),
+    anomalies: numberValue(value?.anomalies),
+    welds: numberValue(value?.welds),
+    valves: numberValue(value?.valves),
+    tees: numberValue(value?.tees),
+    offtakes: numberValue(value?.offtakes),
+    bends: numberValue(value?.bends),
+    others: numberValue(value?.others),
+    gwAnchors: numberValue(value?.gwAnchors),
+    invalidAnchorDistances: numberValue(value?.invalidAnchorDistances),
+    rawFeatures: Array.isArray(value?.rawFeatures) ? value.rawFeatures : [],
+  };
+}
+
+function typeName(feature: any): string {
+  const value = feature?.type ?? feature?.featureType ?? feature?.originalType ?? feature?.['Feature Type'] ?? 'Other';
+  return String(value).trim().replace(/\s+/g, ' ') || 'Other';
+}
+
+function RunEvidenceCard({ label, tone, run }: { label: string; tone: 'master' | 'historical'; run: ReviewRun }) {
+  const featureCounts = [
+    { label: 'Metal loss', value: run.anomalies },
+    { label: 'Welds', value: run.welds },
+    { label: 'Valves', value: run.valves },
+    { label: 'Tees', value: run.tees },
+    { label: 'Offtakes', value: run.offtakes },
+    { label: 'Bends', value: run.bends },
+    { label: 'Other features', value: run.others },
+  ];
+
+  return (
+    <article className={`alignment-review-run alignment-review-run--${tone}`}>
+      <header>
+        <div>
+          <span>{label}</span>
+          <h3>{run.name}</h3>
+        </div>
+        <b>{tone === 'master' ? 'NEW · MASTER' : 'OLD · HISTORICAL'}</b>
+      </header>
+      <div className="alignment-review-run__body">
+        <div className="alignment-review-run__total"><span>Total features</span><strong>{run.total.toLocaleString()}</strong></div>
+        <div className="alignment-review-run__anchor">
+          <span>GW anchors</span>
+          <strong>{run.gwAnchors.toLocaleString()}</strong>
+          <small>reference points</small>
+        </div>
+        <dl>
+          {featureCounts.map(({ label: featureLabel, value }) => <div key={featureLabel}><dt>{featureLabel}</dt><dd>{value.toLocaleString()}</dd></div>)}
+        </dl>
+      </div>
+    </article>
+  );
+}
+
 export default function StepDataSummary({ onNext, onBack, config }: StepDataSummaryProps) {
-  const dataSummary = config?.summaryData || {
-    newRun: { name: 'Waiting for data...', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 },
-    oldRun: { name: 'Waiting for data...', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 }
+  const summary = config?.summaryData ?? {};
+  const masterRun = reviewRun(summary.newRun);
+  const historicalRun = reviewRun(summary.oldRun);
+  const additionalHistoricalRuns: ReviewRun[] = (summary.historicalRuns ?? [])
+    .slice(1)
+    .map((r: any) => reviewRun(r))
+    .filter((r: ReviewRun) => r.total > 0);
+  const hasPersistedRunPair = Number.isSafeInteger(Number(summary.newRun?.runId))
+    && Number(summary.newRun?.runId) > 0
+    && Number.isSafeInteger(Number(summary.oldRun?.runId))
+    && Number(summary.oldRun?.runId) > 0
+    && Number(summary.newRun?.runId) !== Number(summary.oldRun?.runId);
+  const hasRunPair = masterRun.total > 0 && historicalRun.total > 0 && hasPersistedRunPair;
+  const runPairs = summary.runPairs ?? [];
+  const hasMultipleRuns = runPairs.length > 1;
+  const [acknowledged, setAcknowledged] = useState(config?.dataReview?.status === 'acknowledged');
+
+  const inventory = useMemo(() => {
+    const rows = [...masterRun.rawFeatures.map((feature) => ({ feature, run: 'master' })), ...historicalRun.rawFeatures.map((feature) => ({ feature, run: 'historical' }))];
+    const fields = new Set(rows.flatMap(({ feature }) => Object.keys(feature ?? {})));
+    return Array.from(new Set(rows.map(({ feature }) => typeName(feature)))).map((type) => {
+      const typeRows = rows.filter(({ feature }) => typeName(feature) === type);
+      const master = typeRows.filter((row) => row.run === 'master').length;
+      const historical = typeRows.length - master;
+      const populated = Array.from(fields).filter((field) => typeRows.some(({ feature }) => feature?.[field] !== null && feature?.[field] !== undefined && String(feature[field]).trim() !== '')).length;
+      return { type, master, historical, total: typeRows.length, populated };
+    }).sort((left, right) => right.total - left.total || left.type.localeCompare(right.type));
+  }, [masterRun.rawFeatures, historicalRun.rawFeatures]);
+
+  const hasQualityWarning = masterRun.invalidAnchorDistances > 0 || historicalRun.invalidAnchorDistances > 0;
+  const invalidAnchorCount = masterRun.invalidAnchorDistances + historicalRun.invalidAnchorDistances;
+  const continueReview = () => {
+    const dataReview = buildDataReview({ newRun: masterRun, oldRun: historicalRun }, acknowledged);
+    if (dataReview) onNext({ dataReview });
   };
 
   return (
-    <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 animate-fade-in">
-      <div className="flex items-center gap-3 mb-6">
-        <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
-          <FiPieChart size={24} />
-        </div>
-        <div>
-          <h2 className="text-xl font-bold text-gray-800">Data Extraction Summary</h2>
-          <p className="text-sm text-gray-500">Pipeline features extracted from uploaded files.</p>
-        </div>
-      </div>
-      
+    <section className="alignment-data-review" aria-labelledby="data-review-title">
+      <header className="alignment-review-heading">
+        <div className="alignment-review-heading__icon"><FiDatabase aria-hidden="true" /></div>
+        <div className="alignment-review-heading__copy"><p>Persisted inspection evidence</p><h2 id="data-review-title">Data review</h2><span>Confirm the extracted master and historical evidence before alignment begins.</span></div>
+        {hasRunPair && <div className="alignment-review-heading__status"><FiCheckCircle aria-hidden="true" /><span>Two runs ready</span></div>}
+      </header>
 
+      {!hasRunPair ? (
+        <div className="alignment-review-empty" role="status"><FiAlertTriangle aria-hidden="true" /><div><strong>Two persisted inspection runs are required</strong><span>Return to Inspection data and import one master and one historical run before continuing.</span></div></div>
+      ) : (
+        <>
+          <div className="alignment-review-run-grid">
+            <RunEvidenceCard label="Master run" tone="master" run={masterRun} />
+            <RunEvidenceCard label="Historical run" tone="historical" run={historicalRun} />
+            {additionalHistoricalRuns.map((run, idx) => (
+              <RunEvidenceCard key={idx} label={`Historical run ${idx + 2}`} tone="historical" run={run} />
+            ))}
+          </div>
+          {hasMultipleRuns && (
+            <section className="rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">
+              <strong>Pairwise chain alignment</strong> — {runPairs.length} sequential pairs will be aligned:
+              {' '}{runPairs.map((p: any, i: number) => (
+                <span key={i} className="inline-block rounded bg-brand-100 px-2 py-0.5 text-xs font-semibold mx-0.5">
+                  {p.oldRun?.year || '?'} → {p.newRun?.year || '?'}
+                </span>
+              ))}
+            </section>
+          )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-        {/* NEW Run Card */}
-        <div className="border border-gray-100 rounded-2xl p-6 bg-gradient-to-br from-white to-gray-50">
-          <div className="flex justify-between items-center mb-4">
-             <h3 className="font-bold text-gray-800">Current Run</h3>
-             <span className="text-xs font-bold px-2 py-1 bg-green-100 text-green-700 rounded-md">NEW</span>
-          </div>
-          <p className="text-sm text-gray-500 mb-6 font-medium">{dataSummary.newRun.name}</p>
-          
-          <div className="space-y-4">
-            <div className="flex justify-between items-end border-b border-gray-100 pb-2">
-              <span className="text-gray-600">Total Features</span>
-              <span className="text-xl font-bold text-gray-800">{dataSummary.newRun.total.toLocaleString()}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div className="flex justify-between"><span className="text-gray-500">Metal Loss</span><span className="font-semibold">{dataSummary.newRun.anomalies}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Welds</span><span className="font-semibold">{dataSummary.newRun.welds}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Valves & Tees</span><span className="font-semibold">{dataSummary.newRun.valves + dataSummary.newRun.tees}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Offtakes</span><span className="font-semibold">{dataSummary.newRun.offtakes}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Bends</span><span className="font-semibold">{dataSummary.newRun.bends}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Others</span><span className="font-semibold">{dataSummary.newRun.others}</span></div>
-            </div>
-          </div>
-        </div>
+          <section className={`alignment-review-readiness ${hasQualityWarning ? 'is-warning' : 'is-ready'}`} aria-label="Evidence readiness">
+            {hasQualityWarning ? <FiAlertTriangle aria-hidden="true" /> : <FiCheckCircle aria-hidden="true" />}
+            <div><strong>{hasQualityWarning ? 'Anchor data needs attention' : 'Extraction evidence is ready for GW matching'}</strong><span>{hasQualityWarning ? 'One or more anchors have invalid upstream-GW distance values. Review them before relying on automated locks.' : 'Both persisted runs contain feature and anchor evidence.'}</span></div>
+            <small>{hasQualityWarning ? `${invalidAnchorCount.toLocaleString()} invalid GW distance${invalidAnchorCount === 1 ? '' : 's'}` : '0 invalid GW distances'}</small>
+          </section>
 
-        {/* OLD Run Card */}
-        <div className="border border-gray-100 rounded-2xl p-6 bg-gradient-to-br from-white to-gray-50">
-          <div className="flex justify-between items-center mb-4">
-             <h3 className="font-bold text-gray-800">Reference Run</h3>
-             <span className="text-xs font-bold px-2 py-1 bg-blue-100 text-blue-700 rounded-md">OLD</span>
-          </div>
-          <p className="text-sm text-gray-500 mb-6 font-medium">{dataSummary.oldRun.name}</p>
-          
-          <div className="space-y-4">
-            <div className="flex justify-between items-end border-b border-gray-100 pb-2">
-              <span className="text-gray-600">Total Features</span>
-              <span className="text-xl font-bold text-gray-800">{dataSummary.oldRun.total.toLocaleString()}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div className="flex justify-between"><span className="text-gray-500">Metal Loss</span><span className="font-semibold">{dataSummary.oldRun.anomalies}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Welds</span><span className="font-semibold">{dataSummary.oldRun.welds}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Valves & Tees</span><span className="font-semibold">{dataSummary.oldRun.valves + dataSummary.oldRun.tees}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Offtakes</span><span className="font-semibold">{dataSummary.oldRun.offtakes}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Bends</span><span className="font-semibold">{dataSummary.oldRun.bends}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Others</span><span className="font-semibold">{dataSummary.oldRun.others}</span></div>
-            </div>
-          </div>
-        </div>
-      </div>
+          <section className="alignment-review-inventory" aria-labelledby="data-inventory-title">
+            <header><div><p>Feature inventory</p><h3 id="data-inventory-title">Coverage by extracted class</h3></div><span>{(masterRun.rawFeatures.length + historicalRun.rawFeatures.length).toLocaleString()} source records</span></header>
+            {inventory.length === 0 ? <div className="alignment-review-inventory__empty"><FiLayers aria-hidden="true" />Detailed source rows are unavailable; aggregate counts above remain persisted for this session.</div> : <div className="alignment-review-inventory__table-wrap"><table><thead><tr><th>Feature class</th><th>NEW</th><th>OLD</th><th>Total</th><th>Fields</th></tr></thead><tbody>{inventory.map((row) => <tr key={row.type}><th scope="row">{row.type}</th><td>{row.master.toLocaleString()}</td><td>{row.historical.toLocaleString()}</td><td>{row.total.toLocaleString()}</td><td>{row.populated}</td></tr>)}</tbody></table></div>}
+          </section>
 
-      {dataSummary.newRun.total > 0 && dataSummary.oldRun.total > 0 && (
-        <div className="bg-yellow-50 p-4 rounded-xl flex gap-3 text-yellow-800 text-sm items-start mb-6 border border-yellow-200/50">
-          <FiInfo className="shrink-0 mt-0.5 text-yellow-600" />
-          <p>Please note the significant difference in total features. We recommend hiding non-critical features in the next step to improve alignment accuracy.</p>
-        </div>
+          <label className="alignment-review-acknowledgement"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span><strong>I reviewed the extracted evidence.</strong><small>This acknowledgement is saved with the alignment session and used as the review record for this run pair.</small></span></label>
+        </>
       )}
 
-      <div className="flex justify-between mt-8">
-        <button 
-          onClick={onBack}
-          className="text-gray-600 hover:text-gray-900 px-6 py-3 rounded-xl font-medium transition-colors"
-        >
-          Back
-        </button>
-        <button 
-          onClick={() => onNext()}
-          className="bg-gray-900 hover:bg-black text-white px-8 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-md shadow-gray-900/20"
-        >
-          Configure Scenario <FiChevronRight />
-        </button>
-      </div>
-    </div>
+      <footer className="alignment-review-actions"><button type="button" className="syn-action syn-action--outline" onClick={onBack}><FiArrowLeft aria-hidden="true" />Back to inspection data</button><button type="button" className="syn-action syn-action--ink" onClick={continueReview} disabled={!hasRunPair || !acknowledged} aria-describedby={!hasRunPair || !acknowledged ? 'data-review-action-help' : undefined}>Continue to GW matching<FiArrowRight aria-hidden="true" /></button></footer>
+      {(!hasRunPair || !acknowledged) && <p id="data-review-action-help" className="alignment-review-action-help">{hasRunPair ? 'Confirm the acknowledgement to continue.' : 'Import both runs to continue.'}</p>}
+    </section>
   );
 }
