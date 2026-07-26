@@ -28,7 +28,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
 
     if (config.sessionStatus === 'completed'
       && !['dtw_hungarian_onedirection', 'manual', 'phylogenetic'].includes(configuredAlgorithm)) {
-      setTerminalLines(['Session alignment sebelumnya sudah selesai.', '✅ All done! Results are ready.']);
+      setTerminalLines(['The previous alignment session already completed.', '✅ All done! Results are ready.']);
       setProgress(100);
       setShowValidation(true);
       return () => { startedRef.current = false; };
@@ -79,7 +79,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
     const startAlignment = async () => {
       try {
         if (!config.sessionId) {
-          fail('Sesi alignment belum tersimpan. Kembali ke ringkasan dan simpan data terlebih dahulu.');
+          fail('The alignment session has not been saved yet. Go back to the summary and save the data first.');
           return;
         }
 
@@ -114,7 +114,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
         }
       } catch (err: any) {
         if (err.name === 'AbortError') {
-          fail('Server tidak merespons dalam 15 detik. Periksa backend pada port 8000 lalu coba lagi.');
+          fail('The server did not respond within 15 seconds. Check the backend on port 8000 and try again.');
           return;
         }
 
@@ -123,16 +123,16 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
         // cause is a rejected request they can act on.
         if (err instanceof ApiError) {
           if (err.status === 401) {
-            fail('Sesi login sudah kedaluwarsa. Silakan masuk kembali untuk menjalankan alignment.');
+            fail('Your login session has expired. Sign in again to run the alignment.');
           } else if (err.status === 422) {
-            fail(`${err.message} Kembali ke langkah Inspection data dan pilih strategi yang tersedia.`);
+            fail(`${err.message} Go back to the Inspection data step and choose an available strategy.`);
           } else {
-            fail(`Server menolak permintaan (${err.status}): ${err.message}`);
+            fail(`The server rejected the request (${err.status}): ${err.message}`);
           }
           return;
         }
 
-        fail(`Tidak dapat menghubungi server: ${err.message}`);
+        fail(`Could not reach the server: ${err.message}`);
       }
     };
 
@@ -227,7 +227,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
           way back to the step that caused it. */}
       {failure && !showValidation && (
         <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-5">
-          <h3 className="font-bold text-red-800">Alignment tidak dapat dijalankan</h3>
+          <h3 className="font-bold text-red-800">Alignment could not be started</h3>
           <p className="mt-1 text-sm text-red-700">{failure}</p>
           <div className="mt-4 flex flex-wrap gap-3">
             <button
@@ -235,14 +235,14 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
               onClick={onBack}
               className="rounded-xl border border-red-300 bg-white px-5 py-2.5 font-semibold text-red-700 transition-colors hover:bg-red-100"
             >
-              Kembali ke langkah sebelumnya
+              Back to the previous step
             </button>
             <button
               type="button"
               onClick={() => setRetryToken((token) => token + 1)}
               className="rounded-xl bg-red-600 px-5 py-2.5 font-semibold text-white transition-colors hover:bg-red-700"
             >
-              Coba jalankan lagi
+              Run it again
             </button>
           </div>
         </div>
@@ -261,8 +261,8 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
           <div className="bg-white border border-green-100 rounded-2xl p-6 shadow-sm mb-8 text-center">
             <h4 className="font-bold text-gray-800 mb-2">Alignment Process Completed Successfully</h4>
             <p className="text-sm text-gray-600">
-              GW locks, NEW-reference sections, dan ordered anomaly matching sudah
-              selesai diproses. Dashboard hanya menampilkan hasil job yang sama.
+              GW locks, NEW-reference sections, and ordered anomaly matching have
+              been processed. The dashboard only shows results from this job.
             </p>
           </div>
           

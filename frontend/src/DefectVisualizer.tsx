@@ -4,8 +4,10 @@ import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Text } from '@react-three/drei';
 import { FiBox, FiX } from 'react-icons/fi';
+import Modal from './components/common/Modal';
 import { apiFetch } from './utils/api';
 import { extentOf } from './utils/numericRange.ts';
+import { clampTooltipPosition } from './utils/tooltipPosition';
 import { parseClockToDegrees } from './utils/clock';
 
 interface DefectVisualizerProps {
@@ -23,6 +25,20 @@ const MAX_SPOOL_FEATURES = 2_000;
  * matching the '- / Internal' fallback used by the results table). */
 function isExternalSurface(value: unknown): boolean {
   return String(value ?? '').toUpperCase().includes('EXT');
+}
+
+/**
+ * Keyboard mirror for interactive SVG shapes (same pattern as
+ * sectioning/SectioningSchematic markerKeyDown): Enter/Space activates, and
+ * the shape's own bounding box stands in for the pointer coordinates.
+ */
+function svgActionKeyDown(action: (clientX: number, clientY: number) => void) {
+  return (event: React.KeyboardEvent<SVGElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    const box = event.currentTarget.getBoundingClientRect();
+    action(box.left + box.width / 2, box.top + box.height / 2);
+  };
 }
 
 function sampleEvenly<T>(items: T[], limit: number, keep?: (item: T) => boolean): T[] {
@@ -494,21 +510,29 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
                return (
                  <g key={`gw-1-${i}`}>
                    {/* Spool Hitbox */}
-                   <rect 
-                     x={x1} y="65" width={Math.max(1, x2 - x1)} height="30" 
-                     fill="transparent" 
+                   <rect
+                     x={x1} y="65" width={Math.max(1, x2 - x1)} height="30"
+                     fill="transparent"
                      className="cursor-pointer hover:fill-yellow-100/30 transition-colors"
+                     role="button"
+                     tabIndex={0}
+                     aria-label={`Select spool from ${dist1.toFixed(2)} m to ${dist2.toFixed(2)} m`}
                      onClick={() => handleSpoolClick(i)}
+                     onKeyDown={svgActionKeyDown(() => handleSpoolClick(i))}
                    />
 
                    {/* Alignment guide */}
                    <line x1={x1} y1="80" x2={x1} y2="210" stroke="#f1f5f9" strokeWidth="1" strokeDasharray="4 4" />
-                   
+
                    {/* GW Marker - Make it clickable */}
-                   <rect 
-                     x={x1 - 4} y="55" width="8" height="50" rx="4" fill={color} 
+                   <rect
+                     x={x1 - 4} y="55" width="8" height="50" rx="4" fill={color}
                      className="cursor-pointer hover:brightness-110"
+                     role="button"
+                     tabIndex={0}
+                     aria-label={`GW at ${dist1.toFixed(2)} m — set as range boundary`}
                      onClick={() => handleGwClick(i)}
+                     onKeyDown={svgActionKeyDown(() => handleGwClick(i))}
                    />
                    <text x={x1} y="115" fontSize="10" fontWeight="bold" fill={color} textAnchor="middle">{dist1.toFixed(2)}m</text>
                  </g>
@@ -517,10 +541,14 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
             {/* Draw the very last GW marker */}
             {gwList.length > 0 && (
               <g>
-                <rect 
-                  x={mToX(gwList[gwList.length - 1]) - 4} y="55" width="8" height="50" rx="4" fill="#10b981" 
+                <rect
+                  x={mToX(gwList[gwList.length - 1]) - 4} y="55" width="8" height="50" rx="4" fill="#10b981"
                   className="cursor-pointer hover:brightness-110"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`GW at ${gwList[gwList.length - 1].toFixed(2)} m — set as range boundary`}
                   onClick={() => handleGwClick(gwList.length - 1)}
+                  onKeyDown={svgActionKeyDown(() => handleGwClick(gwList.length - 1))}
                 />
                 <text x={mToX(gwList[gwList.length - 1])} y="115" fontSize="10" fontWeight="bold" fill="#10b981" textAnchor="middle">{gwList[gwList.length - 1].toFixed(2)}m</text>
               </g>
@@ -553,14 +581,21 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
               const isSel = searchStr !== null && searchStr !== undefined && d.dataIdx === searchStr;
 
               return (
-                <g 
-                  key={`anom1-${i}`} 
-                  className={`cursor-pointer ${isSel ? 'z-20' : 'z-10'}`} 
-                  onClick={(e) => { 
-                    e.stopPropagation(); 
+                <g
+                  key={`anom1-${i}`}
+                  className={`cursor-pointer ${isSel ? 'z-20' : 'z-10'}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Feature A-${d?.id1 ?? ''} at ${d.dist1.toFixed(2)} m — open details`}
+                  onClick={(e) => {
+                    e.stopPropagation();
                     setHoveredDefect(d);
                     setTooltipPos({ x: e.clientX, y: e.clientY });
                   }}
+                  onKeyDown={svgActionKeyDown((clientX, clientY) => {
+                    setHoveredDefect(d);
+                    setTooltipPos({ x: clientX, y: clientY });
+                  })}
                 >
                   <circle cx={x} cy="80" r={isSel ? "10" : "6"} fill={d.isMatched ? "#f59e0b" : "#ef4444"} stroke={isSel ? "#000000" : "#ffffff"} strokeWidth={isSel ? "3" : "2"} />
                   <text x={x} y={isSel ? "40" : "55"} fontSize={isSel ? "11" : "9"} fontWeight="bold" fill={d.isMatched ? "#d97706" : "#ef4444"} textAnchor="middle">A-{d?.id1}</text>
@@ -612,14 +647,21 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
               const isSel = selectedRowIdx !== null && selectedRowIdx !== undefined && d.dataIdx === selectedRowIdx;
 
               return (
-                <g 
-                  key={`anom2-${i}`} 
-                  className={`cursor-pointer ${isSel ? 'z-20' : 'z-10'}`} 
-                  onClick={(e) => { 
-                    e.stopPropagation(); 
+                <g
+                  key={`anom2-${i}`}
+                  className={`cursor-pointer ${isSel ? 'z-20' : 'z-10'}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Feature A-${d?.id2 ?? ''} at ${d.dist2.toFixed(2)} m — open details`}
+                  onClick={(e) => {
+                    e.stopPropagation();
                     setHoveredDefect(d);
                     setTooltipPos({ x: e.clientX, y: e.clientY });
                   }}
+                  onKeyDown={svgActionKeyDown((clientX, clientY) => {
+                    setHoveredDefect(d);
+                    setTooltipPos({ x: clientX, y: clientY });
+                  })}
                 >
                   {/* Match line */}
                   {d.isMatched && d.dist1 !== null && d.dist1 !== undefined && (
@@ -696,14 +738,21 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
                   const h2 = scaleDim(d.wid2);
 
                   return (
-                    <g 
+                    <g
                       key={`2d-match-${i}`}
                       className="cursor-pointer"
-                      onClick={(e) => { 
-                        e.stopPropagation(); 
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Matched defect ${d.id1 ?? d.id2 ?? ''} — open details`}
+                      onClick={(e) => {
+                        e.stopPropagation();
                         setHoveredDefect(d);
                         setTooltipPos({ x: e.clientX, y: e.clientY });
                       }}
+                      onKeyDown={svgActionKeyDown((clientX, clientY) => {
+                        setHoveredDefect(d);
+                        setTooltipPos({ x: clientX, y: clientY });
+                      })}
                     >
                       <line x1={cx1} y1={cy1} x2={cx2} y2={cy2} stroke="#fca5a5" strokeWidth="1" strokeDasharray="2 2" />
                       <ellipse 
@@ -731,14 +780,21 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
                   const color = isRun1 ? "#3b82f6" : "#f59e0b";
 
                   return (
-                    <g 
+                    <g
                       key={`2d-unmatch-${i}`}
                       className="cursor-pointer"
-                      onClick={(e) => { 
-                        e.stopPropagation(); 
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Unmatched defect ${d.id1 ?? d.id2 ?? ''} — open details`}
+                      onClick={(e) => {
+                        e.stopPropagation();
                         setHoveredDefect(d);
                         setTooltipPos({ x: e.clientX, y: e.clientY });
                       }}
+                      onKeyDown={svgActionKeyDown((clientX, clientY) => {
+                        setHoveredDefect(d);
+                        setTooltipPos({ x: clientX, y: clientY });
+                      })}
                     >
                       <ellipse 
                         cx={cx} cy={cy} rx={w/2} ry={h/2}
@@ -848,12 +904,16 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
 
       {/* Detail Modal Overlay */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-8 bg-gray-900/40 backdrop-blur-sm transition-opacity">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-5xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
+        <Modal
+          onClose={() => setIsModalOpen(false)}
+          labelledBy="spool-detail-title"
+          overlayClassName="fixed inset-0 z-[999999] flex items-center justify-center p-8 bg-gray-900/40 backdrop-blur-sm transition-opacity"
+          panelClassName="bg-white rounded-3xl shadow-2xl w-full max-w-5xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200"
+        >
             {/* Modal Header */}
             <div className="flex items-center justify-between px-8 py-5 border-b border-gray-100 bg-gray-50">
               <div>
-                <h2 className="text-xl font-black text-gray-800">Spool Detail View</h2>
+                <h2 id="spool-detail-title" className="text-xl font-black text-gray-800">Spool Detail View</h2>
                 <p className="text-sm text-gray-500 font-medium">Distance: {selectedRange?.startDist.toFixed(2)}m to {selectedRange?.endDist.toFixed(2)}m</p>
               </div>
               
@@ -877,8 +937,9 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
                   </button>
                 </div>
                 
-                <button 
+                <button
                   onClick={() => setIsModalOpen(false)}
+                  aria-label="Close spool detail view"
                   className="p-2 text-gray-400 hover:text-gray-800 hover:bg-gray-200 rounded-full transition-colors"
                 >
                   <FiX size={24} />
@@ -912,17 +973,28 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
                  </div>
               )}
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
 
       {hoveredDefect && (
         <>
-          <div className="fixed inset-0 z-[90]" onClick={() => setHoveredDefect(null)} />
-          <div 
-            className="fixed z-[100] bg-white border border-gray-200 shadow-xl rounded-lg p-3 text-xs w-64 pointer-events-auto"
-            style={{ left: tooltipPos.x + 15, top: tooltipPos.y + 15 }}
+          {/* Above the portaled spool modal so details opened from inside it stay reachable. */}
+          <div className="fixed inset-0 z-[1000000]" onClick={() => setHoveredDefect(null)} />
+          <div
+            className="fixed z-[1000001] bg-white border border-gray-200 shadow-xl rounded-lg p-3 text-xs w-64 pointer-events-auto"
+            style={(() => {
+              // w-64 = 256px; height estimated for the detail list + button.
+              const placement = clampTooltipPosition({
+                pointerX: tooltipPos.x,
+                pointerY: tooltipPos.y,
+                tooltipWidth: 256,
+                tooltipHeight: 320,
+                viewportWidth: window.innerWidth,
+                viewportHeight: window.innerHeight,
+              });
+              return { left: placement.left, top: placement.top };
+            })()}
           >
             <div className="font-bold border-b pb-1 mb-2 text-gray-800 flex justify-between items-center gap-2">
               <span>ID: {hoveredDefect.id1 || hoveredDefect.id2}</span>
@@ -965,7 +1037,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
               }}
               className="w-full bg-blue-500 text-white rounded py-2 hover:bg-blue-600 transition-colors font-bold cursor-pointer shadow-sm"
             >
-              Cari & Sorot Data di Tabel
+              Find & Highlight in Table
             </button>
           </div>
         </>

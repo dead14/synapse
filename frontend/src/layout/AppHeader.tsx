@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FiChevronDown, FiCommand, FiHexagon, FiMoreHorizontal, FiSearch } from 'react-icons/fi';
+import { FiChevronDown, FiHexagon, FiMoreHorizontal } from 'react-icons/fi';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 
 import { ThemeToggleButton } from '../components/common/ThemeToggleButton';
@@ -12,19 +12,29 @@ export default function AppHeader() {
   const { user } = useAuth();
   const location = useLocation();
   const [applicationMenuOpen, setApplicationMenuOpen] = useState(false);
-  const searchRef = useRef<HTMLInputElement>(null);
+  // Which nav group's submenu is pinned open (click/keyboard); hover still
+  // works through CSS independently of this state.
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const navRef = useRef<HTMLElement>(null);
   const topNavGroups = useMemo(() => navigationForRole(user?.role), [user?.role]);
 
+  // Navigating anywhere dismisses the pinned submenu and the mobile menu.
   useEffect(() => {
-    const focusSearch = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        searchRef.current?.focus();
+    setOpenGroup(null);
+    setApplicationMenuOpen(false);
+  }, [location.pathname]);
+
+  // A pinned submenu closes when clicking anywhere outside the nav.
+  useEffect(() => {
+    if (openGroup === null) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (navRef.current && !navRef.current.contains(event.target as Node)) {
+        setOpenGroup(null);
       }
     };
-    document.addEventListener('keydown', focusSearch);
-    return () => document.removeEventListener('keydown', focusSearch);
-  }, []);
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [openGroup]);
 
   const pathIsActive = (path: string) => {
     if (path === '/') return location.pathname === '/';
@@ -60,7 +70,7 @@ export default function AppHeader() {
             <FiMoreHorizontal aria-hidden="true" />
           </button>
 
-          <nav className="engine-nav" aria-label="Workspace navigation">
+          <nav className="engine-nav" aria-label="Workspace navigation" ref={navRef}>
             {topNavGroups.map((group) => {
               const active = groupIsActive(group.items);
               const singleItem = group.items.length === 1 ? group.items[0] : null;
@@ -74,9 +84,25 @@ export default function AppHeader() {
                 );
               }
 
+              const isOpen = openGroup === group.label;
               return (
-                <div key={group.label} className="engine-nav__group">
-                  <button type="button" className={triggerClass} aria-haspopup="menu">
+                <div
+                  key={group.label}
+                  className={`engine-nav__group${isOpen ? ' is-open' : ''}`}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && isOpen) {
+                      event.stopPropagation();
+                      setOpenGroup(null);
+                    }
+                  }}
+                >
+                  <button
+                    type="button"
+                    className={triggerClass}
+                    aria-haspopup="menu"
+                    aria-expanded={isOpen}
+                    onClick={() => setOpenGroup((current) => (current === group.label ? null : group.label))}
+                  >
                     <span>{group.label}</span>
                     <FiChevronDown aria-hidden="true" />
                   </button>
@@ -131,12 +157,6 @@ export default function AppHeader() {
               ))}
             </nav>
           )}
-          <label className="engine-command">
-            <span className="sr-only">Search workspace</span>
-            <FiSearch aria-hidden="true" />
-            <input ref={searchRef} type="search" placeholder="Search" />
-            <kbd><FiCommand aria-hidden="true" /> K</kbd>
-          </label>
           <div className="engine-header__utilities">
             <ThemeToggleButton />
             <NotificationDropdown />

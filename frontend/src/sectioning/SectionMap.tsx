@@ -189,7 +189,7 @@ export default function SectionMap({
               position={pt} 
               icon={L.divIcon({
                 className: 'custom-drawn-label bg-transparent border-0',
-                html: `<div style="background: rgba(255,255,255,0.9); border: 2px solid ${i === 0 ? '#10b981' : '#ef4444'}; padding: 3px 8px; border-radius: 6px; font-weight: 800; font-size: 11px; color: #1f2937; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transform: translate(-50%, -150%);">${i === 0 ? 'START (WELD PERTAMA)' : i === drawnRoute.length - 1 ? 'END (WELD TERAKHIR)' : `Titik ${i+1}`}</div>`,
+                html: `<div style="background: rgba(255,255,255,0.9); border: 2px solid ${i === 0 ? '#10b981' : '#ef4444'}; padding: 3px 8px; border-radius: 6px; font-weight: 800; font-size: 11px; color: #1f2937; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transform: translate(-50%, -150%);">${i === 0 ? 'START (FIRST WELD)' : i === drawnRoute.length - 1 ? 'END (LAST WELD)' : `Point ${i+1}`}</div>`,
                 iconAnchor: [0, 0]
               })} 
             />
@@ -284,13 +284,13 @@ export default function SectionMap({
         <div className="bg-white px-4 py-2 rounded-lg shadow-lg border border-gray-200">
           <span className="text-sm font-bold text-gray-700 flex items-center gap-2">
             {pickingMode === 'start' ? (
-               <><div className="w-3 h-3 rounded-full bg-blue-500 animate-pulse"></div>Klik Peta Untuk Menentukan Titik Awal</>
+               <><div className="w-3 h-3 rounded-full bg-blue-500 animate-pulse"></div>Click the map to set the start point</>
             ) : pickingMode === 'end' ? (
-               <><div className="w-3 h-3 rounded-full bg-blue-500 animate-pulse"></div>Klik Peta Untuk Menentukan Titik Akhir</>
+               <><div className="w-3 h-3 rounded-full bg-blue-500 animate-pulse"></div>Click the map to set the end point</>
             ) : pickingMode === 'route' ? (
-               <><div className="w-3 h-3 rounded-full bg-orange-500 animate-pulse"></div>Mode Gambar Rute Bebas ({drawnRoute.length} titik)</>
+               <><div className="w-3 h-3 rounded-full bg-orange-500 animate-pulse"></div>Freehand route mode ({drawnRoute.length} points)</>
             ) : (
-               <><div className="w-3 h-3 rounded-full bg-red-500 animate-pulse"></div>Pilih GW Untuk Membuat Section</>
+               <><div className="w-3 h-3 rounded-full bg-red-500 animate-pulse"></div>Select GWs to create a section</>
             )}
           </span>
         </div>

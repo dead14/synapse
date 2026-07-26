@@ -25,18 +25,18 @@ export default function SectionTable({ sections, lockedGws, sectionTypes, onEdit
       <header>
         <div>
           <p>SECTION REGISTER</p>
-          <h3 id="section-table-title">Daftar section</h3>
+          <h3 id="section-table-title">Section list</h3>
         </div>
         <span>{sections.length} section</span>
       </header>
 
       {sections.length === 0 ? (
-        <p className="sectioning-light-section-table__empty">Belum ada section. Klik dua marker GW NEW pada jalur untuk mulai.</p>
+        <p className="sectioning-light-section-table__empty">No sections yet. Click two NEW GW markers on the line to begin.</p>
       ) : (
         <div className="sectioning-light-section-table__scroll">
           <table>
             <thead>
-              <tr><th>Section</th><th>Batas GW NEW</th><th>Log distance NEW</th><th>Panjang</th><th>Jenis</th><th>Policy</th><th>Aksi</th></tr>
+              <tr><th>Section</th><th>GW NEW bounds</th><th>Log distance NEW</th><th>Length</th><th>Type</th><th>Policy</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {sections.map((section) => {
@@ -47,15 +47,15 @@ export default function SectionTable({ sections, lockedGws, sectionTypes, onEdit
                 return (
                   <tr key={section.id}>
                     <th scope="row" data-label="Section">{section.name}</th>
-                    <td data-label="Batas GW NEW">{start?.newId ?? '-'} {'->'} {end?.newId ?? '-'}</td>
+                    <td data-label="GW NEW bounds">{start?.newId ?? '-'} {'->'} {end?.newId ?? '-'}</td>
                     <td data-label="Log distance NEW" className="sectioning-light-section-table__number">{formatLogDistance(resolved.newStartM)} {'->'} {formatLogDistance(resolved.newEndM)}</td>
-                    <td data-label="Panjang" className="sectioning-light-section-table__number">{length.toFixed(3)} m</td>
-                    <td data-label="Jenis">{typeLabel.get(section.sectionType ?? 'UNCLASSIFIED') ?? 'Unclassified'}</td>
+                    <td data-label="Length" className="sectioning-light-section-table__number">{length.toFixed(3)} m</td>
+                    <td data-label="Type">{typeLabel.get(section.sectionType ?? 'UNCLASSIFIED') ?? 'Unclassified'}</td>
                     <td data-label="Policy"><span className={`sectioning-light-section-table__policy is-${section.policy.toLowerCase()}`}>{policyLabel[section.policy]}</span></td>
-                    <td data-label="Aksi">
+                    <td data-label="Actions">
                       <div className="sectioning-light-section-table__actions">
                         <button type="button" onClick={() => onEdit(section.id)} aria-label={`Edit ${section.name}`}><FiEdit3 /> Edit</button>
-                        <button type="button" className="is-danger" onClick={() => onDelete(section.id)} aria-label={`Hapus ${section.name}`}><FiTrash2 /> Hapus</button>
+                        <button type="button" className="is-danger" onClick={() => onDelete(section.id)} aria-label={`Delete ${section.name}`}><FiTrash2 /> Delete</button>
                       </div>
                     </td>
                   </tr>

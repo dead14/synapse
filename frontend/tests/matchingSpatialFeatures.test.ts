@@ -26,8 +26,8 @@ test('buildMatchingSpatialFeatures keeps OLD, missing, and bend evidence when ru
     { id: 'OLD-001', status: 'MATCHED' },
     { id: 'OLD-002', status: 'MISSING_IN_MASTER' },
   ]);
-  assert.equal(features.historicalLanes[0].gws[1].rawData.missingReason, 'Tidak ada GW NEW pasangan');
-  assert.equal(features.gws.find((gw) => gw.id === 'NEW-002')?.rawData.missingReason, 'Tidak ada GW OLD pasangan');
+  assert.equal(features.historicalLanes[0].gws[1].rawData.missingReason, 'No paired NEW GW');
+  assert.equal(features.gws.find((gw) => gw.id === 'NEW-002')?.rawData.missingReason, 'No paired OLD GW');
   assert.deepEqual(features.allFeatures.filter((feature) => feature.type.includes('bend')).map((feature) => feature.id), ['BEND-001']);
 });
 

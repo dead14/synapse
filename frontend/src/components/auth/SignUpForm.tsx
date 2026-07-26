@@ -28,10 +28,10 @@ export default function SignUpForm() {
       navigate("/");
     } catch (err: any) {
       const message = err instanceof ApiError && err.status === 404
-        ? "Endpoint pendaftaran tidak ditemukan. Hubungi administrator Synapse."
+        ? "Registration endpoint not found. Contact your Synapse administrator."
         : err instanceof TypeError || /fetch|network/i.test(String(err?.message || ""))
-          ? "Layanan Synapse tidak dapat dihubungi. Periksa koneksi Anda lalu coba lagi."
-          : err?.message || "Pendaftaran gagal. Periksa data yang dimasukkan.";
+          ? "Could not reach the Synapse service. Check your connection and try again."
+          : err?.message || "Registration failed. Check the submitted data.";
       setError(message);
     }
   };

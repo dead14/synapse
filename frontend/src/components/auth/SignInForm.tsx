@@ -30,10 +30,10 @@ export default function SignInForm() {
       navigate(safeFrom, { replace: true });
     } catch (err: any) {
       const message = err instanceof ApiError && err.status === 404
-        ? "Endpoint login tidak ditemukan. Hubungi administrator Synapse."
+        ? "Login endpoint not found. Contact your Synapse administrator."
         : err instanceof TypeError || /fetch|network/i.test(String(err?.message || ''))
-          ? "Layanan Synapse tidak dapat dihubungi. Periksa koneksi Anda lalu coba lagi."
-          : err?.message || "Login gagal. Periksa email dan password.";
+          ? "Could not reach the Synapse service. Check your connection and try again."
+          : err?.message || "Login failed. Check your email and password.";
       setError(message);
     }
   };

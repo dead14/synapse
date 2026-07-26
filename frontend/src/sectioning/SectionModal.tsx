@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import Modal from '../components/common/Modal';
 import type { SectionDef } from './types';
 
 interface SectionModalProps {
@@ -18,7 +19,7 @@ const SECTION_TYPES = [
   { id: 'ROC', label: 'ROC - Road Crossing' },
   { id: 'BUR', label: 'BUR - Buried Normal' },
   { id: 'CAS', label: 'CAS - Cased Section' },
-  { id: 'OTH', label: 'OTH - Lainnya' }
+  { id: 'OTH', label: 'OTH - Other' }
 ];
 
 export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndCoords, error, onClose, onSave }: SectionModalProps) {
@@ -62,30 +63,34 @@ export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndC
   };
 
   return (
-    <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-xl max-w-[500px] w-full p-6 text-gray-800 font-sans">
-        
-        <h2 className="text-xl font-bold text-gray-900 mb-2">Buat Section</h2>
+    <Modal
+      onClose={onClose}
+      labelledBy="section-modal-title"
+      overlayClassName="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[999999] flex items-center justify-center p-4"
+      panelClassName="bg-white rounded-2xl border border-gray-200 shadow-xl max-w-[500px] w-full p-6 text-gray-800 font-sans"
+    >
+
+        <h2 id="section-modal-title" className="text-xl font-bold text-gray-900 mb-2">Create Section</h2>
         <p className="text-xs text-gray-500 mb-6 font-mono bg-gray-50 p-2 rounded-lg border border-gray-100">
-          {orderedGWs[0].id} ({orderedGWs[0].dist.toFixed(2)}m) ➔ {orderedGWs[1].id} ({orderedGWs[1].dist.toFixed(2)}m) • panjang <strong className="text-blue-600">{distance.toFixed(2)} m</strong>
+          {orderedGWs[0].id} ({orderedGWs[0].dist.toFixed(2)}m) ➔ {orderedGWs[1].id} ({orderedGWs[1].dist.toFixed(2)}m) • length <strong className="text-blue-600">{distance.toFixed(2)} m</strong>
         </p>
 
         <div className="flex flex-col gap-5">
-          {/* NAMA SECTION */}
+          {/* SECTION NAME */}
           <div>
-            <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">NAMA SECTION</label>
-            <input 
-              type="text" 
+            <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">SECTION NAME</label>
+            <input
+              type="text"
               value={name}
               onChange={e => setName(e.target.value)}
-              placeholder="cth: RC 192, AC 45, Riser Platform A"
+              placeholder="e.g. RC 192, AC 45, Riser Platform A"
               className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-900 placeholder-gray-400"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">JENIS FISIK</label>
+              <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">PHYSICAL TYPE</label>
               <select
                 value={physicalType}
                 onChange={(e) => setPhysicalType(e.target.value)}
@@ -113,9 +118,9 @@ export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndC
             </div>
           </div>
 
-          {/* TIPE SECTION */}
+          {/* SECTION TYPE */}
           <div>
-            <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">TIPE SECTION</label>
+            <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">SECTION TYPE</label>
             <div className="flex flex-wrap gap-2">
               {SECTION_TYPES.map(t => (
                 <button
@@ -135,7 +140,7 @@ export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndC
 
           {/* GIS COORDINATES */}
           <div>
-            <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">KOORDINAT (MANUAL UNTUK PETA)</label>
+            <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">COORDINATES (MANUAL, FOR THE MAP)</label>
             <div className="grid grid-cols-2 gap-4">
                <div>
                   <label className="block text-[10px] font-bold text-gray-500 mb-1">START GW (LAT / LNG)</label>
@@ -154,13 +159,13 @@ export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndC
             </div>
           </div>
 
-          {/* CATATAN */}
+          {/* NOTES */}
           <div>
-            <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">CATATAN (OPSIONAL)</label>
-            <textarea 
+            <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">NOTES (OPTIONAL)</label>
+            <textarea
               value={notes}
               onChange={e => setNotes(e.target.value)}
-              placeholder="cth: sungai Mahakam, kedalaman 8m, dekat KP 12.3"
+              placeholder="e.g. Mahakam river crossing, 8 m depth, near KP 12.3"
               className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-900 min-h-[80px] placeholder-gray-400"
             />
           </div>
@@ -172,22 +177,21 @@ export default function SectionModal({ startGw, endGw, autoStartCoords, autoEndC
 
         {/* ACTIONS */}
         <div className="flex justify-end gap-3 mt-8 pt-4 border-t border-gray-100">
-          <button 
+          <button
             onClick={onClose}
             className="px-6 py-2 bg-white text-sm font-medium text-gray-600 hover:bg-gray-50 border border-gray-300 rounded-lg transition-colors"
           >
-            batal
+            Cancel
           </button>
-          <button 
+          <button
             onClick={handleSave}
             disabled={!name}
             className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-bold transition-colors disabled:opacity-50 disabled:bg-gray-400 shadow-sm"
           >
-            simpan section
+            Save section
           </button>
         </div>
 
-      </div>
-    </div>
+    </Modal>
   );
 }

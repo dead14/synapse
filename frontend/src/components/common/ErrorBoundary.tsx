@@ -43,19 +43,19 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
           <section className="syn-panel syn-empty-compact" role="alert">
             <p className="syn-kicker">Workspace error</p>
             <h1 className="syn-heading">
-              {this.props.scope ? `${this.props.scope} tidak dapat ditampilkan.` : 'Halaman ini tidak dapat ditampilkan.'}
+              {this.props.scope ? `${this.props.scope} could not be displayed.` : 'This page could not be displayed.'}
             </h1>
             <p className="syn-copy">
-              Tampilan gagal dirender, tetapi data yang sudah tersimpan di server tidak terpengaruh.
-              Detail teknis tersedia di konsol browser.
+              The view failed to render, but data already saved on the server is unaffected.
+              Technical details are available in the browser console.
             </p>
             <p className="syn-copy font-mono text-xs">{error.message}</p>
             <div className="mt-4 flex flex-wrap gap-3">
               <button type="button" className="syn-action syn-action--ink" onClick={this.reset}>
-                Coba tampilkan lagi
+                Try again
               </button>
               <a className="syn-action syn-action--outline" href="/">
-                Kembali ke Overview
+                Back to Overview
               </a>
             </div>
           </section>

@@ -88,7 +88,7 @@ function TrackMarker({
 }) {
   const label = distanceLabel(position);
   const rawLd = rawLdForTimelineMarker(sourcePosition, match, side);
-  const rawSourceLabel = rawLd === null ? ' · LD asli tidak tersedia' : ` · LD asli ${distanceLabel(rawLd)}`;
+  const rawSourceLabel = rawLd === null ? ' · source LD unavailable' : ` · source LD ${distanceLabel(rawLd)}`;
   const markerLabel = `${label} · ${status}${match ? ' pair' : ' feature'}${rawSourceLabel}`;
 
   return (
@@ -102,7 +102,7 @@ function TrackMarker({
     >
       <span aria-hidden="true" />
       <small>{label}</small>
-      <span className="gw-pipeline-marker__raw-label" aria-hidden="true">{rawLd === null ? 'LD asli tidak tersedia' : `LD asli ${distanceLabel(rawLd)}`}</span>
+      <span className="gw-pipeline-marker__raw-label" aria-hidden="true">{rawLd === null ? 'source LD unavailable' : `source LD ${distanceLabel(rawLd)}`}</span>
     </button>
   );
 }
@@ -321,11 +321,11 @@ export default function GwPipelineCanvas({
           {!isLoading && matches.length === 0 && (
             domain.endM > domain.startM ? (
               <div className="gw-pipeline-empty" role="status">
-                <strong>Matcher selesai tanpa satu pun pasangan</strong>
+                <strong>Matcher finished with no pairs</strong>
                 <span>
-                  Anchor kedua run terbaca, tetapi tidak ada yang berpasangan dalam toleransi saat ini.
-                  Longgarkan OTA, periksa hasil Tie-in setup, atau pastikan kedua run benar-benar
-                  mencakup ruas pipa yang sama.
+                  Anchors from both runs were read, but none paired within the current tolerance.
+                  Loosen the OTA, review the Tie-in setup result, or confirm both runs actually
+                  cover the same pipeline segment.
                 </span>
               </div>
             ) : (

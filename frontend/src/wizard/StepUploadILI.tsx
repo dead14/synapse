@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettings, FiShield, FiPlus } from 'react-icons/fi';
 import { apiFetch, apiUrl } from '../utils/api';
+import { useToast } from '../components/common/ToastProvider';
 import {
   buildPersistedIliRun,
   ingestPersistedInspectionRunPair,
@@ -35,8 +36,8 @@ const STRATEGY_ORDER = [
 ];
 
 const UNAVAILABLE_REASONS: Record<string, string> = {
-  MOCK_ENGINE_NOT_VALIDATED: 'engine belum divalidasi',
-  UNKNOWN_STRATEGY: 'strategi tidak dikenal',
+  MOCK_ENGINE_NOT_VALIDATED: 'engine not yet validated',
+  UNKNOWN_STRATEGY: 'unknown strategy',
 };
 
 // Until the capability table arrives, only offer the engines the server is
@@ -49,7 +50,7 @@ function strategyLabel(capability: StrategyCapability): string {
   const name = STRATEGY_LABELS[capability.id] || capability.id;
   if (capability.available) return name;
   const reason = capability.reasonCode ? UNAVAILABLE_REASONS[capability.reasonCode] : null;
-  return `${name} — tidak tersedia${reason ? ` (${reason})` : ''}`;
+  return `${name} — unavailable${reason ? ` (${reason})` : ''}`;
 }
 
 function fileStem(fileName: string): string {
@@ -108,6 +109,7 @@ async function waitForIngestion(
 }
 
 export default function StepUploadILI({ onNext }: StepUploadILIProps) {
+  const toast = useToast();
   const [expandedSection, setExpandedSection] = useState<string | null>('all');
   const [datasets, setDatasets] = useState<any[]>([{ id: 1, year: '', vendor: '', file: null }, { id: 2, year: '', vendor: '', file: null }]);
   const [masterIndex, setMasterIndex] = useState(1);
@@ -258,7 +260,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
       if (signal?.aborted) return;
       console.error(err);
       const detail = err instanceof Error && err.message ? `\n\nDetail: ${err.message}` : '';
-      alert(`Gagal mengimpor file ILI. Pastikan format, tahun, vendor, dan header valid.${detail}`);
+      toast.error(`Failed to import the ILI file. Check the format, year, vendor, and headers.${detail}`);
     } finally {
       if (!signal?.aborted) {
         setIsProcessing(false);

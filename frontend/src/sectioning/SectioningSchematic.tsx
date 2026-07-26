@@ -231,7 +231,7 @@ export default function SectioningSchematic({
                   key={`${feature.id}-${index}`}
                   role={isGw && canInspectGws ? 'button' : undefined}
                   tabIndex={isGw && canInspectGws ? 0 : undefined}
-                  aria-label={isGw && canInspectGws ? `GW ${feature.id} pada ${feature.dist.toFixed(3)} m, ${isUnmatched ? 'tanpa pasangan OLD' : 'terpasang'}` : undefined}
+                  aria-label={isGw && canInspectGws ? `GW ${feature.id} at ${feature.dist.toFixed(3)} m, ${isUnmatched ? 'no OLD pair' : 'paired'}` : undefined}
                   className={isGw && canInspectGws ? 'cursor-pointer' : ''}
                   onClick={() => { if (isGw) activateGw(feature); }}
                   onKeyDown={isGw && canInspectGws ? markerKeyDown(feature) : undefined}
@@ -301,7 +301,7 @@ export default function SectioningSchematic({
                         key={`${gw.id}-${gwIndex}`}
                         role={canInspectGws ? 'button' : undefined}
                         tabIndex={canInspectGws ? 0 : undefined}
-                        aria-label={canInspectGws ? `GW OLD ${gw.id} pada ${gw.dist.toFixed(3)} m, ${unmatched ? 'tanpa pasangan NEW' : 'terpasang'}` : undefined}
+                        aria-label={canInspectGws ? `OLD GW ${gw.id} at ${gw.dist.toFixed(3)} m, ${unmatched ? 'no NEW pair' : 'paired'}` : undefined}
                         className={canInspectGws ? 'cursor-pointer' : ''}
                         onClick={() => activateGw(gw)}
                         onKeyDown={canInspectGws ? markerKeyDown(gw) : undefined}
@@ -327,8 +327,8 @@ export default function SectioningSchematic({
           {/* Legend */}
           <div className="absolute bottom-6 left-6 flex gap-4 items-center text-xs font-medium text-gray-700 bg-white/90 px-5 py-3 rounded-xl border border-gray-200 shadow-md backdrop-blur-sm">
             <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#10b981] rounded-[2px]" />Matched</span>
-            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#ef4444] rounded-[2px]" />Tanpa pasangan</span>
-            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#2563eb] rounded-[2px]" />Terpilih</span>
+            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#ef4444] rounded-[2px]" />Unpaired</span>
+            <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#2563eb] rounded-[2px]" />Selected</span>
             <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#8b5cf6] rounded-[2px]" />Valve/Tee</span>
             <span className="flex items-center gap-2"><div className="w-3 h-3 bg-[#f59e0b] rounded-[2px]" />Bend</span>
             <span className="flex items-center gap-2"><div className="w-5 h-0 border-t-[1.5px] border-dashed border-[#10b981]" />Pair link</span>

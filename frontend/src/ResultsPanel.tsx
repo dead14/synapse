@@ -1,8 +1,9 @@
 import { useState, useMemo, useEffect, useRef, lazy, Suspense } from 'react';
-import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, FiX, FiDownload, FiMap } from 'react-icons/fi';
 import { apiFetch, apiUrl } from './utils/api';
+import Modal from './components/common/Modal';
+import { useToast } from './components/common/ToastProvider';
 import { createExcelExportRows } from './utils/alignmentExport';
 import {
   alignmentDisplayValue,
@@ -99,7 +100,7 @@ const PaginationFooter = ({ totalRows, hasActiveFilters, onClearFilters }: {
   onClearFilters: () => void;
 }) => (
   <div className="bg-gray-100 border-t border-gray-200 p-2 flex justify-between items-center text-sm text-gray-600">
-    <span className="text-gray-500">Total: {totalRows} baris</span>
+    <span className="text-gray-500">Total: {totalRows} rows</span>
     {hasActiveFilters && (
       <button
         onClick={onClearFilters}
@@ -140,11 +141,15 @@ const ProbabilityModal = ({ sourceRow, targetRow, onConfirm, onCancel }: { sourc
   else if (confidence > 50) { recommendation = "Possible Match"; color = "text-yellow-600"; }
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6 animate-fade-in">
+    <Modal
+      onClose={onCancel}
+      labelledBy="probability-modal-title"
+      overlayClassName="fixed inset-0 bg-black/50 z-[999999] flex items-center justify-center p-4"
+      panelClassName="bg-white rounded-lg shadow-xl max-w-lg w-full p-6 animate-fade-in"
+    >
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-bold text-gray-800">Match Probability Analysis</h3>
-          <button onClick={onCancel} className="text-gray-400 hover:text-gray-600"><FiX size={24} /></button>
+          <h3 id="probability-modal-title" className="text-lg font-bold text-gray-800">Match Probability Analysis</h3>
+          <button onClick={onCancel} aria-label="Close match probability analysis" className="text-gray-400 hover:text-gray-600"><FiX size={24} /></button>
         </div>
         
         <div className="bg-blue-50 p-4 rounded-lg mb-6 border border-blue-100">
@@ -184,8 +189,96 @@ const ProbabilityModal = ({ sourceRow, targetRow, onConfirm, onCancel }: { sourc
           <button onClick={onCancel} className="px-4 py-2 rounded text-gray-600 hover:bg-gray-100 font-medium">Cancel</button>
           <button onClick={onConfirm} className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-sm">Confirm Match</button>
         </div>
+    </Modal>
+  );
+};
+
+/** True when the row carries a usable value under the given key. */
+const hasRowValue = (row: any, key: string) => {
+  const value = row?.[key];
+  return value !== undefined && value !== null && value !== '' && value !== '-';
+};
+
+/**
+ * Keyboard path for match reassignment: lists unmatched OLD rows as targets
+ * for the chosen NEW-side row. Picking one routes through the same
+ * ProbabilityModal -> onUpdateMatch path the mouse drag-and-drop uses.
+ */
+const ReassignDialog = ({ sourceRow, candidates, onPick, onCancel }: {
+  sourceRow: any;
+  candidates: any[];
+  onPick: (targetRow: any) => void;
+  onCancel: () => void;
+}) => {
+  const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return candidates;
+    return candidates.filter((row) => ['Source Key OLD', 'Identif. OLD', 'Log Dist OLD (m)', 'Feature Type OLD']
+      .some((key) => row[key] !== undefined && row[key] !== null && String(row[key]).toLowerCase().includes(needle)));
+  }, [candidates, query]);
+  const visible = filtered.slice(0, 100);
+
+  const sourceLabel = String(sourceRow?.['Identif. NEW'] ?? sourceRow?.['Source Key NEW'] ?? '-');
+  const sourceDist = sourceRow?.['Log Dist NEW (m)'];
+
+  return (
+    <Modal
+      onClose={onCancel}
+      labelledBy="reassign-dialog-title"
+      initialFocusRef={searchRef}
+      overlayClassName="fixed inset-0 bg-black/50 z-[999999] flex items-center justify-center p-4"
+      panelClassName="bg-white rounded-lg shadow-xl max-w-xl w-full p-6 flex flex-col max-h-[80vh]"
+    >
+      <div className="flex justify-between items-center mb-1">
+        <h3 id="reassign-dialog-title" className="text-lg font-bold text-gray-800">Reassign NEW feature</h3>
+        <button onClick={onCancel} aria-label="Close reassign dialog" className="text-gray-400 hover:text-gray-600"><FiX size={22} /></button>
       </div>
-    </div>
+      <p className="text-sm text-gray-500 mb-3">
+        NEW <span className="font-semibold text-gray-700">{sourceLabel}</span>
+        {typeof sourceDist === 'number' ? ` at ${sourceDist.toFixed(3)} m` : ''} — choose the unmatched OLD feature it belongs to.
+      </p>
+      <input
+        ref={searchRef}
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search by Source Key, ID, or distance..."
+        aria-label="Search unmatched OLD features by source key, identifier, or distance"
+        className="mb-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+      />
+      {visible.length === 0 ? (
+        <p className="py-6 text-center text-sm text-gray-400">No unmatched OLD features match this search.</p>
+      ) : (
+        <ul className="flex-1 overflow-y-auto divide-y divide-gray-100 border border-gray-100 rounded-md" aria-label="Candidate OLD features">
+          {visible.map((row) => (
+            <li key={row.__origIdx}>
+              <button
+                type="button"
+                onClick={() => onPick(row)}
+                className="w-full px-3 py-2 text-left text-sm hover:bg-blue-50 focus:bg-blue-50 focus:outline-none"
+              >
+                <span className="font-semibold text-gray-800">{String(row['Identif. OLD'] ?? row['Source Key OLD'] ?? '-')}</span>
+                <span className="ml-2 text-gray-500">
+                  {typeof row['Log Dist OLD (m)'] === 'number' ? `${row['Log Dist OLD (m)'].toFixed(3)} m` : String(row['Log Dist OLD (m)'] ?? '')}
+                </span>
+                {hasRowValue(row, 'Feature Type OLD') && (
+                  <span className="ml-2 text-xs text-gray-400">{String(row['Feature Type OLD'])}</span>
+                )}
+                {hasRowValue(row, 'Depth OLD (%WT)') && (
+                  <span className="ml-2 text-xs text-gray-400">{String(row['Depth OLD (%WT)'])} %WT</span>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {filtered.length > visible.length && (
+        <p className="mt-2 text-xs text-gray-400">Showing the first {visible.length} of {filtered.length} candidates — refine the search to narrow down.</p>
+      )}
+    </Modal>
   );
 };
 
@@ -219,6 +312,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   }, [rawData]);
 
   const navigate = useNavigate();
+  const toast = useToast();
   const [isExporting, setIsExporting] = useState(false);
   const [activeTab, setActiveTab] = useState('Results');
   const [radioFilter, setRadioFilter] = useState('All');
@@ -246,6 +340,14 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   // Drag & Drop Match State
   const [draggedRowIdx, setDraggedRowIdx] = useState<number | null>(null);
   const [modalState, setModalState] = useState<{ isOpen: boolean, sourceRow: any, targetRow: any }>({ isOpen: false, sourceRow: null, targetRow: null });
+  // Keyboard path for reassignment: the row whose NEW side is being reassigned.
+  const [reassignSource, setReassignSource] = useState<any | null>(null);
+  // Same rows a drop can land on and pass the parent's validation: an OLD
+  // feature that has no NEW pair yet.
+  const reassignCandidates = useMemo(() => data
+    .filter((row: any) => (hasRowValue(row, 'Source Key OLD') || hasRowValue(row, 'Identif. OLD'))
+      && !hasRowValue(row, 'Source Key NEW') && !hasRowValue(row, 'Identif. NEW'))
+    .sort((a: any, b: any) => (parseFloat(a['Log Dist OLD (m)']) || 0) - (parseFloat(b['Log Dist OLD (m)']) || 0)), [data]);
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState('');
@@ -302,6 +404,13 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
     }
     return ['Section'];
   }, [data]);
+
+  // The column that hosts the keyboard "Reassign..." affordance: the first
+  // visible NEW-side column in the Interventions tab.
+  const reassignColumn = useMemo(
+    () => visibleColumns.filter((c) => allColumns.includes(c)).find((c) => c.includes('NEW')),
+    [visibleColumns, allColumns],
+  );
 
   // Fetch sections
   useEffect(() => {
@@ -627,14 +736,14 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error("Failed to export Excel:", err);
-      alert("Gagal mengekspor file Excel.");
+      toast.error('Failed to export the Excel file.');
     } finally {
       setIsExporting(false);
     }
   };
 
   const panelContent = (
-    <div className={isFullScreen ? "fixed inset-0 z-[999999] bg-white flex flex-col overflow-hidden" : "bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden"}>
+    <div className={isFullScreen ? "h-full w-full bg-white flex flex-col overflow-hidden" : "bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden"}>
       
       {/* Tabs Header */}
       <div className="flex justify-between border-b border-gray-200 bg-gray-50/50 pr-4">
@@ -743,6 +852,19 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
         />
       )}
 
+      {reassignSource !== null && (
+        <ReassignDialog
+          sourceRow={reassignSource}
+          candidates={reassignCandidates}
+          onCancel={() => setReassignSource(null)}
+          onPick={(targetRow) => {
+            // Route through the same confirmation modal the drop path uses.
+            setReassignSource(null);
+            setModalState({ isOpen: true, sourceRow: reassignSource, targetRow });
+          }}
+        />
+      )}
+
       {(activeTab === 'Results' || activeTab === 'ILI Run 1' || activeTab === 'ILI Run 2' || activeTab === 'Interventions') && (
         <div className="flex flex-col h-full bg-white rounded shadow-sm border border-gray-200 overflow-hidden text-sm relative">
           {/* Summary Dashboard Area */}
@@ -800,9 +922,9 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                 {radioFilter === 'Distance' && (
                   <div className="flex items-center gap-2 ml-2">
                     <span className="text-gray-600">Start:</span>
-                    <input type="text" value={distanceStart} onChange={e => setDistanceStart(e.target.value)} className="border border-gray-300 rounded px-2 py-0.5 w-20 focus:border-blue-400 focus:outline-none" />
+                    <input type="text" value={distanceStart} onChange={e => setDistanceStart(e.target.value)} aria-label="Distance filter start (m)" className="border border-gray-300 rounded px-2 py-0.5 w-20 focus:border-blue-400 focus:outline-none" />
                     <span className="text-gray-600 ml-2">End:</span>
-                    <input type="text" value={distanceEnd} onChange={e => setDistanceEnd(e.target.value)} className="border border-gray-300 rounded px-2 py-0.5 w-20 focus:border-blue-400 focus:outline-none" />
+                    <input type="text" value={distanceEnd} onChange={e => setDistanceEnd(e.target.value)} aria-label="Distance filter end (m)" className="border border-gray-300 rounded px-2 py-0.5 w-20 focus:border-blue-400 focus:outline-none" />
                   </div>
                 )}
               </div>
@@ -836,11 +958,12 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
             </div>
             <div className="relative">
               <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input 
-                type="text" 
+              <input
+                type="text"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Search" 
+                placeholder="Search"
+                aria-label="Search by OLD or NEW identifier"
                 className="pl-9 pr-4 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:border-blue-500"
               />
             </div>
@@ -852,7 +975,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                 <div className="w-full max-w-4xl bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
                   <h3 className="text-lg font-bold text-gray-800 mb-6">Filtered Depth Correlation</h3>
                   <div className="h-[400px]">
-                    <Suspense fallback={<div className="flex items-center justify-center h-full text-gray-400 text-sm"><div className="w-6 h-6 border-4 border-blue-200 border-t-blue-500 rounded-full animate-spin mr-3" />Memuat chart...</div>}>
+                    <Suspense fallback={<div className="flex items-center justify-center h-full text-gray-400 text-sm"><div className="w-6 h-6 border-4 border-blue-200 border-t-blue-500 rounded-full animate-spin mr-3" />Loading chart...</div>}>
                       <LazyScatterChart data={filteredData} />
                     </Suspense>
                   </div>
@@ -884,23 +1007,30 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                             e.preventDefault();
                             handleColumnDrop(col);
                           }}
-                          style={{ width: colWidths[col] || 150 }} 
+                          style={{ width: colWidths[col] || 150 }}
+                          aria-sort={sortConfig?.key === col ? (sortConfig.direction === 'asc' ? 'ascending' : 'descending') : undefined}
                           className={`px-2 py-2 font-bold border-r border-gray-200 whitespace-nowrap relative group select-none ${draggedColumn === col ? 'opacity-50 bg-gray-100' : ''}`}
                         >
                           <div className="flex flex-col gap-1">
-                            <div className="flex justify-between items-center cursor-pointer hover:text-brand-600" onClick={() => {
-                              let direction: 'asc' | 'desc' = 'asc';
-                              if (sortConfig && sortConfig.key === col && sortConfig.direction === 'asc') direction = 'desc';
-                              setSortConfig({ key: col, direction });
-                            }}>
+                            <button
+                              type="button"
+                              className="flex w-full justify-between items-center cursor-pointer hover:text-brand-600 focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-500 rounded"
+                              aria-label={`Sort by ${col}${sortConfig?.key === col ? (sortConfig.direction === 'asc' ? ', currently ascending' : ', currently descending') : ''}`}
+                              onClick={() => {
+                                let direction: 'asc' | 'desc' = 'asc';
+                                if (sortConfig && sortConfig.key === col && sortConfig.direction === 'asc') direction = 'desc';
+                                setSortConfig({ key: col, direction });
+                              }}
+                            >
                               <span>{col}</span>
-                              <span className="text-gray-400 text-[10px]">
+                              <span aria-hidden="true" className="text-gray-400 text-[10px]">
                                 {sortConfig?.key === col ? (sortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
                               </span>
-                            </div>
-                            <input 
+                            </button>
+                            <input
                               type="text"
                               placeholder="Filter..."
+                              aria-label={`Filter ${col}`}
                               className="w-full border border-gray-300 rounded px-1 py-0.5 text-[10px] font-normal focus:outline-none focus:border-brand-500"
                               value={filterInput[col] || ''}
                               onChange={(e) => setFilterInput(prev => ({ ...prev, [col]: e.target.value }))}
@@ -932,7 +1062,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                     {loading ? (
                       <tr><td colSpan={visibleColumns.length} className="p-8 text-center text-gray-400">Loading data...</td></tr>
                     ) : sortedData.length === 0 ? (
-                      <tr><td colSpan={visibleColumns.length} className="p-8 text-center text-gray-400">Tidak ada data yang cocok dengan filter</td></tr>
+                      <tr><td colSpan={visibleColumns.length} className="p-8 text-center text-gray-400">No data matches the current filters</td></tr>
                     ) : (
                       <>
                         {/* Spacer top */}
@@ -953,12 +1083,15 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                             else bgClass = 'bg-gray-100 hover:bg-gray-200 text-gray-950';
                           }
                           if (isSelected) bgClass = 'bg-indigo-200 hover:bg-indigo-300 text-indigo-950 font-semibold';
-                          
+
+                          const isReassignableSource = activeTab === 'Interventions'
+                            && (hasRowValue(row, 'Source Key NEW') || hasRowValue(row, 'Identif. NEW'));
+
                           return (
-                            <tr 
-                              key={actualIdx} 
-                              style={{ height: ROW_HEIGHT }} 
-                              className={`transition-colors cursor-pointer ${bgClass} ${isDragTarget ? 'hover:bg-green-200 border-2 border-dashed border-green-500' : ''}`}
+                            <tr
+                              key={actualIdx}
+                              style={{ height: ROW_HEIGHT }}
+                              className={`group transition-colors cursor-pointer ${bgClass} ${isDragTarget ? 'hover:bg-green-200 border-2 border-dashed border-green-500' : ''}`}
                               onClick={() => onSelectRowIdx?.(row.__origIdx)}
                               onDragOver={(e) => {
                                 if (!isDragTarget) return;
@@ -1024,6 +1157,16 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                                         ) : '-'
                                       ) : val
                                     ) : ''}
+                                    {col === reassignColumn && isReassignableSource && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => { e.stopPropagation(); setReassignSource(row); }}
+                                        className="ml-1 inline-block align-middle rounded border border-blue-300 bg-white px-1 text-[9px] font-bold text-blue-700 opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
+                                        aria-label={`Reassign NEW feature ${String(row['Identif. NEW'] ?? '')} to an unmatched OLD feature`}
+                                      >
+                                        Reassign…
+                                      </button>
+                                    )}
                                   </td>
                                 );
                               })}
@@ -1060,7 +1203,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                       {loading ? (
                         <tr><td colSpan={12} className="p-8 text-center text-gray-400">Loading data...</td></tr>
                       ) : iliRows.length === 0 ? (
-                        <tr><td colSpan={12} className="p-8 text-center text-gray-400">Tidak ada data yang cocok dengan filter</td></tr>
+                        <tr><td colSpan={12} className="p-8 text-center text-gray-400">No data matches the current filters</td></tr>
                       ) : (
                         <>
                         {/* Spacer top */}
@@ -1142,5 +1285,20 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
     </div>
   );
 
-  return isFullScreen ? createPortal(panelContent, document.body) : panelContent;
+  // Full screen keeps the exact same layout but gains dialog semantics:
+  // Escape exits, focus is trapped and restored, and the page cannot scroll.
+  if (isFullScreen) {
+    return (
+      <Modal
+        onClose={() => setIsFullScreen(false)}
+        ariaLabel="Alignment results (full screen)"
+        closeOnBackdrop={false}
+        overlayClassName="fixed inset-0 z-[999999]"
+        panelClassName="h-full w-full"
+      >
+        {panelContent}
+      </Modal>
+    );
+  }
+  return panelContent;
 }

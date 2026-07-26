@@ -5,7 +5,9 @@ import OdometerDashboard from './OdometerDashboard';
 import GwTimelineViewer from './GwTimelineViewer';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Tooltip } from 'chart.js';
 import { apiFetch, ApiError } from '../utils/api';
+import Modal from '../components/common/Modal';
 import { extentOf, maxOf, minOf } from '../utils/numericRange.ts';
+import { clampTooltipPosition } from '../utils/tooltipPosition';
 import { gwReviewKey, normalizeGwReview, selectReviewedGwLocks, type GwReviewDisposition, type GwReviewState } from '../domain/alignmentReview';
 import { buildTimelineModel, sourceOdometerOffset, type TimelineEvidence, type TimelineGeometry } from '../domain/gwTimeline';
 import { buildGwReviewTransitionPayload } from './gwReviewTransition';
@@ -259,7 +261,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
           && (tieInDecision?.status === 'AUTO_ACCEPTED' || tieInDecision?.status === 'REVIEW_ACKNOWLEDGED');
         const partialRunEnabled = Boolean(config?.enablePartialRun);
         if (partialRunEnabled && !hasCanonicalTieIn) {
-          setLoadError('Partial Run aktif, tetapi TIE IN canonical belum diterapkan. Kembali ke Tie-In Setup dan gunakan rekomendasi yang accepted. Raw 0 m tidak akan dipakai untuk matching.');
+          setLoadError('Partial Run is enabled, but no canonical TIE-IN has been applied. Go back to Tie-In Setup and use an accepted recommendation. Raw 0 m will not be used for matching.');
           return;
         }
         const featureTypeText = (feature: any) => [
@@ -302,7 +304,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
 
         if (!hasPersistedRuns && (rawOldRun.length === 0 || rawNewRun.length === 0)) {
           setMatches([]);
-          setLoadError('Data anchor belum tersedia. Pastikan kedua file ILI berisi fitur Weld, Valve, atau Tee.');
+          setLoadError('Anchor data is not available yet. Make sure both ILI files contain Weld, Valve, or Tee features.');
           return;
         }
         
@@ -442,14 +444,14 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
           setTimelineGeometry(nextTimeline);
           setMatches(nextTimeline.matches);
         } else {
-          throw new Error(data.error || 'Server tidak mengembalikan hasil GW matching.');
+          throw new Error(data.error || 'The server did not return GW matching results.');
         }
       } catch (err: any) {
         if (err.name !== 'AbortError' && currentCalculation === calculationRevision.current) {
           console.error("Failed to run DTW:", err);
           setLoadError(err instanceof ApiError && err.status === 401
-            ? 'Sesi login sudah kedaluwarsa. Silakan masuk kembali.'
-            : `Gagal memuat hasil GW matching: ${err.message || 'periksa koneksi backend.'}`);
+            ? 'Your login session has expired. Sign in again.'
+            : `Failed to load GW matching results: ${err.message || 'check the backend connection.'}`);
         }
       } finally {
         if (currentCalculation === calculationRevision.current) setIsCalculating(false);
@@ -687,7 +689,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                   key={pair.key}
                   onClick={() => switchPair(pair.key)}
                   aria-pressed={isActive}
-                  title={pending ? 'Pasangan ini belum punya hasil matching' : 'Hasil matching tersimpan'}
+                  title={pending ? 'This pair has no matching result yet' : 'Matching result saved'}
                   className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
                     isActive
                       ? 'bg-brand-600 text-white shadow-sm'
@@ -701,7 +703,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
             })}
           </div>
           <span className="ml-auto text-xs text-brand-600">
-            {runPairs.length - unreviewedPairs.length} / {runPairs.length} pasangan sudah dicocokkan
+            {runPairs.length - unreviewedPairs.length} / {runPairs.length} pairs matched
           </span>
         </div>
       )}
@@ -713,7 +715,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
             onClick={() => setRetryNonce((value) => value + 1)}
             className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100"
           >
-            Coba lagi
+            Retry
           </button>
         </div>
       )}
@@ -886,7 +888,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                         {!isCalculating && matches.length === 0 && (
                           <tr>
                             <td colSpan={6} className="px-3 py-10 text-center text-gray-500">
-                              {loadError || 'Belum ada hasil matching untuk ditampilkan.'}
+                              {loadError || 'No matching results to display yet.'}
                             </td>
                           </tr>
                         )}
@@ -1112,7 +1114,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
             advancing with a pair still unmatched would drop it from the results. */}
         {unreviewedPairs.length > 0 && !isCalculating && (
           <p role="status" className="flex-1 text-right text-sm text-amber-700">
-            Masih perlu dicocokkan: {unreviewedPairs.map((pair) => pair.label).join(', ')}.
+            Still to match: {unreviewedPairs.map((pair) => pair.label).join(', ')}.
           </p>
         )}
         <button
@@ -1126,14 +1128,18 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
       </div>
       {/* 3D Viewer Modal */}
       {show3DViewer && selectedGWs.length === 2 && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in p-8">
-          <div className="gw-3d-modal border border-gray-200 rounded-2xl w-full max-w-6xl h-[80vh] flex flex-col shadow-2xl overflow-hidden relative">
+        <Modal
+          onClose={() => setShow3DViewer(false)}
+          labelledBy="gw-3d-modal-title"
+          overlayClassName="fixed inset-0 z-[999999] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in p-8"
+          panelClassName="gw-3d-modal border border-gray-200 rounded-2xl w-full max-w-6xl h-[80vh] flex flex-col shadow-2xl overflow-hidden relative"
+        >
             <div className="flex justify-between items-center p-4 border-b border-gray-200 bg-black/50">
               <div>
-                <h3 className="text-gray-900 font-bold flex items-center gap-2"><FiBox className="text-brand-500" /> Interactive Spool Analysis</h3>
+                <h3 id="gw-3d-modal-title" className="text-gray-900 font-bold flex items-center gap-2"><FiBox className="text-brand-500" /> Interactive Spool Analysis</h3>
                 <p className="text-gray-500 text-xs">Viewing segment from {selectedGWs[0].toFixed(2)}m to {selectedGWs[1].toFixed(2)}m</p>
               </div>
-              <button onClick={() => setShow3DViewer(false)} className="text-gray-500 hover:text-gray-900 bg-gray-100 hover:bg-gray-700 p-2 rounded-full transition-colors">
+              <button onClick={() => setShow3DViewer(false)} aria-label="Close interactive spool analysis" className="text-gray-500 hover:text-gray-900 bg-gray-100 hover:bg-gray-700 p-2 rounded-full transition-colors">
                 <FiX size={20} />
               </button>
             </div>
@@ -1167,13 +1173,26 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                 );
               })()}
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Math Explanation Tooltip */}
       {tooltipState && tooltipState.row.id !== 'match-0-0' && (
-        <div className="fixed z-[100] bg-white border border-gray-200 shadow-2xl rounded-xl p-4 w-80 pointer-events-none" style={{ left: tooltipState.x + 15, top: tooltipState.y + 15 }}>
+        <div
+          className="fixed z-[100] bg-white border border-gray-200 shadow-2xl rounded-xl p-4 w-80 pointer-events-none"
+          style={(() => {
+            // w-80 = 320px; height estimated for the formula breakdown.
+            const placement = clampTooltipPosition({
+              pointerX: tooltipState.x,
+              pointerY: tooltipState.y,
+              tooltipWidth: 320,
+              tooltipHeight: 300,
+              viewportWidth: window.innerWidth,
+              viewportHeight: window.innerHeight,
+            });
+            return { left: placement.left, top: placement.top };
+          })()}
+        >
           <h5 className={`font-bold mb-2 ${tooltipState.row.status === 'Match' ? 'text-blue-600' : 'text-rose-600'}`}>
             Algorithm Decision: {tooltipState.row.status}
           </h5>

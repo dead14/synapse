@@ -41,8 +41,8 @@ export default function OdometerDashboard({ matches, ota, setOta, dtwOn: _dtwOn,
     .sort((left: any, right: any) => right.deviationPct - left.deviationPct)
     .slice(0, 5), [samples]);
   const statusText = flaggedCount > 0
-    ? `${flaggedCount} joint melewati OTA. Review joint merah sebelum lanjut.`
-    : 'Semua matched joint masih di dalam toleransi OTA saat ini.';
+    ? `${flaggedCount} joints exceed the OTA. Review the red joints before continuing.`
+    : 'All matched joints are within the current OTA tolerance.';
 
   return (
     <div className="w-full flex flex-col gap-5">

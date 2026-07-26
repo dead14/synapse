@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 
 import { useAuth } from './context/AuthContext';
+import { ToastProvider } from './components/common/ToastProvider';
 import AppLayout from './layout/AppLayout';
 
 // Route-level splitting follows React's lazy/Suspense contract:
@@ -90,7 +91,8 @@ function NotFoundPage() {
 
 export default function App() {
   return (
-    <Suspense fallback={<WorkspaceLoading />}>
+    <ToastProvider>
+      <Suspense fallback={<WorkspaceLoading />}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<RegisterPage />} />
@@ -125,6 +127,7 @@ export default function App() {
           </Route>
         </Route>
       </Routes>
-    </Suspense>
+      </Suspense>
+    </ToastProvider>
   );
 }

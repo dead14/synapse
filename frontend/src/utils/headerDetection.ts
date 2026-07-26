@@ -159,7 +159,7 @@ export function detectHeaderRowIndex(rows: readonly (readonly TabularCell[])[]):
 
   if (bestIndex < 0) {
     throw new Error(
-      'Baris header tidak ditemukan. Kolom jarak absolut dan jenis fitur wajib tersedia.',
+      'Header row not found. Absolute distance and feature type columns are required.',
     );
   }
 
