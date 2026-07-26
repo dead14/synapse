@@ -1,0 +1,63 @@
+name: Roll Back Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Existing release id, for example 20260725-162939-abcdef123456
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: synapse-production
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    env:
+      DEPLOY_HOST: ${{ secrets.SYNAPSE_HOST }}
+      DEPLOY_USER: ${{ secrets.SYNAPSE_DEPLOY_USER }}
+      DEPLOY_PORT: ${{ secrets.SYNAPSE_SSH_PORT }}
+      DEPLOY_KEY: ${{ secrets.SYNAPSE_SSH_PRIVATE_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.SYNAPSE_SSH_KNOWN_HOSTS }}
+
+    steps:
+      - name: Validate release id
+        shell: bash
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          [[ "$RELEASE_ID" =~ ^[0-9]{8}-[0-9]{6}(-[0-9a-f]{7,40})?$ ]] \
+            || { echo "Invalid release id"; exit 2; }
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          : "${DEPLOY_HOST:?Missing SYNAPSE_HOST secret}"
+          : "${DEPLOY_USER:?Missing SYNAPSE_DEPLOY_USER secret}"
+          : "${DEPLOY_KEY:?Missing SYNAPSE_SSH_PRIVATE_KEY secret}"
+          : "${DEPLOY_KNOWN_HOSTS:?Missing SYNAPSE_SSH_KNOWN_HOSTS secret}"
+          deploy_port="${DEPLOY_PORT:-22}"
+          echo "DEPLOY_PORT_EFFECTIVE=$deploy_port" >> "$GITHUB_ENV"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Activate previous release
+        shell: bash
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          ssh \
+            -p "$DEPLOY_PORT_EFFECTIVE" \
+            -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "sudo /usr/local/sbin/synapse-deploy rollback '$RELEASE_ID'"

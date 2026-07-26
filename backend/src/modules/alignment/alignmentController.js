@@ -266,6 +266,26 @@ async function hydrateRunReferences(payload, orgId) {
         loadOwnedRunAnchors(oldRunId, orgId),
         loadOwnedRunAnchors(newRunId, orgId),
     ]);
+
+    // A run whose features never normalized into an anchor type returns an
+    // empty set here.  Passing it through produced a successful response with
+    // zero matches, which the timeline renders identically to "not run yet" —
+    // so the operator saw an empty chart and no reason for it.  Name the run
+    // that has no anchors instead.
+    const emptyRuns = [
+        ...(oldRun.length === 0 ? [`OLD run ${oldRunId}`] : []),
+        ...(newRun.length === 0 ? [`NEW run ${newRunId}`] : []),
+    ];
+    if (emptyRuns.length > 0) {
+        const error = new Error(
+            `${emptyRuns.join(' and ')} contains no alignment anchors. `
+            + 'Alignment needs Weld, Valve, Tee, Flange, Bend, or Offtake features with a numeric log distance. '
+            + 'Check the feature-type mapping for this inspection run.',
+        );
+        error.code = 'NO_ALIGNMENT_ANCHORS';
+        throw error;
+    }
+
     return { ...payload, oldRun, newRun };
 }
 
@@ -514,7 +534,11 @@ exports.runDtwAlignment = async (req, res) => {
         requireServerTieInEvidence(payload, req.user.orgId);
         validateDtwPayload(payload);
     } catch (err) {
-        const status = err.code === 'DTW_INPUT_TOO_LARGE' ? 413 : err.code === 'ALIGNMENT_SESSION_NOT_FOUND' ? 404 : 400;
+        const status = err.code === 'DTW_INPUT_TOO_LARGE'
+            ? 413
+            : err.code === 'ALIGNMENT_SESSION_NOT_FOUND'
+                ? 404
+                : CONTROLLED_ALIGNMENT_ERROR_CODES.has(err.code) ? 422 : 400;
         return res.status(status).json({
             error: err.message,
             code: err.code || 'INVALID_ALIGNMENT_PAYLOAD',
