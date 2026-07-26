@@ -1,0 +1,314 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+umask 027
+
+readonly RELEASES_DIR="/var/www/synapse-releases"
+readonly SHARED_DIR="/var/www/synapse-shared"
+readonly INCOMING_DIR="/var/www/synapse-deploy/incoming"
+readonly NGINX_CONFIG="/etc/nginx/sites-enabled/synapse"
+readonly ENV_FILE="/etc/synapse/production.env"
+readonly CURRENT_LINK="/var/www/synapse-current"
+readonly CURRENT_RELEASE_FILE="${SHARED_DIR}/current-release"
+readonly CURRENT_PROCESS_FILE="${SHARED_DIR}/current-pm2-name"
+readonly NGINX_BACKUP_DIR="${SHARED_DIR}/nginx-backups"
+readonly DEPLOY_LOG="/var/log/synapse-deploy.log"
+readonly PM2_BIN="/www/server/nvm/versions/node/v22.17.1/bin/pm2"
+readonly NODE_BIN_DIR="/www/server/nvm/versions/node/v22.17.1/bin"
+
+candidate_process=""
+nginx_backup=""
+nginx_switched=0
+deployment_complete=0
+prepared_release_dir=""
+
+log() {
+  printf '%s %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" | tee -a "$DEPLOY_LOG"
+}
+
+fail() {
+  log "ERROR: $*"
+  exit 1
+}
+
+valid_release_id() {
+  [[ "${1:-}" =~ ^[0-9]{8}-[0-9]{6}(-[0-9a-f]{7,40})?$ ]]
+}
+
+cleanup_on_exit() {
+  local exit_code=$?
+
+  if (( exit_code == 0 || deployment_complete == 1 )); then
+    return
+  fi
+
+  if (( nginx_switched == 1 )) && [[ -n "$nginx_backup" && -f "$nginx_backup" ]]; then
+    cp "$nginx_backup" "$NGINX_CONFIG"
+    nginx -t >/dev/null 2>&1 && nginx -s reload >/dev/null 2>&1 || true
+    log "Restored previous Nginx configuration"
+  fi
+
+  if [[ -n "$candidate_process" ]] && "$PM2_BIN" describe "$candidate_process" >/dev/null 2>&1; then
+    "$PM2_BIN" delete "$candidate_process" >/dev/null 2>&1 || true
+    log "Removed failed candidate process $candidate_process"
+  fi
+
+  trap - EXIT
+  exit "$exit_code"
+}
+
+trap cleanup_on_exit EXIT
+
+require_runtime() {
+  [[ "$(id -u)" -eq 0 ]] || fail "This command must run as root"
+  [[ -x "$PM2_BIN" ]] || fail "PM2 binary not found at $PM2_BIN"
+  [[ -f "$NGINX_CONFIG" ]] || fail "Nginx site config not found"
+  [[ -f "$ENV_FILE" ]] || fail "Production environment file not found"
+  [[ -f "${SHARED_DIR}/Parser ingestion.xlsx" ]] || fail "Shared parser workbook not found"
+
+  install -d -m 0755 "$RELEASES_DIR" "$SHARED_DIR" "$NGINX_BACKUP_DIR"
+  install -d -m 0755 "${SHARED_DIR}/assets"
+  install -d -m 0770 "${SHARED_DIR}/uploads" "${SHARED_DIR}/outputs"
+  touch "$DEPLOY_LOG"
+  chmod 0640 "$DEPLOY_LOG"
+}
+
+load_environment() {
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+
+  : "${NODE_ENV:?NODE_ENV is required}"
+  : "${JWT_SECRET:?JWT_SECRET is required}"
+  : "${ALLOWED_ORIGINS:?ALLOWED_ORIGINS is required}"
+  : "${DATABASE_URL:?DATABASE_URL is required}"
+
+  export REDIS_HOST="${REDIS_HOST:-127.0.0.1}"
+  export REDIS_PORT="${REDIS_PORT:-6379}"
+  export PUBLIC_HOST="${PUBLIC_HOST:-145.79.15.157}"
+}
+
+current_port() {
+  grep -Eo 'proxy_pass http://127\.0\.0\.1:[0-9]+' "$NGINX_CONFIG" \
+    | head -n 1 \
+    | sed -E 's/.*:([0-9]+)$/\1/'
+}
+
+next_port() {
+  local active_port
+  active_port="$(current_port)"
+  if [[ "$active_port" == "18005" ]]; then
+    printf '18006\n'
+  else
+    printf '18005\n'
+  fi
+}
+
+assert_safe_archive() {
+  local archive="$1"
+  local unsafe_entry
+
+  unsafe_entry="$(
+    tar -tzf "$archive" \
+      | awk 'BEGIN { bad = "" } /(^\/)|(^|\/)\.\.(\/|$)/ { bad = $0; print bad; exit }'
+  )"
+
+  [[ -z "$unsafe_entry" ]] || fail "Unsafe archive entry: $unsafe_entry"
+}
+
+prepare_release() {
+  local release_id="$1"
+  local release_dir="${RELEASES_DIR}/${release_id}"
+  local archive="${INCOMING_DIR}/release-${release_id}.tar.gz"
+  local checksum="${archive}.sha256"
+
+  [[ -f "$archive" ]] || fail "Release archive not found: $archive"
+  [[ -f "$checksum" ]] || fail "Release checksum not found: $checksum"
+  [[ ! -e "$release_dir" ]] || fail "Release already exists: $release_dir"
+
+  (
+    cd "$INCOMING_DIR"
+    sha256sum -c "$(basename "$checksum")"
+  )
+  assert_safe_archive "$archive"
+
+  install -d -m 0755 "$release_dir"
+  tar -xzf "$archive" -C "$release_dir"
+
+  [[ -f "${release_dir}/backend/server.js" ]] || fail "backend/server.js missing from release"
+  [[ -f "${release_dir}/backend/package-lock.json" ]] || fail "backend/package-lock.json missing"
+  [[ -f "${release_dir}/backend/requirements.txt" ]] || fail "backend/requirements.txt missing"
+  [[ -f "${release_dir}/frontend/dist/index.html" ]] || fail "frontend build missing"
+
+  ln -s "${SHARED_DIR}/Parser ingestion.xlsx" "${release_dir}/Parser ingestion.xlsx"
+  ln -s "${SHARED_DIR}/uploads" "${release_dir}/uploads"
+  ln -s "${SHARED_DIR}/outputs" "${release_dir}/outputs"
+  ln -s "${SHARED_DIR}/uploads" "${release_dir}/backend/uploads"
+
+  log "Installing backend dependencies for $release_id"
+  (
+    cd "${release_dir}/backend"
+    "${NODE_BIN_DIR}/npm" ci --omit=dev --no-audit --no-fund
+    python3 -m venv venv
+    venv/bin/python -m pip install --disable-pip-version-check -r requirements.txt
+  )
+
+  prepared_release_dir="$release_dir"
+}
+
+wait_for_health() {
+  local port="$1"
+  local attempts=0
+
+  until curl --fail --silent --show-error --max-time 5 \
+    "http://127.0.0.1:${port}/api/health" >/dev/null; do
+    attempts=$((attempts + 1))
+    if (( attempts >= 30 )); then
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+start_candidate() {
+  local release_id="$1"
+  local release_dir="$2"
+  local port="$3"
+
+  candidate_process="synapse-release-${release_id}"
+
+  if "$PM2_BIN" describe "$candidate_process" >/dev/null 2>&1; then
+    "$PM2_BIN" delete "$candidate_process"
+  fi
+
+  export PORT="$port"
+  export PYTHON_EXECUTABLE="${release_dir}/backend/venv/bin/python"
+  export PATH="${release_dir}/backend/venv/bin:${NODE_BIN_DIR}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+  "$PM2_BIN" start "${release_dir}/backend/server.js" \
+    --name "$candidate_process" \
+    --cwd "$release_dir" \
+    --time \
+    --update-env
+
+  wait_for_health "$port" || fail "Candidate failed health check on port $port"
+  log "Candidate $candidate_process is healthy on port $port"
+}
+
+switch_nginx() {
+  local release_id="$1"
+  local release_dir="$2"
+  local port="$3"
+  local asset_path
+
+  cp -a "${release_dir}/frontend/dist/assets/." "${SHARED_DIR}/assets/"
+
+  nginx_backup="${NGINX_BACKUP_DIR}/synapse-before-${release_id}.conf"
+  cp "$NGINX_CONFIG" "$nginx_backup"
+
+  sed -E -i \
+    -e "s#root /var/www/synapse-releases/[A-Za-z0-9._-]+/frontend/dist;#root ${release_dir}/frontend/dist;#g" \
+    -e "s#proxy_pass http://127\\.0\\.0\\.1:[0-9]+;#proxy_pass http://127.0.0.1:${port};#g" \
+    "$NGINX_CONFIG"
+
+  grep -Fq "root ${release_dir}/frontend/dist;" "$NGINX_CONFIG" \
+    || fail "Nginx frontend root was not updated"
+  grep -Fq "proxy_pass http://127.0.0.1:${port};" "$NGINX_CONFIG" \
+    || fail "Nginx backend port was not updated"
+
+  nginx -t
+  nginx -s reload
+  nginx_switched=1
+
+  curl --fail --silent --show-error --max-time 10 \
+    -H "Host: ${PUBLIC_HOST}" \
+    "http://127.0.0.1/api/health" >/dev/null
+
+  asset_path="$(
+    grep -Eo 'src="/assets/[^"]+\.js"' "${release_dir}/frontend/dist/index.html" \
+      | head -n 1 \
+      | cut -d'"' -f2
+  )"
+  [[ -n "$asset_path" ]] || fail "Could not locate the main JavaScript asset"
+
+  curl --fail --silent --show-error --max-time 15 \
+    -H "Host: ${PUBLIC_HOST}" \
+    "http://127.0.0.1${asset_path}" >/dev/null
+
+  log "Nginx now serves $release_id on port $port"
+}
+
+finalize_release() {
+  local release_id="$1"
+  local release_dir="$2"
+  local previous_process=""
+
+  if [[ -f "$CURRENT_PROCESS_FILE" ]]; then
+    previous_process="$(<"$CURRENT_PROCESS_FILE")"
+  fi
+
+  ln -sfn "$release_dir" "$CURRENT_LINK"
+  printf '%s\n' "$release_id" > "$CURRENT_RELEASE_FILE"
+  printf '%s\n' "$candidate_process" > "$CURRENT_PROCESS_FILE"
+
+  if [[ -n "$previous_process" && "$previous_process" != "$candidate_process" ]] \
+    && "$PM2_BIN" describe "$previous_process" >/dev/null 2>&1; then
+    "$PM2_BIN" stop "$previous_process"
+    log "Stopped previous process $previous_process"
+  fi
+
+  "$PM2_BIN" save
+  deployment_complete=1
+  log "Deployment completed: $release_id"
+}
+
+activate_existing_release() {
+  local release_id="$1"
+  local release_dir="${RELEASES_DIR}/${release_id}"
+  local port
+
+  if [[ -f "$CURRENT_RELEASE_FILE" && "$(<"$CURRENT_RELEASE_FILE")" == "$release_id" ]]; then
+    fail "Release $release_id is already active"
+  fi
+
+  [[ -d "$release_dir" ]] || fail "Release not found: $release_id"
+  [[ -x "${release_dir}/backend/venv/bin/python" ]] || fail "Release Python environment is missing"
+  [[ -d "${release_dir}/backend/node_modules" ]] || fail "Release Node dependencies are missing"
+  [[ -f "${release_dir}/frontend/dist/index.html" ]] || fail "Release frontend build is missing"
+
+  port="$(next_port)"
+  start_candidate "$release_id" "$release_dir" "$port"
+  switch_nginx "$release_id" "$release_dir" "$port"
+  finalize_release "$release_id" "$release_dir"
+}
+
+main() {
+  local command="${1:-}"
+  local release_id="${2:-}"
+  local release_dir
+  local port
+
+  require_runtime
+  load_environment
+  valid_release_id "$release_id" || fail "Invalid release id"
+
+  case "$command" in
+    deploy)
+      prepare_release "$release_id"
+      release_dir="$prepared_release_dir"
+      port="$(next_port)"
+      start_candidate "$release_id" "$release_dir" "$port"
+      switch_nginx "$release_id" "$release_dir" "$port"
+      finalize_release "$release_id" "$release_dir"
+      ;;
+    rollback)
+      activate_existing_release "$release_id"
+      ;;
+    *)
+      fail "Usage: synapse-deploy {deploy|rollback} RELEASE_ID"
+      ;;
+  esac
+}
+
+main "$@"
