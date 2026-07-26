@@ -49,3 +49,19 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: node ../scripts/ci/audit-npm-production.mjs .
+      - name: Validate release archive permissions
+        working-directory: .
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/synapse-release-smoke.tar.gz"
+          bash scripts/ci/package-release.sh \
+            "20000101-000000-0000000" \
+            "$archive"
+          sha256sum -c "${archive}.sha256"
+          frontend_mode="$(
+            tar -tvzf "$archive" \
+              | awk '$NF == "frontend/" { print substr($1, 1, 10) }' \
+              | tail -n 1
+          )"
+          [[ "$frontend_mode" == "drwxr-xr-x" ]] \
+            || { echo "Unsafe frontend directory mode: $frontend_mode"; exit 1; }

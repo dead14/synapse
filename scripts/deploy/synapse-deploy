@@ -146,6 +146,13 @@ prepare_release() {
   ln -s "${SHARED_DIR}/outputs" "${release_dir}/outputs"
   ln -s "${SHARED_DIR}/uploads" "${release_dir}/backend/uploads"
 
+  # GNU tar creates missing parent directories under this script's 027 umask.
+  # The package records frontend/ explicitly, but normalize the static tree as
+  # a second line of defence so the unprivileged Nginx worker can traverse it.
+  chmod 0755 "${release_dir}/frontend"
+  find "${release_dir}/frontend/dist" -type d -exec chmod 0755 {} +
+  find "${release_dir}/frontend/dist" -type f -exec chmod 0644 {} +
+
   log "Installing backend dependencies for $release_id"
   (
     cd "${release_dir}/backend"
@@ -224,6 +231,10 @@ switch_nginx() {
   curl --fail --silent --show-error --max-time 10 \
     -H "Host: ${PUBLIC_HOST}" \
     "http://127.0.0.1/api/health" >/dev/null
+
+  curl --fail --silent --show-error --max-time 15 \
+    -H "Host: ${PUBLIC_HOST}" \
+    "http://127.0.0.1/" >/dev/null
 
   asset_path="$(
     grep -Eo 'src="/assets/[^"]+\.js"' "${release_dir}/frontend/dist/index.html" \

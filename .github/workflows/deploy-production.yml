@@ -84,7 +84,23 @@ jobs:
             "$archive" "${archive}.sha256" \
             "${DEPLOY_USER}@${DEPLOY_HOST}:/var/www/synapse-deploy/incoming/"
 
+      - name: Record active release
+        id: previous
+        shell: bash
+        run: |
+          previous_release="$(
+            ssh \
+              -p "$DEPLOY_PORT_EFFECTIVE" \
+              -o BatchMode=yes \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              "cat /var/www/synapse-shared/current-release"
+          )"
+          [[ "$previous_release" =~ ^[0-9]{8}-[0-9]{6}(-[0-9a-f]{7,40})?$ ]] \
+            || { echo "Invalid active release id"; exit 2; }
+          echo "release_id=$previous_release" >> "$GITHUB_OUTPUT"
+
       - name: Activate release
+        id: activate
         shell: bash
         run: |
           ssh \
@@ -92,3 +108,23 @@ jobs:
             -o BatchMode=yes \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "sudo /usr/local/sbin/synapse-deploy deploy '${{ steps.package.outputs.release_id }}'"
+
+      - name: Verify public release
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --max-time 15 \
+            "http://${DEPLOY_HOST}/api/health" >/dev/null
+          curl --fail --silent --show-error --max-time 20 \
+            "http://${DEPLOY_HOST}/" >/dev/null
+
+      - name: Roll back failed public release
+        if: failure() && steps.activate.outcome == 'success'
+        shell: bash
+        env:
+          PREVIOUS_RELEASE: ${{ steps.previous.outputs.release_id }}
+        run: |
+          ssh \
+            -p "$DEPLOY_PORT_EFFECTIVE" \
+            -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "sudo /usr/local/sbin/synapse-deploy rollback '$PREVIOUS_RELEASE'"

@@ -95,6 +95,27 @@ test('validateDtwPayload rejects malformed datasets before starting the worker',
     );
 });
 
+test('validateDtwPayload rejects a run with no anchors instead of reporting zero matches', () => {
+    // The size guard is only an upper bound, so an empty run used to satisfy it
+    // and reach the engine.  The response was a truthful "zero matches", which
+    // the timeline renders exactly like a matcher that never ran.
+    const anchor = { dist: 10 };
+    for (const payload of [
+        { oldRun: [], newRun: [anchor] },
+        { oldRun: [anchor], newRun: [] },
+        { oldRun: [], newRun: [] },
+    ]) {
+        assert.throws(
+            () => validateDtwPayload(payload),
+            (error) => error.code === 'NO_ALIGNMENT_ANCHORS',
+        );
+    }
+});
+
+test('validateDtwPayload accepts a single anchor in each run', () => {
+    assert.doesNotThrow(() => validateDtwPayload({ oldRun: [{ dist: 1 }], newRun: [{ dist: 2 }] }));
+});
+
 test('validateDtwPayload rejects oversized quadratic input with a controlled code', () => {
     assert.throws(
         () => validateDtwPayload(
