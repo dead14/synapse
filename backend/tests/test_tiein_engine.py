@@ -251,6 +251,63 @@ class TieInEngineTests(unittest.TestCase):
         self.assertAlmostEqual(breaches[0]["oldEndM"], 25.0)
         self.assertGreater(breaches[0]["baselineShiftM"], 1.0)
 
+    def test_an_accepted_transform_survives_the_matcher_gate(self):
+        """Whatever the estimator accepts, the matcher's validator must accept.
+
+        These were two separate copies of the gate and they drifted: the
+        estimator returned AUTO_ACCEPTED while `validated_tiein_knots` rejected
+        the same transform, so the matcher ran with no mapping and produced zero
+        pairs behind an INVALID_TIEIN_TRANSFORM error. A fitting excursion that
+        reverts is exactly the shape that exposed it.
+        """
+        import tiein_transform
+
+        old_distances = [0, 12, 24, 36, 36.18, 48, 60, 72, 84]
+        new_distances = [0, 12, 24, 36, 38.04, 48, 60, 72, 84]
+        old = [self.feature(f"o-{i}", "weld", value) for i, value in enumerate(old_distances)]
+        new = [self.feature(f"n-{i}", "weld", value) for i, value in enumerate(new_distances)]
+
+        result = tiein_engine.calculate_tiein_offset(old, new)
+        self.assertEqual(result["gateBreaches"], [])
+
+        accepted = tiein_transform.validated_tiein_knots({
+            "tieInDecision": {"status": "AUTO_ACCEPTED"},
+            "tieInTransform": result["transform"],
+        })
+        self.assertEqual(len(accepted), result["transform"]["knotCount"])
+
+    def test_acknowledged_evidence_still_carries_a_usable_transform(self):
+        """Signing off on a gate warning must not strip the mapping.
+
+        Partial Run has no scalar fallback, so a transform silently reduced to
+        zero knots leaves the matcher with nothing and zero pairs — the sign-off
+        would appear to work and then produce an empty result.
+        """
+        import tiein_transform
+
+        transform = {
+            "direction": "OLD_TO_NEW",
+            "model": "MONOTONIC_PIECEWISE_LINEAR",
+            "allowExtrapolation": False,
+            "knots": [
+                {"oldDistanceM": 0.0, "newDistanceM": 0.0},
+                {"oldDistanceM": 12.0, "newDistanceM": 12.0},
+                # A persistent step: rejected when auto-accepted, allowed once an
+                # engineer has explicitly taken responsibility for it.
+                {"oldDistanceM": 13.0, "newDistanceM": 16.0},
+                {"oldDistanceM": 25.0, "newDistanceM": 28.0},
+                {"oldDistanceM": 37.0, "newDistanceM": 40.0},
+            ],
+            "domain": {"oldStartM": 0.0, "oldEndM": 37.0, "newStartM": 0.0, "newEndM": 40.0},
+        }
+
+        self.assertEqual(tiein_transform.validated_tiein_knots({
+            "tieInDecision": {"status": "AUTO_ACCEPTED"}, "tieInTransform": transform,
+        }), [])
+        self.assertEqual(len(tiein_transform.validated_tiein_knots({
+            "tieInDecision": {"status": "REVIEW_ACKNOWLEDGED"}, "tieInTransform": transform,
+        })), 5)
+
     def test_missed_anchor_is_preserved_in_skip_audit(self):
         old = [
             self.feature(f"o-{i}", "weld", distance)
