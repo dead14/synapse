@@ -113,6 +113,10 @@ function buildPairSessionConfig(sessionConfig, pair) {
     // displaced a 2012 run by the offset belonging to a 2024 -> 2026 transform.
     const pairTieIn = pairKey ? sessionConfig?.pairTieIns?.[pairKey] : null;
     const pairGw = pairKey ? sessionConfig?.pairGwResults?.[pairKey] : null;
+    // A 14-year interval and a 2-year interval do not deserve the same anomaly
+    // tolerances, so each pair may carry its own. Sessions that never set them
+    // keep using the single session-wide config.
+    const pairTolerances = pairKey ? sessionConfig?.pairToleranceConfigs?.[pairKey] : null;
     const sections = Array.isArray(sessionConfig?.matchingSections)
         ? sessionConfig.matchingSections.filter((section) => (
             section?.pairKey ? section.pairKey === pairKey : !section?.pairKey
@@ -133,6 +137,7 @@ function buildPairSessionConfig(sessionConfig, pair) {
                 useValveAnchor: pairGw.useValveAnchor ?? sessionConfig?.useValveAnchor,
             }
             : {}),
+        ...(pairTolerances ? { ToleranceConfig: pairTolerances } : {}),
         matchingSections: sections,
         activeRunPairKey: pairKey,
         summaryData: {

@@ -53,7 +53,9 @@ tar \
   engine \
   frontend/package.json \
   frontend/package-lock.json \
-  frontend/dist
+  frontend/dist \
+  --no-recursion \
+  frontend
 
 sha256sum "$output_path" > "${output_path}.sha256"
 echo "Packaged $output_path"

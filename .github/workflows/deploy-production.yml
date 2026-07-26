@@ -73,22 +73,83 @@ jobs:
           chmod 600 "$HOME/.ssh/id_ed25519"
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.ssh/config" <<EOF
+          Host synapse-production
+            HostName $DEPLOY_HOST
+            User $DEPLOY_USER
+            Port $deploy_port
+            IdentityFile $HOME/.ssh/id_ed25519
+            BatchMode yes
+            StrictHostKeyChecking yes
+            ConnectTimeout 20
+            ServerAliveInterval 15
+            ServerAliveCountMax 3
+          EOF
+          chmod 600 "$HOME/.ssh/config"
 
       - name: Upload verified release
         shell: bash
         run: |
           archive="${{ steps.package.outputs.archive }}"
-          scp \
-            -P "$DEPLOY_PORT_EFFECTIVE" \
-            -o BatchMode=yes \
-            "$archive" "${archive}.sha256" \
-            "${DEPLOY_USER}@${DEPLOY_HOST}:/var/www/synapse-deploy/incoming/"
+          for attempt in 1 2 3; do
+            if scp \
+              "$archive" "${archive}.sha256" \
+              "synapse-production:/var/www/synapse-deploy/incoming/"; then
+              exit 0
+            fi
+            echo "SCP attempt $attempt failed; retrying in 10 seconds" >&2
+            sleep 10
+          done
+          exit 1
 
-      - name: Activate release
+      - name: Record active release
+        id: previous
         shell: bash
         run: |
-          ssh \
-            -p "$DEPLOY_PORT_EFFECTIVE" \
-            -o BatchMode=yes \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "sudo /usr/local/sbin/synapse-deploy deploy '${{ steps.package.outputs.release_id }}'"
+          previous_release=""
+          for attempt in 1 2 3; do
+            previous_release="$(ssh synapse-production 'cat /var/www/synapse-shared/current-release')" && break
+            echo "SSH attempt $attempt failed; retrying in 10 seconds" >&2
+            sleep 10
+          done
+          [[ "$previous_release" =~ ^[0-9]{8}-[0-9]{6}(-[0-9a-f]{7,40})?$ ]] \
+            || { echo "Invalid active release id"; exit 2; }
+          echo "release_id=$previous_release" >> "$GITHUB_OUTPUT"
+
+      - name: Activate release
+        id: activate
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if ssh synapse-production \
+              "sudo /usr/local/sbin/synapse-deploy deploy '${{ steps.package.outputs.release_id }}'"; then
+              exit 0
+            fi
+            echo "Activation attempt $attempt failed; retrying in 15 seconds" >&2
+            sleep 15
+          done
+          exit 1
+
+      - name: Verify public release
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --max-time 15 \
+            "http://${DEPLOY_HOST}/api/health" >/dev/null
+          curl --fail --silent --show-error --max-time 20 \
+            "http://${DEPLOY_HOST}/" >/dev/null
+
+      - name: Roll back failed public release
+        if: failure() && steps.activate.outcome == 'success'
+        shell: bash
+        env:
+          PREVIOUS_RELEASE: ${{ steps.previous.outputs.release_id }}
+        run: |
+          for attempt in 1 2 3; do
+            if ssh synapse-production \
+              "sudo /usr/local/sbin/synapse-deploy rollback '$PREVIOUS_RELEASE'"; then
+              exit 0
+            fi
+            echo "Rollback attempt $attempt failed; retrying in 15 seconds" >&2
+            sleep 15
+          done
+          exit 1
