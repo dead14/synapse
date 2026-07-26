@@ -1,0 +1,94 @@
+name: Deploy Production
+
+on:
+  workflow_run:
+    workflows: ["Quality Gates"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: synapse-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    env:
+      DEPLOY_HOST: ${{ secrets.SYNAPSE_HOST }}
+      DEPLOY_USER: ${{ secrets.SYNAPSE_DEPLOY_USER }}
+      DEPLOY_PORT: ${{ secrets.SYNAPSE_SSH_PORT }}
+      DEPLOY_KEY: ${{ secrets.SYNAPSE_SSH_PRIVATE_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.SYNAPSE_SSH_KNOWN_HOSTS }}
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+
+    steps:
+      - name: Check out the verified commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend release
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package release
+        id: package
+        shell: bash
+        run: |
+          release_id="$(date -u +'%Y%m%d-%H%M%S')-${RELEASE_SHA:0:12}"
+          archive="release-${release_id}.tar.gz"
+          bash scripts/ci/package-release.sh "$release_id" "$archive"
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          : "${DEPLOY_HOST:?Missing SYNAPSE_HOST secret}"
+          : "${DEPLOY_USER:?Missing SYNAPSE_DEPLOY_USER secret}"
+          : "${DEPLOY_KEY:?Missing SYNAPSE_SSH_PRIVATE_KEY secret}"
+          : "${DEPLOY_KNOWN_HOSTS:?Missing SYNAPSE_SSH_KNOWN_HOSTS secret}"
+          deploy_port="${DEPLOY_PORT:-22}"
+          echo "DEPLOY_PORT_EFFECTIVE=$deploy_port" >> "$GITHUB_ENV"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Upload verified release
+        shell: bash
+        run: |
+          archive="${{ steps.package.outputs.archive }}"
+          scp \
+            -P "$DEPLOY_PORT_EFFECTIVE" \
+            -o BatchMode=yes \
+            "$archive" "${archive}.sha256" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/var/www/synapse-deploy/incoming/"
+
+      - name: Activate release
+        shell: bash
+        run: |
+          ssh \
+            -p "$DEPLOY_PORT_EFFECTIVE" \
+            -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "sudo /usr/local/sbin/synapse-deploy deploy '${{ steps.package.outputs.release_id }}'"
