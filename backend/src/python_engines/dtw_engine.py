@@ -205,12 +205,11 @@ def calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty=False):
     old_dists = [gw['dist'] for gw in old_gws]
     new_dists = [gw['dist'] for gw in new_gws]
 
-    # Precalculate spool lengths (distance from previous GW)
-    for i in range(n):
-        old_gws[i]['spool'] = old_dists[i] - old_dists[i-1] if i > 0 else old_dists[i]
-    for j in range(m):
-        new_gws[j]['spool'] = new_dists[j] - new_dists[j-1] if j > 0 else new_dists[j]
-    
+    # Spool lengths are derived from old_dists/new_dists inside the DP loops
+    # below. calculate_dtw must not annotate the caller-owned feature dicts:
+    # a 'spool' write here leaked into process_request's payloads on the
+    # direct (non-segmented) call path, which passes the dicts unprotected.
+
     inf = float('inf')
     
     # Initialize DTW matrix with infinity
@@ -1100,18 +1099,22 @@ def main():
         if not line:
             continue
 
+        # Mirror tiein_engine.main: bind the parsed payload before the try so
+        # the error reply always carries THIS request's id. The old
+        # ``'data' in locals()`` recovery replied with requestId None on a
+        # parse failure (hanging the Node promise) — or worse, with the id of
+        # a previous loop iteration.
+        data = {}
         try:
             data = json.loads(line)
             result = process_request(data)
             print(json.dumps(result))
             sys.stdout.flush()
-            
+
         except Exception as e:
             import traceback
             traceback.print_exc(file=sys.stderr)
-            request_id = None
-            if 'data' in locals() and isinstance(data, dict):
-                request_id = data.get('requestId')
+            request_id = data.get('requestId') if isinstance(data, dict) else None
             print(json.dumps({"error": str(e), "success": False, "requestId": request_id}))
             sys.stdout.flush()
 
@@ -1160,8 +1163,13 @@ def _post_process_matches(gw_matches, ota_threshold):
                 curr['flagged'] = False
                 curr['scaling_factor'] = L_ref / L_new if L_new > 0 else 1.0
         else:
+            # A zero or NEGATIVE reference spool means the matched GWs are
+            # out of order — a physically impossible backwards spool. That
+            # must surface as a review flag, not masquerade as a perfect
+            # (deviation 0.0, unflagged) match.
             curr['deviation_ratio'] = 0.0
-            curr['flagged'] = False
+            curr['flagged'] = True
+            curr['reason'] = 'NON_POSITIVE_REFERENCE_SPOOL'
             curr['scaling_factor'] = 1.0
 
     if len(valid_matches) > 0:

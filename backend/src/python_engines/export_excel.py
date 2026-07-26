@@ -56,12 +56,25 @@ def difference(left, right):
     return left_number - right_number
 
 
+# Two clock readings within this many degrees count as unchanged (one clock
+# minute is 0.5 degrees, so this tolerates vendor rounding of +/- 2 minutes).
+CLOCK_UNCHANGED_TOLERANCE_DEG = 1.0
+
+
 def clock_degrees(value):
     if value in (None, "", "-", "N/A"):
         return None
     try:
         if isinstance(value, (int, float)):
-            return float(value) * 30
+            numeric = float(value)
+            if 0 < numeric < 1:
+                # An unconverted Excel time serial (fraction of a 24 h day):
+                # 0.5 means 12:00, not half past midnight. Convert to hours,
+                # then onto the 12-hour pipeline dial at 30 degrees per hour
+                # so it agrees with the hour-based conversions below
+                # (12:00 -> 0/360 degrees).
+                return ((numeric * 24.0) % 12.0) * 30.0
+            return numeric * 30
         text = str(value)
         hour, minute = text.split(":", 1)
         return (int(hour) % 12) * 30 + int(minute[:2]) * 0.5
@@ -75,7 +88,11 @@ def clock_difference(new_clock, old_clock):
     if new_degrees is None or old_degrees is None:
         return None, None
     delta = abs(new_degrees - old_degrees)
-    return ("no" if delta == 0 else "YES"), min(delta, 360 - delta)
+    wrapped_delta = min(delta, 360 - delta)
+    # The verdict must agree with the reported (wrapped) magnitude:
+    # 11:59 vs 12:01 is a 1 degree change, not a 359 degree "YES".
+    changed = "no" if wrapped_delta <= CLOCK_UNCHANGED_TOLERANCE_DEG else "YES"
+    return changed, wrapped_delta
 
 
 def side_values(row, side):

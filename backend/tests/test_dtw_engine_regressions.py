@@ -694,6 +694,43 @@ class DtwEngineRegressionTests(unittest.TestCase):
             if match["status"] == "Match"
         ))
 
+    def test_non_positive_reference_spool_is_flagged_for_review(self):
+        # Out-of-order matched GWs produce a NEGATIVE reference spool — a
+        # physically impossible backwards joint. It must not be recorded as
+        # a perfect (deviation 0.0, unflagged) match.
+        matches = [
+            {"status": "Match", "oldDist": 100.0, "newDist": 100.0},
+            {"status": "Match", "oldDist": 90.0, "newDist": 112.0},
+        ]
+
+        dtw_engine._post_process_matches(matches, ota_threshold=5.0)
+
+        self.assertEqual(matches[1]["L_ref"], -10.0)
+        self.assertTrue(matches[1]["flagged"])
+        self.assertEqual(matches[1]["reason"], "NON_POSITIVE_REFERENCE_SPOOL")
+        self.assertEqual(matches[1]["scaling_factor"], 1.0)
+
+    def test_zero_reference_spool_is_flagged_for_review(self):
+        matches = [
+            {"status": "Match", "oldDist": 100.0, "newDist": 100.0},
+            {"status": "Match", "oldDist": 100.0, "newDist": 101.0},
+        ]
+
+        dtw_engine._post_process_matches(matches, ota_threshold=5.0)
+
+        self.assertEqual(matches[1]["L_ref"], 0.0)
+        self.assertTrue(matches[1]["flagged"])
+        self.assertEqual(matches[1]["reason"], "NON_POSITIVE_REFERENCE_SPOOL")
+
+    def test_calculate_dtw_leaves_caller_feature_dicts_unmodified(self):
+        old = [{"id": "old-1", "type": "weld", "dist": 100.0}]
+        new = [{"id": "new-1", "type": "weld", "dist": 100.4}]
+
+        dtw_engine.calculate_dtw(old, new, ota_threshold=5.0)
+
+        self.assertEqual(old, [{"id": "old-1", "type": "weld", "dist": 100.0}])
+        self.assertEqual(new, [{"id": "new-1", "type": "weld", "dist": 100.4}])
+
     def test_ota_falls_back_as_a_pair_when_one_source_endpoint_is_missing(self):
         matches = [
             {

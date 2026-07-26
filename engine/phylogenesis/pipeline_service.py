@@ -204,17 +204,21 @@ def write_canonical_and_links(
         pipeline_id: ID pipeline
     """
     cursor = db_conn.cursor()
-    
+
     for upd in updates:
+        # Reset per iterasi: tanpa ini, action yang tidak menghasilkan id
+        # akan memakai canonical_id dari iterasi SEBELUMNYA dan me-link
+        # anchor canonical yang salah.
+        canonical_id = None
         target_feat = None
         for f in features_target:
             if f.id == upd['target_feature_id']:
                 target_feat = f
                 break
-        
+
         if target_feat is None:
             continue
-        
+
         if upd['action'] == 'INSERT':
             # Insert canonical baru
             cursor.execute("""
@@ -232,26 +236,46 @@ def write_canonical_and_links(
             canonical_id = cursor.fetchone()[0]
             
         elif upd['action'] == 'UPDATE':
-            # Update canonical existing
-            cursor.execute("""
-                UPDATE canonical_anchors 
-                SET abs_chainage = %s, sigma = %s, confidence = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE id = (
-                    SELECT canonical_id FROM alignment_links 
-                    WHERE ili_run_id = %s 
-                    ORDER BY ABS(odometer - %s) LIMIT 1
-                )
-                RETURNING id
-            """, (
-                upd['abs_chainage'],
-                upd['sigma'],
-                upd['confidence'],
-                target_run_id,
-                target_feat.odometer
-            ))
+            known_canonical_id = upd.get('canonical_id')
+            if known_canonical_id is not None:
+                # Identitas canonical sudah diketahui dari lookup existing
+                # links — pakai langsung, jangan menebak ulang lewat subquery
+                # jarak terdekat.
+                cursor.execute("""
+                    UPDATE canonical_anchors
+                    SET abs_chainage = %s, sigma = %s, confidence = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                    RETURNING id
+                """, (
+                    upd['abs_chainage'],
+                    upd['sigma'],
+                    upd['confidence'],
+                    known_canonical_id
+                ))
+            else:
+                # Fallback proximity untuk update lama tanpa identitas
+                # eksplisit; link yang sudah ditandai outlier tidak boleh
+                # dipakai sebagai target.
+                cursor.execute("""
+                    UPDATE canonical_anchors
+                    SET abs_chainage = %s, sigma = %s, confidence = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = (
+                        SELECT canonical_id FROM alignment_links
+                        WHERE ili_run_id = %s
+                          AND is_outlier = FALSE
+                        ORDER BY ABS(odometer - %s) LIMIT 1
+                    )
+                    RETURNING id
+                """, (
+                    upd['abs_chainage'],
+                    upd['sigma'],
+                    upd['confidence'],
+                    target_run_id,
+                    target_feat.odometer
+                ))
             result = cursor.fetchone()
             canonical_id = result[0] if result else None
-        
+
         if canonical_id:
             # Insert alignment_link
             cursor.execute("""
@@ -420,12 +444,23 @@ def run_phylogenetic_alignment(
         logger.info("FASE 1: RANSAC ANCESTRAL SANITIZATION")
         logger.info("=" * 60)
         
-        inliers, outliers, scale, offset = ransac_linear_fit(
+        inliers, outliers, scale, offset, ransac_ok = ransac_linear_fit(
             raw_anchors,
             n_iters=ransac_iters,
             tolerance=ransac_tolerance
         )
-        
+
+        if not ransac_ok:
+            # Tidak ada hipotesis yang lolos batas scale — hasilnya bukan
+            # "semua inlier" melainkan kegagalan fit. Abort TANPA menandai
+            # anchor mana pun sebagai outlier di database.
+            logger.error(
+                "RANSAC gagal menemukan model linear yang wajar untuk run %d. Abort.",
+                source_run_id
+            )
+            finalize_job(db_conn, job_id, report, status='failed')
+            return report
+
         report.ransac_inliers = len(inliers)
         report.ransac_outliers = len(outliers)
         report.outlier_anchors = [o.canonical_id for o in outliers]

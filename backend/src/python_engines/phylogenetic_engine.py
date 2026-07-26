@@ -18,6 +18,7 @@ import sys
 import os
 import json
 import logging
+import re
 import numpy as np
 from dataclasses import asdict
 
@@ -34,6 +35,16 @@ from engine.phylogenesis.pipeline_service import (
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("phylogenetic_engine")
+
+# Mirrors dtw_engine._alignment_feature_kind's weld classification: 'Weld',
+# 'Girth Weld', 'GW' and seam-weld labels are girth-weld evidence, not
+# anomalies. A bare upper() membership test routed "Girth Weld" rows into the
+# corrosion buckets.
+_WELD_KIND_PATTERN = re.compile(r"\b(?:gw|weld|girth|seam)\b")
+
+
+def _is_weld_kind(feature_type) -> bool:
+    return bool(_WELD_KIND_PATTERN.search(str(feature_type or "").strip().lower()))
 
 
 def _resolve_phylogenetic_runs(params_json: dict) -> list[dict]:
@@ -162,6 +173,7 @@ def _feature_to_row(feature: ILIFeature, run_label: str, match_status: str,
 def perform_phylogenetic_alignment(session_id: int):
     """Run the full phylogenetic alignment pipeline for a session."""
     db_session = SessionLocal()
+    raw_conn = None
     try:
         sess = db_session.query(AlignmentSession).filter(
             AlignmentSession.id == session_id
@@ -190,10 +202,12 @@ def perform_phylogenetic_alignment(session_id: int):
         if not pipeline_id:
             raise RuntimeError("Cannot resolve pipeline_id for this session")
 
-        # Use raw psycopg2 connection for the phylogenesis engine
+        # Use raw psycopg2 connection for the phylogenesis engine.
+        # Closed deterministically in the finally block below.
         raw_conn = db_session.get_bind().raw_connection()
 
         all_pair_results = []
+        failed_pairs = []
         combined_report_summary = {
             "pairs": [],
             "total_matches": 0,
@@ -217,6 +231,7 @@ def perform_phylogenetic_alignment(session_id: int):
             signal_source = _build_signal_from_features(db_session, source_id)
             signal_target = _build_signal_from_features(db_session, target_id)
 
+            pair_error = None
             try:
                 report = run_phylogenetic_alignment(
                     db_conn=raw_conn,
@@ -227,8 +242,13 @@ def perform_phylogenetic_alignment(session_id: int):
                     signal_target=signal_target,
                 )
             except Exception as e:
-                logger.error("Pair %d failed: %s", pair_idx + 1, e)
+                # A crashed pair is a failure, not "nothing matched". Record
+                # it so the run as a whole can fail instead of silently
+                # reporting every feature as Only OLD / Only NEW.
+                logger.exception("Pair %d (run %d -> run %d) crashed", pair_idx + 1, source_id, target_id)
                 report = None
+                pair_error = str(e)
+                failed_pairs.append({"pair_index": pair_idx, "error": pair_error})
 
             # Build output rows for this pair
             source_features = {
@@ -289,7 +309,10 @@ def perform_phylogenetic_alignment(session_id: int):
                 "matched": len(matched_rows),
                 "only_old": len(only_old_rows),
                 "only_new": len(only_new_rows),
+                "status": "error" if pair_error is not None else "completed",
             }
+            if pair_error is not None:
+                pair_summary["error"] = pair_error
             if report:
                 pair_summary["ransac_inliers"] = report.ransac_inliers
                 pair_summary["ransac_outliers"] = report.ransac_outliers
@@ -316,9 +339,7 @@ def perform_phylogenetic_alignment(session_id: int):
 
         for pair_result in all_pair_results:
             for row in pair_result["anomaly_matched"]:
-                ft_old = (row.get("old_feature_type") or "").upper()
-                ft_new = (row.get("new_feature_type") or "").upper()
-                if ft_old in ("GW", "WELD") or ft_new in ("GW", "WELD"):
+                if _is_weld_kind(row.get("old_feature_type")) or _is_weld_kind(row.get("new_feature_type")):
                     gw_locked.append(row)
                 else:
                     anomaly_matched.append(row)
@@ -351,6 +372,11 @@ def perform_phylogenetic_alignment(session_id: int):
                 ),
             },
         }
+        if failed_pairs:
+            json_output["success"] = False
+            json_output["error"] = (
+                f"{len(failed_pairs)} of {len(runs) - 1} alignment pair(s) crashed"
+            )
 
         result_path = os.environ.get("ALIGNMENT_RESULT_FILE")
         if result_path:
@@ -362,11 +388,39 @@ def perform_phylogenetic_alignment(session_id: int):
             print(json.dumps(json_output))
             print("___RESULT_JSON_END___")
 
+        if failed_pairs:
+            # The result payload above carries the per-pair statuses; the
+            # process itself must still exit nonzero so the worker does not
+            # record a crashed run as a successful alignment.
+            raise RuntimeError(
+                "; ".join(
+                    f"pair {f['pair_index'] + 1} crashed: {f['error']}"
+                    for f in failed_pairs
+                )
+            )
+
         total_m = combined_report_summary["total_matches"]
         print(f"\n[DONE] Phylogenetic alignment complete: {total_m} matches across {len(runs)-1} pairs")
 
     finally:
+        if raw_conn is not None:
+            raw_conn.close()
         db_session.close()
+
+
+def _force_utf8_io():
+    """Never let the locale codepage decide how requests are decoded.
+
+    Node sets PYTHONIOENCODING, but this keeps the engine correct when it is
+    run by hand.  ``errors='replace'`` matters as much as the encoding: an
+    encode error while printing the result envelope would kill the run after
+    the alignment already succeeded.  Mirrors dtw_engine._force_utf8_io.
+    """
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
 
 
 def main(argv=None):
@@ -388,4 +442,5 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    _force_utf8_io()
     sys.exit(main())

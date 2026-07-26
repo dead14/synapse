@@ -39,9 +39,21 @@ MAX_SKIP_ANCHORS = 4
 MAX_OVERLAP_CELLS = 1_000_000
 MIN_AUTO_PAIRS = 3
 AMBIGUITY_SCORE_RATIO = 0.95
+# Candidate path scores are additive evidence and can be legitimately
+# negative (skip penalties, wall-thickness changes).  The legacy ratio rule
+# "runner_up >= 0.95 * best" inverts for negative scores, so ambiguity is
+# tested as an additive margin instead: margin = 0.05 * max(|best|, floor).
+# The floor is the score of a minimal auto-acceptable overlap (about
+# MIN_AUTO_PAIRS clean weld pairs), so near-zero or negative best scores
+# still get a meaningful margin.
+AMBIGUITY_SCORE_FLOOR = 20.0
 FACILITY_BOUNDARY_TYPES = {"flange", "launcher", "receiver"}
 FACILITY_BOUNDARY_MAX_DISTANCE_M = 10.0
 MAX_THEIL_SEN_PAIRS = 100_000
+# Fixed seed for Theil-Sen pair subsampling: the fit must stay deterministic
+# (ROBUST_FIT_METHOD promises it), sampling only replaces the O(n^2)
+# materialization of every index pair.
+THEIL_SEN_SAMPLING_SEED = 0
 SPAN_P95_REVIEW_THRESHOLD_M = 1.5
 
 # Engineering gate for per-span geometry change.  These constants describe
@@ -278,6 +290,46 @@ def _same_alignment_family(left, right):
     return overlap >= 0.5
 
 
+def _score_scale(best_score):
+    """Scale used for the ambiguity margin and the uniqueness ratio.
+
+    Always positive, so neither computation divides by (or compares against)
+    a zero or negative best score.
+    """
+    return max(abs(best_score), AMBIGUITY_SCORE_FLOOR)
+
+
+def _is_ambiguous_runner_up(best, runner_up):
+    """Additive-margin replacement for ``runner >= best * 0.95``.
+
+    For positive scores at or above the floor this is exactly the legacy
+    semantics: best - runner <= (1 - 0.95) * best.  Unlike the ratio form it
+    keeps working when scores are near zero or negative, where the
+    multiplicative comparison inverts and stops detecting near-ties.
+    """
+    if not runner_up:
+        return False
+    margin = (1.0 - AMBIGUITY_SCORE_RATIO) * _score_scale(best["score"])
+    return (
+        best["score"] - runner_up["score"] <= margin
+        and runner_up["pairCount"] >= best["pairCount"] * 0.95
+    )
+
+
+def _uniqueness_score(best, runner_up, ambiguous):
+    """Clamped score gap on the same scale as the ambiguity margin.
+
+    Equals the legacy ``1 - runner/best`` for positive best scores at or
+    above the floor, but never divides by ~0 for small or negative scores.
+    """
+    if ambiguous:
+        return 0.0
+    if runner_up is None:
+        return 1.0
+    gap = best["score"] - runner_up["score"]
+    return max(0.0, min(1.0, gap / _score_scale(best["score"])))
+
+
 def find_overlap_candidates(old_anchors, new_anchors, max_candidates=3):
     """Find monotonic local alignments using robust multi-anchor span transitions."""
     old_count, new_count = len(old_anchors), len(new_anchors)
@@ -360,17 +412,24 @@ def align_anchors(anchors_a, anchors_b, gap_penalty=-5.0):
 
 
 def _sample_pair_slopes(source_array, target_array):
-    left, right = np.triu_indices(len(source_array), k=1)
+    count = len(source_array)
+    total_pairs = count * (count - 1) // 2
+    if total_pairs <= MAX_THEIL_SEN_PAIRS:
+        # Small inputs keep the exhaustive enumeration so existing results
+        # stay bit-for-bit deterministic.
+        left, right = np.triu_indices(count, k=1)
+    else:
+        # np.triu_indices materializes every index pair — O(n^2) memory,
+        # ~1.2 GB at n=10k — only to be subsampled right after.  Draw i<j
+        # pairs directly instead; the fixed seed keeps the fit deterministic.
+        rng = np.random.default_rng(THEIL_SEN_SAMPLING_SEED)
+        left = rng.integers(0, count - 1, size=MAX_THEIL_SEN_PAIRS)
+        right = rng.integers(left + 1, count)
     differences = source_array[right] - source_array[left]
     valid = np.abs(differences) > 1e-9
     left = left[valid]
     right = right[valid]
     differences = differences[valid]
-    if len(differences) > MAX_THEIL_SEN_PAIRS:
-        selected = np.linspace(0, len(differences) - 1, MAX_THEIL_SEN_PAIRS, dtype=int)
-        left = left[selected]
-        right = right[selected]
-        differences = differences[selected]
     return (target_array[right] - target_array[left]) / differences
 
 
@@ -633,11 +692,7 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
         inlier_pairs[-1][1].dist - inlier_pairs[0][1].dist,
     )
     runner_up = candidates[1] if len(candidates) > 1 else None
-    ambiguous = bool(
-        runner_up
-        and runner_up["score"] >= best["score"] * AMBIGUITY_SCORE_RATIO
-        and runner_up["pairCount"] >= best["pairCount"] * 0.95
-    )
+    ambiguous = _is_ambiguous_runner_up(best, runner_up)
 
     reasons = []
     if len(inlier_pairs) < MIN_AUTO_PAIRS:
@@ -662,9 +717,7 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
         -0.5 * (span_quality["p95AbsM"] / ROBUST_RESIDUAL_THRESHOLD_M) ** 2
     )
     coverage_score = min(1.0, len(inlier_pairs) / 8.0)
-    uniqueness_score = 0.0 if ambiguous else (
-        1.0 if runner_up is None else max(0.0, min(1.0, 1.0 - runner_up["score"] / best["score"]))
-    )
+    uniqueness_score = _uniqueness_score(best, runner_up, ambiguous)
     scale_score = math.exp(-0.5 * ((canonical_scale - 1.0) / ILI_SCALE_TOLERANCE) ** 2)
     confidence = 100.0 * (
         0.35 * inlier_ratio

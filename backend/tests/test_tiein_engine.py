@@ -3,6 +3,8 @@ import unittest
 from datetime import time
 from pathlib import Path
 
+import numpy as np
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "python_engines"))
 
@@ -525,6 +527,91 @@ class WallThicknessTransitionTests(unittest.TestCase):
             tiein_engine.Anchor(idx=1, dist=22.0, type="valve", feature_id="d"),
         ]
         self.assertEqual(tiein_engine.find_overlap_candidates(old, new), [])
+
+
+class AmbiguityMarginTests(unittest.TestCase):
+    """Span/node scores can go negative (skip penalties, WT changes).
+
+    The legacy ratio test ``runner >= best * 0.95`` inverts for negative
+    best scores and the uniqueness ratio divides by ~0 near zero; the
+    additive margin must handle all sign regimes.
+    """
+
+    @staticmethod
+    def candidate(score, pair_count=5):
+        return {"score": float(score), "pairCount": pair_count}
+
+    def test_close_negative_scores_are_ambiguous(self):
+        best = self.candidate(-10.0)
+        runner_up = self.candidate(-10.4)
+        # Legacy ratio rule: -10.4 >= -9.5 is False -> near-tie missed.
+        self.assertTrue(tiein_engine._is_ambiguous_runner_up(best, runner_up))
+
+    def test_clearly_worse_negative_runner_up_is_not_ambiguous(self):
+        best = self.candidate(-2.0)
+        runner_up = self.candidate(-40.0)
+        self.assertFalse(tiein_engine._is_ambiguous_runner_up(best, runner_up))
+        self.assertEqual(
+            tiein_engine._uniqueness_score(best, runner_up, False), 1.0
+        )
+
+    def test_zero_best_score_does_not_divide_by_zero(self):
+        best = self.candidate(0.0)
+        runner_up = self.candidate(-0.2)
+
+        ambiguous = tiein_engine._is_ambiguous_runner_up(best, runner_up)
+
+        self.assertTrue(ambiguous)
+        self.assertEqual(tiein_engine._uniqueness_score(best, runner_up, ambiguous), 0.0)
+
+    def test_missing_runner_up_is_unique(self):
+        best = self.candidate(-3.0)
+        self.assertFalse(tiein_engine._is_ambiguous_runner_up(best, None))
+        self.assertEqual(tiein_engine._uniqueness_score(best, None, False), 1.0)
+
+    def test_positive_scores_keep_the_legacy_ratio_semantics(self):
+        best = self.candidate(100.0)
+        self.assertTrue(
+            tiein_engine._is_ambiguous_runner_up(best, self.candidate(96.0))
+        )
+        self.assertFalse(
+            tiein_engine._is_ambiguous_runner_up(best, self.candidate(94.0))
+        )
+        self.assertAlmostEqual(
+            tiein_engine._uniqueness_score(best, self.candidate(94.0), False),
+            0.06,
+            places=9,
+        )
+
+    def test_fewer_pairs_in_runner_up_is_not_ambiguous(self):
+        best = self.candidate(-10.0, pair_count=10)
+        runner_up = self.candidate(-10.1, pair_count=4)
+        self.assertFalse(tiein_engine._is_ambiguous_runner_up(best, runner_up))
+
+
+class TheilSenPairSamplingTests(unittest.TestCase):
+    def test_small_inputs_still_enumerate_every_pair(self):
+        source = np.array([0.0, 1.0, 3.0, 6.0])
+        target = np.array([0.0, 2.0, 6.0, 12.0])
+
+        slopes = tiein_engine._sample_pair_slopes(source, target)
+
+        self.assertEqual(len(slopes), 6)
+        self.assertTrue(np.allclose(slopes, 2.0))
+
+    def test_large_inputs_sample_pairs_without_materializing_all(self):
+        # 600 points -> 179,700 pairs, above the 100k cap: the sampled path
+        # must stay bounded, deterministic, and statistically faithful.
+        source = np.linspace(0.0, 1000.0, 600)
+        target = 2.0 * source + 5.0
+
+        slopes_first = tiein_engine._sample_pair_slopes(source, target)
+        slopes_second = tiein_engine._sample_pair_slopes(source, target)
+
+        self.assertLessEqual(len(slopes_first), tiein_engine.MAX_THEIL_SEN_PAIRS)
+        self.assertGreater(len(slopes_first), 0)
+        self.assertTrue(np.array_equal(slopes_first, slopes_second))
+        self.assertAlmostEqual(float(np.median(slopes_first)), 2.0, places=9)
 
 
 if __name__ == "__main__":

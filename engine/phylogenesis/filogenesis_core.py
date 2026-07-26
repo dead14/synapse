@@ -104,15 +104,15 @@ def ransac_linear_fit(
     scale_min: float = 0.95,
     scale_max: float = 1.05,
     rng_seed: Optional[int] = None
-) -> Tuple[List[AncestralAnchor], List[AncestralAnchor], float, float]:
+) -> Tuple[List[AncestralAnchor], List[AncestralAnchor], float, float, bool]:
     """
     RANSAC linear fitting untuk sanitasi anchor leluhur.
-    
+
     Model: abs_chainage = scale * odom_source + offset
-    
+
     Menolak anchor yang secara statistik tidak konsisten dengan
     model linear (kemungkinan error odometer historis, salah link, dll).
-    
+
     Parameter:
         anchors: Daftar anchor mentah dari ancestor chain
         n_iters: Jumlah iterasi RANSAC (default 150)
@@ -120,13 +120,17 @@ def ransac_linear_fit(
         scale_min: Batas bawah scale yang diterima (default 0.95)
         scale_max: Batas atas scale yang diterima (default 1.05)
         rng_seed: Seed untuk reproducibility (opsional)
-    
+
     Return:
-        (inliers, outliers, best_scale, best_offset)
+        (inliers, outliers, best_scale, best_offset, success)
+        success=False berarti TIDAK ADA hipotesis sampel yang lolos batas
+        scale [scale_min, scale_max]; inliers dan outliers dikembalikan
+        kosong dan caller tidak boleh memperlakukan anchor mana pun sebagai
+        tervalidasi ataupun outlier.
     """
     if len(anchors) < 2:
         logger.warning("RANSAC: Terlalu sedikit anchor (%d), skip sanitasi", len(anchors))
-        return anchors, [], 1.0, 0.0
+        return anchors, [], 1.0, 0.0, True
 
     rng = np.random.RandomState(rng_seed)
     
@@ -168,6 +172,27 @@ def ransac_linear_fit(
             best_offset = offset
             best_inlier_mask = inlier_mask
 
+    if best_inlier_count == 0:
+        # Semua hipotesis sampel jatuh di luar batas scale (atau degenerate).
+        # Jangan kembalikan scale=1/offset=0 dengan semua anchor "inlier" —
+        # itu tidak bisa dibedakan dari fit yang sukses.
+        logger.warning(
+            "RANSAC GAGAL: tidak ada hipotesis dengan scale dalam [%.3f, %.3f] "
+            "dari %d anchor. Hasil fit tidak bisa dipakai.",
+            scale_min, scale_max, len(anchors)
+        )
+        return [], [], 1.0, 0.0, False
+
+    # Refit least-squares pada inlier set (langkah standar RANSAC) supaya
+    # scale/offset tidak bergantung hanya pada 2 titik sampel hipotesis.
+    inlier_odoms = odoms[best_inlier_mask]
+    inlier_chainages = chainages[best_inlier_mask]
+    if len(inlier_odoms) >= 2 and float(np.ptp(inlier_odoms)) > 1e-6:
+        refit_scale, refit_offset = np.polyfit(inlier_odoms, inlier_chainages, 1)
+        if scale_min <= refit_scale <= scale_max:
+            best_scale = float(refit_scale)
+            best_offset = float(refit_offset)
+
     # Pisahkan inliers dan outliers
     inliers = [a for a, m in zip(anchors, best_inlier_mask) if m]
     outliers = [a for a, m in zip(anchors, best_inlier_mask) if not m]
@@ -177,7 +202,7 @@ def ransac_linear_fit(
         len(inliers), len(outliers), best_scale, best_offset
     )
 
-    return inliers, outliers, best_scale, best_offset
+    return inliers, outliers, best_scale, best_offset, True
 
 
 # ===========================================================================
@@ -471,6 +496,11 @@ def dtw_constrained(
             _, i, j = min(candidates, key=lambda x: x[0])
     
     path.reverse()
+    # Buang entri dengan index negatif: loop di atas meng-append (i-1, j-1)
+    # SEBELUM memeriksa i == 0 / j == 0, sehingga traceback yang menyentuh
+    # baris/kolom 0 bisa memasukkan pasangan -1 ke warping path. Filter yang
+    # sama dipakai dtw_joint_sequence di engine/math_utils.py.
+    path = [(a, b) for (a, b) in path if a >= 0 and b >= 0]
     total_cost = D[n, m]
 
     return path, total_cost
@@ -610,12 +640,17 @@ def hungarian_matching_with_prior(
                 cost[i, j] = 1e12
                 continue
             
-            # Cari weight ancestor terdekat
+            # Cari weight ancestor terdekat.
+            # fs.odometer adalah odometer run SUMBER, jadi kedekatan anchor
+            # harus diukur pada sumbu odom_source — sumbu yang sama dengan
+            # interpolasi abs_chainage di bawah. Membandingkan dengan
+            # abs_chainage mencampur dua sistem koordinat dan memilih anchor
+            # yang salah begitu scale/offset RANSAC menjauh dari identitas.
             closest_weight = 0.1  # default minimum
             if weighted_anchors:
                 min_anchor_dist = float('inf')
                 for anchor, weight, sigma in weighted_anchors:
-                    d = abs(anchor.abs_chainage - fs.odometer)
+                    d = abs(anchor.odom_source - fs.odometer)
                     if d < min_anchor_dist:
                         min_anchor_dist = d
                         closest_weight = max(weight, 0.01)
@@ -739,8 +774,10 @@ def compute_canonical_updates(
         features_target: Fitur target
         warping_path: DTW warping path
         weighted_anchors: Anchor dengan weight
-        existing_canonicals: Dict {feature_id: (abs_chainage, sigma)} jika ada
-    
+        existing_canonicals: Dict {feature_id: (abs_chainage, sigma)} atau
+            {feature_id: (canonical_id, abs_chainage, sigma)} jika identitas
+            canonical-nya sudah diketahui dari lookup existing links
+
     Return:
         List of dicts dengan info update canonical
     """
@@ -764,12 +801,18 @@ def compute_canonical_updates(
         
         if match.target_feature_id in existing_canonicals:
             # Kalman update
-            abs_old, sigma_old = existing_canonicals[match.target_feature_id]
+            entry = existing_canonicals[match.target_feature_id]
+            if len(entry) == 3:
+                known_canonical_id, abs_old, sigma_old = entry
+            else:
+                known_canonical_id = None
+                abs_old, sigma_old = entry
             abs_updated, sigma_updated = kalman_update_chainage(
                 abs_old, sigma_old, match.abs_chainage, sigma_new
             )
             updates.append({
                 'action': 'UPDATE',
+                'canonical_id': known_canonical_id,
                 'target_feature_id': match.target_feature_id,
                 'abs_chainage': abs_updated,
                 'sigma': sigma_updated,
@@ -802,43 +845,61 @@ def compute_canonical_updates(
 # FASE 7: VALIDASI FISIK OTOMATIS
 # ===========================================================================
 
+def _is_weld_anchor_type(anchor_type: Any) -> bool:
+    """Kenali anchor jenis girth weld dari berbagai penulisan tipe yang
+    masuk lewat ingest: 'GW', 'Weld', 'Girth Weld', 'girth weld', dll."""
+    label = str(anchor_type or '').strip().lower()
+    return label == 'gw' or 'weld' in label
+
+
 def validate_physical_constraints(
     canonical_anchors_sorted: List[Dict[str, Any]],
     block_results: List[BlockResult],
-    min_joint_length: float = 10.5,
-    max_joint_length: float = 13.5,
+    min_joint_length: float = 3.0,
+    max_joint_length: float = 25.0,
     suspect_cost_multiplier: float = 2.5
 ) -> Tuple[List[Dict[str, Any]], List[int]]:
     """
     Validasi fisik otomatis setelah semua blok selesai.
-    
-    Cek 1: Joint length harus antara min_joint_length dan max_joint_length
-           untuk anchor tipe GW.
+
+    Cek 1: Joint length antar anchor jenis girth weld harus berada dalam
+           sanity band [min_joint_length, max_joint_length]. Pelanggaran
+           dicatat sebagai WARNING untuk review, bukan hard failure —
+           joint non-standar (mis. double joint 18 m) memang ada di lapangan.
     Cek 2: Jika mean DTW cost blok > 2.5x mean global, flag sebagai
            SUSPECT_SPOOL_REPLACEMENT.
-    
+
     Parameter:
         canonical_anchors_sorted: List anchor canonical terurut berdasarkan abs_chainage
         block_results: Hasil dari semua blok
-        min_joint_length: Panjang joint minimum (meter, default 10.5)
-        max_joint_length: Panjang joint maksimum (meter, default 13.5)
+        min_joint_length: Panjang joint minimum (meter, default 3.0)
+        max_joint_length: Panjang joint maksimum (meter, default 25.0)
         suspect_cost_multiplier: Multiplier untuk deteksi spool replacement (default 2.5)
-    
+
     Return:
         (violations, suspect_block_indices)
         violations: List dicts {index, chainage_i, chainage_j, joint_length, type}
         suspect_block_indices: Indeks blok yang dicurigai spool replacement
     """
     violations = []
-    
-    # Cek 1: Joint length violations
-    gw_anchors = [a for a in canonical_anchors_sorted if a.get('anchor_type') == 'GW']
+
+    # Cek 1: Joint length warnings antar girth weld
+    gw_anchors = [
+        a for a in canonical_anchors_sorted
+        if _is_weld_anchor_type(a.get('anchor_type'))
+    ]
     gw_anchors.sort(key=lambda x: x['abs_chainage'])
-    
+
     for i in range(len(gw_anchors) - 1):
         joint_length = gw_anchors[i + 1]['abs_chainage'] - gw_anchors[i]['abs_chainage']
-        
+
         if joint_length < min_joint_length or joint_length > max_joint_length:
+            logger.warning(
+                "Joint length %.2fm di luar sanity band [%.1f, %.1f]m "
+                "(chainage %.2f -> %.2f) — ditandai untuk review",
+                joint_length, min_joint_length, max_joint_length,
+                gw_anchors[i]['abs_chainage'], gw_anchors[i + 1]['abs_chainage']
+            )
             violations.append({
                 'index': i,
                 'chainage_i': gw_anchors[i]['abs_chainage'],
