@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { FiActivity } from 'react-icons/fi';
 import PageMeta from '../../components/common/PageMeta';
 import { formatDistanceToNow } from 'date-fns';
+import { apiFetch } from '../../utils/api';
 
 interface LogEntry {
   id: number;
@@ -19,14 +20,7 @@ export default function ActivityLogs() {
   useEffect(() => {
     const fetchLogs = async () => {
       try {
-        const token = localStorage.getItem('synapse_token');
-        const res = await fetch('http://localhost:8000/api/activity-logs', {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setLogs(data);
-        }
+        setLogs(await apiFetch<LogEntry[]>('/api/dashboard/activity-logs'));
       } catch (err) {
         console.error('Failed to fetch logs:', err);
       } finally {

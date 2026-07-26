@@ -1,6 +1,7 @@
 import React, { useMemo, useEffect } from 'react';
-import { MapContainer, TileLayer, Polyline, Tooltip, Marker, Popup, CircleMarker, useMapEvents, Circle, useMap } from 'react-leaflet';
-import { SectionDef } from './IliSectioningPage';
+import { MapContainer, TileLayer, Polyline, Tooltip, Marker, CircleMarker, useMapEvents, useMap } from 'react-leaflet';
+import type { SectionDef } from './types';
+import { sectionColor } from './sectionColors';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
@@ -117,18 +118,6 @@ export default function SectionMap({
 
   const defaultCenter: [number, number] = [-2.5489, 118.0149]; // Center of Indonesia
 
-  const getSectionColor = (type: string) => {
-    switch (type) {
-      case 'RL': return '#2dd4bf';
-      case 'AL': return '#60a5fa';
-      case 'RIS': return '#ef4444';
-      case 'ROC': return '#fb923c';
-      case 'BUR': return '#a3e635';
-      case 'CAS': return '#94a3b8';
-      default: return '#c084fc';
-    }
-  };
-
   const handleMapClick = (e: any) => {
     const { lat, lng } = e.latlng;
     
@@ -228,7 +217,7 @@ export default function SectionMap({
           
           const midLat = (sec.latStart! + sec.latEnd!) / 2;
           const midLng = (sec.lngStart! + sec.lngEnd!) / 2;
-          const color = getSectionColor(sec.type);
+          const color = sectionColor(sec.type);
           const labelIcon = L.divIcon({
             className: 'custom-section-label bg-transparent border-0',
             html: `<div style="background: rgba(255,255,255,0.9); border: 2px solid ${color}; padding: 2px 8px; border-radius: 6px; font-weight: 800; font-size: 11px; color: #1f2937; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transform: translate(-50%, -50%);">${sec.name}</div>`,
@@ -275,7 +264,7 @@ export default function SectionMap({
               eventHandlers={{
                 click: (e) => {
                   L.DomEvent.stopPropagation(e);
-                  onGwClick && onGwClick(gw);
+                  onGwClick?.(gw);
                 }
               }}
             >

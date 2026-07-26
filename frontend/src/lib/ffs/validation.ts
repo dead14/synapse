@@ -1,4 +1,4 @@
-import { REQUIRED_COLUMNS } from './types';
+import { REQUIRED_COLUMNS } from './types.ts';
 
 export interface ValidationError {
   row: number;
@@ -7,45 +7,64 @@ export interface ValidationError {
 }
 
 const NUMERIC_COLS = [
-  'Max Depth [%]', 'Length [mm]', 'Width [mm]',
-  'Nominal Wall Thickness [mm]', 'CR Depth [mm/y]', 'CR Length [mm/y]',
-  'Design Factor', 'Outer Diameter Ds', 'SMYS [MPa]', 'Operating Pressure P₀ [MPa]'
+  REQUIRED_COLUMNS[0], REQUIRED_COLUMNS[3], REQUIRED_COLUMNS[4], REQUIRED_COLUMNS[5],
+  REQUIRED_COLUMNS[7], REQUIRED_COLUMNS[8], REQUIRED_COLUMNS[9], REQUIRED_COLUMNS[10],
+  REQUIRED_COLUMNS[11], REQUIRED_COLUMNS[12], REQUIRED_COLUMNS[13],
 ];
 
 const POSITIVE_COLS = [
-  'Length [mm]', 'Nominal Wall Thickness [mm]', 'Design Factor',
-  'Outer Diameter Ds', 'SMYS [MPa]', 'Operating Pressure P₀ [MPa]'
+  REQUIRED_COLUMNS[4], REQUIRED_COLUMNS[5], REQUIRED_COLUMNS[7], REQUIRED_COLUMNS[10],
+  REQUIRED_COLUMNS[11], REQUIRED_COLUMNS[12], REQUIRED_COLUMNS[13],
 ];
 
+const NON_NEGATIVE_COLS = [REQUIRED_COLUMNS[0], REQUIRED_COLUMNS[3], REQUIRED_COLUMNS[8], REQUIRED_COLUMNS[9]];
+
 export function validateHeaders(headers: string[]): string[] {
-  const missing: string[] = [];
-  for (const col of REQUIRED_COLUMNS) {
-    if (!headers.includes(col)) missing.push(col);
-  }
-  return missing;
+  return REQUIRED_COLUMNS.filter((column) => !headers.includes(column));
 }
 
 export function validateData(rows: Record<string, string>[]): ValidationError[] {
   const errors: ValidationError[] = [];
-  rows.forEach((row, idx) => {
-    const rowNum = idx + 2; // CSV row 1 is header
-    for (const col of NUMERIC_COLS) {
-      const val = row[col];
-      if (val === undefined || val === null || String(val).trim() === '') {
-        errors.push({ row: rowNum, col, msg: 'Missing value' });
-      } else if (isNaN(parseFloat(String(val)))) {
-        errors.push({ row: rowNum, col, msg: `"${val}" is not a number` });
+  rows.forEach((row, index) => {
+    const rowNumber = index + 2;
+    for (const column of NUMERIC_COLS) {
+      const value = row[column];
+      if (value === undefined || value === null || String(value).trim() === '') {
+        errors.push({ row: rowNumber, col: column, msg: 'Missing value' });
+        continue;
+      }
+      if (!Number.isFinite(Number(String(value).trim()))) {
+        errors.push({ row: rowNumber, col: column, msg: `"${value}" must be a finite number` });
       }
     }
-    for (const col of POSITIVE_COLS) {
-      const v = parseFloat(String(row[col]));
-      if (!isNaN(v) && v <= 0) {
-        errors.push({ row: rowNum, col, msg: `Must be > 0 (got ${v})` });
+
+    for (const column of POSITIVE_COLS) {
+      const value = Number(String(row[column]).trim());
+      if (Number.isFinite(value) && value <= 0) {
+        errors.push({ row: rowNumber, col: column, msg: `Must be > 0 (got ${value})` });
       }
     }
-    const depth = parseFloat(String(row['Max Depth [%]']));
-    if (!isNaN(depth) && (depth < 0 || depth > 100)) {
-      errors.push({ row: rowNum, col: 'Max Depth [%]', msg: `Must be 0–100 (got ${depth})` });
+
+    for (const column of NON_NEGATIVE_COLS) {
+      const value = Number(String(row[column]).trim());
+      if (Number.isFinite(value) && value < 0) {
+        errors.push({ row: rowNumber, col: column, msg: `Must be non-negative (got ${value})` });
+      }
+    }
+
+    const depth = Number(String(row[REQUIRED_COLUMNS[3]]).trim());
+    if (Number.isFinite(depth) && (depth < 0 || depth > 80)) {
+      errors.push({ row: rowNumber, col: REQUIRED_COLUMNS[3], msg: `Must be 0-80 (got ${depth})` });
+    }
+
+    const designFactor = Number(String(row[REQUIRED_COLUMNS[10]]).trim());
+    if (Number.isFinite(designFactor) && designFactor > 1) {
+      errors.push({ row: rowNumber, col: REQUIRED_COLUMNS[10], msg: `Must be <= 1 (got ${designFactor})` });
+    }
+
+    const outerDiameter = Number(String(row[REQUIRED_COLUMNS[11]]).trim());
+    if (Number.isFinite(outerDiameter) && outerDiameter < 50) {
+      errors.push({ row: rowNumber, col: REQUIRED_COLUMNS[11], msg: `Pipeline OD must be >= 50 mm (got ${outerDiameter})` });
     }
   });
   return errors;

@@ -1,7 +1,7 @@
 
 import { 
   FiGrid, FiDatabase, FiActivity, FiShield, FiTrendingUp, 
-  FiPieChart, FiTarget, FiTool, FiList, FiSettings, FiUser
+  FiPieChart, FiTarget, FiTool, FiList, FiSettings
 } from 'react-icons/fi';
 import { useLocation, useNavigate } from 'react-router-dom';
 

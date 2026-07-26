@@ -1,7 +1,14 @@
-import { useState, useMemo, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
+import { useState, useMemo, useEffect, useRef, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { FiSearch, FiFileText, FiSave, FiEdit, FiInfo, FiMaximize, FiMinimize, FiActivity, FiColumns, FiX, FiDownload, FiMap } from 'react-icons/fi';
+import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, FiX, FiDownload, FiMap } from 'react-icons/fi';
+import { apiFetch, apiUrl } from './utils/api';
+import { createExcelExportRows } from './utils/alignmentExport';
+import {
+  alignmentDisplayValue,
+  isAlignmentDisplayMetadata,
+  sortAlignmentRowsByDisplayedLogDistance,
+} from './utils/alignmentDisplay';
 
 // Lazy load chart.js - heavy library, only load when Chart tab is selected
 const LazyScatterChart = lazy(() =>
@@ -40,12 +47,47 @@ const LazyScatterChart = lazy(() =>
 );
 
 interface ResultsPanelProps {
-  data: any[];
+  data: any;
   loading: boolean;
   onOpenAnalytics?: () => void;
   selectedRowIdx?: number | null;
   onSelectRowIdx?: (idx: number | null) => void;
   onUpdateMatch?: (sourceIdx: number, targetIdx: number) => void;
+  audit?: unknown;
+}
+
+/** Parse a clock value to hours (0..12) regardless of format ("HH:MM" or Excel serial fraction). */
+function parseClockHours(val: unknown): number {
+  if (val == null || val === '-') return 0;
+  const s = String(val).trim();
+  if (s.includes(':')) {
+    const [h, m] = s.split(':').map(Number);
+    return (h % 12) + (m || 0) / 60;
+  }
+  const n = parseFloat(s);
+  if (isNaN(n)) return 0;
+  // Excel time serial: fraction of 24-hour day
+  if (n > 0 && n < 1) return (n * 24) % 12;
+  return n % 12;
+}
+
+/** Format a clock value for display — convert Excel time serials to HH:MM. */
+function formatClockDisplay(val: unknown): string {
+  if (val == null || val === '-' || val === '') return '-';
+  const s = String(val).trim();
+  if (s.toLowerCase() === 'null' || s.toLowerCase() === 'nan' || s.toLowerCase() === 'undefined' || s === '-') return '-';
+  if (s.includes(':')) return s; // already formatted
+  const n = typeof val === 'number' ? val : parseFloat(s);
+  if (isNaN(n)) return s;
+  if (n > 0 && n < 1) {
+    const totalHours = n * 24;
+    let h = Math.floor(totalHours);
+    let m = Math.round((totalHours - h) * 60);
+    if (m === 60) { h += 1; m = 0; }
+    if (h === 0) h = 12;
+    return `${h}:${String(m).padStart(2, '0')}`;
+  }
+  return s;
 }
 
 const ProbabilityModal = ({ sourceRow, targetRow, onConfirm, onCancel }: { sourceRow: any, targetRow: any, onConfirm: () => void, onCancel: () => void }) => {
@@ -55,8 +97,8 @@ const ProbabilityModal = ({ sourceRow, targetRow, onConfirm, onCancel }: { sourc
   const dDepth = Math.abs((parseFloat(targetRow['Depth OLD (%WT)']) || 0) - (parseFloat(sourceRow['Depth NEW (%WT)']) || 0));
   const dLength = Math.abs((parseFloat(targetRow['Length OLD (mm)']) || 0) - (parseFloat(sourceRow['Length NEW (mm)']) || 0));
   const dWidth = Math.abs((parseFloat(targetRow['Width OLD (mm)']) || 0) - (parseFloat(sourceRow['Width NEW (mm)']) || 0));
-  const oClockOld = parseFloat(targetRow["O'Clock OLD"]) || 0;
-  const oClockNew = parseFloat(sourceRow["O'Clock NEW"]) || 0;
+  const oClockOld = parseClockHours(targetRow["O'Clock OLD"]);
+  const oClockNew = parseClockHours(sourceRow["O'Clock NEW"]);
   let dClock = Math.abs(oClockOld - oClockNew);
   if (dClock > 6) dClock = 12 - dClock;
   
@@ -128,8 +170,32 @@ const ProbabilityModal = ({ sourceRow, targetRow, onConfirm, onCancel }: { sourc
   );
 };
 
-export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedRowIdx, onSelectRowIdx, onUpdateMatch }: ResultsPanelProps) {
+export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, selectedRowIdx, onSelectRowIdx, onUpdateMatch }: ResultsPanelProps) {
+  const data = useMemo(() => {
+    let flattened: any[] = [];
+    if (Array.isArray(rawData)) {
+       flattened = rawData.map((row: any) => ({
+         ...row,
+         __resultGroup: String(row['Result Group'] || '').toUpperCase(),
+       }));
+    } else if (rawData && typeof rawData === 'object') {
+       flattened = [
+          ...(rawData.gw_locked || []).map((row: any) => ({ ...row, __resultGroup: 'GW' })),
+          ...(rawData.gw_unmatched || []).map((row: any) => ({ ...row, __resultGroup: 'GW' })),
+          ...(rawData.anomaly_matched || []).map((row: any) => ({ ...row, __resultGroup: 'ANOMALY' })),
+          ...(rawData.anomaly_only_old || []).map((row: any) => ({ ...row, __resultGroup: 'ANOMALY' })),
+          ...(rawData.anomaly_only_new || []).map((row: any) => ({ ...row, __resultGroup: 'ANOMALY' })),
+          ...(rawData.bypassed_old || []).map((row: any) => ({ ...row, __resultGroup: 'BYPASSED' })),
+          ...(rawData.bypassed_new || []).map((row: any) => ({ ...row, __resultGroup: 'BYPASSED' }))
+       ];
+    }
+    // NEW is the spatial master. Keep the default order consistent with the
+    // source NEW log distance rendered in the table; OLD-only rows follow it.
+    return sortAlignmentRowsByDisplayedLogDistance(flattened);
+  }, [rawData]);
+
   const navigate = useNavigate();
+  const [isExporting, setIsExporting] = useState(false);
   const [activeTab, setActiveTab] = useState('Results');
   const [radioFilter, setRadioFilter] = useState('All');
   const [unmatchedOld, setUnmatchedOld] = useState(false);
@@ -138,12 +204,20 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
   // Sections state
   const [sections, setSections] = useState<any[]>([]);
   
-  // Interventions state
-  const [interventions, setInterventions] = useState<any[]>([]);
-  const [run1Defect, setRun1Defect] = useState('');
-  const [run2Defect, setRun2Defect] = useState('');
-  const [interventionAction, setInterventionAction] = useState('-');
-  const [showInterventionForm, setShowInterventionForm] = useState(false);
+  const summaryCounts = useMemo(() => {
+    if (rawData && !Array.isArray(rawData)) {
+      return {
+        gwLocked: rawData.gw_locked?.length || 0,
+        gwUnmatched: rawData.gw_unmatched?.length || 0,
+        anomalyMatched: rawData.anomaly_matched?.length || 0,
+        anomalyOnlyOld: rawData.anomaly_only_old?.length || 0,
+        anomalyOnlyNew: rawData.anomaly_only_new?.length || 0,
+        bypassedOld: rawData.bypassed_old?.length || 0,
+        bypassedNew: rawData.bypassed_new?.length || 0,
+      };
+    }
+    return null;
+  }, [rawData]);
 
   // Drag & Drop Match State
   const [draggedRowIdx, setDraggedRowIdx] = useState<number | null>(null);
@@ -191,9 +265,13 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
   // Extract all columns
   const allColumns = useMemo(() => {
     if (data && data.length > 0) {
-      const keys = Object.keys(data[0]).filter(k => k !== 'Match/Unmatch');
+      const keys = Object.keys(data[0]).filter(k =>
+        k !== 'Match/Unmatch'
+        && k !== '__resultGroup'
+        && !isAlignmentDisplayMetadata(k)
+      );
       // Add computed columns at the end
-      keys.push('CR mm/yr', 'Lateral Growth');
+      keys.push('Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning');
       return ['Section', ...keys];
     }
     return ['Section'];
@@ -205,17 +283,12 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
       try {
         const urlParams = new URLSearchParams(window.location.search);
         const sessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
-        const token = localStorage.getItem('synapse_token') || '';
         if (sessionId) {
-          const res = await fetch(`http://localhost:8000/api/wizard/session/${sessionId}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
-          if (res.ok) {
-            const sessData = await res.json();
-            if (sessData.config && sessData.config.sections) {
-              setSections(sessData.config.sections);
-            }
-          }
+          const sessData = await apiFetch<{ config?: { sections?: any[]; matchingSections?: any[] } }>(`/api/wizard/session/${encodeURIComponent(sessionId)}`);
+          const configuredSections = sessData.config?.matchingSections?.length
+            ? sessData.config.matchingSections
+            : sessData.config?.sections;
+          if (configuredSections) setSections(configuredSections);
         }
       } catch (err) {
         console.error("Failed to fetch sections:", err);
@@ -237,12 +310,12 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
         'Length OLD (mm)', 'Length NEW (mm)',
         'Width OLD (mm)', 'Width NEW (mm)',
         "O'Clock OLD", "O'Clock NEW",
-        'CR mm/yr', 'Lateral Growth'
+        'Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning'
       ];
       // Only include columns that actually exist in allColumns to be safe
       setVisibleColumns(defaultCols.filter(col => allColumns.includes(col)));
     }
-  }, [allColumns]);
+  }, [allColumns, visibleColumns.length]);
 
   // Debounce filter inputs - delay 300ms before applying
   useEffect(() => {
@@ -285,7 +358,7 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
       'Length OLD (mm)', 'Length NEW (mm)',
       'Width OLD (mm)', 'Width NEW (mm)',
       "O'Clock OLD", "O'Clock NEW",
-      'CR mm/yr', 'Lateral Growth'
+      'Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning'
     ];
     setVisibleColumns(defaultCols.filter(col => allColumns.includes(col)));
     setColWidths({});
@@ -308,81 +381,35 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
   };
 
   
-  // 1. Process data with interventions
+  // 1. Process alignment data
   const processedData = useMemo(() => {
-    let baseData = (data && data.length > 1) ? data.slice(1) : [];
-    
-    // Apply interventions
-    interventions.forEach(inv => {
-      if (inv.action === 'Unmatched') {
-        const idx = baseData.findIndex((row: any) => row['Identif. OLD'] === inv.run1 && row['Identif. NEW'] === inv.run2);
-        if (idx !== -1) {
-          const row = baseData[idx];
-          // Split into two unmatched
-          const oldUnmatched = { ...row };
-          const newUnmatched = { ...row };
-          
-          Object.keys(row).forEach(k => {
-            if (k.includes('NEW')) oldUnmatched[k] = null;
-            if (k.includes('OLD')) newUnmatched[k] = null;
-          });
-          
-          oldUnmatched['Identif. NEW'] = '-';
-          oldUnmatched['Feature Type NEW'] = '-';
-          oldUnmatched["O'Clock NEW"] = '-';
-          oldUnmatched['Match/Unmatch'] = 'Unmatched Old';
-          
-          newUnmatched['Identif. OLD'] = '-';
-          newUnmatched['Feature Type OLD'] = '-';
-          newUnmatched["O'Clock OLD"] = '-';
-          newUnmatched['Match/Unmatch'] = 'Unmatched New';
-          
-          baseData = [...baseData.slice(0, idx), oldUnmatched, newUnmatched, ...baseData.slice(idx + 1)];
-        }
-      } else if (inv.action === 'Matched') {
-        const oldIdx = baseData.findIndex((row: any) => row['Identif. OLD'] === inv.run1 && (!row['Identif. NEW'] || row['Identif. NEW'] === '-'));
-        const newIdx = baseData.findIndex((row: any) => row['Identif. NEW'] === inv.run2 && (!row['Identif. OLD'] || row['Identif. OLD'] === '-'));
-        
-        if (oldIdx !== -1 && newIdx !== -1) {
-          const oldRow = baseData[oldIdx];
-          const newRow = baseData[newIdx];
-          // Merge
-          const mergedRow = { ...oldRow };
-          Object.keys(newRow).forEach(k => {
-            if (k.includes('NEW')) {
-              mergedRow[k] = newRow[k];
-            }
-          });
-          mergedRow['Match/Unmatch'] = 'Match';
-          
-          const minIdx = Math.min(oldIdx, newIdx);
-          const maxIdx = Math.max(oldIdx, newIdx);
-          baseData = [
-            ...baseData.slice(0, minIdx), 
-            mergedRow, 
-            ...baseData.slice(minIdx + 1, maxIdx), 
-            ...baseData.slice(maxIdx + 1)
-          ];
-        }
-      }
-    });
-    
-    return baseData.map((row: any, idx: number) => {
+    return (data || []).map((row: any, idx: number) => {
       const d1 = parseFloat(row['Depth OLD (%WT)']);
       const d2 = parseFloat(row['Depth NEW (%WT)']);
-      const cr = (!isNaN(d1) && !isNaN(d2)) ? ((d2 - d1) / 5).toFixed(2) : '-';
+      const oldYear = Number(row['Run Year OLD']);
+      const newYear = Number(row['Run Year NEW']);
+      const yearSpan = Number.isFinite(oldYear) && Number.isFinite(newYear) && newYear > oldYear
+        ? newYear - oldYear
+        : null;
+      const depthGrowth = row['Depth Growth (%WT/yr)'] ?? (
+        yearSpan && !isNaN(d1) && !isNaN(d2) ? ((d2 - d1) / yearSpan).toFixed(3) : '-'
+      );
       
       const l1 = parseFloat(row['Length OLD (mm)']);
       const l2 = parseFloat(row['Length NEW (mm)']);
-      const latGrowth = (!isNaN(l1) && !isNaN(l2)) ? ((l2 - l1) / 5).toFixed(2) : '-';
+      const lengthGrowth = row['Length Growth (mm/yr)'] ?? (
+        yearSpan && !isNaN(l1) && !isNaN(l2) ? ((l2 - l1) / yearSpan).toFixed(3) : '-'
+      );
 
-      // Find section for this row (using Log Dist OLD as reference)
-      const dist = parseFloat(row['Log Dist OLD (m)']);
+      // NEW is the current/reference run for corrosion-growth analysis.
+      const dist = parseFloat(row['Log Dist NEW (m)']);
       let sectionName = '-';
       if (!isNaN(dist) && sections && sections.length > 0) {
          const matchingSec = sections.find(s => {
-            const min = Math.min(s.startM, s.endM);
-            const max = Math.max(s.startM, s.endM);
+            const start = Number(s.newStartM ?? s.startM);
+            const end = Number(s.newEndM ?? s.endM);
+            const min = Math.min(start, end);
+            const max = Math.max(start, end);
             return dist >= min && dist <= max;
          });
          if (matchingSec) {
@@ -392,13 +419,13 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
 
       return {
         ...row,
-        'CR mm/yr': cr,
-        'Lateral Growth': latGrowth,
+        'Depth Growth (%WT/yr)': depthGrowth,
+        'Length Growth (mm/yr)': lengthGrowth,
         'Section': sectionName,
         __origIdx: idx
       };
     });
-  }, [data, interventions]);
+  }, [data, sections]);
 
   // 2. Filter data for view
   const filteredData = useMemo(() => {
@@ -420,6 +447,23 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
       }
       
       if (!typeInclude) return false;
+
+      // Radio filter for categories
+      const resultGroup = String(row.__resultGroup || row['Result Group'] || '').toUpperCase();
+      const oldFeatureType = String(row['Feature Type OLD'] || '').toLowerCase();
+      const newFeatureType = String(row['Feature Type NEW'] || '').toLowerCase();
+      const legacyGw = !resultGroup && [oldFeatureType, newFeatureType]
+        .some((featureType) => ['weld', 'valve', 'tee', 'flange'].some((type) => featureType.includes(type)));
+      const isGw = resultGroup === 'GW' || legacyGw;
+      const isBypassed = resultGroup === 'BYPASSED' || ['Bypassed OLD', 'Bypassed NEW'].includes(row['Match/Unmatch']);
+
+      if (radioFilter === 'GW') {
+        if (!isGw) return false;
+      } else if (radioFilter === 'Anomaly') {
+        if (resultGroup ? resultGroup !== 'ANOMALY' : isGw || isBypassed) return false;
+      } else if (radioFilter === 'Bypassed') {
+        if (!isBypassed) return false;
+      }
       
       // Distance filter
       if (radioFilter === 'Distance') {
@@ -443,7 +487,7 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
       // Column data filters
       for (const [key, value] of Object.entries(filterConfig)) {
         if (value) {
-          const rowValue = row[key];
+          const rowValue = alignmentDisplayValue(row, key);
           if (rowValue === undefined || rowValue === null || !rowValue.toString().toLowerCase().includes(value.toLowerCase())) {
             return false;
           }
@@ -457,8 +501,8 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
   const sortedData = useMemo(() => {
     if (!sortConfig) return filteredData;
     return [...filteredData].sort((a, b) => {
-      const aVal = a[sortConfig.key];
-      const bVal = b[sortConfig.key];
+      const aVal = alignmentDisplayValue(a, sortConfig.key);
+      const bVal = alignmentDisplayValue(b, sortConfig.key);
       if (aVal === bVal) return 0;
       
       if (aVal === undefined || aVal === null || aVal === '-') return sortConfig.direction === 'asc' ? 1 : -1;
@@ -499,48 +543,40 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
     }
   }, [selectedRowIdx, sortedData]);
 
-  const saveIntervention = () => {
-    if (!run1Defect && !run2Defect) return;
-    if (interventionAction === '-') return;
-    setInterventions([...interventions, { id: Date.now().toString(), run1: run1Defect, run2: run2Defect, action: interventionAction }]);
-    setRun1Defect('');
-    setRun2Defect('');
-    setInterventionAction('-');
-    setShowInterventionForm(false);
-  };
-
-  const removeIntervention = (id: string) => {
-    setInterventions(interventions.filter(i => i.id !== id));
-  };
-
-  const exportToCSV = () => {
+  const exportToExcel = async () => {
     if (sortedData.length === 0) return;
-    
-    // Create CSV content from allColumns and sortedData
-    const headers = allColumns.join(',');
-    const csvRows = sortedData.map((row: any) => {
-      return allColumns.map(col => {
-        let val = row[col];
-        if (val === null || val === undefined) val = '';
-        // Escape quotes and commas
-        const strVal = String(val).replace(/"/g, '""');
-        if (strVal.includes(',') || strVal.includes('"') || strVal.includes('\n')) {
-          return `"${strVal}"`;
-        }
-        return strVal;
-      }).join(',');
-    });
-    
-    const csvString = [headers, ...csvRows].join('\n');
-    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', 'synapse_alignment_results.csv');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    setIsExporting(true);
+    try {
+      const exportRows = createExcelExportRows(sortedData);
+      const response = await fetch(apiUrl('/api/alignment/export-excel'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        credentials: 'include',
+        body: JSON.stringify({ data: exportRows })
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to generate Excel file');
+      }
+      
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', 'synapse_alignment_report.xlsx');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to export Excel:", err);
+      alert("Gagal mengekspor file Excel.");
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   // Footer showing total row count (replaces pagination)
@@ -635,11 +671,12 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
             To Sectional
           </button>
           <button 
-            onClick={exportToCSV}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] bg-emerald-600 text-white rounded-md shadow-sm hover:bg-emerald-700 font-medium transition-colors"
+            onClick={exportToExcel}
+            disabled={isExporting}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] bg-emerald-600 text-white rounded-md shadow-sm hover:bg-emerald-700 font-medium transition-colors disabled:opacity-50"
           >
             <FiDownload size={14} />
-            Export CSV
+            {isExporting ? 'Exporting...' : 'Export Excel'}
           </button>
           <button 
             onClick={() => setIsFullScreen(!isFullScreen)}
@@ -667,15 +704,55 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
 
       {(activeTab === 'Results' || activeTab === 'ILI Run 1' || activeTab === 'ILI Run 2' || activeTab === 'Interventions') && (
         <div className="flex flex-col h-full bg-white rounded shadow-sm border border-gray-200 overflow-hidden text-sm relative">
+          {/* Summary Dashboard Area */}
+          {summaryCounts && (
+            <div className="p-4 bg-white border-b border-gray-200 grid grid-cols-1 md:grid-cols-5 gap-4 shadow-sm z-10">
+              <div className="bg-blue-50/50 p-3 rounded-lg border border-blue-100 flex flex-col items-center justify-center text-center">
+                 <span className="text-xs font-semibold text-blue-600 uppercase tracking-wider mb-1">Total Pairs Matched</span>
+                 <span className="text-2xl font-black text-blue-800">{summaryCounts.gwLocked + summaryCounts.anomalyMatched}</span>
+                 <span className="text-[10px] text-blue-500 mt-1">({summaryCounts.gwLocked} GW + {summaryCounts.anomalyMatched} Anom)</span>
+              </div>
+              <div className="bg-gray-50/50 p-3 rounded-lg border border-gray-200 flex flex-col items-center justify-center text-center">
+                 <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Total GW Orphan</span>
+                 <span className="text-2xl font-bold text-gray-700">{summaryCounts.gwUnmatched}</span>
+              </div>
+              <div className="bg-orange-50/50 p-3 rounded-lg border border-orange-100 flex flex-col items-center justify-center text-center">
+                 <span className="text-xs font-semibold text-orange-600 uppercase tracking-wider mb-1">Only OLD (Anomaly)</span>
+                 <span className="text-2xl font-bold text-orange-800">{summaryCounts.anomalyOnlyOld}</span>
+              </div>
+              <div className="bg-emerald-50/50 p-3 rounded-lg border border-emerald-100 flex flex-col items-center justify-center text-center">
+                 <span className="text-xs font-semibold text-emerald-600 uppercase tracking-wider mb-1">Only NEW (Anomaly)</span>
+                 <span className="text-2xl font-bold text-emerald-800">{summaryCounts.anomalyOnlyNew}</span>
+              </div>
+              <div className="bg-purple-50/50 p-3 rounded-lg border border-purple-100 flex flex-col items-center justify-center text-center">
+                 <span className="text-xs font-semibold text-purple-600 uppercase tracking-wider mb-1">Bypassed Features</span>
+                 <span className="text-2xl font-bold text-purple-800">{summaryCounts.bypassedOld + summaryCounts.bypassedNew}</span>
+                 <span className="text-[10px] text-purple-500 mt-1">(Non-Anomaly / Filtered)</span>
+              </div>
+            </div>
+          )}
+
           {/* Filters Area */}
           <div className="p-4 bg-[#fffdf0] border-b border-gray-200 text-sm flex flex-row flex-wrap items-center gap-8">
             <div className="flex gap-6 items-center">
-              <label className="flex items-center gap-2 cursor-pointer">
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
                 <input type="radio" name="filter" checked={radioFilter === 'All'} onChange={() => setRadioFilter('All')} className="text-blue-500" />
                 All
               </label>
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
+                <input type="radio" name="filter" checked={radioFilter === 'GW'} onChange={() => setRadioFilter('GW')} className="text-blue-500" />
+                GWs Only
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
+                <input type="radio" name="filter" checked={radioFilter === 'Anomaly'} onChange={() => setRadioFilter('Anomaly')} className="text-blue-500" />
+                Anomalies Only
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
+                <input type="radio" name="filter" checked={radioFilter === 'Bypassed'} onChange={() => setRadioFilter('Bypassed')} className="text-blue-500" />
+                Bypassed
+              </label>
               <div className="flex items-center gap-3">
-                <label className="flex items-center gap-2 cursor-pointer">
+                <label className="flex items-center gap-2 cursor-pointer font-medium">
                   <input type="radio" name="filter" checked={radioFilter === 'Distance'} onChange={() => setRadioFilter('Distance')} className="text-blue-500" />
                   Distance
                 </label>
@@ -688,19 +765,19 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
                   </div>
                 )}
               </div>
-              <label className="flex items-center gap-2 cursor-pointer">
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
                 <input type="radio" name="filter" checked={radioFilter === 'Chart'} onChange={() => setRadioFilter('Chart')} className="text-blue-500" />
                 Chart
               </label>
             </div>
-            <div className="flex gap-6 items-center">
+            <div className="flex gap-6 items-center border-l border-gray-300 pl-6">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={unmatchedOld} onChange={(e) => setUnmatchedOld(e.target.checked)} className="rounded text-blue-500" />
-                Unmatched old
+                Unmatched OLD
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={unmatchedNew} onChange={(e) => setUnmatchedNew(e.target.checked)} className="rounded text-blue-500" />
-                Unmatched new
+                Unmatched NEW
               </label>
             </div>
           </div>
@@ -822,17 +899,17 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
                           const isSelected = selectedRowIdx !== null && selectedRowIdx !== undefined && row.__origIdx === selectedRowIdx;
                           const isDragTarget = activeTab === 'Interventions' && draggedRowIdx !== null && draggedRowIdx !== row.__origIdx;
                           
-                          const isMatch = row['Match/Unmatch'] === 'Match';
+                          const isMatch = row['Match/Unmatch'] === 'Matched' || row['Match/Unmatch'] === 'Match';
                           const featType = String(row['Feature Type OLD'] || row['Feature Type NEW'] || '').toLowerCase();
                           let bgClass = 'hover:bg-blue-50/50';
                           if (isMatch) {
-                            if (featType.includes('valve')) bgClass = 'bg-purple-200 hover:bg-purple-300';
-                            else if (featType.includes('weld')) bgClass = 'bg-blue-200 hover:bg-blue-300';
-                            else if (featType.includes('bend')) bgClass = 'bg-yellow-200 hover:bg-yellow-300';
-                            else if (featType.includes('anomaly') || featType.includes('metal') || featType.includes('dent') || featType.includes('corrosion')) bgClass = 'bg-red-200 hover:bg-red-300';
-                            else bgClass = 'bg-gray-200 hover:bg-gray-300';
+                            if (featType.includes('valve')) bgClass = 'bg-purple-100 hover:bg-purple-200 text-purple-950';
+                            else if (featType.includes('weld')) bgClass = 'bg-blue-100 hover:bg-blue-200 text-blue-950';
+                            else if (featType.includes('bend')) bgClass = 'bg-yellow-100 hover:bg-yellow-200 text-yellow-950';
+                            else if (featType.includes('anomaly') || featType.includes('metal') || featType.includes('dent') || featType.includes('corrosion')) bgClass = 'bg-red-100 hover:bg-red-200 text-red-950';
+                            else bgClass = 'bg-gray-100 hover:bg-gray-200 text-gray-950';
                           }
-                          if (isSelected) bgClass = 'bg-indigo-300 hover:bg-indigo-400 font-semibold';
+                          if (isSelected) bgClass = 'bg-indigo-200 hover:bg-indigo-300 text-indigo-950 font-semibold';
                           
                           return (
                             <tr 
@@ -855,14 +932,31 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
                               }}
                             >
                               {visibleColumns.filter(c => allColumns.includes(c)).map((col, j) => {
-                                let val = row[col];
+                                let val = alignmentDisplayValue(row, col);
+                                if (typeof val === 'string' && (val.toLowerCase() === 'null' || val.toLowerCase() === 'nan' || val.toLowerCase() === 'undefined')) {
+                                  val = null;
+                                }
                                 const isNewDataCol = col.includes('NEW');
-                                if (typeof val === 'number') val = val.toFixed(3);
-                                if (col === 'CR mm/yr' && val !== '-' && !isNaN(parseFloat(val))) val = parseFloat(val).toFixed(3);
+                                // Only format computed columns; leave raw data values untouched
+                                if ((col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)') && val !== '-' && val != null && !isNaN(parseFloat(String(val)))) {
+                                  val = parseFloat(String(val)).toFixed(3);
+                                }
+                                // Convert O'Clock Excel time serial fractions to HH:MM
+                                if (col.includes("O'Clock")) {
+                                  val = formatClockDisplay(val);
+                                }
                                 return (
                                   <td 
                                     key={j} 
-                                    className={`px-2 border-r border-gray-100 whitespace-nowrap overflow-hidden text-ellipsis ${col === 'CR mm/yr' || col === 'Lateral Growth' ? 'font-bold text-blue-600' : ''} ${activeTab === 'Interventions' && isNewDataCol ? 'cursor-grab active:cursor-grabbing hover:bg-blue-50/80' : ''}`}
+                                    className={`px-2 border-r border-gray-100 whitespace-nowrap overflow-hidden text-ellipsis ${
+                                      j === 0 && isMatch ? (
+                                        featType.includes('valve') ? 'border-l-4 border-purple-500' :
+                                        featType.includes('weld') ? 'border-l-4 border-blue-500' :
+                                        featType.includes('bend') ? 'border-l-4 border-yellow-500' :
+                                        (featType.includes('anomaly') || featType.includes('metal') || featType.includes('dent') || featType.includes('corrosion')) ? 'border-l-4 border-red-500' :
+                                        'border-l-4 border-gray-500'
+                                      ) : ''
+                                    } ${col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)' ? 'font-bold text-blue-600' : ''} ${activeTab === 'Interventions' && isNewDataCol ? 'cursor-grab active:cursor-grabbing hover:bg-blue-50/80' : ''}`}
                                     draggable={activeTab === 'Interventions' && isNewDataCol && val !== '-' && val !== null && val !== undefined}
                                     onDragStart={(e) => {
                                       if (activeTab === 'Interventions' && isNewDataCol) {
@@ -877,6 +971,14 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
                                         <span className={getFeatureColor(val, row['Identif. OLD'] !== '-' && row['Identif. NEW'] !== '-')}>{val}</span>
                                       ) : col === 'Section' && val !== '-' ? (
                                         <span className="bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wider">{val}</span>
+                                      ) : col === 'Match/Unmatch' ? (
+                                        val === 'Matched' || val === 'Match' ? (
+                                          <span className="bg-green-600 text-white font-extrabold px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider shadow-sm">Match</span>
+                                        ) : val === 'Unmatch' || val === 'Only NEW' || val === 'Only OLD' ? (
+                                          <span className="bg-red-600 text-white font-extrabold px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider shadow-sm">{val}</span>
+                                        ) : val !== '-' ? (
+                                          <span className="bg-gray-500 text-white font-semibold px-1.5 py-0.5 rounded text-[10px] tracking-wider shadow-sm">{val}</span>
+                                        ) : '-'
                                       ) : val
                                     ) : ''}
                                   </td>
@@ -899,9 +1001,9 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
                       <tr>
                         <th className="px-1 py-1 font-bold border-r border-gray-200">Defect ID</th>
                         <th className="px-1 py-1 font-bold border-r border-gray-200">Distance <span className="text-blue-500">m</span></th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200">Dist. Adj <span className="text-blue-500">m</span></th>
+                        <th className="px-1 py-1 font-bold border-r border-gray-200" title="Estimate only: nominal 0.1 m offset applied to the logged distance. Not a surveyed value — do not use directly for dig planning.">Dist. Adj <span className="text-blue-500">m</span> <span className="text-amber-500 font-normal">(est.)</span></th>
                         <th className="px-1 py-1 font-bold border-r border-gray-200">Rel. to U/S Weld <span className="text-blue-500">m</span></th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200">Rel. Nearest Weld <span className="text-blue-500">m</span></th>
+                        <th className="px-1 py-1 font-bold border-r border-gray-200" title="Estimate only: nominal 0.05 m offset applied to the upstream-weld distance. Not derived from the weld table — do not use directly for dig planning.">Rel. Nearest Weld <span className="text-blue-500">m</span> <span className="text-amber-500 font-normal">(est.)</span></th>
                         <th className="px-1 py-1 font-bold border-r border-gray-200">Wall Thick <span className="text-blue-500">mm</span></th>
                         <th className="px-1 py-1 font-bold border-r border-gray-200">Orient <span className="text-blue-500">deg</span></th>
                         <th className="px-1 py-1 font-bold border-r border-gray-200">Length <span className="text-blue-500">mm</span></th>
@@ -931,9 +1033,27 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
                           const surface = row[isOld ? 'Surface OLD' : 'Surface NEW'] ?? 'Internal';
                           
                           const distFormatted = typeof distance === 'number' ? distance.toFixed(3) : '';
+                          // Rough estimates, not measured values: fixed nominal
+                          // offsets pending a real tie-in / weld-table lookup.
+                          // The column headers mark them as such.
                           const distAdj = typeof distance === 'number' ? (distance - 0.1).toFixed(3) : '';
                           const nearWeld = distGw ? (parseFloat(distGw) - 0.05).toFixed(2) : '';
-                          const perc = (parseFloat(depth) / parseFloat(wt) * 100).toFixed(1);
+
+                          // The source column is 'Depth (%WT)' — already a
+                          // percentage of wall thickness. The two depth columns
+                          // were inverted: the mm column printed the raw
+                          // percentage, and the % column divided that
+                          // percentage by the wall thickness and scaled it
+                          // again, so a 40 %WT flaw in a 10 mm wall rendered as
+                          // "400.0" under a [%] header.
+                          const depthPctValue = parseFloat(depth);
+                          const wallThicknessMm = parseFloat(wt);
+                          const depthPct = Number.isFinite(depthPctValue)
+                            ? depthPctValue.toFixed(1)
+                            : '';
+                          const depthMm = Number.isFinite(depthPctValue) && Number.isFinite(wallThicknessMm)
+                            ? ((depthPctValue / 100) * wallThicknessMm).toFixed(2)
+                            : '';
 
                           return (
                             <tr key={i} className="hover:bg-blue-50/50 transition-colors">
@@ -946,8 +1066,8 @@ export default function ResultsPanel({ data, loading, onOpenAnalytics, selectedR
                               <td className="px-1 py-1 border-r border-gray-100">{oclock}</td>
                               <td className="px-1 py-1 border-r border-gray-100">{length}</td>
                               <td className="px-1 py-1 border-r border-gray-100">{width}</td>
-                              <td className="px-1 py-1 border-r border-gray-100">{depth}</td>
-                              <td className="px-1 py-1 border-r border-gray-100">{isNaN(Number(perc)) ? '-' : perc}</td>
+                              <td className="px-1 py-1 border-r border-gray-100">{depthMm || '-'}</td>
+                              <td className="px-1 py-1 border-r border-gray-100">{depthPct || '-'}</td>
                               <td className="px-1 py-1 text-blue-600 font-medium">{surface}</td>
                             </tr>
                           );

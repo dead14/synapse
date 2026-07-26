@@ -1,3 +1,4 @@
+/* oxlint-disable react(only-export-components) -- provider and its hook are a single public context API. */
 import { createContext, useContext, useState, useEffect } from "react";
 
 type SidebarContextType = {
@@ -15,6 +16,7 @@ type SidebarContextType = {
 
 const SidebarContext = createContext<SidebarContextType | undefined>(undefined);
 
+// oxlint-disable-next-line react(only-export-components) -- exported alongside its provider as one context API.
 export const useSidebar = () => {
   const context = useContext(SidebarContext);
   if (!context) {

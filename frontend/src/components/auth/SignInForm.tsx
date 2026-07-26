@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { ChevronLeftIcon, EyeCloseIcon, EyeIcon } from "../../icons";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { EyeCloseIcon, EyeIcon } from "../../icons";
 import Label from "../form/Label";
 import Input from "../form/input/InputField";
 import Checkbox from "../form/input/Checkbox";
 import Button from "../ui/button/Button";
 import { useAuth } from "../../context/AuthContext";
+import { ApiError } from "../../utils/api";
 
 export default function SignInForm() {
   const [showPassword, setShowPassword] = useState(false);
@@ -15,15 +16,25 @@ export default function SignInForm() {
   const [error, setError] = useState("");
   const { login } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
+      setError("");
     try {
       await login(email, password);
-      navigate("/");
+      const from = (location.state as { from?: unknown } | null)?.from;
+      const safeFrom = typeof from === "string" && from.startsWith("/") && !from.startsWith("//")
+        ? from
+        : "/";
+      navigate(safeFrom, { replace: true });
     } catch (err: any) {
-      setError(err.message);
+      const message = err instanceof ApiError && err.status === 404
+        ? "Endpoint login tidak ditemukan. Hubungi administrator Synapse."
+        : err instanceof TypeError || /fetch|network/i.test(String(err?.message || ''))
+          ? "Layanan Synapse tidak dapat dihubungi. Periksa koneksi Anda lalu coba lagi."
+          : err?.message || "Login gagal. Periksa email dan password.";
+      setError(message);
     }
   };
   return (
@@ -149,7 +160,7 @@ export default function SignInForm() {
                   </Link>
                 </div>
                 <div>
-                  <Button className="w-full" size="sm">
+                  <Button type="submit" className="w-full" size="sm">
                     Sign in
                   </Button>
                 </div>

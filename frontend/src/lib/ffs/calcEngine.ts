@@ -1,4 +1,12 @@
 import type { FfsConfig, FfsResult } from './types';
+import { assertValidFfsRow } from './inputValidation.ts';
+
+export {
+  MODIFIED_B31G_Z_CUTOFF,
+  ORIGINAL_B31G_Z_CUTOFF,
+  evaluateModifiedB31g,
+  evaluateOriginalB31g,
+} from './remainingStrength.ts';
 
 // Modified B31G calculation
 function calcModified(d: number, l: number, wall: number, smys: number, od: number, df: number, so: number, saMode: 'smys69' | 'smys11') {
@@ -70,6 +78,7 @@ function addYears(date: Date, years: number): string {
 
 // Process a single row
 export function processRow(row: Record<string, string>, config: FfsConfig): FfsResult {
+  assertValidFfsRow(row, config);
   const ld = row['LD [m]'];
   const section = row['Section'];
   const surface = row['Surface'];
@@ -154,19 +163,28 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
 }
 
 export function processAllRows(rows: Record<string, string>[], config: FfsConfig, onProgress?: (pct: number) => void): Promise<FfsResult[]> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const results: FfsResult[] = [];
     const total = rows.length;
+    if (total === 0) {
+      onProgress?.(100);
+      resolve(results);
+      return;
+    }
     const BATCH = 200;
     let i = 0;
     function tick() {
-      const end = Math.min(i + BATCH, total);
-      for (; i < end; i++) {
-        results.push(processRow(rows[i], config));
+      try {
+        const end = Math.min(i + BATCH, total);
+        for (; i < end; i++) {
+          results.push(processRow(rows[i], config));
+        }
+        onProgress?.(Math.round((i / total) * 100));
+        if (i < total) setTimeout(tick, 0);
+        else resolve(results);
+      } catch (error) {
+        reject(error);
       }
-      onProgress?.(Math.round((i / total) * 100));
-      if (i < total) setTimeout(tick, 0);
-      else resolve(results);
     }
     setTimeout(tick, 0);
   });

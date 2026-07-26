@@ -1,107 +1,149 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { FiChevronDown, FiCommand, FiHexagon, FiMoreHorizontal, FiSearch } from 'react-icons/fi';
+import { Link, NavLink, useLocation } from 'react-router-dom';
 
-import { Link } from "react-router-dom";
-import { useSidebar } from "../context/SidebarContext";
-import { ThemeToggleButton } from "../components/common/ThemeToggleButton";
-import NotificationDropdown from "../components/header/NotificationDropdown";
-import UserDropdown from "../components/header/UserDropdown";
-import AppSidebar from "./AppSidebar";
+import { ThemeToggleButton } from '../components/common/ThemeToggleButton';
+import NotificationDropdown from '../components/header/NotificationDropdown';
+import UserDropdown from '../components/header/UserDropdown';
+import { useAuth } from '../context/AuthContext';
+import { navigationForRole } from './navigation';
 
-const AppHeader: React.FC = () => {
-  const [isApplicationMenuOpen, setApplicationMenuOpen] = useState(false);
-
-  const { isMobileOpen, toggleSidebar, toggleMobileSidebar } = useSidebar();
-
-  const handleToggle = () => {
-    if (window.innerWidth >= 1024) {
-      toggleSidebar();
-    } else {
-      toggleMobileSidebar();
-    }
-  };
-
-  const toggleApplicationMenu = () => {
-    setApplicationMenuOpen(!isApplicationMenuOpen);
-  };
-
-  const inputRef = useRef<HTMLInputElement>(null);
+export default function AppHeader() {
+  const { user } = useAuth();
+  const location = useLocation();
+  const [applicationMenuOpen, setApplicationMenuOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const topNavGroups = useMemo(() => navigationForRole(user?.role), [user?.role]);
 
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === "k") {
+    const focusSearch = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
-        inputRef.current?.focus();
+        searchRef.current?.focus();
       }
     };
-
-    document.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-    };
+    document.addEventListener('keydown', focusSearch);
+    return () => document.removeEventListener('keydown', focusSearch);
   }, []);
 
+  const pathIsActive = (path: string) => {
+    if (path === '/') return location.pathname === '/';
+    if (path === '/ffs') return location.pathname === '/ffs' || location.pathname.startsWith('/ffs/');
+    return location.pathname === path;
+  };
+
+  const groupIsActive = (items: { path: string }[]) => items.some((item) => pathIsActive(item.path));
+  const activeItem = topNavGroups.flatMap((group) => group.items).find((item) => pathIsActive(item.path));
+
   return (
-    <header className="sticky top-0 flex w-full bg-white border-gray-200 z-99999 dark:border-gray-800 dark:bg-gray-900 lg:border-b text-sm">
-      <div className="flex flex-col items-center justify-between grow lg:flex-row lg:px-6">
-        <div className="flex items-center justify-between w-full lg:w-auto lg:flex-1 gap-2 px-3 py-1.5 border-b border-gray-200 dark:border-gray-800 sm:gap-4 lg:justify-normal lg:border-b-0 lg:px-0 lg:py-2">
-          {/* Logo */}
-          <Link to="/" className="flex items-center gap-2 mr-4 lg:mr-8 shrink-0">
-            <img
-              className="dark:hidden w-10 h-10 object-contain"
-              src="/logo.png"
-              alt="Logo"
-            />
-            <img
-              className="hidden dark:block w-10 h-10 object-contain"
-              src="/logo.png"
-              alt="Logo"
-            />
-            <span className="text-xl font-bold text-gray-900 dark:text-white tracking-tight hidden sm:block">Synapse</span>
+    <header className="engine-header">
+      <div className="engine-header__bar">
+        <div className="engine-header__primary">
+          <Link to="/" className="engine-brand" aria-label="Synapse dashboard">
+            <span className="engine-brand__mark">
+              <FiHexagon aria-hidden="true" />
+              <span>S</span>
+            </span>
+            <span className="engine-brand__copy">
+              <strong>Synapse</strong>
+              <small>Integrity OS</small>
+            </span>
           </Link>
 
           <button
-            onClick={toggleApplicationMenu}
-            className="flex items-center justify-center w-8 h-8 text-gray-700 rounded-lg z-99999 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 lg:hidden"
+            type="button"
+            onClick={() => setApplicationMenuOpen((open) => !open)}
+            className="engine-icon-button engine-menu-toggle"
+            aria-label="Toggle application menu"
+            aria-expanded={applicationMenuOpen}
           >
-            <svg
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                fillRule="evenodd"
-                clipRule="evenodd"
-                d="M5.99902 10.4951C6.82745 10.4951 7.49902 11.1667 7.49902 11.9951V12.0051C7.49902 12.8335 6.82745 13.5051 5.99902 13.5051C5.1706 13.5051 4.49902 12.8335 4.49902 12.0051V11.9951C4.49902 11.1667 5.1706 10.4951 5.99902 10.4951ZM17.999 10.4951C18.8275 10.4951 19.499 11.1667 19.499 11.9951V12.0051C19.499 12.8335 18.8275 13.5051 17.999 13.5051C17.1706 13.5051 16.499 12.8335 16.499 12.0051V11.9951C16.499 11.1667 17.1706 10.4951 17.999 10.4951ZM13.499 11.9951C13.499 11.1667 12.8275 10.4951 11.999 10.4951C11.1706 10.4951 10.499 11.1667 10.499 11.9951V12.0051C10.499 12.8335 11.1706 13.5051 11.999 13.5051C12.8275 13.5051 13.499 12.8335 13.499 12.0051V11.9951Z"
-                fill="currentColor"
-              />
-            </svg>
+            <FiMoreHorizontal aria-hidden="true" />
           </button>
 
-          <div className="hidden lg:flex flex-1 mx-4 min-w-0">
-            <AppSidebar />
-          </div>
+          <nav className="engine-nav" aria-label="Workspace navigation">
+            {topNavGroups.map((group) => {
+              const active = groupIsActive(group.items);
+              const singleItem = group.items.length === 1 ? group.items[0] : null;
+              const triggerClass = `engine-nav__trigger${active ? ' is-active' : ''}`;
+
+              if (singleItem) {
+                return (
+                  <NavLink key={group.label} to={singleItem.path} title={singleItem.description} className={triggerClass}>
+                    {singleItem.label}
+                  </NavLink>
+                );
+              }
+
+              return (
+                <div key={group.label} className="engine-nav__group">
+                  <button type="button" className={triggerClass} aria-haspopup="menu">
+                    <span>{group.label}</span>
+                    <FiChevronDown aria-hidden="true" />
+                  </button>
+                  <div className="engine-nav__menu">
+                    <p>{group.label} / modules</p>
+                    <div role="menu">
+                      {group.items.map((item) => (
+                        <NavLink
+                          key={item.path}
+                          to={item.path}
+                          title={item.description}
+                          role="menuitem"
+                          className={() => `engine-nav__item${pathIsActive(item.path) ? ' is-active' : ''}`}
+                        >
+                          <span>{item.label}</span>
+                          <small>{item.description}</small>
+                        </NavLink>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </nav>
         </div>
-        <div
-          className={`${
-            isApplicationMenuOpen ? "flex" : "hidden"
-          } items-center justify-between w-full lg:w-auto lg:shrink-0 gap-4 px-5 py-2 lg:flex shadow-theme-md lg:justify-end lg:px-0 lg:shadow-none`}
-        >
-          <div className="flex items-center gap-2 2xsm:gap-3">
-            {/* <!-- Dark Mode Toggler --> */}
+
+        <div className="engine-header__context" aria-label="Current workspace">
+          <span>workspace</span>
+          <strong>{activeItem?.label ?? 'Overview'}</strong>
+          <span className="engine-status"><i /> operational</span>
+        </div>
+
+        <div className={`engine-header__actions${applicationMenuOpen ? ' is-open' : ''}`}>
+          {applicationMenuOpen && (
+            <nav className="engine-mobile-nav" aria-label="Mobile workspace navigation">
+              {topNavGroups.map((group) => (
+                <div key={group.label}>
+                  <p>{group.label}</p>
+                  <div>
+                    {group.items.map((item) => (
+                      <NavLink
+                        key={item.path}
+                        to={item.path}
+                        onClick={() => setApplicationMenuOpen(false)}
+                        className={() => pathIsActive(item.path) ? 'is-active' : ''}
+                      >
+                        {item.label}
+                      </NavLink>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </nav>
+          )}
+          <label className="engine-command">
+            <span className="sr-only">Search workspace</span>
+            <FiSearch aria-hidden="true" />
+            <input ref={searchRef} type="search" placeholder="Search" />
+            <kbd><FiCommand aria-hidden="true" /> K</kbd>
+          </label>
+          <div className="engine-header__utilities">
             <ThemeToggleButton />
-            {/* <!-- Dark Mode Toggler --> */}
             <NotificationDropdown />
-            {/* <!-- Notification Menu Area --> */}
           </div>
-          {/* <!-- User Area --> */}
           <UserDropdown />
         </div>
       </div>
     </header>
   );
-};
-
-export default AppHeader;
+}

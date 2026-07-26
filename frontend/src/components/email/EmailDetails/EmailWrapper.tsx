@@ -1,4 +1,3 @@
-import SimpleBar from "simplebar-react";
 import EmailDetailsHeader from "./EmailDetailsHeader";
 import EmailDetailsBottom from "./EmailDetailsBottom";
 
@@ -6,7 +5,7 @@ export default function EmailWrapper() {
   return (
     <div className="flex flex-col justify-between overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] xl:h-full">
       <EmailDetailsHeader />
-      <SimpleBar className="custom-scrollbar max-h-[500px] 2xl:max-h-[780px]">
+      <div className="custom-scrollbar max-h-[500px] overflow-y-auto 2xl:max-h-[780px]">
         <div className="p-5 xl:p-6">
           <div className="flex items-center gap-3 mb-9">
             <div className="w-12 h-12 overflow-hidden rounded-full">
@@ -146,7 +145,7 @@ export default function EmailWrapper() {
             </div>
           </div>
         </div>
-      </SimpleBar>
+      </div>
       <EmailDetailsBottom />
     </div>
   );

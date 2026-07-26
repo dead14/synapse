@@ -3,9 +3,11 @@ import numpy as np
 #  BAGIAN 1 — SKEMA & KONSTANTA
 # ══════════════════════════════════════════════════════════════════════════════════
 
+ABS_DIST_COL = "log_distance_m"
+
 UNIVERSAL_SCHEMA = [
     ("feature_id",             "str",   "ID / Nomor fitur unik dari vendor",            False),
-    ("log_distance_m",         "float", "Jarak odometer absolut dari launcher (meter)", True),
+    (ABS_DIST_COL,              "float", "Jarak odometer absolut dari launcher (meter)", True),
     ("joint_number",           "int",   "Nomor joint pipa",                             False),
     ("dist_to_us_gw_m",        "float", "Jarak ke upstream girth weld (meter)",         False),
     ("joint_length_m",         "float", "Panjang joint (meter)",                        False),

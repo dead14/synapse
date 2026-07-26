@@ -1,9 +1,11 @@
 import React from 'react';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Text } from '@react-three/drei';
 import { FiBox, FiX } from 'react-icons/fi';
+import { apiFetch } from './utils/api';
+import { extentOf } from './utils/numericRange.ts';
 
 interface DefectVisualizerProps {
   data: any[];
@@ -11,12 +13,58 @@ interface DefectVisualizerProps {
   onSelectRowIdx?: (idx: number | null) => void;
 }
 
+const MAX_TIMELINE_FEATURES = 2_500;
+const MAX_TIMELINE_GWS = 1_500;
+const MAX_SPOOL_FEATURES = 2_000;
+
+function sampleEvenly<T>(items: T[], limit: number, keep?: (item: T) => boolean): T[] {
+  if (items.length <= limit) return items;
+  const selected = keep ? items.filter(keep) : [];
+  const available = Math.max(1, limit - selected.length);
+  const step = Math.max(1, Math.ceil(items.length / available));
+  const sampled = items.filter((_item, index) => index % step === 0);
+  return Array.from(new Set([...sampled, ...selected])).slice(0, limit);
+}
+
+function nearestDistance(sortedDistances: number[], value: number): number {
+  let low = 0;
+  let high = sortedDistances.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (sortedDistances[middle] < value) low = middle + 1;
+    else high = middle;
+  }
+  return Math.min(
+    Math.abs((sortedDistances[low] ?? Infinity) - value),
+    Math.abs((sortedDistances[low - 1] ?? Infinity) - value),
+  );
+}
+
 const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { renderLength: number, sLength: number, startDist: number, spoolData: any[], gwList: number[] }) => {
+  const defectBuckets = useMemo(() => {
+    const buckets = new Map<number, any[]>();
+    const add = (distance: number | null, defect: any) => {
+      if (distance === null || !Number.isFinite(distance)) return;
+      const key = Math.floor(distance);
+      const list = buckets.get(key) || [];
+      list.push({ defect, distance });
+      buckets.set(key, list);
+    };
+    spoolData.forEach((defect) => {
+      add(defect.dist1, defect);
+      add(defect.dist2, defect);
+    });
+    return buckets;
+  }, [spoolData]);
+
   const geom = useMemo(() => {
     const segments = 64;
     const padding = 2.0;
     const actualPipeLength = renderLength + (padding * 2);
-    const heightSegments = Math.max(10, Math.ceil(actualPipeLength * 10));
+    // A bounded longitudinal mesh preserves the inspection view while
+    // preventing the 3D renderer from allocating hundreds of thousands of
+    // vertices for a long selected spool.
+    const heightSegments = Math.min(400, Math.max(10, Math.ceil(actualPipeLength * 4)));
     const pipeRadius = 2.0;
     const geometry = new THREE.CylinderGeometry(pipeRadius, pipeRadius, actualPipeLength, segments, heightSegments, true);
     
@@ -46,11 +94,7 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { 
       
       // --- GIRTH WELD: Paint & Bulge ---
       // Find nearest girth weld distance
-      let minGwDist = Infinity;
-      for (const gwDist of gwList) {
-        const d = Math.abs(trueDist - gwDist);
-        if (d < minGwDist) minGwDist = d;
-      }
+      const minGwDist = nearestDistance(gwList, trueDist);
       
       // Convert weld half-width from real meters to the vy coordinate space
       const weldHalfWidthVy = (weldHalfWidth / sLength) * renderLength;
@@ -82,7 +126,13 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { 
       // --- DEFECT HEATMAP (only if not already painted as weld) ---
       if (!isInWeld) {
         let maxDepth = 0;
-        spoolData.forEach(d => {
+        const nearbyDefects: any[] = [];
+        const distanceBucket = Math.floor(trueDist);
+        for (let bucket = distanceBucket - 1; bucket <= distanceBucket + 1; bucket += 1) {
+          const candidates = defectBuckets.get(bucket);
+          if (candidates) nearbyDefects.push(...candidates);
+        }
+        nearbyDefects.forEach(({ defect: d, distance: defectDistance }) => {
           const checkDefect = (dist: number, orient: number, len: number, wid: number, depth: number) => {
             const sLen = Math.max(0.4, len * 0.03); 
             const sWidAngle = Math.max(15, wid * 1.5); 
@@ -92,8 +142,8 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { 
             const inOrient = angleDiff <= (sWidAngle / 2);
             if (inDist && inOrient) maxDepth = Math.max(maxDepth, depth);
           };
-          if (d.dist1 !== null) checkDefect(d.dist1, d.orient1, d.len1, d.wid1, d?.depth1);
-          if (d.dist2 !== null) checkDefect(d.dist2, d.orient2, d.len2, d.wid2, d?.depth2);
+          if (defectDistance === d.dist1) checkDefect(d.dist1, d.orient1, d.len1, d.wid1, d?.depth1);
+          if (defectDistance === d.dist2) checkDefect(d.dist2, d.orient2, d.len2, d.wid2, d?.depth2);
         });
         
         if (maxDepth > 0) {
@@ -113,7 +163,7 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { 
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.computeVertexNormals();
     return geometry;
-  }, [renderLength, sLength, startDist, spoolData, gwList]);
+  }, [renderLength, sLength, startDist, defectBuckets, gwList]);
 
   const padding = 2.0;
   const clockRadius = 2.4;
@@ -140,7 +190,50 @@ const FEAPipeMesh = ({ renderLength, sLength, startDist, spoolData, gwList }: { 
   );
 };
 
-const DefectOverlayMeshes = ({ spoolData, renderLength, sLength, startDist, onHover, onSelect }: any) => {
+const DefectOverlayInstancedMesh = ({ spoolData, renderLength, sLength, startDist, onSelect }: any) => {
+  const meshRef = React.useRef<THREE.InstancedMesh>(null);
+  const geometry = useMemo(() => new THREE.BoxGeometry(1, 1, 1), []);
+  const material = useMemo(() => new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }), []);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  const instances = useMemo(() => spoolData.flatMap((d: any) => [
+    d.dist1 === null ? null : { d, dist: d.dist1, orient: d.orient1, len: d.len1, wid: d.wid1, id: d.id1 },
+    d.dist2 === null ? null : { d, dist: d.dist2, orient: d.orient2, len: d.len2, wid: d.wid2, id: d.id2 },
+  ]).filter(Boolean), [spoolData]);
+
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    mesh.count = instances.length;
+    instances.forEach((instance: any, index: number) => {
+      const angle = Number(instance.orient || 0) * (Math.PI / 180);
+      const vy = ((Number(instance.dist) - startDist) / Math.max(sLength, 0.001)) * renderLength - renderLength / 2;
+      dummy.position.set(Math.cos(angle) * 2.05, vy, Math.sin(angle) * 2.05);
+      dummy.rotation.set(0, -angle, 0);
+      dummy.scale.set(Math.max(0.6, Number(instance.wid || 0) * 0.05), Math.max(0.6, Number(instance.len || 0) * 0.05), 1);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(index, dummy.matrix);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+  }, [dummy, instances, renderLength, sLength, startDist]);
+
+  return (
+    <group rotation={[Math.PI / 2, 0, 0]}>
+      <instancedMesh
+        ref={meshRef}
+        args={[geometry, material, Math.max(1, instances.length)]}
+        onPointerOver={(event: any) => { event.stopPropagation(); document.body.style.cursor = 'pointer'; }}
+        onPointerOut={(event: any) => { event.stopPropagation(); document.body.style.cursor = 'default'; }}
+        onClick={(event: any) => {
+          event.stopPropagation();
+          const instance = instances[event.instanceId ?? -1] as any;
+          if (instance) onSelect(instance.id, instance.d, event);
+        }}
+      />
+    </group>
+  );
+};
+
+const DefectOverlayMeshes = ({ spoolData, renderLength, sLength, startDist, onSelect }: any) => {
   return (
     <group rotation={[Math.PI / 2, 0, 0]}>
       {spoolData.map((d: any, i: number) => {
@@ -185,6 +278,56 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
   const [modalViewMode, setModalViewMode] = useState<'2D' | '3D'>('3D');
   const [hoveredDefect, setHoveredDefect] = useState<any>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  const [runOldName, setRunOldName] = useState('RUN OLD (REFERENCE)');
+  const [runNewName, setRunNewName] = useState('RUN NEW (CURRENT)');
+  const [oldRawFeatures, setOldRawFeatures] = useState<any[]>([]);
+  const [newRawFeatures, setNewRawFeatures] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!isModalOpen || modalViewMode !== '3D') return undefined;
+    const startedAt = performance.now();
+    let firstFrame = 0;
+    let secondFrame = 0;
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const durationMs = performance.now() - startedAt;
+        apiFetch('/api/metrics/browser', {
+          method: 'POST',
+          body: { name: 'render_3d_viewer', durationMs: Math.round(durationMs * 100) / 100 },
+        }).catch(() => {});
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [isModalOpen, modalViewMode, selectedRowIdx]);
+
+  useEffect(() => {
+    const fetchSession = async () => {
+      try {
+        const sessionId = new URLSearchParams(window.location.search).get('sessionId') || localStorage.getItem('synapse_last_session_id');
+        if (sessionId) {
+          const data = await apiFetch<{ config?: unknown }>(`/api/wizard/session/${encodeURIComponent(sessionId)}`);
+          if (data.config) {
+             const config = typeof data.config === 'string' ? JSON.parse(data.config) : data.config;
+             const oldY = config?.summaryData?.oldRun?.year || config?.oldRun?.year;
+             const newY = config?.summaryData?.newRun?.year || config?.newRun?.year;
+             if (oldY) setRunOldName(`${oldY} (Historical OLD)`);
+             if (newY) setRunNewName(`${newY} (Master NEW)`);
+             
+             if (config?.summaryData?.oldRun?.rawFeatures) {
+               setOldRawFeatures(config.summaryData.oldRun.rawFeatures);
+             }
+             if (config?.summaryData?.newRun?.rawFeatures) {
+               setNewRawFeatures(config.summaryData.newRun.rawFeatures);
+             }
+          }
+        }
+      } catch {}
+    };
+    fetchSession();
+  }, []);
 
   // Parse data into usable array of objects
   const parsedData = useMemo(() => {
@@ -202,25 +345,33 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
       
       const isWeld1 = String(item['Feature Type OLD'] || '').toLowerCase().includes('weld');
       const isWeld2 = String(item['Feature Type NEW'] || '').toLowerCase().includes('weld');
+      const isValve1 = String(item['Feature Type OLD'] || '').toLowerCase().includes('valve');
+      const isValve2 = String(item['Feature Type NEW'] || '').toLowerCase().includes('valve');
+      const isTee1 = String(item['Feature Type OLD'] || '').toLowerCase().includes('tee');
+      const isTee2 = String(item['Feature Type NEW'] || '').toLowerCase().includes('tee');
 
       return {
         id1: (item['Identif. OLD'] && item['Identif. OLD'] !== '-') ? String(item['Identif. OLD']) : (item['Log Dist OLD (m)'] !== undefined && item['Log Dist OLD (m)'] !== '') ? `DIST:${item['Log Dist OLD (m)']}` : null,
         dist1: isNaN(r1Dist) ? null : r1Dist,
         len1: parseFloat(item['Length OLD (mm)']) || 10,
-        wid1: parseFloat(item['Dist GW OLD (m)']) || 10,
-        orient1: parseFloat(item["O'Clock OLD"]) || 0,
+        wid1: parseFloat(item['Width OLD (mm)']) || 10,
+        orient1: (() => { const v = item["O'Clock OLD"]; if (v == null || v === '-') return 0; const s = String(v); if (s.includes(':')) { const [h, m] = s.split(':').map(Number); return (h % 12) + (m || 0) / 60; } const n = parseFloat(s); if (isNaN(n)) return 0; return (n > 0 && n < 1) ? (n * 24) % 12 : n % 12; })(),
         depth1: r1Depth,
         isExt1,
         isWeld1,
+        isValve1,
+        isTee1,
         
         id2: (item['Identif. NEW'] && item['Identif. NEW'] !== '-') ? String(item['Identif. NEW']) : (item['Log Dist NEW (m)'] !== undefined && item['Log Dist NEW (m)'] !== '') ? `DIST:${item['Log Dist NEW (m)']}` : null,
         dist2: isNaN(r2Dist) ? null : r2Dist,
         len2: parseFloat(item['Length NEW (mm)']) || 10,
-        wid2: parseFloat(item['Dist GW NEW (m)']) || 10,
-        orient2: parseFloat(item["O'Clock NEW"]) || 0,
+        wid2: parseFloat(item['Width NEW (mm)']) || 10,
+        orient2: (() => { const v = item["O'Clock NEW"]; if (v == null || v === '-') return 0; const s = String(v); if (s.includes(':')) { const [h, m] = s.split(':').map(Number); return (h % 12) + (m || 0) / 60; } const n = parseFloat(s); if (isNaN(n)) return 0; return (n > 0 && n < 1) ? (n * 24) % 12 : n % 12; })(),
         depth2: r2Depth,
         isExt2,
         isWeld2,
+        isValve2,
+        isTee2,
 
         isMatched,
         rawItem: item,
@@ -229,9 +380,19 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
     }).filter(Boolean);
   }, [data]);
 
+  const timelineData = useMemo(() => sampleEvenly(
+    parsedData,
+    MAX_TIMELINE_FEATURES,
+    (item: any) => item.dataIdx === selectedRowIdx,
+  ), [parsedData, selectedRowIdx]);
+
   // Derived boundaries
-  const minDistance = Math.min(...parsedData.flatMap(d => [d?.dist1, d?.dist2]).filter(d => d !== null && d !== undefined) as number[]);
-  const maxDistance = Math.max(...parsedData.flatMap(d => [d?.dist1, d?.dist2]).filter(d => d !== null && d !== undefined) as number[]);
+  const availableDistances = parsedData
+    .flatMap(d => [d?.dist1, d?.dist2])
+    .filter((d): d is number => Number.isFinite(d));
+  const distanceExtent = extentOf(availableDistances);
+  const minDistance = distanceExtent.min;
+  const maxDistance = distanceExtent.max;
   const totalLength = Math.max(10, maxDistance - minDistance + 20);
   const startDist = Math.max(0, minDistance - 10);
 
@@ -254,7 +415,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
     if (list.length === 0) {
        for(let d = startDist; d <= startDist + totalLength; d += 12) list.push(d);
     }
-    return Array.from(new Set(list));
+    return sampleEvenly(Array.from(new Set(list)), MAX_TIMELINE_GWS);
   }, [parsedData, startDist, totalLength]);
 
   // Determine actual selected range
@@ -290,7 +451,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
         <div style={{ width: svgWidth, minWidth: '100%', height: '280px' }} className="relative transition-all duration-300">
           <svg width="100%" height="100%" style={{ position: 'absolute', top: 0, left: 0 }}>
             {/* --- RUN OLD (REFERENCE) --- */}
-            <text x="20" y="40" className="text-xs font-extrabold fill-gray-400 tracking-wider">RUN OLD (REFERENCE)</text>
+            <text x="20" y="40" className="text-xs font-extrabold fill-gray-400 tracking-wider uppercase">{runOldName}</text>
             <line x1="0" y1="80" x2="100%" y2="80" stroke="#e2e8f0" strokeWidth="4" strokeLinecap="round" />
             
             {/* Draw Highlighted Range Background First */}
@@ -354,12 +515,32 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
               </g>
             )}
             
-            {/* Run 1 Anomalies */}
-            {parsedData.map((d, i) => {
+            {/* Raw Features: Valves & Tees (Run 1) */}
+            {oldRawFeatures.map((feat, i) => {
+              const typeStr = String(feat['Feature Type'] || feat['type'] || feat['feature_identification'] || '').toLowerCase();
+              if (typeStr.includes('valve') || typeStr.includes('tee')) {
+                const dist = parseFloat(feat['Log Dist (m)'] || feat['Log Distance (m)'] || feat['Distance (m)']);
+                if (!isNaN(dist) && dist >= startDist && dist <= startDist + totalLength) {
+                  const x = mToX(dist);
+                  const label = typeStr.includes('valve') ? 'VALVE' : 'TEE';
+                  return (
+                    <g key={`raw-landmark1-${i}`} className="z-20">
+                      <circle cx={x} cy="65" r="4" fill="#8b5cf6" stroke="#ffffff" strokeWidth="1" />
+                      <text x={x} y="55" fontSize="9" fontWeight="black" fill="#8b5cf6" textAnchor="middle">{label}</text>
+                    </g>
+                  );
+                }
+              }
+              return null;
+            })}
+
+            {/* Run 1 Anomalies & Landmarks */}
+            {timelineData.map((d, i) => {
               if (d?.dist1 === null || d?.dist1 === undefined) return null;
               const x = mToX(d.dist1);
               const searchStr = selectedRowIdx;
               const isSel = searchStr !== null && searchStr !== undefined && d.dataIdx === searchStr;
+
               return (
                 <g 
                   key={`anom1-${i}`} 
@@ -377,7 +558,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
             })}
 
             {/* --- RUN NEW (CURRENT) --- */}
-            <text x="20" y="170" className="text-xs font-extrabold fill-gray-400 tracking-wider">RUN NEW (CURRENT)</text>
+            <text x="20" y="170" className="text-xs font-extrabold fill-gray-400 tracking-wider uppercase">{runNewName}</text>
             <line x1="0" y1="210" x2="100%" y2="210" stroke="#e2e8f0" strokeWidth="4" strokeLinecap="round" />
             
             {/* Draw Run 2 GW Ticks */}
@@ -394,11 +575,31 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
                );
             })}
 
-            {/* Run 2 Anomalies */}
-            {parsedData.map((d, i) => {
+            {/* Raw Features: Valves & Tees (Run 2) */}
+            {newRawFeatures.map((feat, i) => {
+              const typeStr = String(feat['Feature Type'] || feat['type'] || feat['feature_identification'] || '').toLowerCase();
+              if (typeStr.includes('valve') || typeStr.includes('tee')) {
+                const dist = parseFloat(feat['Log Dist (m)'] || feat['Log Distance (m)'] || feat['Distance (m)']);
+                if (!isNaN(dist) && dist >= startDist && dist <= startDist + totalLength) {
+                  const x2 = mToX(dist);
+                  const label = typeStr.includes('valve') ? 'VALVE' : 'TEE';
+                  return (
+                    <g key={`raw-landmark2-${i}`} className="z-20">
+                      <circle cx={x2} cy="195" r="4" fill="#8b5cf6" stroke="#ffffff" strokeWidth="1" />
+                      <text x={x2} y="185" fontSize="9" fontWeight="black" fill="#8b5cf6" textAnchor="middle">{label}</text>
+                    </g>
+                  );
+                }
+              }
+              return null;
+            })}
+
+            {/* Run 2 Anomalies & Landmarks */}
+            {timelineData.map((d, i) => {
               if (d?.dist2 === null || d?.dist2 === undefined) return null;
               const x2 = mToX(d.dist2);
               const isSel = selectedRowIdx !== null && selectedRowIdx !== undefined && d.dataIdx === selectedRowIdx;
+
               return (
                 <g 
                   key={`anom2-${i}`} 
@@ -434,6 +635,11 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
       if (dist === null) return false;
       return dist >= selectedRange.startDist && dist <= selectedRange.endDist;
     });
+    const renderableSpoolData = sampleEvenly(
+      spoolData,
+      MAX_SPOOL_FEATURES,
+      (item: any) => item.dataIdx === selectedRowIdx,
+    );
 
     const sLength = selectedRange.length;
     // For 2D SVG rendering inside modal (fixed width)
@@ -464,7 +670,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
                 );
               })}
 
-              {spoolData.map((d, i) => {
+              {renderableSpoolData.map((d, i) => {
                 const scaleDim = (val: number) => Math.max(10, val * 0.8); 
 
                 if (d.isMatched && d.dist1 !== null && d.dist2 !== null) {
@@ -554,11 +760,11 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
                renderLength={renderLength} 
                sLength={sLength} 
                startDist={selectedRange.startDist} 
-               spoolData={spoolData} 
+               spoolData={renderableSpoolData} 
                gwList={gwList}
              />
-             <DefectOverlayMeshes 
-               spoolData={spoolData} 
+             <DefectOverlayInstancedMesh 
+               spoolData={renderableSpoolData} 
                renderLength={renderLength} 
                sLength={sLength} 
                startDist={selectedRange.startDist} 
@@ -583,11 +789,16 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
         <div className="flex items-center gap-6">
           <div>
             <h3 className="text-xl font-extrabold text-gray-800 bg-gradient-to-r from-gray-900 to-gray-500 bg-clip-text text-transparent">
-              Alignment Timeline Viewer (12+ km)
+              Alignment Timeline Viewer
             </h3>
             <p className="text-sm text-gray-500 font-medium mt-1">
-              Select a spool segment between Girth Welds to view 2D/3D details.
+              {(totalLength / 1000).toFixed(1)}+ km Interactive Pipeline Alignment Map
             </p>
+            {timelineData.length < parsedData.length && (
+              <p className="mt-1 text-xs font-medium text-amber-700">
+                Viewer sampling {timelineData.length.toLocaleString()} of {parsedData.length.toLocaleString()} rows; the selected row is always retained.
+              </p>
+            )}
           </div>
           
           {/* Dynamic Selection Actions */}

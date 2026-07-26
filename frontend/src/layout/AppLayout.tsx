@@ -1,27 +1,37 @@
-import { SidebarProvider, useSidebar } from "../context/SidebarContext";
-import { Outlet } from "react-router-dom";
-import AppHeader from "./AppHeader";
-import Backdrop from "./Backdrop";
+import { Outlet, useLocation } from 'react-router-dom';
 
-const LayoutContent: React.FC = () => {
+import ErrorBoundary from '../components/common/ErrorBoundary';
+import AppHeader from './AppHeader';
+
+function LayoutContent() {
+  const location = useLocation();
+
   return (
-    <div className="min-h-screen flex flex-col bg-white dark:bg-gray-900 overflow-hidden">
-      <AppHeader />
-      <div className="flex-1 overflow-auto transition-all duration-300 ease-in-out">
-        <div className="p-3 mx-auto max-w-(--breakpoint-2xl) md:p-4">
-          <Outlet />
-        </div>
+    <div className="syn-app engine-app">
+      <a href="#main-content" className="syn-action syn-action--signal syn-skip-link">
+        Skip to main content
+      </a>
+      <div className="min-w-0 flex-1">
+        <AppHeader />
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="engine-main"
+        >
+          {/* Keyed by path so the boundary clears when the operator navigates
+              away, and so a failed workspace never blanks the header they
+              would use to leave it. */}
+          <ErrorBoundary key={location.pathname} scope="Workspace ini">
+            <Outlet />
+          </ErrorBoundary>
+        </main>
       </div>
     </div>
   );
-};
+}
 
-const AppLayout: React.FC = () => {
+export default function AppLayout() {
   return (
-    <SidebarProvider>
-      <LayoutContent />
-    </SidebarProvider>
+    <LayoutContent />
   );
-};
-
-export default AppLayout;
+}

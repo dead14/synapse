@@ -30,7 +30,7 @@ interface GwAlignmentPanelProps {
 
 export default function GwAlignmentPanel({ gwData }: GwAlignmentPanelProps) {
   const [zoom, setZoom] = useState(1);
-  const [ota, setOta] = useState(1.6);
+  const [ota, setOta] = useState(1.5);
   const [activeTab, setActiveTab] = useState('GW Offset');
 
   const tabs = ['GW Offset', 'Table GW Unmatched', 'Table GW Matched', 'Table GW'];
@@ -72,7 +72,7 @@ export default function GwAlignmentPanel({ gwData }: GwAlignmentPanelProps) {
         }
       ]
     };
-  }, [gwData]);
+  }, [matchedData]);
 
   const chartOptions = {
     responsive: true,
@@ -109,7 +109,7 @@ export default function GwAlignmentPanel({ gwData }: GwAlignmentPanelProps) {
   };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="gw-alignment-panel flex flex-col gap-6">
       
       {/* Automated Girth Weld Match Simulator Header */}
       <div>
@@ -124,14 +124,14 @@ export default function GwAlignmentPanel({ gwData }: GwAlignmentPanelProps) {
         <div className="xl:col-span-2 flex flex-col gap-6">
           
           {/* 1. Timeline Viewer */}
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
+          <div className="gw-alignment-timeline bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
             <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
               <h3 className="font-bold text-gray-700">Timeline Viewer (12+ km)</h3>
               <div className="flex items-center gap-3">
                 <span className="text-xs font-bold text-gray-500">Zoom:</span>
                 <input 
                   type="range" 
-                  min="1" max="10" step="0.5" 
+                  min="1" max="100" step="0.5" 
                   value={zoom} 
                   onChange={e => setZoom(parseFloat(e.target.value))}
                   className="w-32 accent-blue-600 cursor-pointer"
@@ -141,9 +141,9 @@ export default function GwAlignmentPanel({ gwData }: GwAlignmentPanelProps) {
             
             <div className="p-6 overflow-x-auto bg-white min-h-[250px] flex items-center">
               <div style={{ minWidth: `${100 * zoom}%` }} className="flex flex-col gap-12 py-8 transition-all duration-300 relative border-x border-gray-200 w-full">
-                {/* Run Old (Reference) */}
+                {/* Historical OLD */}
                 <div className="relative h-px w-full bg-gray-300">
-                  <span className="absolute -top-8 left-0 text-xs font-bold text-gray-500 tracking-wide">RUN OLD (REFERENCE)</span>
+                  <span className="absolute -top-8 left-0 text-xs font-bold text-gray-500 tracking-wide">HISTORICAL OLD (NON-MASTER)</span>
                   <div className="absolute top-0 bottom-0 left-0 right-0 h-px bg-green-500" />
                   {processedData.slice(0, 50).map((gw, idx) => {
                     const perc = (gw.distOld / (12 * 50)) * 100;
@@ -157,9 +157,9 @@ export default function GwAlignmentPanel({ gwData }: GwAlignmentPanelProps) {
                   })}
                 </div>
 
-                {/* Run New (Current) */}
+                {/* Master NEW */}
                 <div className="relative h-px w-full bg-gray-300 mt-4">
-                  <span className="absolute -top-8 left-0 text-xs font-bold text-gray-500 tracking-wide">RUN NEW (CURRENT)</span>
+                  <span className="absolute -top-8 left-0 text-xs font-bold text-gray-500 tracking-wide">MASTER NEW (CURRENT)</span>
                   <div className="absolute top-0 bottom-0 left-0 right-0 h-px bg-blue-500" />
                   {processedData.slice(0, 50).map((gw, idx) => {
                     const perc = (gw.distNew / (12 * 50)) * 100;

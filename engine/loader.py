@@ -3,6 +3,7 @@ import numpy as np
 import sys
 import re
 import os
+from difflib import get_close_matches
 from datetime import datetime
 from .constants import *
 #  BAGIAN 2 — FUZZY COLUMN MATCHING
@@ -62,6 +63,17 @@ def normalize_clock(val):
         except: pass
     try:
         h = float(s)
+        # Excel stores time as a fraction of a 24-hour day (0 < h < 1)
+        if 0 < h < 1:
+            total_hours = h * 24
+            hours = int(total_hours)
+            minutes = round((total_hours - hours) * 60)
+            if minutes == 60:
+                hours += 1
+                minutes = 0
+            if hours == 0:
+                hours = 12
+            return f"{hours:02d}:{minutes:02d}"
         return f"{int(h):02d}:00"
     except: pass
     return s
@@ -82,18 +94,25 @@ def normalize_feature_type(val, fallback_id=None):
             raw = None
     if raw:
         key = raw.lower().strip()
+        key = re.sub(r"[\-_]+", " ", key)
         result = FEATURE_TYPE_NORMALIZATION.get(key)
         if result: return result
         for k, v in FEATURE_TYPE_NORMALIZATION.items():
             if k in key or key in k: return v
+        # Handle small vendor spelling variations without changing unrelated labels.
+        fuzzy = get_close_matches(key, FEATURE_TYPE_NORMALIZATION.keys(), n=1, cutoff=0.82)
+        if fuzzy:
+            return FEATURE_TYPE_NORMALIZATION[fuzzy[0]]
         return raw.title()
     if fallback_id is not None:
         try:
             if not (isinstance(fallback_id, float) and np.isnan(fallback_id)):
-                fb = str(fallback_id).strip().lower()
-                if fb and fb not in ("nan", "none", "-", "n/a", ""):
-                    r = FEATURE_TYPE_NORMALIZATION.get(fb)
-                    if r: return r
+                    fb = re.sub(r"[\-_]+", " ", str(fallback_id).strip().lower())
+                    if fb and fb not in ("nan", "none", "-", "n/a", ""):
+                        r = FEATURE_TYPE_NORMALIZATION.get(fb)
+                        if r: return r
+                        fuzzy = get_close_matches(fb, FEATURE_TYPE_NORMALIZATION.keys(), n=1, cutoff=0.82)
+                        if fuzzy: return FEATURE_TYPE_NORMALIZATION[fuzzy[0]]
         except: pass
     return "Other"
 

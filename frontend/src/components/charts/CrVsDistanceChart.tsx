@@ -35,7 +35,6 @@ export default function CrVsDistanceChart({ data, filters }: CrVsDistanceChartPr
       const isMatched = row['Match/Unmatch'] === 'Matched';
 
       // Distances
-      const dist1 = typeof row['DATA LAMA 2020 (Vendor Lama)  >'] === 'number' ? row['DATA LAMA 2020 (Vendor Lama)  >'] - 0.1 : null;
       const dist2 = typeof row['<  DATA BARU 2025 (Vendor Baru)'] === 'number' ? row['<  DATA BARU 2025 (Vendor Baru)'] : null;
       
       // Depths (Absolute mm)

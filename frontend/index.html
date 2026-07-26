@@ -4,10 +4,20 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Urbanist:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+    <title>Synapse</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main aria-busy="true" style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#eef1eb;color:#151711;font-family:Segoe UI,Arial,sans-serif">
+        <div style="max-width:360px;padding:24px;border:1px solid #d4d9d0;border-radius:16px;background:#fff;text-align:center;box-shadow:0 18px 50px -42px rgba(18,24,14,.55)">
+          <strong style="display:block;font-size:16px">Loading Synapse</strong>
+          <span style="display:block;margin-top:8px;color:#727a6d;font-size:13px">Preparing the engineering workspace...</span>
+        </div>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
