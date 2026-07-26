@@ -13,8 +13,10 @@ readonly CURRENT_RELEASE_FILE="${SHARED_DIR}/current-release"
 readonly CURRENT_PROCESS_FILE="${SHARED_DIR}/current-pm2-name"
 readonly NGINX_BACKUP_DIR="${SHARED_DIR}/nginx-backups"
 readonly DEPLOY_LOG="/var/log/synapse-deploy.log"
-readonly PM2_BIN="/www/server/nvm/versions/node/v22.17.1/bin/pm2"
-readonly NODE_BIN_DIR="/www/server/nvm/versions/node/v22.17.1/bin"
+# Defaults for the Node runtime; override via SYNAPSE_NODE_BIN_DIR / SYNAPSE_PM2_BIN
+# in /etc/synapse/production.env so a Node patch upgrade cannot brick deploys.
+PM2_BIN="/www/server/nvm/versions/node/v22.17.1/bin/pm2"
+NODE_BIN_DIR="/www/server/nvm/versions/node/v22.17.1/bin"
 
 candidate_process=""
 nginx_backup=""
@@ -32,7 +34,7 @@ fail() {
 }
 
 valid_release_id() {
-  [[ "${1:-}" =~ ^[0-9]{8}-[0-9]{6}(-[0-9a-f]{7,40})?$ ]]
+  [[ "${1:-}" =~ ^[0-9]{8}-[0-9]{6}-[0-9a-f]{7,40}$ ]]
 }
 
 cleanup_on_exit() {
@@ -61,7 +63,6 @@ trap cleanup_on_exit EXIT
 
 require_runtime() {
   [[ "$(id -u)" -eq 0 ]] || fail "This command must run as root"
-  [[ -x "$PM2_BIN" ]] || fail "PM2 binary not found at $PM2_BIN"
   [[ -f "$NGINX_CONFIG" ]] || fail "Nginx site config not found"
   [[ -f "$ENV_FILE" ]] || fail "Production environment file not found"
   [[ -f "${SHARED_DIR}/Parser ingestion.xlsx" ]] || fail "Shared parser workbook not found"
@@ -74,6 +75,8 @@ require_runtime() {
 }
 
 load_environment() {
+  [[ -f "$ENV_FILE" ]] || fail "Production environment file not found"
+
   set -a
   # shellcheck disable=SC1090
   source "$ENV_FILE"
@@ -83,10 +86,17 @@ load_environment() {
   : "${JWT_SECRET:?JWT_SECRET is required}"
   : "${ALLOWED_ORIGINS:?ALLOWED_ORIGINS is required}"
   : "${DATABASE_URL:?DATABASE_URL is required}"
+  : "${PUBLIC_HOST:?PUBLIC_HOST is required}"
 
   export REDIS_HOST="${REDIS_HOST:-127.0.0.1}"
   export REDIS_PORT="${REDIS_PORT:-6379}"
-  export PUBLIC_HOST="${PUBLIC_HOST:-145.79.15.157}"
+  export PUBLIC_HOST
+
+  # Optional runtime overrides from the environment file.
+  PM2_BIN="${SYNAPSE_PM2_BIN:-$PM2_BIN}"
+  NODE_BIN_DIR="${SYNAPSE_NODE_BIN_DIR:-$NODE_BIN_DIR}"
+  [[ -x "$PM2_BIN" ]] || fail "PM2 binary not found at $PM2_BIN"
+  [[ -x "${NODE_BIN_DIR}/npm" ]] || fail "npm not found in $NODE_BIN_DIR"
 }
 
 current_port() {
@@ -250,13 +260,46 @@ switch_nginx() {
   log "Nginx now serves $release_id on port $port"
 }
 
+prune_old_releases() {
+  local current_id="$1"
+  local previous_id="$2"
+  local keep="${SYNAPSE_KEEP_RELEASES:-5}"
+  local dir id
+  local -a candidates=()
+
+  # Release ids start with a UTC timestamp, so lexical order is chronological.
+  while IFS= read -r dir; do
+    id="$(basename "$dir")"
+    valid_release_id "$id" || continue
+    [[ "$id" == "$current_id" || "$id" == "$previous_id" ]] && continue
+    candidates+=("$id")
+  done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d | sort)
+
+  # current + previous are always kept on top of the retention budget.
+  local excess=$(( ${#candidates[@]} + 2 - keep ))
+  (( excess > 0 )) || return 0
+
+  local i
+  for (( i = 0; i < excess && i < ${#candidates[@]}; i++ )); do
+    if rm -rf -- "${RELEASES_DIR:?}/${candidates[$i]}"; then
+      log "Pruned old release ${candidates[$i]}"
+    else
+      log "WARNING: failed to prune release ${candidates[$i]}"
+    fi
+  done
+}
+
 finalize_release() {
   local release_id="$1"
   local release_dir="$2"
   local previous_process=""
+  local previous_release=""
 
   if [[ -f "$CURRENT_PROCESS_FILE" ]]; then
     previous_process="$(<"$CURRENT_PROCESS_FILE")"
+  fi
+  if [[ -f "$CURRENT_RELEASE_FILE" ]]; then
+    previous_release="$(<"$CURRENT_RELEASE_FILE")"
   fi
 
   ln -sfn "$release_dir" "$CURRENT_LINK"
@@ -271,6 +314,7 @@ finalize_release() {
 
   "$PM2_BIN" save
   deployment_complete=1
+  prune_old_releases "$release_id" "$previous_release" || true
   log "Deployment completed: $release_id"
 }
 
