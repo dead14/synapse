@@ -77,7 +77,7 @@ jobs:
           Host synapse-production
             HostName $DEPLOY_HOST
             User $DEPLOY_USER
-            Port $DEPLOY_PORT_EFFECTIVE
+            Port $deploy_port
             IdentityFile $HOME/.ssh/id_ed25519
             BatchMode yes
             StrictHostKeyChecking yes
