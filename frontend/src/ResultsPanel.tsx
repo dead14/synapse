@@ -385,7 +385,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [containerHeight, setContainerHeight] = useState(800); // fallback until measured
-  const ROW_HEIGHT = 28; // px per row
+  const ROW_HEIGHT = 24; // px per row — keep in sync with .results-table td height in synapse-tokens.css
   const OVERSCAN = 10; // extra rows to render above/below viewport
 
   // Extract all columns
