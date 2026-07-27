@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FiChevronLeft, FiChevronRight, FiMaximize2, FiZoomIn, FiZoomOut } from 'react-icons/fi';
+import { FiChevronLeft, FiChevronRight, FiCrosshair, FiMaximize2, FiZoomIn, FiZoomOut } from 'react-icons/fi';
 import {
   featureAxisValue,
   laneFeaturesInWindow,
@@ -100,7 +100,7 @@ export default function LaneTimeline({
   const containerRef = useRef<HTMLDivElement>(null);
   const laneStackRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(960);
-  const [axis, setAxis] = useState<AxisMode>('aligned');
+  const [axis, setAxis] = useState<AxisMode>('raw');
   const [colorMode, setColorMode] = useState<ColorMode>('status');
   const [filter, setFilter] = useState<FeatureFilter>('all');
   const [showLinks, setShowLinks] = useState(true);
@@ -398,23 +398,24 @@ export default function LaneTimeline({
         className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-1.5"
         style={{ borderBottom: '1px solid var(--syn-line)', background: 'var(--syn-surface)' }}
       >
+        {/* One click toggles between each run at its own reported log distance
+            (honest, un-shifted) and every run projected onto the newest run's
+            odometer so matched girth welds line up despite pipe growth/shrink. */}
         <div className="flex items-center gap-1.5">
-          <span className="syn-kicker" style={{ fontSize: '0.58rem' }}>Distance axis</span>
-          {(['raw', 'aligned'] as AxisMode[]).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              aria-pressed={axis === mode}
-              onClick={() => setAxis(mode)}
-              className={`syn-btn syn-btn--sm ${axis === mode ? 'syn-btn--ink' : 'syn-btn--outline'}`}
-              style={{ minHeight: '1.6rem', fontSize: '0.66rem' }}
-              title={mode === 'raw'
-                ? 'Every run sits at the log distance printed in its own tally'
-                : 'Every run projected onto the newest run odometer'}
-            >
-              {mode === 'raw' ? 'Reported LD (per run)' : 'Aligned to newest run'}
-            </button>
-          ))}
+          <span className="syn-kicker" style={{ fontSize: '0.58rem' }}>Position</span>
+          <button
+            type="button"
+            aria-pressed={axis === 'aligned'}
+            onClick={() => setAxis((current) => (current === 'aligned' ? 'raw' : 'aligned'))}
+            className={`syn-btn syn-btn--sm ${axis === 'aligned' ? 'syn-btn--lime' : 'syn-btn--outline'}`}
+            style={{ minHeight: '1.6rem', fontSize: '0.66rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+            title={axis === 'aligned'
+              ? 'Girth welds are calibrated onto the newest run so matched welds line up. Click to return to each run’s own reported log distance.'
+              : 'Each run sits at the log distance printed in its own tally. Click to calibrate girth-weld positions onto the newest run so matched welds line up.'}
+          >
+            <FiCrosshair size={12} />
+            {axis === 'aligned' ? 'GW calibrated — click for real LD' : 'Calibrate GW positions'}
+          </button>
         </div>
 
         <div className="flex items-center gap-1.5">
@@ -484,8 +485,8 @@ export default function LaneTimeline({
 
       {axis === 'aligned' && unalignedRuns.length > 0 && (
         <div className="px-3 py-1.5 text-xs" style={{ background: 'var(--syn-warning-soft)', color: 'var(--syn-warning)' }}>
-          {unalignedRuns.join(', ')} carries no alignment onto the newest odometer, so it stays empty on this axis. Switch to
-          <strong> Reported LD </strong> to read it at its own log distance.
+          {unalignedRuns.join(', ')} carries no alignment onto the newest odometer, so it stays empty while calibrated. Click
+          <strong> GW calibrated </strong> off to read it at its own reported log distance.
         </div>
       )}
 
