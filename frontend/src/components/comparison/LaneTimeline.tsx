@@ -414,11 +414,11 @@ export default function LaneTimeline({
             className={`syn-btn syn-btn--sm ${axis === 'aligned' ? 'syn-btn--lime' : 'syn-btn--outline'}`}
             style={{ minHeight: '1.6rem', fontSize: '0.66rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
             title={axis === 'aligned'
-              ? 'Girth welds are calibrated onto the newest run so matched welds line up. Click to return to each run’s own reported log distance.'
-              : 'Each run sits at the log distance printed in its own tally. Click to calibrate girth-weld positions onto the newest run so matched welds line up.'}
+              ? 'Matched girth welds and features are snapped onto the newest run so a matched pair sits at the same X. Click to return to each run’s own reported log distance.'
+              : 'Each run sits at the log distance printed in its own tally. Click to snap matched girth welds and features onto the newest run so a matched pair sits at the same X.'}
           >
             <FiCrosshair size={12} />
-            {axis === 'aligned' ? 'GW calibrated — click for real LD' : 'Calibrate GW positions'}
+            {axis === 'aligned' ? 'Matched GW snapped — click for real LD' : 'Snap matched GW positions'}
           </button>
         </div>
 
@@ -489,8 +489,8 @@ export default function LaneTimeline({
 
       {axis === 'aligned' && unalignedRuns.length > 0 && (
         <div className="px-3 py-1.5 text-xs" style={{ background: 'var(--syn-warning-soft)', color: 'var(--syn-warning)' }}>
-          {unalignedRuns.join(', ')} carries no alignment onto the newest odometer, so it stays empty while calibrated. Click
-          <strong> GW calibrated </strong> off to read it at its own reported log distance.
+          {unalignedRuns.join(', ')} carries no matched welds onto the newest odometer, so it stays empty while snapped. Click
+          <strong> Matched GW snapped </strong> off to read it at its own reported log distance.
         </div>
       )}
 

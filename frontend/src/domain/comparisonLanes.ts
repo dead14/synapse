@@ -206,6 +206,13 @@ interface Observation {
   kind: FeatureKind;
   rawM: number | null;
   mappedM: number | null;
+  /**
+   * Set on OLD observations of matched rows: the matched NEW side's own
+   * reported distance. Using it as the destination when projecting an OLD
+   * feature onto the newer run makes a matched pair sit at exactly the same
+   * X in the chart, which is what a reviewer means by "calibrated view".
+   */
+  snapM: number | null;
   clockHours: number | null;
   depthPct: number | null;
   lengthMm: number | null;
@@ -250,6 +257,7 @@ function sideObservation(
     // where the master is unshifted anyway).
     rawM: originalM ?? mappedM,
     mappedM,
+    snapM: null,
     clockHours,
     depthPct: num(row[`Depth ${suffix} (%WT)`]),
     lengthMm: num(row[`Length ${suffix} (mm)`]),
@@ -298,19 +306,24 @@ function pairIdentities(rows: readonly ComparisonRow[]): PairIdentity[] {
   return [...byIndex.values()].sort((left, right) => left.index - right.index);
 }
 
-/** Anchors mapping a pair's OLD run odometer onto the pair's NEW run odometer. */
+/**
+ * Anchors mapping a pair's OLD run odometer onto the pair's NEW run odometer.
+ * The destination is the matched NEW side's own reported distance (`snapM`),
+ * not the engine's shifted `mappedM`, so a matched girth weld lands on the
+ * exact same X as its partner in the newer lane instead of a fraction of a
+ * metre off.  Anomalies only stand in as anchors when the pair produced no
+ * matched welds at all — welds are the locked evidence of the alignment.
+ */
 function pairAnchors(observations: Observation[]): Array<{ from: number; to: number }> {
   const welds: Array<{ from: number; to: number }> = [];
   const others: Array<{ from: number; to: number }> = [];
   for (const observation of observations) {
     if (observation.side !== 'old' || !observation.rowMatched) continue;
-    if (observation.rawM === null || observation.mappedM === null) continue;
-    const anchor = { from: observation.rawM, to: observation.mappedM };
+    if (observation.rawM === null || observation.snapM === null) continue;
+    const anchor = { from: observation.rawM, to: observation.snapM };
     if (observation.kind === 'weld') welds.push(anchor);
     else others.push(anchor);
   }
-  // Girth welds are the locked evidence of the alignment; anomalies only stand
-  // in when a pair produced no matched welds at all.
   return welds.length >= 2 ? welds : [...welds, ...others];
 }
 
@@ -356,9 +369,19 @@ export function buildComparisonLanes(rows: readonly ComparisonRow[]): Comparison
       || num(row['Original Log Dist NEW (m)']) !== null;
     const rowMatched = oldPresent && newPresent;
 
+    // NEW first so its raw distance is known before wiring it into the OLD
+    // observation's snap point.  The snap point is what lets a matched pair
+    // sit on the exact same vertical in the chart when the axis is
+    // calibrated, rather than sitting a few cm apart because the engine's
+    // shift left a residual gap.
+    const newObservation = sideObservation(row, rowIndex, order, 'new', rowMatched);
+    const oldObservation = sideObservation(row, rowIndex, order, 'old', rowMatched);
+    if (rowMatched && oldObservation && newObservation && newObservation.rawM !== null) {
+      oldObservation.snapM = newObservation.rawM;
+    }
+
     const pairBucket = observationsByPair.get(order) ?? [];
-    ([['old', order], ['new', order + 1]] as const).forEach(([side, runIndex]) => {
-      const observation = sideObservation(row, rowIndex, order, side, rowMatched);
+    ([['old', order, oldObservation], ['new', order + 1, newObservation]] as const).forEach(([, runIndex, observation]) => {
       if (!observation) return;
       pairBucket.push(observation);
       const runBucket = byRun[runIndex];
@@ -380,6 +403,7 @@ export function buildComparisonLanes(rows: readonly ComparisonRow[]): Comparison
 
   for (let runIndex = 0; runIndex < runCount; runIndex += 1) {
     const isMaster = runIndex === runCount - 1;
+    const ownHop = hops[runIndex] ?? null;
     const laterHops = hops.slice(runIndex + 1);
     const composable = laterHops.every((hop) => hop !== null);
     const features: LaneFeature[] = [];
@@ -393,11 +417,19 @@ export function buildComparisonLanes(rows: readonly ComparisonRow[]): Comparison
       if (!primary) return;
 
       const rawM = primary.rawM ?? back?.rawM ?? forward?.rawM ?? null;
+      // A matched OLD observation carries `snapM` = its partner's own raw
+      // distance in the newer run. Starting the projection from there makes
+      // the matched pair land on exactly the same X in the chart.  Unmatched
+      // features fall through to the projector built from matched-GW anchors,
+      // which interpolates them into the same axis.
       let alignedM: number | null = null;
       if (isMaster) {
         alignedM = rawM;
-      } else if (forward?.mappedM !== null && forward?.mappedM !== undefined && composable) {
-        alignedM = laterHops.reduce<number>((value, hop) => (hop ? hop(value) : value), forward.mappedM);
+      } else if (forward?.snapM !== null && forward?.snapM !== undefined && composable) {
+        alignedM = laterHops.reduce<number>((value, hop) => (hop ? hop(value) : value), forward.snapM);
+      } else if (rawM !== null && ownHop && composable) {
+        const mappedIntoNewer = ownHop(rawM);
+        alignedM = laterHops.reduce<number>((value, hop) => (hop ? hop(value) : value), mappedIntoNewer);
       }
 
       const matchedBack = back ? back.rowMatched : (runIndex === 0 ? null : false);
