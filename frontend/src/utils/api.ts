@@ -1,15 +1,11 @@
 import { resolveApiBase } from "./apiConfig";
+import { getErrorInfo, isRecord } from "./apiError";
 
 export const API_BASE = resolveApiBase(
   import.meta.env.VITE_API_URL ||
     import.meta.env.VITE_API_BASE_URL,
   import.meta.env.DEV,
 );
-
-type ApiErrorPayload = {
-  error?: unknown;
-  message?: unknown;
-};
 
 export class ApiError extends Error {
   readonly code?: string;
@@ -39,45 +35,11 @@ export type ApiFetchOptions = Omit<RequestInit, "body"> & {
   body?: BodyInit | Record<string, unknown> | null;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (!isRecord(value)) return false;
 
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
-}
-
-function getErrorInfo(payload: unknown, fallbackMessage: string) {
-  if (!isRecord(payload)) {
-    return { message: fallbackMessage };
-  }
-
-  const envelope = payload as ApiErrorPayload;
-  if (typeof envelope.error === "string") {
-    return { message: envelope.error };
-  }
-
-  if (isRecord(envelope.error)) {
-    return {
-      message:
-        typeof envelope.error.message === "string"
-          ? envelope.error.message
-          : fallbackMessage,
-      code:
-        typeof envelope.error.code === "string"
-          ? envelope.error.code
-          : undefined,
-      details: envelope.error.details,
-    };
-  }
-
-  return {
-    message:
-      typeof envelope.message === "string" ? envelope.message : fallbackMessage,
-  };
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {

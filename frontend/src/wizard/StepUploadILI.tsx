@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettings, FiShield, FiPlus } from 'react-icons/fi';
 import { apiFetch, apiUrl } from '../utils/api';
 import { useToast } from '../components/common/ToastProvider';
+import { formatIngestionImportError } from '../domain/ingestionError';
 import {
   buildPersistedIliRun,
   ingestPersistedInspectionRunPair,
@@ -259,8 +260,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
       // Unmounted mid-flight: the abort is intentional, keep quiet.
       if (signal?.aborted) return;
       console.error(err);
-      const detail = err instanceof Error && err.message ? `\n\nDetail: ${err.message}` : '';
-      toast.error(`Failed to import the ILI file. Check the format, year, vendor, and headers.${detail}`);
+      toast.error(formatIngestionImportError(err));
     } finally {
       if (!signal?.aborted) {
         setIsProcessing(false);
