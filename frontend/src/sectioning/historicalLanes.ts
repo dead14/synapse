@@ -1,4 +1,5 @@
 import { pairKey } from './pairing.ts';
+import { maxOf, minOf } from '../utils/numericRange.ts';
 import type { HistoricalGwLane, SpatialFeature } from './types';
 
 type AlignmentMatch = Record<string, unknown>;
@@ -42,6 +43,16 @@ function historicalId(row: ComparisonRow, fallback: string) {
 export function displayDistanceOnMaster(feature: SpatialFeature) {
   const masterDistance = Number(feature.rawData.masterDistance);
   return Number.isFinite(masterDistance) ? masterDistance : feature.dist;
+}
+
+export function longitudinalAxisExtent(totalMasterLength: number, lanes: HistoricalGwLane[]) {
+  const historicalDistances = lanes
+    .flatMap((lane) => lane.gws.map((gw) => gw.dist))
+    .filter(Number.isFinite);
+  return {
+    start: Math.min(0, minOf(historicalDistances)),
+    end: Math.max(0, totalMasterLength, maxOf(historicalDistances)),
+  };
 }
 
 function lockedOldGw(match: AlignmentMatch, run: HistoricalRun): SpatialFeature | null {

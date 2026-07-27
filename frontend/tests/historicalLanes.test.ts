@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   buildHistoricalLanes,
   displayDistanceOnMaster,
+  longitudinalAxisExtent,
   parseWallThicknessMm,
 } from '../src/sectioning/historicalLanes.ts';
 
@@ -110,4 +111,48 @@ test('displayDistanceOnMaster uses a matched OLD GW master coordinate', () => {
     lat: Number.NaN,
     lng: Number.NaN,
   }), 125);
+});
+
+test('longitudinalAxisExtent keeps the original OLD odometer range visible', () => {
+  assert.deepEqual(longitudinalAxisExtent(2100, [{
+    id: 'history-0',
+    label: 'ILI 2012',
+    year: '2012',
+    bends: [],
+    gws: [{
+      id: 'OLD-001',
+      dist: -1870,
+      type: 'weld',
+      runRole: 'HISTORICAL',
+      status: 'MATCHED',
+      rawData: { masterDistance: 4.24 },
+      lat: Number.NaN,
+      lng: Number.NaN,
+    }],
+  }]), { start: -1870, end: 2100 });
+});
+
+test('longitudinalAxisExtent handles ILI-sized historical lanes without spreading the array', () => {
+  const template = {
+    id: 'OLD',
+    type: 'weld',
+    runRole: 'HISTORICAL' as const,
+    status: 'MATCHED',
+    rawData: {},
+    lat: Number.NaN,
+    lng: Number.NaN,
+  };
+  const gws = Array.from({ length: 130_000 }, (_, index) => ({
+    ...template,
+    id: `OLD-${index}`,
+    dist: index - 5,
+  }));
+
+  assert.deepEqual(longitudinalAxisExtent(100, [{
+    id: 'history-large',
+    label: 'Large ILI',
+    year: '2012',
+    bends: [],
+    gws,
+  }]), { start: -5, end: 129_994 });
 });
