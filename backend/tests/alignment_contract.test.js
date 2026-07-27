@@ -11,6 +11,7 @@ const {
     sameGwReviewDecisions,
     normalizeAlignmentReviewForPersistence,
     normalizeInterventionEvent,
+    preserveCanonicalGwEvidence,
 } = require('../src/modules/alignment/alignmentContract');
 
 test('sameGwReviewDecisions ignores persistence timestamps but detects changed decisions', () => {
@@ -388,6 +389,30 @@ test('normalizeAlignmentReviewForPersistence derives trusted review evidence and
         }, { canonicalGwLocks: canonicalLocks }),
         (error) => error.code === 'INVALID_ALIGNMENT_REVIEW',
     );
+});
+
+test('preserveCanonicalGwEvidence keeps server-owned pair locks across wizard saves', () => {
+    const persisted = {
+        pairGwEvidence: {
+            '8->9': {
+                canonicalGwLocks: [{ old_id: 'old-8', new_id: 'new-9' }],
+                gwCanonicalSignature: 'server-signature',
+            },
+        },
+        canonicalGwLocks: [{ old_id: 'primary-old', new_id: 'primary-new' }],
+        gwCanonicalSignature: 'primary-signature',
+    };
+    const incoming = {
+        pairGwResults: { '8->9': { gwReview: {} } },
+        pairGwEvidence: { '8->9': { canonicalGwLocks: [{ old_id: 'forged', new_id: 'forged' }] } },
+    };
+
+    assert.deepEqual(preserveCanonicalGwEvidence(incoming, persisted), {
+        ...incoming,
+        pairGwEvidence: persisted.pairGwEvidence,
+        canonicalGwLocks: persisted.canonicalGwLocks,
+        gwCanonicalSignature: persisted.gwCanonicalSignature,
+    });
 });
 
 test('normalizeInterventionEvent accepts only auditable NEW-to-OLD reassignments', () => {

@@ -30,6 +30,7 @@ const {
     normalizeAlignmentReviewForPersistence,
     normalizeInterventionEvent,
     normalizePairGwResultsForPersistence,
+    preserveCanonicalGwEvidence,
     sameGwReviewDecisions,
 } = require('./alignmentContract');
 const {
@@ -545,7 +546,11 @@ exports.saveWizardState = async (req, res) => {
             if (requiresReviewBoundary && !expectedRevision) {
                 return res.status(409).json({ error: 'This review is out of date. Refresh the alignment session before saving.' });
             }
-            let configToPersist = config;
+            // The browser sends a wizard snapshot, not the server-authored GW
+            // evidence recorded when DTW completed. Preserve that evidence
+            // across every later step so Sectioning cannot lose its canonical
+            // locks and reject the next save.
+            let configToPersist = preserveCanonicalGwEvidence(config, session.params_json);
             try {
                 if (requiresReviewBoundary) {
                     const references = getPersistedRunReferences(session.params_json || {});

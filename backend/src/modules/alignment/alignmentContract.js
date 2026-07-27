@@ -505,6 +505,25 @@ function normalizePairGwResultsForPersistence(config, {
     return normalized;
 }
 
+/**
+ * GW matching evidence is authored by the server when the DTW run completes.
+ * Later wizard steps send a client snapshot that intentionally omits that
+ * evidence, so replacing the session JSON with the snapshot must retain the
+ * server-owned canonical locks and signatures.  Always prefer the persisted
+ * values to prevent a client from replacing trusted evidence.
+ */
+function preserveCanonicalGwEvidence(config, persistedConfig) {
+    const preserved = { ...(config || {}) };
+    if (isRecord(persistedConfig?.pairGwEvidence)) {
+        preserved.pairGwEvidence = persistedConfig.pairGwEvidence;
+    }
+    if (Array.isArray(persistedConfig?.canonicalGwLocks)) {
+        preserved.canonicalGwLocks = persistedConfig.canonicalGwLocks;
+        preserved.gwCanonicalSignature = persistedConfig.gwCanonicalSignature;
+    }
+    return preserved;
+}
+
 function normalizeInterventionEvent(event) {
     if (!event || typeof event !== 'object' || Array.isArray(event)) {
         throw validationError('INVALID_INTERVENTION', 'Intervention event must be an object');
@@ -618,4 +637,5 @@ module.exports = {
     normalizeAlignmentReviewForPersistence,
     normalizeInterventionEvent,
     normalizePairGwResultsForPersistence,
+    preserveCanonicalGwEvidence,
 };
