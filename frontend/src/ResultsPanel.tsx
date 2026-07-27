@@ -99,13 +99,12 @@ const PaginationFooter = ({ totalRows, hasActiveFilters, onClearFilters }: {
   hasActiveFilters: boolean;
   onClearFilters: () => void;
 }) => (
-  <div className="bg-gray-100 border-t border-gray-200 p-2 flex justify-between items-center text-sm text-gray-600">
-    <span className="text-gray-500">Total: {totalRows} rows</span>
+  <div className="flex justify-between items-center" style={{ minHeight: '2.25rem', borderTop: '1px solid var(--syn-line)', background: 'var(--syn-surface)', padding: '0.4rem 0.75rem', color: 'var(--syn-muted)', font: '0.68rem var(--syn-font-data)' }}>
+    <span>Total: {totalRows} rows</span>
     {hasActiveFilters && (
-      <button
-        onClick={onClearFilters}
-        className="text-xs text-red-500 hover:underline"
-      >Clear all filters</button>
+      <button onClick={onClearFilters} className="text-xs hover:underline font-bold" style={{ color: 'var(--syn-danger)' }}>
+        Clear all filters
+      </button>
     )}
   </div>
 );
@@ -743,56 +742,57 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   };
 
   const panelContent = (
-    <div className={isFullScreen ? "h-full w-full bg-white flex flex-col overflow-hidden" : "bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden"}>
-      
+    <div className={`results-panel ${isFullScreen ? "h-full w-full flex flex-col overflow-hidden" : "flex flex-col h-full overflow-hidden"}`}>
+
       {/* Tabs Header */}
-      <div className="flex justify-between border-b border-gray-200 bg-gray-50/50 pr-4">
+      <div className="results-tabs flex justify-between pr-3">
         <div className="flex">
           {tabs.map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`px-6 py-3 text-sm font-medium transition-colors border-b-2 ${
-                activeTab === tab 
-                  ? 'border-blue-500 text-blue-600 bg-white' 
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+              className={`results-tab px-5 py-3 text-sm font-medium transition-colors border-b-2 ${
+                activeTab === tab
+                  ? 'border-current'
+                  : 'border-transparent'
               }`}
+              style={activeTab === tab ? { color: 'var(--syn-info, #155eef)', background: 'var(--syn-surface-raised, #fff)' } : {}}
             >
               {tab}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-3 relative">
+        <div className="flex items-center gap-2 relative">
           {activeTab === 'Results' && (
             <div ref={columnMenuRef}>
-              <button 
+              <button
                 onClick={() => setShowColumnFilter(!showColumnFilter)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] bg-white border border-gray-300 text-gray-700 rounded-md shadow-sm hover:bg-gray-50 font-medium transition-colors"
+                className="syn-btn syn-btn--sm syn-btn--outline"
               >
                 <FiColumns size={14} />
                 Columns ({visibleColumns.length}/{allColumns.length})
               </button>
-              
+
               {showColumnFilter && (
-                <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-lg shadow-xl border border-gray-200 z-[999999] overflow-hidden flex flex-col max-h-[400px]">
-                  <div className="p-3 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center">
-                    <span className="font-bold text-gray-700 text-sm">Visible Columns</span>
+                <div className="absolute right-0 top-full mt-2 w-72 rounded-lg z-[999999] overflow-hidden flex flex-col max-h-[400px]"
+                  style={{ background: 'var(--syn-surface-raised, #fff)', border: '1px solid var(--syn-line, #d4d9d0)', boxShadow: 'var(--syn-shadow)' }}>
+                  <div className="p-3 flex justify-between items-center" style={{ borderBottom: '1px solid var(--syn-line, #d4d9d0)', background: 'var(--syn-surface, #fbfcf9)' }}>
+                    <span className="font-bold text-sm" style={{ color: 'var(--syn-ink, #151711)' }}>Visible Columns</span>
                     <div className="flex gap-2">
-                      <button onClick={() => setVisibleColumns(allColumns)} className="text-xs text-blue-600 hover:underline font-medium">All</button>
-                      <span className="text-gray-300">|</span>
-                      <button onClick={() => setVisibleColumns([])} className="text-xs text-gray-500 hover:underline font-medium">None</button>
+                      <button onClick={() => setVisibleColumns(allColumns)} className="text-xs hover:underline font-medium" style={{ color: 'var(--syn-info, #155eef)' }}>All</button>
+                      <span style={{ color: 'var(--syn-line-strong)' }}>|</span>
+                      <button onClick={() => setVisibleColumns([])} className="text-xs hover:underline font-medium" style={{ color: 'var(--syn-muted, #727a6d)' }}>None</button>
                     </div>
                   </div>
-                  <div className="overflow-y-auto p-2 flex-1 flex flex-col gap-1">
+                  <div className="overflow-y-auto p-2 flex-1 flex flex-col gap-0.5">
                     {allColumns.map(col => (
-                      <label key={col} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded cursor-pointer text-sm">
-                        <input 
-                          type="checkbox" 
+                      <label key={col} className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm" style={{ color: 'var(--syn-ink-soft)' }}>
+                        <input
+                          type="checkbox"
                           checked={visibleColumns.includes(col)}
                           onChange={() => toggleColumn(col)}
-                          className="rounded border-gray-300 text-blue-600"
                         />
-                        <span className="truncate flex-1 text-gray-700" title={col}>{col}</span>
+                        <span className="truncate flex-1" title={col}>{col}</span>
                       </label>
                     ))}
                   </div>
@@ -801,39 +801,33 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
             </div>
           )}
           {onOpenAnalytics && (
-            <button 
-              onClick={onOpenAnalytics}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700 font-medium transition-colors"
-            >
+            <button onClick={onOpenAnalytics} className="syn-btn syn-btn--sm syn-btn--ink">
               <FiActivity size={14} />
-              Advanced Analytics
+              Analytics
             </button>
           )}
-          <button 
+          <button
             onClick={() => {
               const urlParams = new URLSearchParams(window.location.search);
               const sessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
               navigate(`/ili-sectioning?sessionId=${sessionId}`);
             }}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] bg-[#0f766e] text-white rounded-md shadow-sm hover:bg-[#115e59] font-medium transition-colors"
+            className="syn-btn syn-btn--sm syn-btn--ink"
           >
             <FiMap size={14} />
-            To Sectional
+            Sectional
           </button>
-          <button 
-            onClick={exportToExcel}
-            disabled={isExporting}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] bg-emerald-600 text-white rounded-md shadow-sm hover:bg-emerald-700 font-medium transition-colors disabled:opacity-50"
-          >
+          <button onClick={exportToExcel} disabled={isExporting} className="syn-btn syn-btn--sm syn-btn--lime">
             <FiDownload size={14} />
-            {isExporting ? 'Exporting...' : 'Export Excel'}
+            {isExporting ? 'Exporting...' : 'Excel'}
           </button>
-          <button 
+          <button
             onClick={() => setIsFullScreen(!isFullScreen)}
-            className="text-orange-500 hover:text-orange-700 p-2 rounded-full hover:bg-orange-100 transition-colors flex items-center justify-center font-medium"
+            className="syn-icon-button"
             title={isFullScreen ? "Exit Full Screen" : "Full Screen Data"}
+            style={{ width: '2rem', height: '2rem' }}
           >
-            {isFullScreen ? <FiMinimize size={18} /> : <FiMaximize size={18} />}
+            {isFullScreen ? <FiMinimize size={15} /> : <FiMaximize size={15} />}
           </button>
         </div>
       </div>
@@ -866,105 +860,81 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
       )}
 
       {(activeTab === 'Results' || activeTab === 'ILI Run 1' || activeTab === 'ILI Run 2' || activeTab === 'Interventions') && (
-        <div className="flex flex-col h-full bg-white rounded shadow-sm border border-gray-200 overflow-hidden text-sm relative">
-          {/* Summary Dashboard Area */}
+        <div className="flex flex-col h-full overflow-hidden text-sm relative">
+          {/* Summary Dashboard */}
           {summaryCounts && (
-            <div className="p-4 bg-white border-b border-gray-200 grid grid-cols-1 md:grid-cols-5 gap-4 shadow-sm z-10">
-              <div className="bg-blue-50/50 p-3 rounded-lg border border-blue-100 flex flex-col items-center justify-center text-center">
-                 <span className="text-xs font-semibold text-blue-600 uppercase tracking-wider mb-1">Total Pairs Matched</span>
-                 <span className="text-2xl font-black text-blue-800">{summaryCounts.gwLocked + summaryCounts.anomalyMatched}</span>
-                 <span className="text-[10px] text-blue-500 mt-1">({summaryCounts.gwLocked} GW + {summaryCounts.anomalyMatched} Anom)</span>
+            <div className="results-summary grid grid-cols-2 md:grid-cols-5 z-10" style={{ borderBottom: '1px solid var(--syn-line)' }}>
+              <div>
+                <span>Total Pairs Matched</span>
+                <span>{summaryCounts.gwLocked + summaryCounts.anomalyMatched}</span>
+                <span>({summaryCounts.gwLocked} GW + {summaryCounts.anomalyMatched} Anom)</span>
               </div>
-              <div className="bg-gray-50/50 p-3 rounded-lg border border-gray-200 flex flex-col items-center justify-center text-center">
-                 <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Total GW Orphan</span>
-                 <span className="text-2xl font-bold text-gray-700">{summaryCounts.gwUnmatched}</span>
+              <div>
+                <span>GW Orphan</span>
+                <span>{summaryCounts.gwUnmatched}</span>
               </div>
-              <div className="bg-orange-50/50 p-3 rounded-lg border border-orange-100 flex flex-col items-center justify-center text-center">
-                 <span className="text-xs font-semibold text-orange-600 uppercase tracking-wider mb-1">Only OLD (Anomaly)</span>
-                 <span className="text-2xl font-bold text-orange-800">{summaryCounts.anomalyOnlyOld}</span>
+              <div>
+                <span>Only OLD</span>
+                <span>{summaryCounts.anomalyOnlyOld}</span>
               </div>
-              <div className="bg-emerald-50/50 p-3 rounded-lg border border-emerald-100 flex flex-col items-center justify-center text-center">
-                 <span className="text-xs font-semibold text-emerald-600 uppercase tracking-wider mb-1">Only NEW (Anomaly)</span>
-                 <span className="text-2xl font-bold text-emerald-800">{summaryCounts.anomalyOnlyNew}</span>
+              <div>
+                <span>Only NEW</span>
+                <span>{summaryCounts.anomalyOnlyNew}</span>
               </div>
-              <div className="bg-purple-50/50 p-3 rounded-lg border border-purple-100 flex flex-col items-center justify-center text-center">
-                 <span className="text-xs font-semibold text-purple-600 uppercase tracking-wider mb-1">Bypassed Features</span>
-                 <span className="text-2xl font-bold text-purple-800">{summaryCounts.bypassedOld + summaryCounts.bypassedNew}</span>
-                 <span className="text-[10px] text-purple-500 mt-1">(Non-Anomaly / Filtered)</span>
+              <div>
+                <span>Bypassed</span>
+                <span>{summaryCounts.bypassedOld + summaryCounts.bypassedNew}</span>
+                <span>(Non-Anomaly)</span>
               </div>
             </div>
           )}
 
-          {/* Filters Area */}
-          <div className="p-4 bg-[#fffdf0] border-b border-gray-200 text-sm flex flex-row flex-wrap items-center gap-8">
-            <div className="flex gap-6 items-center">
-              <label className="flex items-center gap-2 cursor-pointer font-medium">
-                <input type="radio" name="filter" checked={radioFilter === 'All'} onChange={() => setRadioFilter('All')} className="text-blue-500" />
-                All
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer font-medium">
-                <input type="radio" name="filter" checked={radioFilter === 'GW'} onChange={() => setRadioFilter('GW')} className="text-blue-500" />
-                GWs Only
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer font-medium">
-                <input type="radio" name="filter" checked={radioFilter === 'Anomaly'} onChange={() => setRadioFilter('Anomaly')} className="text-blue-500" />
-                Anomalies Only
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer font-medium">
-                <input type="radio" name="filter" checked={radioFilter === 'Bypassed'} onChange={() => setRadioFilter('Bypassed')} className="text-blue-500" />
-                Bypassed
-              </label>
-              <div className="flex items-center gap-3">
-                <label className="flex items-center gap-2 cursor-pointer font-medium">
-                  <input type="radio" name="filter" checked={radioFilter === 'Distance'} onChange={() => setRadioFilter('Distance')} className="text-blue-500" />
-                  Distance
+          {/* Filters */}
+          <div className="results-filters flex flex-row flex-wrap items-center" style={{ borderBottom: '1px solid var(--syn-line)' }}>
+            <div className="results-filter-group flex gap-1 items-center flex-wrap">
+              {['All', 'GW', 'Anomaly', 'Bypassed', 'Distance', 'Chart'].map(f => (
+                <label key={f} className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="filter" checked={radioFilter === f} onChange={() => setRadioFilter(f)} />
+                  <span>{f === 'GW' ? 'GWs' : f === 'Anomaly' ? 'Anomalies' : f}</span>
                 </label>
-                {radioFilter === 'Distance' && (
-                  <div className="flex items-center gap-2 ml-2">
-                    <span className="text-gray-600">Start:</span>
-                    <input type="text" value={distanceStart} onChange={e => setDistanceStart(e.target.value)} aria-label="Distance filter start (m)" className="border border-gray-300 rounded px-2 py-0.5 w-20 focus:border-blue-400 focus:outline-none" />
-                    <span className="text-gray-600 ml-2">End:</span>
-                    <input type="text" value={distanceEnd} onChange={e => setDistanceEnd(e.target.value)} aria-label="Distance filter end (m)" className="border border-gray-300 rounded px-2 py-0.5 w-20 focus:border-blue-400 focus:outline-none" />
-                  </div>
-                )}
-              </div>
-              <label className="flex items-center gap-2 cursor-pointer font-medium">
-                <input type="radio" name="filter" checked={radioFilter === 'Chart'} onChange={() => setRadioFilter('Chart')} className="text-blue-500" />
-                Chart
-              </label>
+              ))}
+              {radioFilter === 'Distance' && (
+                <div className="flex items-center gap-2 ml-1">
+                  <span style={{ color: 'var(--syn-muted)' }}>Start:</span>
+                  <input type="text" value={distanceStart} onChange={e => setDistanceStart(e.target.value)} aria-label="Distance filter start (m)" style={{ width: '5rem', minHeight: '1.75rem', padding: '0.25rem 0.5rem', fontSize: '0.75rem' }} />
+                  <span style={{ color: 'var(--syn-muted)' }}>End:</span>
+                  <input type="text" value={distanceEnd} onChange={e => setDistanceEnd(e.target.value)} aria-label="Distance filter end (m)" style={{ width: '5rem', minHeight: '1.75rem', padding: '0.25rem 0.5rem', fontSize: '0.75rem' }} />
+                </div>
+              )}
             </div>
-            <div className="flex gap-6 items-center border-l border-gray-300 pl-6">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={unmatchedOld} onChange={(e) => setUnmatchedOld(e.target.checked)} className="rounded text-blue-500" />
-                Unmatched OLD
+            <div className="flex gap-1 items-center ml-auto" style={{ borderLeft: '1px solid var(--syn-line)', paddingLeft: '0.5rem' }}>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={unmatchedOld} onChange={(e) => setUnmatchedOld(e.target.checked)} />
+                <span>Unmatched OLD</span>
               </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={unmatchedNew} onChange={(e) => setUnmatchedNew(e.target.checked)} className="rounded text-blue-500" />
-                Unmatched NEW
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={unmatchedNew} onChange={(e) => setUnmatchedNew(e.target.checked)} />
+                <span>Unmatched NEW</span>
               </label>
             </div>
           </div>
 
-          {/* Search Bar */}
-          <div className="p-2 border-b border-gray-200 bg-white flex justify-between items-center">
-            <div className="flex items-center gap-3 text-blue-600 pl-2">
-              <FiFileText size={18} />
-              <button 
-                onClick={resetColumns}
-                className="text-xs bg-gray-50 hover:bg-gray-100 text-gray-700 px-3 py-1 rounded border border-gray-200 transition-colors shadow-sm font-medium"
-              >
+          {/* Toolbar */}
+          <div className="results-toolbar flex justify-between items-center" style={{ borderBottom: '1px solid var(--syn-line)' }}>
+            <div>
+              <FiFileText size={16} />
+              <button onClick={resetColumns} className="results-toolbar__reset syn-btn syn-btn--sm syn-btn--outline" style={{ minHeight: '1.75rem', fontSize: '0.68rem' }}>
                 Reset Columns
               </button>
             </div>
             <div className="relative">
-              <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--syn-muted)' }} />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 placeholder="Search"
                 aria-label="Search by OLD or NEW identifier"
-                className="pl-9 pr-4 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:border-blue-500"
               />
             </div>
           </div>
@@ -988,12 +958,12 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
               onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
             >
               {(activeTab === 'Results' || activeTab === 'Interventions') && (
-                <table className="w-max text-left border-collapse text-[11px] leading-tight table-fixed break-words min-w-full">
-                  <thead className="bg-gray-50 text-gray-700 sticky top-0 border-b border-gray-200 shadow-sm z-10">
+                <table className="results-table w-max text-left border-collapse text-[11px] leading-tight table-fixed break-words min-w-full">
+                  <thead className="sticky top-0 z-10">
                     <tr>
                       {visibleColumns.filter(c => allColumns.includes(c)).map((col, idx) => (
-                        <th 
-                          key={idx} 
+                        <th
+                          key={idx}
                           draggable
                           onDragStart={(e) => {
                             setDraggedColumn(col);
@@ -1009,7 +979,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                           }}
                           style={{ width: colWidths[col] || 150 }}
                           aria-sort={sortConfig?.key === col ? (sortConfig.direction === 'asc' ? 'ascending' : 'descending') : undefined}
-                          className={`px-2 py-2 font-bold border-r border-gray-200 whitespace-nowrap relative group select-none ${draggedColumn === col ? 'opacity-50 bg-gray-100' : ''}`}
+                          className={`px-2 py-2 font-bold whitespace-nowrap relative group select-none ${draggedColumn === col ? 'opacity-50' : ''}`}
                         >
                           <div className="flex flex-col gap-1">
                             <button
@@ -1052,7 +1022,8 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                               document.addEventListener('mousemove', onMouseMove);
                               document.addEventListener('mouseup', onMouseUp);
                             }}
-                            className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize opacity-0 group-hover:opacity-100 bg-brand-400 hover:w-2 transition-all z-20"
+                            className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize opacity-0 group-hover:opacity-100 hover:w-2 transition-all z-20"
+                            style={{ background: 'var(--syn-accent-strong, #8b9f3d)' }}
                           />
                         </th>
                       ))}
@@ -1074,15 +1045,19 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                           
                           const isMatch = row['Match/Unmatch'] === 'Matched' || row['Match/Unmatch'] === 'Match';
                           const featType = String(row['Feature Type OLD'] || row['Feature Type NEW'] || '').toLowerCase();
-                          let bgClass = 'hover:bg-blue-50/50';
-                          if (isMatch) {
-                            if (featType.includes('valve')) bgClass = 'bg-purple-100 hover:bg-purple-200 text-purple-950';
-                            else if (featType.includes('weld')) bgClass = 'bg-blue-100 hover:bg-blue-200 text-blue-950';
-                            else if (featType.includes('bend')) bgClass = 'bg-yellow-100 hover:bg-yellow-200 text-yellow-950';
-                            else if (featType.includes('anomaly') || featType.includes('metal') || featType.includes('dent') || featType.includes('corrosion')) bgClass = 'bg-red-100 hover:bg-red-200 text-red-950';
-                            else bgClass = 'bg-gray-100 hover:bg-gray-200 text-gray-950';
+                          let rowClass = 'results-row';
+                          if (isSelected) {
+                            rowClass += ' results-row--selected';
+                          } else if (isMatch) {
+                            if (featType.includes('valve')) rowClass += ' results-row--match-valve';
+                            else if (featType.includes('weld')) rowClass += ' results-row--match-weld';
+                            else if (featType.includes('bend')) rowClass += ' results-row--match-bend';
+                            else if (featType.includes('flange')) rowClass += ' results-row--match-flange';
+                            else if (featType.includes('tee')) rowClass += ' results-row--match-tee';
+                            else if (featType.includes('anomaly') || featType.includes('metal') || featType.includes('dent') || featType.includes('corrosion')) rowClass += ' results-row--match-anomaly';
+                            else rowClass += ' results-row--match-other';
                           }
-                          if (isSelected) bgClass = 'bg-indigo-200 hover:bg-indigo-300 text-indigo-950 font-semibold';
+                          const bgClass = '';
 
                           const isReassignableSource = activeTab === 'Interventions'
                             && (hasRowValue(row, 'Source Key NEW') || hasRowValue(row, 'Identif. NEW'));
@@ -1091,7 +1066,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                             <tr
                               key={actualIdx}
                               style={{ height: ROW_HEIGHT }}
-                              className={`group transition-colors cursor-pointer ${bgClass} ${isDragTarget ? 'hover:bg-green-200 border-2 border-dashed border-green-500' : ''}`}
+                              className={`${rowClass} group transition-colors cursor-pointer ${bgClass} ${isDragTarget ? 'results-row--drop-target' : ''}`}
                               onClick={() => onSelectRowIdx?.(row.__origIdx)}
                               onDragOver={(e) => {
                                 if (!isDragTarget) return;
@@ -1124,15 +1099,8 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
                                 return (
                                   <td 
                                     key={j} 
-                                    className={`px-2 border-r border-gray-100 whitespace-nowrap overflow-hidden text-ellipsis ${
-                                      j === 0 && isMatch ? (
-                                        featType.includes('valve') ? 'border-l-4 border-purple-500' :
-                                        featType.includes('weld') ? 'border-l-4 border-blue-500' :
-                                        featType.includes('bend') ? 'border-l-4 border-yellow-500' :
-                                        (featType.includes('anomaly') || featType.includes('metal') || featType.includes('dent') || featType.includes('corrosion')) ? 'border-l-4 border-red-500' :
-                                        'border-l-4 border-gray-500'
-                                      ) : ''
-                                    } ${col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)' ? 'font-bold text-blue-600' : ''} ${activeTab === 'Interventions' && isNewDataCol ? 'cursor-grab active:cursor-grabbing hover:bg-blue-50/80' : ''}`}
+                                    className={`px-2 whitespace-nowrap overflow-hidden text-ellipsis ${col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)' ? 'font-bold' : ''} ${activeTab === 'Interventions' && isNewDataCol ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                                    style={col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)' ? { color: 'var(--syn-info, #155eef)' } : undefined}
                                     draggable={activeTab === 'Interventions' && isNewDataCol && val !== '-' && val !== null && val !== undefined}
                                     onDragStart={(e) => {
                                       if (activeTab === 'Interventions' && isNewDataCol) {
@@ -1182,21 +1150,21 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
               )}
 
               {(activeTab === 'ILI Run 1' || activeTab === 'ILI Run 2') && (
-                <table className="w-full text-left border-collapse text-[11px] leading-tight table-fixed break-words">
-                  <thead className="bg-gray-50 text-gray-700 sticky top-0 border-b border-gray-200 shadow-sm z-10">
+                <table className="results-table results-table--run w-full text-left border-collapse text-[11px] leading-tight table-fixed break-words">
+                  <thead className="sticky top-0 z-10">
                       <tr>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200">Defect ID</th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200">Distance <span className="text-blue-500">m</span></th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200" title="Estimate only: nominal 0.1 m offset applied to the logged distance. Not a surveyed value — do not use directly for dig planning.">Dist. Adj <span className="text-blue-500">m</span> <span className="text-amber-500 font-normal">(est.)</span></th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200">Rel. to U/S Weld <span className="text-blue-500">m</span></th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200" title="Estimate only: nominal 0.05 m offset applied to the upstream-weld distance. Not derived from the weld table — do not use directly for dig planning.">Rel. Nearest Weld <span className="text-blue-500">m</span> <span className="text-amber-500 font-normal">(est.)</span></th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200">Wall Thick <span className="text-blue-500">mm</span></th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200">Orient <span className="text-blue-500">deg</span></th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200">Length <span className="text-blue-500">mm</span></th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200">Width <span className="text-blue-500">mm</span></th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200">Depth <span className="text-blue-500">mm</span></th>
-                        <th className="px-1 py-1 font-bold border-r border-gray-200">Flaw Depth <span className="text-blue-500">[%]</span></th>
-                        <th className="px-1 py-1 font-bold">Wall Side</th>
+                        <th className="px-1.5 py-2 font-bold">Defect ID</th>
+                        <th className="px-1.5 py-2 font-bold">Distance (m)</th>
+                        <th className="px-1.5 py-2 font-bold" title="Estimate only: nominal 0.1 m offset applied to the logged distance.">Dist. Adj (m) <span style={{ color: 'var(--syn-warning)' }}>(est.)</span></th>
+                        <th className="px-1.5 py-2 font-bold">Rel. U/S Weld (m)</th>
+                        <th className="px-1.5 py-2 font-bold" title="Estimate only: nominal 0.05 m offset applied to the upstream-weld distance.">Rel. Nearest Weld (m) <span style={{ color: 'var(--syn-warning)' }}>(est.)</span></th>
+                        <th className="px-1.5 py-2 font-bold">Wall Thick (mm)</th>
+                        <th className="px-1.5 py-2 font-bold">Orient (deg)</th>
+                        <th className="px-1.5 py-2 font-bold">Length (mm)</th>
+                        <th className="px-1.5 py-2 font-bold">Width (mm)</th>
+                        <th className="px-1.5 py-2 font-bold">Depth (mm)</th>
+                        <th className="px-1.5 py-2 font-bold">Flaw Depth (%)</th>
+                        <th className="px-1.5 py-2 font-bold">Wall Side</th>
                       </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
