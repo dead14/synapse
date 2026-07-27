@@ -380,6 +380,27 @@ function validateAlignmentReview(config, { maxDecisions = 10_000 } = {}) {
     }
 }
 
+/**
+ * A later wizard step resubmits the whole session config. A review timestamp is
+ * persistence metadata, not a fresh operator decision, so only the decision
+ * key, disposition, and note define whether review evidence changed.
+ */
+function gwReviewDecisionFingerprint(review) {
+    if (!isRecord(review)) return null;
+    return JSON.stringify(Object.entries(review)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, decision]) => [
+            key,
+            isRecord(decision) ? { disposition: decision.disposition, note: decision.note } : null,
+        ]));
+}
+
+function sameGwReviewDecisions(incoming, persisted) {
+    const incomingFingerprint = gwReviewDecisionFingerprint(incoming);
+    const persistedFingerprint = gwReviewDecisionFingerprint(persisted);
+    return incomingFingerprint !== null && incomingFingerprint === persistedFingerprint;
+}
+
 function normalizeAlignmentReviewForPersistence(config, {
     featureCounts = null,
     canonicalGwLocks = undefined,
@@ -592,6 +613,7 @@ module.exports = {
     validateTieInTransform,
     validateMatchingSections,
     validateAlignmentReview,
+    sameGwReviewDecisions,
     normalizeCanonicalGwLocks,
     normalizeAlignmentReviewForPersistence,
     normalizeInterventionEvent,

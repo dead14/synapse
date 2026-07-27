@@ -30,6 +30,7 @@ const {
     normalizeAlignmentReviewForPersistence,
     normalizeInterventionEvent,
     normalizePairGwResultsForPersistence,
+    sameGwReviewDecisions,
 } = require('./alignmentContract');
 const {
     buildRunEndpointRejection,
@@ -556,7 +557,11 @@ exports.saveWizardState = async (req, res) => {
                 if (requiresReviewBoundary) {
                     const references = getPersistedRunReferences(session.params_json || {});
                     const featureCounts = await countOwnedRunFeatures(pool, references, req.user.orgId);
+                    // Sectioning and later steps resave the already-approved
+                    // review as part of the full wizard config. Validate only a
+                    // new decision, not an unchanged historical record.
                     if (config.gwReview !== undefined
+                        && !sameGwReviewDecisions(config.gwReview, session.params_json?.gwReview)
                         && !canonicalSignaturesEqual(
                             session.params_json?.gwCanonicalSignature,
                             canonicalSignatureForConfig(config, references),
@@ -569,7 +574,11 @@ exports.saveWizardState = async (req, res) => {
                         existingDataReview: session.params_json?.dataReview,
                     });
                     for (const [pairKey, pairResult] of Object.entries(config.pairGwResults || {})) {
-                        if (pairResult?.gwReview === undefined) continue;
+                        if (pairResult?.gwReview === undefined
+                            || sameGwReviewDecisions(
+                                pairResult.gwReview,
+                                session.params_json?.pairGwResults?.[pairKey]?.gwReview,
+                            )) continue;
                         const pair = findSessionRunPair(session.params_json || {}, {
                             oldRunId: Number(pairKey.split('->')[0]),
                             newRunId: Number(pairKey.split('->')[1]),

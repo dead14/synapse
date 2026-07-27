@@ -8,9 +8,33 @@ const {
     validateTieInTransform,
     validateMatchingSections,
     validateAlignmentReview,
+    sameGwReviewDecisions,
     normalizeAlignmentReviewForPersistence,
     normalizeInterventionEvent,
 } = require('../src/modules/alignment/alignmentContract');
+
+test('sameGwReviewDecisions ignores persistence timestamps but detects changed decisions', () => {
+    const persisted = {
+        'OLD-1::NEW-1': {
+            disposition: 'accepted',
+            note: 'verified in field',
+            reviewedAt: '2026-07-27T04:00:00.000Z',
+        },
+    };
+    const resavedFromSectioning = {
+        'OLD-1::NEW-1': {
+            disposition: 'accepted',
+            note: 'verified in field',
+            reviewedAt: '2026-07-27T05:00:00.000Z',
+        },
+    };
+
+    assert.equal(sameGwReviewDecisions(resavedFromSectioning, persisted), true);
+    assert.equal(sameGwReviewDecisions({
+        ...resavedFromSectioning,
+        'OLD-1::NEW-1': { ...resavedFromSectioning['OLD-1::NEW-1'], disposition: 'excluded' },
+    }, persisted), false);
+});
 
 test('normalizeComparisonResult preserves an array comparison', () => {
     const rows = [{ status: 'Matched' }];
