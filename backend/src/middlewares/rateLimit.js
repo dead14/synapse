@@ -25,7 +25,20 @@ function createRateLimiter({
             if (attempts.size >= maxEntries) {
                 pruneExpired(currentTime);
                 if (attempts.size >= maxEntries) {
-                    attempts.delete(attempts.keys().next().value);
+                    // Evict the entry closest to expiry (least remaining
+                    // state), not the first-inserted key: Map insertion
+                    // order survives re-sets, so the old behaviour let a
+                    // flood of fresh keys erase the counter of a long-lived,
+                    // actively throttled key.
+                    let oldestKey;
+                    let oldestResetAt = Infinity;
+                    for (const [candidateKey, candidate] of attempts) {
+                        if (candidate.resetAt < oldestResetAt) {
+                            oldestResetAt = candidate.resetAt;
+                            oldestKey = candidateKey;
+                        }
+                    }
+                    attempts.delete(oldestKey);
                 }
             }
             entry = { count: 0, resetAt: currentTime + windowMs };
@@ -42,9 +55,7 @@ function createRateLimiter({
 
         if (entry.count > max) {
             res.setHeader('Retry-After', String(retryAfterSeconds));
-            return res.status(429).json({
-                error: 'Too many authentication attempts. Please try again later.',
-            });
+            return res.status(429).json({ error: 'RATE_LIMITED', retryAfterSeconds });
         }
 
         return next();

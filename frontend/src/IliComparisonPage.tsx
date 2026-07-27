@@ -27,7 +27,7 @@ const JobProgressBar = ({ progress, message }: { progress: number; message: stri
       <div className="h-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
     </div>
     <span className="text-blue-600 font-bold text-lg">{progress}%</span>
-    <p className="text-gray-400 text-xs">Status diperbarui otomatis dari server. Halaman hasil akan terbuka setelah siap.</p>
+    <p className="text-gray-400 text-xs">Status updates automatically from the server. The results page opens when ready.</p>
   </div>
 );
 
@@ -35,7 +35,7 @@ export default function IliComparisonPage() {
   const [data, setData] = useState<ComparisonRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [jobProgress, setJobProgress] = useState(0);
-  const [jobMessage, setJobMessage] = useState('Mengirim data ke antrian...');
+  const [jobMessage, setJobMessage] = useState('Sending data to the queue...');
   const [isProcessing, setIsProcessing] = useState(false);
   const [showAdvancedCharts, setShowAdvancedCharts] = useState(false);
   const [showVisualizer, setShowVisualizer] = useState(false);
@@ -65,12 +65,12 @@ export default function IliComparisonPage() {
       try {
         const params = new URLSearchParams(window.location.search);
         const sessionId = params.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
-        if (!sessionId) throw new Error('ID sesi tidak ditemukan. Pilih pipeline terlebih dahulu.');
+        if (!sessionId) throw new Error('Session ID not found. Select a pipeline first.');
         setSessionId(sessionId);
 
         setIsProcessing(true);
         setJobProgress(5);
-        setJobMessage('Memeriksa status alignment...');
+        setJobMessage('Checking alignment status...');
         const [alignment, session] = await Promise.all([
           fetchAlignmentResult(sessionId, (progress, message) => {
             setJobProgress(progress);
@@ -87,7 +87,7 @@ export default function IliComparisonPage() {
         ));
       } catch (caughtError) {
         if ((caughtError as Error).name !== 'AbortError') {
-          setError(caughtError instanceof Error ? caughtError.message : 'Gagal memuat hasil ILI.');
+          setError(caughtError instanceof Error ? caughtError.message : 'Failed to load ILI results.');
         }
       } finally {
         if (!controller.signal.aborted) {
@@ -112,7 +112,7 @@ export default function IliComparisonPage() {
     const targetOldKey = String(targetBefore?.['Source Key OLD'] || '');
     const targetAlreadyHasNew = targetBefore?.['Source Key NEW'] && targetBefore['Source Key NEW'] !== '-';
     if (!sourceNewKey || sourceNewKey === '-' || !targetOldKey || targetOldKey === '-' || targetAlreadyHasNew) {
-      setError('Intervention dibatalkan: pilih NEW unmatched dan target OLD yang belum memiliki pasangan. Data existing tidak boleh ditimpa.');
+      setError('Intervention cancelled: select an unmatched NEW feature and an OLD target that has no pair yet. Existing data must not be overwritten.');
       return;
     }
     const event: InterventionEvent = {
@@ -120,7 +120,7 @@ export default function IliComparisonPage() {
       type: 'REASSIGN_NEW', sourceNewKey, targetOldKey, evidenceScore,
     };
     if (!sessionId) {
-      setError('Intervention dibatalkan karena sesi belum tersedia.');
+      setError('Intervention cancelled because no session is available.');
       return;
     }
     try {
@@ -129,7 +129,7 @@ export default function IliComparisonPage() {
         body: JSON.stringify({ sessionId, event }),
       });
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : 'Gagal menyimpan intervention event.');
+      setError(caughtError instanceof Error ? caughtError.message : 'Failed to save the intervention event.');
       return;
     }
 
@@ -190,7 +190,7 @@ export default function IliComparisonPage() {
                     pairFilter === null ? 'bg-blue-600 text-white shadow-sm' : 'border border-blue-200 bg-white text-blue-700 hover:bg-blue-100'
                   }`}
                 >
-                  Semua ({data.length.toLocaleString()})
+                  All ({data.length.toLocaleString()})
                 </button>
                 {pairLabels.map((label) => {
                   const count = data.filter((row) => row[RUN_PAIR_COLUMN] === label).length;
@@ -229,7 +229,7 @@ export default function IliComparisonPage() {
                 onClick={() => setShowVisualizer(true)}
                 className="w-full py-3 rounded-xl border-2 border-dashed border-blue-300 text-blue-500 hover:bg-blue-50 hover:border-blue-400 transition-all font-medium text-sm flex items-center justify-center gap-2"
               >
-                Tampilkan Alignment Timeline Viewer (3D Chart)
+                Show Alignment Timeline Viewer (3D Chart)
               </button>
             ) : (
               <div className="relative">
@@ -237,9 +237,9 @@ export default function IliComparisonPage() {
                   onClick={() => setShowVisualizer(false)}
                   className="absolute top-2 right-2 z-10 bg-white border border-gray-200 rounded-full px-3 py-1 text-xs text-gray-500 hover:bg-gray-100 shadow-sm"
                 >
-                  Sembunyikan Chart
+                  Hide Chart
                 </button>
-                <Suspense fallback={<LoadingSpinner label="Memuat Alignment Timeline Viewer..." />}>
+                <Suspense fallback={<LoadingSpinner label="Loading Alignment Timeline Viewer..." />}>
                   <DefectVisualizer data={visibleData} selectedRowIdx={selectedRowIdx} onSelectRowIdx={setSelectedRowIdx} />
                 </Suspense>
               </div>
@@ -249,7 +249,7 @@ export default function IliComparisonPage() {
       </div>
 
       {showAdvancedCharts && (
-        <Suspense fallback={<LoadingSpinner label="Memuat Advanced Analytics..." />}>
+        <Suspense fallback={<LoadingSpinner label="Loading Advanced Analytics..." />}>
           <AdvancedCharts data={visibleData} onClose={() => setShowAdvancedCharts(false)} />
         </Suspense>
       )}

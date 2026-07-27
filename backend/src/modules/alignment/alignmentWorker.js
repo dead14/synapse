@@ -17,7 +17,7 @@ const {
 } = require('./alignmentContract');
 const { ALIGNMENT_ENGINE_VERSION } = require('./alignmentExecution');
 const { pairKeyOf } = require('./runPairIdentity');
-const { pythonExecutable, pythonSpawnOptions } = require('../../config/python');
+const { pythonExecutable, pythonSpawnOptions, killPythonProcess } = require('../../config/python');
 
 const alignmentQueue = new Queue('ili-alignment', {
     connection,
@@ -43,15 +43,18 @@ function emitProgress(job, progress, message) {
 }
 
 async function runPythonAlignment(sessionId, algorithm, pairConfig = null) {
-    const stamp = `${sessionId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const resultFile = path.join(os.tmpdir(), `synapse-alignment-${stamp}.json`);
+    // mkdtemp gives this run a private, unpredictable directory instead of
+    // guessable file names in the shared tmp dir (mirrors
+    // objectStorage.createWorkerTempPath).
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'synapse-alignment-'));
+    const resultFile = path.join(workDir, 'result.json');
     // A chain job runs the engine once per pair with different configuration
     // each time. Handing that over in a file keeps the shared
     // `alignment_sessions` row untouched: rewriting it per pair raced any other
     // reader of the session and left the row holding one pair's configuration
     // for good if the process died mid-loop.
     const pairConfigFile = pairConfig
-        ? path.join(os.tmpdir(), `synapse-alignment-pair-${stamp}.json`)
+        ? path.join(workDir, 'pair-config.json')
         : null;
     if (pairConfigFile) await fs.writeFile(pairConfigFile, JSON.stringify(pairConfig), 'utf8');
     try {
@@ -71,7 +74,7 @@ async function runPythonAlignment(sessionId, algorithm, pairConfig = null) {
             let errorOutput = '';
             const timeoutMs = Number(process.env.ALIGNMENT_PROCESS_TIMEOUT_MS) || 30 * 60 * 1000;
             const timeout = setTimeout(() => {
-                child.kill();
+                killPythonProcess(child);
                 const error = new Error(`Alignment process exceeded ${timeoutMs} ms`);
                 error.code = 'ALIGNMENT_PROCESS_TIMEOUT';
                 reject(error);
@@ -90,8 +93,7 @@ async function runPythonAlignment(sessionId, algorithm, pairConfig = null) {
         });
         return result;
     } finally {
-        await fs.rm(resultFile, { force: true }).catch(() => {});
-        if (pairConfigFile) await fs.rm(pairConfigFile, { force: true }).catch(() => {});
+        await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
 }
 

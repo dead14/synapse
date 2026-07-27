@@ -1,9 +1,7 @@
-const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const { randomUUID } = require('crypto');
-const socketConfig = require('../../socket');
 const pool = require('../../config/db');
 const {
     findOwnedSession,
@@ -11,18 +9,20 @@ const {
     listOwnedSessions,
     createOwnedSession,
     updateOwnedSessionConfig,
-    markOwnedSessionCompleted,
-    markOwnedSessionFailed,
     deleteOwnedSession,
     createAlignmentJob,
     getLatestAlignmentJob,
     getOwnedAlignmentJob,
     listOwnedAlignmentResultPage,
     serializeAlignmentJob,
+    updateAlignmentJob,
 } = require('./alignmentRepository');
 const {
-    normalizeComparisonResult,
-    summarizeComparison,
+    countOwnedRunFeatures,
+    listOwnedAlignmentResults,
+    loadOwnedRunAnchors,
+} = require('./anchorRepository');
+const {
     validateDtwPayload,
     validateMatchingSections,
     validateAlignmentReview,
@@ -37,13 +37,8 @@ const {
     listAlignmentStrategyCapabilities,
 } = require('./alignmentStrategyCapabilities');
 const { buildTieInEvidence, signTieInEvidence, verifyTieInEvidence } = require('./tieInEvidence');
-const { OwnedJobStore } = require('./ownedJobStore');
 const ingestionController = require('../ingestion/ingestionController');
 const { alignmentQueue } = require('./alignmentWorker');
-const {
-    ALIGNMENT_ANCHOR_FEATURE_TYPE_SQL,
-    canonicalAlignmentAnchorType,
-} = require('./alignmentAnchorTypes');
 const {
     canonicalSignature,
     canonicalSignatureForConfig,
@@ -62,17 +57,23 @@ const {
     primarySessionRunPair,
     runPairKey,
 } = require('./runPairIdentity');
+const {
+    startPythonWorkers,
+    stopPythonWorkers,
+    getPythonWorkerStates,
+    runDtwRequest,
+    runTieInRequest,
+} = require('./pythonWorkers');
+const { createExcelExport } = require('./exportService');
 
-// Local execution remains intentionally bounded and owner-scoped. A shared
-// queue can replace this store later without changing the public job contract.
-const localJobs = new OwnedJobStore({
-    ttlMs: Number(process.env.JOB_RESULT_TTL_MS) || 60 * 60 * 1000,
-});
-const DTW_WORKER_TIMEOUT_MS = Number(process.env.DTW_WORKER_TIMEOUT_MS) || 60_000;
-const TIEIN_WORKER_TIMEOUT_MS = Number(process.env.TIEIN_WORKER_TIMEOUT_MS) || 30_000;
+// The DTW/tie-in worker lifecycle lives in pythonWorkers.js; the re-exports
+// keep the import path stable for consumers outside this module
+// (config/health.js resolves getPythonWorkerStates through the controller).
+exports.startPythonWorkers = startPythonWorkers;
+exports.stopPythonWorkers = stopPythonWorkers;
+exports.getPythonWorkerStates = getPythonWorkerStates;
 
 const MAX_EXPORT_ROWS = Number(process.env.MAX_EXPORT_ROWS) || 100_000;
-const MAX_DTW_ANCHORS = Number(process.env.MAX_DTW_RECORDS) || 25_000;
 const CONTROLLED_ALIGNMENT_ERROR_CODES = new Set([
     'INVALID_TIEIN_TRANSFORM',
     'PARTIAL_RUN_TIEIN_REQUIRED',
@@ -133,24 +134,6 @@ function resolveRequestedRunPair(config, body) {
     return { oldRunId: pair.oldRunId, newRunId: pair.newRunId };
 }
 
-async function countOwnedRunFeatures({ oldRunId, newRunId }, orgId) {
-    const result = await pool.query(
-        `SELECT f.run_id, COUNT(*)::integer AS feature_count
-         FROM ili_features f
-         JOIN survey_runs sr ON sr.id = f.run_id
-         JOIN pipelines p ON p.id = sr.pipeline_id
-         WHERE f.run_id = ANY($1::integer[])
-           AND p.organization_id = $2
-         GROUP BY f.run_id`,
-        [[oldRunId, newRunId], orgId],
-    );
-    const counts = new Map(result.rows.map((row) => [Number(row.run_id), Number(row.feature_count)]));
-    return {
-        master: counts.get(newRunId) || 0,
-        historical: counts.get(oldRunId) || 0,
-    };
-}
-
 function hasReviewEvidence(config) {
     return config?.dataReview !== undefined
         || config?.gwReview !== undefined
@@ -195,62 +178,6 @@ function requireServerTieInEvidence(payload, organizationId) {
     }
 }
 
-function toCanonicalAnchor(row) {
-    const canonicalType = canonicalAlignmentAnchorType(
-        row.feature_type,
-        row.feature_identification,
-    );
-    return {
-        id: String(row.id),
-        feature_id: row.feature_id || String(row.id),
-        dist: Number(row.log_distance_m),
-        log_distance_m: Number(row.log_distance_m),
-        type: canonicalType || row.feature_type || row.feature_identification || 'other',
-        originalType: row.feature_type || row.feature_identification || 'other',
-        feature_type: row.feature_type || null,
-        feature_identification: row.feature_identification || null,
-        dist_to_us_gw_m: row.dist_to_us_gw_m === null ? null : Number(row.dist_to_us_gw_m),
-        joint_length_m: row.joint_length_m === null ? null : Number(row.joint_length_m),
-        clock: row.clock_position || null,
-        clock_position: row.clock_position || null,
-        depth: row.depth_pct === null ? null : Number(row.depth_pct),
-        depth_pct: row.depth_pct === null ? null : Number(row.depth_pct),
-        length: row.length_mm === null ? null : Number(row.length_mm),
-        length_mm: row.length_mm === null ? null : Number(row.length_mm),
-        width: row.width_mm === null ? null : Number(row.width_mm),
-        width_mm: row.width_mm === null ? null : Number(row.width_mm),
-    };
-}
-
-async function loadOwnedRunAnchors(runId, orgId) {
-    const result = await pool.query(
-        `SELECT f.id, f.feature_id, f.log_distance_m, f.feature_type,
-                f.feature_identification, f.dist_to_us_gw_m, f.joint_length_m,
-                f.clock_position, f.depth_pct, f.length_mm, f.width_mm
-         FROM ili_features f
-         JOIN survey_runs sr ON sr.id = f.run_id
-         JOIN pipelines p ON p.id = sr.pipeline_id
-         WHERE f.run_id = $1
-           AND p.organization_id = $2
-           AND (
-               f.feature_type IN (${ALIGNMENT_ANCHOR_FEATURE_TYPE_SQL})
-               OR (
-                   COALESCE(f.feature_type, '') IN ('', 'Other')
-                   AND COALESCE(f.feature_identification, '') ~* '(weld|girth|seam|valve|tee|offtake|branch|bend|elbow|launcher|receiver)'
-               )
-           )
-         ORDER BY f.log_distance_m ASC, f.id ASC
-         LIMIT $3`,
-        [runId, orgId, MAX_DTW_ANCHORS + 1],
-    );
-    if (result.rows.length > MAX_DTW_ANCHORS) {
-        const error = new Error(`Inspection run has more than ${MAX_DTW_ANCHORS.toLocaleString()} alignment anchors. Narrow the run or raise MAX_DTW_RECORDS for this deployment.`);
-        error.code = 'DTW_INPUT_TOO_LARGE';
-        throw error;
-    }
-    return result.rows.map(toCanonicalAnchor);
-}
-
 async function hydrateRunReferences(payload, orgId) {
     const oldRunId = parsePositiveId(payload?.oldRunId);
     const newRunId = parsePositiveId(payload?.newRunId);
@@ -263,8 +190,8 @@ async function hydrateRunReferences(payload, orgId) {
     }
 
     const [oldRun, newRun] = await Promise.all([
-        loadOwnedRunAnchors(oldRunId, orgId),
-        loadOwnedRunAnchors(newRunId, orgId),
+        loadOwnedRunAnchors(pool, oldRunId, orgId),
+        loadOwnedRunAnchors(pool, newRunId, orgId),
     ]);
 
     // A run whose features never normalized into an anchor type returns an
@@ -289,10 +216,6 @@ async function hydrateRunReferences(payload, orgId) {
     return { ...payload, oldRun, newRun };
 }
 
-function emitToUser(io, userId, event, payload) {
-    if (io && userId != null) io.to(`user_${userId}`).emit(event, payload);
-}
-
 exports.uploadCsv = async (req, res) => {
     const { pipelineName, surveyYear, vendor } = req.body;
     const file = req.file;
@@ -301,7 +224,18 @@ exports.uploadCsv = async (req, res) => {
     }
 
     try {
-        const prefix = fs.readFileSync(file.path).subarray(0, 512);
+        // Only the first 512 bytes matter for the magic-byte check; reading
+        // the whole upload (up to 25 MB) synchronously blocked the event loop.
+        let prefix;
+        let handle;
+        try {
+            handle = await fsPromises.open(file.path, 'r');
+            const header = Buffer.alloc(512);
+            const { bytesRead } = await handle.read(header, 0, header.length, 0);
+            prefix = header.subarray(0, bytesRead);
+        } finally {
+            await handle?.close().catch(() => {});
+        }
         const extension = path.extname(file.originalname || '').toLowerCase();
         const isZipWorkbook = prefix.length >= 2 && prefix[0] === 0x50 && prefix[1] === 0x4B;
         const looksBinaryCsv = extension === '.csv' && prefix.includes(0);
@@ -394,17 +328,8 @@ exports.getAlignmentResults = async (req, res) => {
     const runId = parsePositiveId(req.params.runId);
     if (!runId) return res.status(400).json({ error: 'Invalid session ID' });
     try {
-        const result = await pool.query(
-            `SELECT r.*
-             FROM alignment_results r
-             JOIN alignment_sessions s ON s.id = r.session_id
-             LEFT JOIN pipelines p ON p.id = s.pipeline_id
-             WHERE r.session_id = $1
-               AND COALESCE(s.organization_id, p.organization_id) = $2
-             ORDER BY r.id`,
-            [runId, req.user.orgId]
-        );
-        res.json(result.rows);
+        const rows = await listOwnedAlignmentResults(pool, runId, req.user.orgId);
+        res.json(rows);
     } catch (err) {
         res.status(500).json({ error: 'Failed to fetch alignment results' });
     }
@@ -435,81 +360,6 @@ exports.getAlignmentResultsPage = async (req, res) => {
         return res.status(500).json({ error: 'Failed to fetch paged alignment results' });
     }
 };
-
-// Persistent Python Worker for DTW
-let dtwPythonProcess = null;
-let dtwPendingRequests = new Map();
-let dtwRequestCounter = 0;
-let dtwRestartTimer = null;
-let tieInPythonProcess = null;
-let tieInPendingRequests = new Map();
-let tieInRequestCounter = 0;
-let tieInRestartTimer = null;
-let workersShuttingDown = false;
-const { pythonExecutable, pythonSpawnOptions } = require('../../config/python');
-
-function scheduleWorkerRestart(startWorker, getTimer, setTimer) {
-    if (workersShuttingDown || getTimer()) return;
-    setTimer(setTimeout(() => {
-        setTimer(null);
-        if (!workersShuttingDown) startWorker();
-    }, 1000));
-}
-
-function stopPythonWorkers() {
-    workersShuttingDown = true;
-    if (dtwRestartTimer) clearTimeout(dtwRestartTimer);
-    if (tieInRestartTimer) clearTimeout(tieInRestartTimer);
-    dtwPythonProcess?.kill();
-    tieInPythonProcess?.kill();
-}
-
-process.once('exit', stopPythonWorkers);
-
-function startDtwPythonWorker() {
-    console.log("Starting persistent DTW Python worker...");
-    if (workersShuttingDown) return;
-    dtwPythonProcess = spawn(pythonExecutable, ['src/python_engines/dtw_engine.py'], pythonSpawnOptions({ cwd: path.join(__dirname, '../../..') }));
-    
-    let buffer = '';
-    dtwPythonProcess.stdout.on('data', (data) => {
-        buffer += data.toString();
-        let lines = buffer.split('\n');
-        buffer = lines.pop(); // keep incomplete line
-        
-        for (const line of lines) {
-            if (!line.trim()) continue;
-            try {
-                const result = JSON.parse(line);
-                const { requestId } = result;
-                if (dtwPendingRequests.has(requestId)) {
-                    dtwPendingRequests.get(requestId).resolve(result);
-                    dtwPendingRequests.delete(requestId);
-                }
-            } catch (e) {
-                console.error('Parse error from DTW worker:', line);
-            }
-        }
-    });
-    
-    dtwPythonProcess.stderr.on('data', (data) => {
-        console.error('DTW Worker Stderr:', data.toString());
-    });
-    
-    dtwPythonProcess.on('close', (code) => {
-        console.error(`DTW Python worker exited (code ${code}).`);
-        for (const { reject } of dtwPendingRequests.values()) {
-            reject(new Error('Python worker crashed'));
-        }
-        dtwPendingRequests.clear();
-        dtwPythonProcess = null;
-        scheduleWorkerRestart(
-            startDtwPythonWorker,
-            () => dtwRestartTimer,
-            (timer) => { dtwRestartTimer = timer; },
-        );
-    });
-}
 
 exports.runDtwAlignment = async (req, res) => {
     let payload;
@@ -544,31 +394,11 @@ exports.runDtwAlignment = async (req, res) => {
             code: err.code || 'INVALID_ALIGNMENT_PAYLOAD',
         });
     }
-    const requestId = ++dtwRequestCounter;
-    payload.requestId = requestId;
-    
     try {
-        const result = await new Promise((resolve, reject) => {
-            if (!dtwPythonProcess || dtwPythonProcess.killed || !dtwPythonProcess.stdin?.writable) {
-                reject(new Error('DTW worker is not available. Check the Python runtime and backend logs.'));
-                return;
-            }
-            dtwPendingRequests.set(requestId, { resolve, reject });
-            
-            // Log payload length for debugging
-            console.log(`[DTW] Request ${requestId}: oldRun=${payload.oldRun?.length}, newRun=${payload.newRun?.length}`);
-            
-            dtwPythonProcess.stdin.write(JSON.stringify(payload) + '\n');
-            
-            setTimeout(() => {
-                if (dtwPendingRequests.has(requestId)) {
-                    dtwPendingRequests.delete(requestId);
-                    console.error(`[DTW] Request ${requestId} timeout!`);
-                    reject(new Error('Python worker timeout'));
-                }
-            }, DTW_WORKER_TIMEOUT_MS);
-        });
-        
+        // Log payload length for debugging
+        console.log(`[DTW] Request: oldRun=${payload.oldRun?.length}, newRun=${payload.newRun?.length}`);
+        const result = await runDtwRequest(payload);
+
         if (result.success) {
             if (session && persistedReferences) {
                 const canonicalGwLocks = normalizeCanonicalGwLocks(result.gwMatchesFinal);
@@ -622,7 +452,7 @@ exports.runDtwAlignment = async (req, res) => {
             }
             res.json(result);
         } else {
-            console.error(`[DTW] Request ${requestId} failed:`, result.error);
+            console.error(`[DTW] Request ${result.requestId} failed:`, result.error);
             const status = result.code === 'DTW_INPUT_TOO_LARGE'
                 ? 413
                 : CONTROLLED_ALIGNMENT_ERROR_CODES.has(result.code) ? 422 : 500;
@@ -635,62 +465,16 @@ exports.runDtwAlignment = async (req, res) => {
             });
         }
     } catch (err) {
-        console.error(`[DTW] Request ${requestId} exception:`, err);
+        // Admission-control rejection: every worker is busy and the queue is
+        // full.  Mirrors the export concurrency cap's 429 response.
+        if (err.code === 'ENGINE_BUSY') {
+            res.set('Retry-After', '10');
+            return res.status(429).json({ error: err.message, code: 'ENGINE_BUSY' });
+        }
+        console.error('[DTW] Request exception:', err);
         res.status(500).json({ error: err.message });
     }
 };
-
-function startTieInPythonWorker() {
-    console.log("Starting persistent TieIn Python worker...");
-    if (workersShuttingDown) return;
-    tieInPythonProcess = spawn(pythonExecutable, ['src/python_engines/tiein_engine.py'], pythonSpawnOptions({ cwd: path.join(__dirname, '../../..') }));
-    
-    let buffer = '';
-    tieInPythonProcess.stdout.on('data', (data) => {
-        buffer += data.toString();
-        let lines = buffer.split('\n');
-        buffer = lines.pop();
-        
-        for (const line of lines) {
-            if (!line.trim()) continue;
-            try {
-                const result = JSON.parse(line);
-                const { requestId } = result;
-                if (tieInPendingRequests.has(requestId)) {
-                    tieInPendingRequests.get(requestId).resolve(result);
-                    tieInPendingRequests.delete(requestId);
-                }
-            } catch (e) {
-                console.error('Parse error from TieIn worker:', line);
-            }
-        }
-    });
-    
-    tieInPythonProcess.stderr.on('data', (data) => {
-        console.error('TieIn Worker Stderr:', data.toString());
-    });
-    
-    tieInPythonProcess.on('close', (code) => {
-        console.error(`TieIn Python worker exited (code ${code}).`);
-        for (const { reject } of tieInPendingRequests.values()) {
-            reject(new Error('TieIn Python worker crashed'));
-        }
-        tieInPendingRequests.clear();
-        tieInPythonProcess = null;
-        scheduleWorkerRestart(
-            startTieInPythonWorker,
-            () => tieInRestartTimer,
-            (timer) => { tieInRestartTimer = timer; },
-        );
-    });
-}
-
-function startPythonWorkers() {
-    if (!dtwPythonProcess) startDtwPythonWorker();
-    if (!tieInPythonProcess) startTieInPythonWorker();
-}
-
-exports.startPythonWorkers = startPythonWorkers;
 
 exports.estimateTieInOffset = async (req, res) => {
     let payload;
@@ -703,26 +487,9 @@ exports.estimateTieInOffset = async (req, res) => {
             code: err.code || 'INVALID_ALIGNMENT_PAYLOAD',
         });
     }
-    const requestId = ++tieInRequestCounter;
-    payload.requestId = requestId;
-    
     try {
-        const result = await new Promise((resolve, reject) => {
-            if (!tieInPythonProcess || tieInPythonProcess.killed || !tieInPythonProcess.stdin?.writable) {
-                reject(new Error('Tie-in worker is not available. Check the Python runtime and backend logs.'));
-                return;
-            }
-            tieInPendingRequests.set(requestId, { resolve, reject });
-            tieInPythonProcess.stdin.write(JSON.stringify(payload) + '\n');
-            
-            setTimeout(() => {
-                if (tieInPendingRequests.has(requestId)) {
-                    tieInPendingRequests.delete(requestId);
-                    reject(new Error('TieIn Python worker timeout'));
-                }
-            }, TIEIN_WORKER_TIMEOUT_MS);
-        });
-        
+        const result = await runTieInRequest(payload);
+
         if (result.success && result.transform && result.decision) {
             result.evidenceToken = signTieInEvidence(buildTieInEvidence({
                 ...payload,
@@ -754,6 +521,10 @@ exports.estimateTieInOffset = async (req, res) => {
         }
         res.json(result);
     } catch (err) {
+        if (err.code === 'ENGINE_BUSY') {
+            res.set('Retry-After', '10');
+            return res.status(429).json({ error: err.message, code: 'ENGINE_BUSY' });
+        }
         res.status(500).json({ error: err.message });
     }
 };
@@ -783,7 +554,7 @@ exports.saveWizardState = async (req, res) => {
             try {
                 if (requiresReviewBoundary) {
                     const references = getPersistedRunReferences(session.params_json || {});
-                    const featureCounts = await countOwnedRunFeatures(references, req.user.orgId);
+                    const featureCounts = await countOwnedRunFeatures(pool, references, req.user.orgId);
                     if (config.gwReview !== undefined
                         && session.params_json?.gwCanonicalSignature !== canonicalSignatureForConfig(config, references)) {
                         throw reviewPersistenceError('GW matching settings changed. Recalculate the canonical matching result before saving review decisions.');
@@ -1068,15 +839,32 @@ exports.getIliResults = async (req, res) => {
             engineVersion: ALIGNMENT_ENGINE_VERSION,
             configFingerprint,
         });
-        await alignmentQueue.add('align-ili', {
-            jobId,
-            sessionId: resolvedSessionId,
-            organizationId: req.user.orgId,
-            userId: req.user.id,
-            algorithm: configuredAlgorithm,
-            engineVersion: ALIGNMENT_ENGINE_VERSION,
-            configFingerprint,
-        }, { jobId });
+        try {
+            await alignmentQueue.add('align-ili', {
+                jobId,
+                sessionId: resolvedSessionId,
+                organizationId: req.user.orgId,
+                userId: req.user.id,
+                algorithm: configuredAlgorithm,
+                engineVersion: ALIGNMENT_ENGINE_VERSION,
+                configFingerprint,
+            }, { jobId });
+        } catch (queueError) {
+            // Mirrors enqueueIngestion: with Redis down the durable row would
+            // otherwise stay 'queued' forever, and the reuse check above would
+            // keep answering 202 for this session with no worker ever coming.
+            console.error('Failed to queue alignment job:', queueError);
+            await updateAlignmentJob(pool, jobId, {
+                state: 'failed',
+                errorCode: 'QUEUE_UNAVAILABLE',
+                errorMessage: 'Alignment queue is unavailable',
+                completedAt: new Date(),
+            });
+            return res.status(503).json({
+                error: 'Alignment queue is unavailable',
+                code: 'ALIGNMENT_QUEUE_UNAVAILABLE',
+            });
+        }
         return res.status(202).json({
             success: true,
             jobId,
@@ -1097,18 +885,7 @@ exports.getJobResult = async (req, res) => {
     try {
         const durableJob = await getOwnedAlignmentJob(pool, jobId, req.user.orgId);
         if (durableJob) return res.json(serializeAlignmentJob(durableJob));
-        const job = localJobs.getForPrincipal(jobId, req.user);
-        if (!job) {
-            return res.status(404).json({ error: 'Job not found' });
-        }
-
-        res.json({ 
-            jobId, 
-            state: job.state, 
-            progress: job.progress, 
-            result: job.returnvalue, 
-            failedReason: job.failedReason 
-        });
+        return res.status(404).json({ error: 'Job not found' });
     } catch (err) {
         console.error("Get job result error:", err);
         res.status(500).json({ error: 'Failed to get job status' });
@@ -1129,17 +906,6 @@ exports.deletePipelineRun = async (req, res) => {
     }
 };
 
-// Each export spawns a Python process and writes a temp file, so an
-// authenticated client looping this endpoint could otherwise spawn unbounded
-// interpreters and fill uploads/.  Cap how many can run at once.
-const MAX_CONCURRENT_EXPORTS = Number(process.env.MAX_CONCURRENT_EXPORTS) || 3;
-const EXPORT_PROCESS_TIMEOUT_MS = Number(process.env.EXPORT_PROCESS_TIMEOUT_MS) || 2 * 60 * 1000;
-let activeExports = 0;
-
-async function removeQuietly(filePath) {
-    await fsPromises.rm(filePath, { force: true }).catch(() => {});
-}
-
 exports.exportExcel = async (req, res) => {
     const { data } = req.body;
     if (!data || !Array.isArray(data)) {
@@ -1152,105 +918,27 @@ exports.exportExcel = async (req, res) => {
         return res.status(400).json({ error: 'Each export row must be an object' });
     }
 
-    if (activeExports >= MAX_CONCURRENT_EXPORTS) {
-        res.set('Retry-After', '10');
-        return res.status(429).json({
-            error: 'Too many exports in progress. Retry shortly.',
-            code: 'EXPORT_BUSY',
-        });
-    }
-    activeExports += 1;
-
-    const uploadsDir = path.join(__dirname, '../../../../uploads');
-    const exportId = randomUUID();
-    const tempInputFile = path.join(uploadsDir, `export_input_${exportId}.json`);
-    const tempOutputFile = path.join(uploadsDir, `export_output_${exportId}.xlsx`);
-
-    let settled = false;
-    const finish = async (handler) => {
-        if (settled) return;
-        settled = true;
-        await removeQuietly(tempInputFile);
-        try {
-            await handler();
-        } finally {
-            activeExports -= 1;
-        }
-    };
-
+    let excelExport;
     try {
-        await fsPromises.mkdir(uploadsDir, { recursive: true });
-        // Async, and without the pretty-printing that tripled the bytes written
-        // for a 100k-row export.
-        await fsPromises.writeFile(tempInputFile, JSON.stringify(data));
-
-        const pythonProcess = spawn(
-            pythonExecutable,
-            [
-                path.join(__dirname, '../../python_engines/export_excel.py'),
-                tempInputFile,
-                tempOutputFile,
-            ],
-            pythonSpawnOptions(),
-        );
-
-        let errorOutput = '';
-        pythonProcess.stderr.on('data', (chunk) => { errorOutput += chunk.toString(); });
-
-        const timeout = setTimeout(() => {
-            pythonProcess.kill();
-            finish(async () => {
-                await removeQuietly(tempOutputFile);
-                if (!res.headersSent) {
-                    res.status(504).json({ error: 'Excel export timed out', code: 'EXPORT_TIMEOUT' });
-                }
-            });
-        }, EXPORT_PROCESS_TIMEOUT_MS);
-
-        // 'error' is emitted asynchronously (e.g. the interpreter is not on
-        // PATH).  With no listener it becomes an uncaught exception, the
-        // request hangs until the client times out, and the temp file leaks.
-        pythonProcess.on('error', (error) => {
-            clearTimeout(timeout);
-            console.error('Excel export failed to spawn:', error.message);
-            finish(async () => {
-                await removeQuietly(tempOutputFile);
-                if (!res.headersSent) {
-                    res.status(500).json({ error: 'Failed to generate Excel file' });
-                }
-            });
-        });
-
-        pythonProcess.on('close', (code) => {
-            clearTimeout(timeout);
-            finish(async () => {
-                const produced = code === 0 && await fsPromises
-                    .access(tempOutputFile)
-                    .then(() => true, () => false);
-
-                if (!produced) {
-                    console.error('Excel export python failed:', errorOutput);
-                    await removeQuietly(tempOutputFile);
-                    if (!res.headersSent) {
-                        res.status(500).json({ error: 'Failed to generate Excel file' });
-                    }
-                    return;
-                }
-
-                await new Promise((resolve) => {
-                    res.download(tempOutputFile, 'synapse_alignment_report.xlsx', () => {
-                        removeQuietly(tempOutputFile).finally(resolve);
-                    });
-                });
-            });
-        });
+        excelExport = await createExcelExport(data);
     } catch (err) {
+        if (err.code === 'EXPORT_BUSY') {
+            res.set('Retry-After', '10');
+            return res.status(429).json({ error: err.message, code: 'EXPORT_BUSY' });
+        }
+        if (err.code === 'EXPORT_TIMEOUT') {
+            return res.status(504).json({ error: err.message, code: 'EXPORT_TIMEOUT' });
+        }
+        if (err.code === 'EXPORT_FAILED') {
+            return res.status(500).json({ error: err.message });
+        }
         console.error('Failed to export Excel:', err);
-        await finish(async () => {
-            await removeQuietly(tempOutputFile);
-            if (!res.headersSent) {
-                res.status(500).json({ error: 'Failed to export Excel' });
-            }
-        });
+        return res.status(500).json({ error: 'Failed to export Excel' });
     }
+
+    // The concurrency slot stays held until the download finishes; release
+    // removes the temp workbook and frees the slot exactly once.
+    res.download(excelExport.filePath, 'synapse_alignment_report.xlsx', () => {
+        excelExport.release();
+    });
 };

@@ -121,7 +121,7 @@ export function buildMatchingSpatialFeatures({
           oldId: pair.oldId,
           oldDistance: pair.oldDistance,
           masterDistance: pair.newDistance,
-        } : { missingReason: 'Tidak ada GW OLD pasangan' }),
+        } : { missingReason: 'No paired OLD GW' }),
       },
       ...coordinateAt(distance),
     }];
@@ -154,7 +154,7 @@ export function buildMatchingSpatialFeatures({
     if (existing) {
       if (existing.status === 'MATCHED') return;
       existing.status = 'UNRESOLVED';
-      existing.rawData.missingReason = 'Tidak ada GW OLD pasangan';
+      existing.rawData.missingReason = 'No paired OLD GW';
       return;
     }
     masterWelds.set(key, {
@@ -164,7 +164,7 @@ export function buildMatchingSpatialFeatures({
       runRole: 'MASTER',
       runYear: String(masterRun.year ?? ''),
       status: 'UNRESOLVED',
-      rawData: { ...orphan, missingReason: 'Tidak ada GW OLD pasangan' },
+      rawData: { ...orphan, missingReason: 'No paired OLD GW' },
       ...coordinateAt(distance),
     });
   });
@@ -206,7 +206,7 @@ export function buildMatchingSpatialFeatures({
       if (existing) {
         if (existing.status === 'MATCHED') return;
         existing.status = 'MISSING_IN_MASTER';
-        existing.rawData.missingReason = 'Tidak ada GW NEW pasangan';
+        existing.rawData.missingReason = 'No paired NEW GW';
         return;
       }
       gws.set(key, {
@@ -216,7 +216,7 @@ export function buildMatchingSpatialFeatures({
         runRole: 'HISTORICAL',
         runYear: lane.year,
         status: 'MISSING_IN_MASTER',
-        rawData: { ...orphan, sourceDistance: distance, missingReason: 'Tidak ada GW NEW pasangan' },
+        rawData: { ...orphan, sourceDistance: distance, missingReason: 'No paired NEW GW' },
         lat: Number.NaN,
         lng: Number.NaN,
       });

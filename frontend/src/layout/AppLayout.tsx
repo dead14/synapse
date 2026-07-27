@@ -21,7 +21,7 @@ function LayoutContent() {
           {/* Keyed by path so the boundary clears when the operator navigates
               away, and so a failed workspace never blanks the header they
               would use to leave it. */}
-          <ErrorBoundary key={location.pathname} scope="Workspace ini">
+          <ErrorBoundary key={location.pathname} scope="This workspace">
             <Outlet />
           </ErrorBoundary>
         </main>

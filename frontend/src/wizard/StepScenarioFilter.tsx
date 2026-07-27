@@ -54,7 +54,7 @@ export default function StepScenarioFilter({ onNext, onBack, config: _config }: 
             </div>
 
             <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-800">
-              Depth tidak memfilter kandidat. Nilainya diperiksa setelah Hungarian untuk menandai penurunan depth yang tidak sesuai ekspektasi pertumbuhan corrosion.
+              Depth does not filter candidates. It is checked after Hungarian matching to flag depth decreases that contradict expected corrosion growth.
             </p>
           </div>
         </div>

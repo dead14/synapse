@@ -84,3 +84,37 @@ test('places OLD-only rows after the ordered NEW master timeline', () => {
     ['new-1', 'new-2', 'old-1', 'old-2'],
   );
 });
+
+test('sorting preserves a pre-assigned __origIdx so each row keeps pointing at its source row', () => {
+  // ResultsPanel stamps __origIdx (the index in the unsorted source array)
+  // BEFORE sorting; selection, defect-viewer highlighting, and drag-drop
+  // reassignment all rely on the sort not renumbering or copying rows.
+  const rows = [
+    { id: 'c', 'Log Dist NEW (m)': 30 },
+    { id: 'a', 'Log Dist NEW (m)': 10 },
+    { id: 'b', 'Log Dist NEW (m)': 20 },
+  ].map((row, index) => ({ ...row, __origIdx: index }));
+
+  const sorted = sortAlignmentRowsByDisplayedLogDistance(rows);
+
+  assert.deepEqual(sorted.map((row) => row.id), ['a', 'b', 'c']);
+  assert.deepEqual(sorted.map((row) => row.__origIdx), [1, 2, 0]);
+  // Every sorted entry is the very same object as its source row, so
+  // rows[sorted[i].__origIdx] always recovers the original row.
+  for (const row of sorted) {
+    assert.equal(row, rows[row.__origIdx]);
+  }
+});
+
+test('sorting does not invent or renumber identity for equal-distance rows', () => {
+  const rows = [
+    { id: 'first', 'Log Dist NEW (m)': 5 },
+    { id: 'second', 'Log Dist NEW (m)': 5 },
+  ].map((row, index) => ({ ...row, __origIdx: index }));
+
+  const sorted = sortAlignmentRowsByDisplayedLogDistance(rows);
+
+  // Ties keep input order (stable), and identities ride along untouched.
+  assert.deepEqual(sorted.map((row) => row.id), ['first', 'second']);
+  assert.deepEqual(sorted.map((row) => row.__origIdx), [0, 1]);
+});

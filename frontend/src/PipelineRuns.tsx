@@ -1,8 +1,17 @@
 import { useState, useEffect } from 'react';
 import { FiEye, FiSettings, FiBell, FiActivity, FiClock, FiCheckCircle, FiTrash2 } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
-import { format } from 'date-fns';
+import { format, isValid } from 'date-fns';
 import { apiFetch } from './utils/api';
+import ConfirmDialog from './components/common/ConfirmDialog';
+
+/** date-fns v4 format() throws a RangeError on invalid dates; one malformed
+ * run date must not take down the whole history page. */
+function formatRunDate(value: string): string {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  return isValid(parsed) ? format(parsed, 'dd MMM yyyy') : '-';
+}
 
 interface PipelineRun {
   id: string;
@@ -20,6 +29,7 @@ export default function PipelineRuns() {
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchRuns = async () => {
@@ -27,7 +37,7 @@ export default function PipelineRuns() {
         setRuns(await apiFetch<PipelineRun[]>('/api/pipeline-runs'));
       } catch (err) {
         console.error('Failed to fetch pipeline runs:', err);
-        setError('Riwayat pipeline tidak dapat dimuat.');
+        setError('The pipeline history could not be loaded.');
       } finally {
         setLoading(false);
       }
@@ -36,13 +46,12 @@ export default function PipelineRuns() {
   }, []);
 
   const deleteRun = async (runId: string) => {
-    if (!window.confirm('Hapus pipeline run ini? Tindakan ini tidak dapat dibatalkan.')) return;
     try {
       await apiFetch(`/api/pipeline-runs/${encodeURIComponent(runId)}`, { method: 'DELETE' });
       setRuns((previous) => previous.filter((run) => run.id !== runId));
     } catch (caughtError) {
       console.error('Failed to delete pipeline run:', caughtError);
-      setError('Pipeline run tidak dapat dihapus.');
+      setError('The pipeline run could not be deleted.');
     }
   };
 
@@ -118,7 +127,7 @@ export default function PipelineRuns() {
                     </td>
                     <td className="px-6 py-5">
                       <div className="text-sm font-medium text-gray-700">
-                        {run.date ? format(new Date(run.date), 'dd MMM yyyy') : '-'}
+                        {formatRunDate(run.date)}
                       </div>
                       <div className="text-xs text-gray-400">Total Anomalies: {run.anomaliesFound}</div>
                     </td>
@@ -168,10 +177,11 @@ export default function PipelineRuns() {
                         </button>
 
                         {/* Action: Delete */}
-                        <button 
-                          onClick={() => void deleteRun(run.id)}
+                        <button
+                          onClick={() => setPendingDeleteId(run.id)}
                           className="flex items-center justify-center p-2 text-red-500 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
                           title="Delete Run"
+                          aria-label={`Delete run ${run.pipelineName}`}
                         >
                           <FiTrash2 size={18} />
                         </button>
@@ -184,10 +194,25 @@ export default function PipelineRuns() {
           </div>
           
           <div className="bg-white px-6 py-4 border-t border-gray-100 flex items-center justify-between">
-            <span className="text-sm text-gray-500">Total <span className="font-medium text-gray-900">{runs.length}</span> pipeline run</span>
+            <span className="text-sm text-gray-500">Total <span className="font-medium text-gray-900">{runs.length}</span> pipeline runs</span>
           </div>
         </div>
       </div>
+
+      {pendingDeleteId !== null && (
+        <ConfirmDialog
+          title="Delete this pipeline run?"
+          message="This permanently removes the run and its alignment results. This action cannot be undone."
+          confirmLabel="Delete Run"
+          danger
+          onConfirm={() => {
+            const runId = pendingDeleteId;
+            setPendingDeleteId(null);
+            void deleteRun(runId);
+          }}
+          onCancel={() => setPendingDeleteId(null)}
+        />
+      )}
     </div>
   );
 }

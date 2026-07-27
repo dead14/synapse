@@ -46,8 +46,38 @@ function createWorkerConnection(label = 'worker') {
   return attachLogging(new Redis(buildRedisOptions()), label);
 }
 
+// Dedicated connection for the rate-limiter middleware.  Unlike the queue
+// clients it must never queue commands while disconnected — a down Redis
+// would otherwise stall every API request until reconnect.  Commands fail
+// immediately instead (the middleware fails open on any error), the client
+// keeps reconnecting in the background, and errors are logged at most once
+// per minute rather than once per retry attempt.
+let rateLimiterConnection;
+function getRateLimiterConnection() {
+  if (!rateLimiterConnection) {
+    rateLimiterConnection = new Redis({
+      ...buildRedisOptions(),
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
+    });
+    let lastErrorLogAt = 0;
+    rateLimiterConnection.on('error', (err) => {
+      const currentTime = Date.now();
+      if (currentTime - lastErrorLogAt >= 60_000) {
+        lastErrorLogAt = currentTime;
+        console.error('Redis rate-limiter error:', err.message);
+      }
+    });
+    rateLimiterConnection.on('connect', () => {
+      console.log('Redis rate-limiter connected');
+    });
+  }
+  return rateLimiterConnection;
+}
+
 module.exports = {
   connection,
   createWorkerConnection,
+  getRateLimiterConnection,
   buildRedisOptions,
 };

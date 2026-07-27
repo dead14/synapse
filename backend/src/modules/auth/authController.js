@@ -3,9 +3,12 @@ const crypto = require('node:crypto');
 const pool = require('../../config/db');
 const {
     clearAuthCookie,
+    extractAuthToken,
     setAuthCookie,
     signAuthToken,
+    verifyAuthToken,
 } = require('../../middlewares/authMiddleware');
+const { bumpTokenVersion } = require('../../middlewares/principalCache');
 const {
     validateLoginInput,
     validateRegistrationInput,
@@ -71,7 +74,7 @@ exports.register = async (req, res) => {
 
         const passwordHash = await bcrypt.hash(password, 12);
         const userResult = await client.query(
-            'INSERT INTO users (organization_id, username, email, password_hash, role, is_active) VALUES ($1, $2, $3, $4, $5, true) RETURNING id, username, email, role',
+            'INSERT INTO users (organization_id, username, email, password_hash, role, is_active) VALUES ($1, $2, $3, $4, $5, true) RETURNING id, username, email, role, COALESCE(token_version, 0) AS token_version',
             [orgId, username, email, passwordHash, 'admin']
         );
         const user = userResult.rows[0];
@@ -84,6 +87,7 @@ exports.register = async (req, res) => {
             role: user.role,
             username: user.username,
             email: user.email,
+            tv: Number(user.token_version) || 0,
         });
         setAuthCookie(res, token);
         res.setHeader('Cache-Control', 'no-store');
@@ -118,6 +122,7 @@ exports.login = async (req, res) => {
     try {
         const result = await pool.query(
             `SELECT u.id, u.username, u.email, u.password_hash, u.role, u.organization_id,
+                    COALESCE(u.token_version, 0) AS token_version,
                     o.name as org_name
              FROM users u
              JOIN organizations o ON u.organization_id = o.id
@@ -139,6 +144,7 @@ exports.login = async (req, res) => {
             role: user.role,
             username: user.username,
             email: user.email,
+            tv: Number(user.token_version) || 0,
         });
         setAuthCookie(res, token);
         res.setHeader('Cache-Control', 'no-store');
@@ -153,7 +159,22 @@ exports.login = async (req, res) => {
     }
 };
 
-exports.logout = (req, res) => {
+// Logout stays unauthenticated and best-effort: clearing the cookie must
+// always succeed.  When the caller presents a valid token, their
+// token_version is bumped so every outstanding copy of the session — a
+// stolen bearer token included — dies immediately instead of at JWT expiry.
+exports.logout = async (req, res) => {
+    const token = extractAuthToken(req);
+    if (token) {
+        try {
+            const decoded = verifyAuthToken(token);
+            await bumpTokenVersion((text, values) => pool.query(text, values), Number(decoded.id));
+        } catch (err) {
+            // An expired/forged token or an unavailable database must not
+            // block logout; the cookie is cleared regardless.
+            console.error('Logout token revocation skipped:', err.message);
+        }
+    }
     clearAuthCookie(res);
     res.setHeader('Cache-Control', 'no-store');
     return res.json({ message: 'Logged out' });

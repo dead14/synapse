@@ -34,7 +34,7 @@ export default function WeldTable({ features }: Props) {
       partnerId: String(gw.rawData.oldId ?? '-'),
       partnerDistance: numberFrom(gw.rawData.oldDistance),
       unmatched: gw.status !== 'MATCHED',
-      detail: String(gw.rawData.missingReason ?? (gw.status === 'MATCHED' ? 'Paired to historical OLD' : 'Tidak ada GW OLD pasangan')),
+      detail: String(gw.rawData.missingReason ?? (gw.status === 'MATCHED' ? 'Paired to historical OLD' : 'No paired OLD GW')),
     }));
     const historicalRows = features.historicalLanes.flatMap((lane) => lane.gws.map((gw, index) => ({
       key: `${lane.id}-${gw.id}-${gw.dist}-${index}`,
@@ -45,7 +45,7 @@ export default function WeldTable({ features }: Props) {
       partnerId: String(gw.rawData.matchedMasterId ?? '-'),
       partnerDistance: numberFrom(gw.rawData.masterDistance),
       unmatched: gw.status !== 'MATCHED',
-      detail: String(gw.rawData.missingReason ?? (gw.status === 'MATCHED' ? 'Paired to master NEW' : 'Tidak ada GW NEW pasangan')),
+      detail: String(gw.rawData.missingReason ?? (gw.status === 'MATCHED' ? 'Paired to master NEW' : 'No paired NEW GW')),
     })));
     return [...masterRows, ...historicalRows];
   }, [features]);
@@ -57,7 +57,7 @@ export default function WeldTable({ features }: Props) {
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
         <div>
           <h3 className="text-xs font-bold uppercase tracking-wide text-slate-700">Weld data</h3>
-          <p className="text-[11px] text-slate-500">Merah = GW tidak memiliki pasangan; kolom detail menjelaskan sisi yang tidak ditemukan.</p>
+          <p className="text-[11px] text-slate-500">Red = GW has no pair; the detail column explains which side is missing.</p>
         </div>
         <div className="sectioning-weld-table__controls">
           <div className="sectioning-weld-table__filters" role="group" aria-label="Weld status filter">

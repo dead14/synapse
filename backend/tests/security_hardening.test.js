@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+    resolveJwtExpiresIn,
     resolveJwtSecret,
 } = require('../src/config/auth');
 const {
@@ -14,6 +15,7 @@ const {
 const {
     getAllowedOrigins,
     isOriginAllowed,
+    resolveTrustProxy,
 } = require('../src/config/security');
 const {
     createRateLimiter,
@@ -28,8 +30,12 @@ const {
 } = require('../src/modules/auth/authValidation');
 const {
     authenticateSocket,
+    createSocketAuthenticator,
     getSocketRooms,
 } = require('../src/socket');
+const {
+    createPrincipalCache,
+} = require('../src/middlewares/principalCache');
 const {
     buildDatabaseConfig,
 } = require('../src/config/databaseConfig');
@@ -43,6 +49,12 @@ test('production refuses to start without a strong JWT secret', () => {
         () => resolveJwtSecret({ NODE_ENV: 'production', JWT_SECRET: 'too-short' }),
         /at least 32 characters/,
     );
+});
+
+test('JWT lifetime defaults to 24 hours and stays overridable', () => {
+    assert.equal(resolveJwtExpiresIn({}), '24h');
+    assert.equal(resolveJwtExpiresIn({ JWT_EXPIRES_IN: '  ' }), '24h');
+    assert.equal(resolveJwtExpiresIn({ JWT_EXPIRES_IN: '7d' }), '7d');
 });
 
 test('development uses an ephemeral JWT secret when none is configured', () => {
@@ -106,6 +118,25 @@ test('production requires an explicit CORS allowlist', () => {
     assert.throws(
         () => getAllowedOrigins({ NODE_ENV: 'production' }),
         /ALLOWED_ORIGINS/,
+    );
+});
+
+test('TRUST_PROXY accepts hop counts, booleans, and express preset strings', () => {
+    // Unset or blank leaves the express default untouched.
+    assert.equal(resolveTrustProxy(undefined), undefined);
+    assert.equal(resolveTrustProxy(''), undefined);
+    assert.equal(resolveTrustProxy('   '), undefined);
+    // Hop counts keep their previous numeric behaviour.
+    assert.equal(resolveTrustProxy('2'), 2);
+    // Booleans and express presets/CIDRs must not be silently ignored, or
+    // req.ip stays the proxy address and the login rate limiter locks out
+    // every user behind it at once.
+    assert.equal(resolveTrustProxy('true'), true);
+    assert.equal(resolveTrustProxy('false'), false);
+    assert.equal(resolveTrustProxy('loopback'), 'loopback');
+    assert.equal(
+        resolveTrustProxy('10.0.0.0/8, 172.16.0.0/12'),
+        '10.0.0.0/8, 172.16.0.0/12',
     );
 });
 
@@ -201,13 +232,23 @@ test('login validation rejects malformed or unbounded credentials', () => {
 });
 
 test('socket handshake is authenticated and rooms come only from signed identity', async () => {
+    // The handshake now re-checks is_active/token_version, so the database
+    // lookup is injected instead of hitting a real pool.
+    const authenticate = createSocketAuthenticator({
+        principalCache: createPrincipalCache({
+            query: async () => ({
+                rows: [{ is_active: true, role: 'admin', token_version: 0 }],
+            }),
+            ttlMs: 0,
+        }),
+    });
     const token = signAuthToken({ id: 77, orgId: 13, role: 'admin' });
     const socket = {
         handshake: { auth: { token }, headers: {} },
     };
 
     await new Promise((resolve, reject) => {
-        authenticateSocket(socket, (error) => error ? reject(error) : resolve());
+        authenticate(socket, (error) => error ? reject(error) : resolve());
     });
 
     assert.equal(socket.user.id, 77);

@@ -208,16 +208,67 @@ def validated_tiein_knots(payload):
     ]
 
 
+class PreparedTransform:
+    """A knot list with its search axis already extracted.
+
+    ``map_old_to_new`` rebuilt ``[knot[0] for knot in knots]`` on every call.
+    The matchers call it once per feature against one transform, so a 50k
+    feature run against a 10k knot transform rebuilt a 10k element list half a
+    billion times.  The axis depends only on the knots, so it is built once.
+
+    The knot list must not be mutated after preparation; every producer in this
+    codebase treats validated knots as immutable evidence.
+    """
+
+    __slots__ = ("knots", "_old_axis", "_first_old", "_last_old", "_count")
+
+    def __init__(self, knots):
+        self.knots = knots
+        self._old_axis = [knot[0] for knot in knots]
+        self._count = len(knots)
+        self._first_old = knots[0][0] if knots else None
+        self._last_old = knots[-1][0] if knots else None
+
+    def __call__(self, distance):
+        """OLD odometer to NEW odometer, or None outside the knot domain."""
+        knots = self.knots
+        if not self._count or distance < self._first_old or distance > self._last_old:
+            return None
+        right = bisect.bisect_right(self._old_axis, distance)
+        if right == 0:
+            return knots[0][1]
+        if right >= self._count:
+            return knots[-1][1]
+        old_left, new_left = knots[right - 1]
+        old_right, new_right = knots[right]
+        fraction = (distance - old_left) / (old_right - old_left)
+        return new_left + fraction * (new_right - new_left)
+
+
+def prepare_transform(knots):
+    """Build a reusable OLD-to-NEW mapper for a fixed knot list."""
+    return PreparedTransform(knots)
+
+
+# One-entry memo keyed on knot-list identity, so the legacy
+# ``map_old_to_new(distance, knots)`` call shape gets the prepared axis too.
+# The key is held by strong reference so its id() can never be recycled onto a
+# different list while the entry is live; one knot list is a bounded 10k items.
+_LAST_PREPARED_KNOTS = None
+_LAST_PREPARED_TRANSFORM = None
+
+
+def _prepared_for(knots):
+    global _LAST_PREPARED_KNOTS, _LAST_PREPARED_TRANSFORM
+    if _LAST_PREPARED_KNOTS is knots:
+        return _LAST_PREPARED_TRANSFORM
+    prepared = PreparedTransform(knots)
+    _LAST_PREPARED_KNOTS = knots
+    _LAST_PREPARED_TRANSFORM = prepared
+    return prepared
+
+
 def map_old_to_new(distance, knots):
-    if not knots or distance < knots[0][0] or distance > knots[-1][0]:
+    if not knots:
         return None
-    old_axis = [knot[0] for knot in knots]
-    right = bisect.bisect_right(old_axis, distance)
-    if right == 0:
-        return knots[0][1]
-    if right >= len(knots):
-        return knots[-1][1]
-    old_left, new_left = knots[right - 1]
-    old_right, new_right = knots[right]
-    fraction = (distance - old_left) / (old_right - old_left)
-    return new_left + fraction * (new_right - new_left)
+    return _prepared_for(knots)(distance)

@@ -3,7 +3,21 @@ const { createHash } = require('crypto');
 const ALIGNMENT_ENGINE_VERSION = process.env.ALIGNMENT_ENGINE_VERSION
     || '2026-07-22-hard-tolerances-v6';
 const REUSABLE_JOB_STATES = new Set(['queued', 'active', 'retrying', 'completed']);
+// Non-terminal states only stay reusable while the row is fresh.  A pending
+// row whose worker is gone (Redis flushed, enqueue raced a crash, worker died
+// before its final attempt) would otherwise answer 202 for this session
+// forever, because nothing ever moves it to a terminal state.
+const PENDING_JOB_STATES = new Set(['queued', 'active', 'retrying']);
 const RUNTIME_CONFIG_FIELDS = new Set(['resultSummary', 'failureReason']);
+
+function alignmentJobReuseMaxAgeMs(env = process.env) {
+    const configured = Number(env.ALIGNMENT_JOB_REUSE_MAX_AGE_MS);
+    if (Number.isFinite(configured) && configured > 0) return configured;
+    // The bound must comfortably exceed the engine's own per-process timeout,
+    // or a legitimately long run would be declared stale while still working.
+    const processTimeoutMs = Number(env.ALIGNMENT_PROCESS_TIMEOUT_MS) || 30 * 60 * 1000;
+    return Math.max(30 * 60 * 1000, processTimeoutMs + 10 * 60 * 1000);
+}
 
 function canonicalize(value) {
     if (Array.isArray(value)) return value.map(canonicalize);
@@ -35,8 +49,21 @@ function jobExecutionMetadata(job) {
     }
 }
 
-function isReusableAlignmentJob(job, config) {
+function jobFreshnessTimestamp(job) {
+    // updated_at refreshes on every progress update, so an active job that is
+    // still reporting progress keeps itself fresh while a wedged one ages out.
+    const stamp = job?.updated_at || job?.created_at;
+    if (!stamp) return null;
+    const parsed = stamp instanceof Date ? stamp.getTime() : Date.parse(stamp);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isReusableAlignmentJob(job, config, { now = Date.now(), env = process.env } = {}) {
     if (!job || !REUSABLE_JOB_STATES.has(job.state)) return false;
+    if (PENDING_JOB_STATES.has(job.state)) {
+        const freshestAt = jobFreshnessTimestamp(job);
+        if (freshestAt === null || now - freshestAt > alignmentJobReuseMaxAgeMs(env)) return false;
+    }
     const metadata = jobExecutionMetadata(job);
     return metadata?.engineVersion === ALIGNMENT_ENGINE_VERSION
         && metadata?.configFingerprint === alignmentConfigFingerprint(config);
@@ -59,6 +86,7 @@ function buildReusableAlignmentJobResponse(job) {
 module.exports = {
     ALIGNMENT_ENGINE_VERSION,
     alignmentConfigFingerprint,
+    alignmentJobReuseMaxAgeMs,
     buildReusableAlignmentJobResponse,
     isReusableAlignmentJob,
 };

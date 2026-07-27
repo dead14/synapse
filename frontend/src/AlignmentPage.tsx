@@ -8,6 +8,7 @@ import StepUploadILI from './wizard/StepUploadILI';
 import StepTieInConfig from './wizard/StepTieInConfig';
 import StepMatchingSections from './wizard/StepMatchingSections';
 import { apiFetch, ApiError } from './utils/api';
+import ConfirmDialog from './components/common/ConfirmDialog';
 import './styles/alignment-review.css';
 
 const WIZARD_PROGRESS_STORAGE_KEY = 'synapse_alignment_wizard_progress';
@@ -34,6 +35,7 @@ export default function AlignmentPage() {
   const [wizardConfig, setWizardConfig] = useState<any>({});
   const [isResuming, setIsResuming] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const saveErrorRef = React.useRef<HTMLDivElement>(null);
 
   // The wizard footer sits far below the fold, so a save rejection used to look
@@ -107,7 +109,7 @@ export default function AlignmentPage() {
         updatedConfig.sessionRevision = resData.sessionRevision;
         localStorage.setItem('synapse_last_session_id', String(resData.sessionId));
       } else {
-        setSaveError('Server tidak mengembalikan ID sesi alignment. Periksa backend lalu coba lagi.');
+        setSaveError('The server did not return an alignment session ID. Check the backend and try again.');
         return;
       }
     } catch (err) {
@@ -118,8 +120,8 @@ export default function AlignmentPage() {
         return;
       }
       setSaveError(err instanceof ApiError
-        ? `Gagal menyimpan sesi alignment (${err.status}): ${err.message}`
-        : 'Gagal menyimpan sesi alignment. Pastikan backend dan database aktif.');
+        ? `Failed to save the alignment session (${err.status}): ${err.message}`
+        : 'Failed to save the alignment session. Make sure the backend and database are running.');
       return;
     }
 
@@ -144,7 +146,7 @@ export default function AlignmentPage() {
   };
 
   if (isResuming) {
-    return <div className="alignment-workspace flex min-h-[60vh] items-center justify-center"><p className="text-sm font-medium text-gray-500">Memulihkan alignment terakhir...</p></div>;
+    return <div className="alignment-workspace flex min-h-[60vh] items-center justify-center"><p className="text-sm font-medium text-gray-500">Restoring your last alignment...</p></div>;
   }
 
   return (
@@ -160,7 +162,7 @@ export default function AlignmentPage() {
             <button
               type="button"
               onClick={() => setSaveError(null)}
-              aria-label="Tutup pesan kesalahan"
+              aria-label="Dismiss error message"
               className="shrink-0 font-bold text-red-400 hover:text-red-700"
             >
               ×
@@ -175,14 +177,8 @@ export default function AlignmentPage() {
                 <div className="flex flex-wrap items-center gap-3">
                   <p className="alignment-eyebrow">Alignment workspace</p>
                   <span className="alignment-run-label" title={runLabel}>{runLabel}</span>
-                  <button 
-                    onClick={() => {
-                      if (window.confirm("Are you sure you want to abandon this session and start a new run?")) {
-                        localStorage.removeItem(WIZARD_PROGRESS_STORAGE_KEY);
-                        setStep(0);
-                        setWizardConfig({});
-                      }
-                    }} 
+                  <button
+                    onClick={() => setShowResetConfirm(true)}
                     className="alignment-reset"
                     title="Clear current progress and start a new alignment run"
                   >
@@ -206,7 +202,7 @@ export default function AlignmentPage() {
                 const isComplete = index < step;
                 const isCurrent = index === step;
                 return (
-                  <li key={s.id} className={isCurrent ? 'is-current' : isComplete ? 'is-complete' : ''}>
+                  <li key={s.id} aria-current={isCurrent ? 'step' : undefined} className={isCurrent ? 'is-current' : isComplete ? 'is-complete' : ''}>
                     <span className="alignment-stepper-index">{isComplete ? '✓' : index + 1}</span>
                     <span className="alignment-stepper-copy">
                       <strong>{s.name}</strong>
@@ -238,9 +234,25 @@ export default function AlignmentPage() {
           {stepsList[step]?.id === 'anomaly' && <StepAnomalyTolerances onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 
           {stepsList[step]?.id === 'exec' && <StepExecution onBack={handleBack} config={wizardConfig} />}
-          
+
         </div>
       </div>
+
+      {showResetConfirm && (
+        <ConfirmDialog
+          title="Start a new run?"
+          message="This abandons the current session and clears the wizard progress. Data already saved on the server is not deleted."
+          confirmLabel="Start New Run"
+          danger
+          onConfirm={() => {
+            localStorage.removeItem(WIZARD_PROGRESS_STORAGE_KEY);
+            setStep(0);
+            setWizardConfig({});
+            setShowResetConfirm(false);
+          }}
+          onCancel={() => setShowResetConfirm(false)}
+        />
+      )}
     </div>
   );
 }

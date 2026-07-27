@@ -68,16 +68,16 @@ export function validateSectionOrder(sections: MatchingSection[], lockedGws: Loc
   const ranges: Array<{ name: string; start: number; end: number }> = [];
 
   for (const section of sections) {
-    if (!section.name.trim()) return 'Nama section tidak boleh kosong.';
+    if (!section.name.trim()) return 'Section name must not be empty.';
     const start = indexes.get(section.startGwKey);
     const end = indexes.get(section.endGwKey);
-    if (start === undefined || end === undefined) return `${section.name}: boundary harus menggunakan GW locked.`;
-    if (start >= end) return `${section.name}: End GW harus berada setelah Start GW pada NEW.`;
+    if (start === undefined || end === undefined) return `${section.name}: boundaries must use locked GWs.`;
+    if (start >= end) return `${section.name}: End GW must come after Start GW on NEW.`;
     if (section.tolerances) {
       const invalidTolerance = Object.entries(section.tolerances).find(
         ([, value]) => !Number.isFinite(value) || value < 0,
       );
-      if (invalidTolerance) return `${section.name}: ${invalidTolerance[0]} harus angka non-negatif.`;
+      if (invalidTolerance) return `${section.name}: ${invalidTolerance[0]} must be a non-negative number.`;
     }
     ranges.push({ name: section.name, start, end });
   }
@@ -85,7 +85,7 @@ export function validateSectionOrder(sections: MatchingSection[], lockedGws: Loc
   ranges.sort((left, right) => left.start - right.start);
   for (let index = 1; index < ranges.length; index += 1) {
     if (ranges[index].start < ranges[index - 1].end) {
-      return `${ranges[index].name}: section tidak boleh overlap.`;
+      return `${ranges[index].name}: sections must not overlap.`;
     }
   }
   return null;

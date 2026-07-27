@@ -92,10 +92,16 @@ def match_welds_by_spool_variance(df_new, df_old, ota_pct):
     d_o = [float(v) for v in welds_old["log_distance_m"].values]
 
     matched_new = {}
-    
-    # First GW is matched by default (benchmark anchor)
-    matched_new[idx_n[0]] = idx_o[0]
-    
+
+    # Benchmark anchor: the first NEW weld is locked to the first OLD weld,
+    # but only when both sequences plausibly start together.  For a partial
+    # run the first NEW weld can sit kilometres into the OLD line, and an
+    # unconditional lock poisoned every downstream spool-variance step.  The
+    # gate reuses the loosest Weld odometer tolerance already in scope.
+    seed_tolerance = ODO_TOLERANCE_FIXED["Weld"][-1]
+    if abs(d_n[0] - d_o[0]) <= seed_tolerance:
+        matched_new[idx_n[0]] = idx_o[0]
+
     i = 1
     j = 1
     

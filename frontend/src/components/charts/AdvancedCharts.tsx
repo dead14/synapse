@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { FiX } from 'react-icons/fi';
+import Modal from '../common/Modal';
 import DepthVsDistanceChart from './DepthVsDistanceChart';
 import OrientationVsDistanceChart from './OrientationVsDistanceChart';
 import CrVsDistanceChart from './CrVsDistanceChart';
@@ -25,17 +26,24 @@ export default function AdvancedCharts({ data, onClose }: AdvancedChartsProps) {
   const [minCr, setMinCr] = useState(-2);
 
   return (
-    <div className="fixed inset-0 z-[999999] bg-white flex flex-col font-sans overflow-hidden animate-fade-in">
+    <Modal
+      onClose={onClose}
+      labelledBy="advanced-analytics-title"
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 z-[999999]"
+      panelClassName="h-full w-full bg-white flex flex-col font-sans overflow-hidden animate-fade-in"
+    >
       <div className="w-full h-full flex flex-col overflow-hidden">
-        
+
         {/* Premium Header */}
         <div className="flex justify-between items-center px-8 py-5 border-b border-gray-100 bg-white/50 backdrop-blur-md flex-shrink-0">
           <div>
-            <h2 className="text-xl font-bold text-gray-800">Advanced Analytics</h2>
+            <h2 id="advanced-analytics-title" className="text-xl font-bold text-gray-800">Advanced Analytics</h2>
             <p className="text-sm text-gray-500 mt-0.5">Defect & CR Matching Overview</p>
           </div>
-          <button 
+          <button
             onClick={onClose}
+            aria-label="Close advanced analytics"
             className="text-gray-400 hover:text-red-500 hover:bg-red-50 p-2.5 rounded-full transition-all duration-300"
           >
             <FiX size={24} />
@@ -257,6 +265,6 @@ export default function AdvancedCharts({ data, onClose }: AdvancedChartsProps) {
           </div>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

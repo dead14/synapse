@@ -103,14 +103,14 @@ interface TieInMetrics {
 }
 
 const reviewReasonLabels: Record<string, string> = {
-  INSUFFICIENT_MATCHED_ANCHORS: 'anchor fisik yang cocok belum cukup',
-  INSUFFICIENT_PHYSICAL_COVERAGE: 'panjang overlap belum cukup',
-  AMBIGUOUS_OVERLAP: 'ada kandidat overlap lain yang terlalu mirip',
-  LOW_INLIER_RATIO: 'terlalu banyak anchor tidak konsisten',
-  NON_MONOTONIC_TRANSFORM: 'urutan pasangan tidak monoton',
-  LOCAL_SCALE_OUTSIDE_ENGINEERING_GATE: 'koreksi skala lokal melewati engineering gate',
-  ABRUPT_OFFSET_CHANGE: 'terdeteksi lonjakan offset antar-spool',
-  HIGH_SPAN_RESIDUAL: 'residual panjang spool terlalu tinggi',
+  INSUFFICIENT_MATCHED_ANCHORS: 'not enough matched physical anchors',
+  INSUFFICIENT_PHYSICAL_COVERAGE: 'physical overlap length is insufficient',
+  AMBIGUOUS_OVERLAP: 'another overlap candidate is too similar',
+  LOW_INLIER_RATIO: 'too many inconsistent anchors',
+  NON_MONOTONIC_TRANSFORM: 'pair order is not monotonic',
+  LOCAL_SCALE_OUTSIDE_ENGINEERING_GATE: 'local scale correction exceeds the engineering gate',
+  ABRUPT_OFFSET_CHANGE: 'abrupt offset jump detected between spools',
+  HIGH_SPAN_RESIDUAL: 'spool length residual is too high',
 };
 
 type TieInSelection = 'auto' | 'acknowledged' | 'manual';
@@ -307,12 +307,12 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
             <FiTarget className="text-brand-500" /> Partial Run Calibration
           </h2>
           <p className="text-sm text-gray-500 mt-1">
-            Temukan overlap fisik, lalu petakan run historis ke sumbu master terbaru.
+            Find the physical overlap, then map the historical run onto the latest master axis.
           </p>
         </div>
         {pairs.length > 1 && (
           <div className="text-right text-xs font-semibold text-gray-500">
-            {pairs.length - unresolvedPairs.length} / {pairs.length} pasangan siap
+            {pairs.length - unresolvedPairs.length} / {pairs.length} pairs ready
           </div>
         )}
       </div>
@@ -352,7 +352,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
             <div className="w-12 h-12 border-4 border-brand-200 border-t-brand-500 rounded-full animate-spin mb-4"></div>
             <h3 className="text-lg font-semibold text-gray-700">Matching ordered physical anchors...</h3>
             <p className="text-gray-500 max-w-md mt-2">
-              Engine sedang mencari common permanent pipeline dari urutan weld, fitting, dan panjang spool.
+              The engine is searching for the common permanent pipeline using weld order, fittings, and spool lengths.
             </p>
           </div>
         ) : (
@@ -366,7 +366,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
               <div className="flex items-start gap-4">
                 <button
                   type="button"
-                  aria-label="Gunakan rekomendasi engineering otomatis"
+                  aria-label="Use the automatic engineering recommendation"
                   aria-pressed={useAuto}
                   disabled={!autoAccepted}
                   onClick={(event) => { event.stopPropagation(); setSelection('auto'); }}
@@ -380,7 +380,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                     {useAuto && <span className="text-xs font-bold bg-brand-500 text-white px-2 py-1 rounded-full uppercase tracking-wider">Selected</span>}
                   </div>
                   <p className="text-gray-600 mb-4">
-                    Urutan GW dan landmark dicocokkan tanpa memakai absolute odometer sebagai identitas.
+                    GW and landmark sequences are matched without using the absolute odometer as identity.
                   </p>
                   {errorMessage ? (
                     <div className="bg-red-50 p-4 rounded-lg border border-red-200 text-red-700 text-sm mb-4" role="alert">
@@ -388,14 +388,14 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                       <br/>
                       <span className="text-red-500 text-xs">
                         {partialRunEnabled
-                          ? 'Periksa anchor atau excluded range. Partial Run tidak boleh fallback ke scalar offset.'
-                          : 'Gunakan Manual Override bila mode legacy memang diperlukan.'}
+                          ? 'Check the anchors or excluded ranges. Partial Run must not fall back to a scalar offset.'
+                          : 'Use Manual Override if legacy mode is genuinely required.'}
                       </span>
                     </div>
                   ) : (
                     <div className="bg-white p-4 rounded-lg border border-gray-200 flex items-center justify-between">
                       <div>
-                        <p className="text-sm text-gray-500 font-medium">Titik fisik pertama yang stabil</p>
+                        <p className="text-sm text-gray-500 font-medium">First stable physical point</p>
                         <p className="text-xl font-black text-gray-800 mt-1">
                           OLD {tieInMetrics?.tieIn?.oldDistanceM?.toFixed(3)} m
                           <span className="mx-2 text-brand-500">→</span>
@@ -404,7 +404,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                         <p className="mt-1 text-xs text-gray-500">Transform: OLD → NEW, piecewise-linear; legacy offset {autoOffset?.toLocaleString()} m</p>
                         {tieInMetrics?.comparisonCoordinates && (
                           <p className="mt-1 text-xs text-blue-700">
-                            Tampilan bantu TIE IN: OLD + {tieInMetrics.comparisonCoordinates.provisionalOffsetM.toFixed(3)} m ≈ NEW. Raw odometer tidak diubah.
+                            TIE-IN helper view: OLD + {tieInMetrics.comparisonCoordinates.provisionalOffsetM.toFixed(3)} m ≈ NEW. Raw odometers are unchanged.
                           </p>
                         )}
                       </div>
@@ -412,16 +412,16 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                         <p className={`text-sm font-bold flex items-center gap-1 justify-end ${(tieInMetrics?.confidence ?? 0) >= 80 ? 'text-green-600' : 'text-amber-600'}`}>
                           <FiCheckCircle /> {tieInMetrics?.confidence ? `${tieInMetrics.confidence.toFixed(1)}/100 evidence` : 'Estimated'}
                         </p>
-                        <p className="mt-1 text-[11px] font-medium text-gray-500">Evidence score, bukan probabilitas</p>
+                        <p className="mt-1 text-[11px] font-medium text-gray-500">Evidence score, not a probability</p>
                         <p className="text-xs text-gray-400 mt-1">{tieInMetrics?.message || 'Sequence Alignment (Anchors)'}</p>
                       </div>
                     </div>
                   )}
                   {tieInMetrics?.decision?.status === 'REVIEW_REQUIRED' && !errorMessage && (
                     <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
-                      <strong>Auto-apply diblokir:</strong>{' '}
+                      <strong>Auto-apply blocked:</strong>{' '}
                       {tieInMetrics.decision.reasons.map((reason) => reviewReasonLabels[reason] ?? reason).join('; ')}.
-                      {' '}Perbaiki kandidat overlap, source anchor, atau excluded range sampai engineering gate terpenuhi — atau setujui transform ini secara sadar di bawah.
+                      {' '}Fix the overlap candidates, source anchors, or excluded ranges until the engineering gate passes — or knowingly accept this transform below.
                     </div>
                   )}
                   {transformDomain && !errorMessage && (
@@ -429,18 +429,18 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
                         <span>Domain transform OLD<br/><strong>{transformDomain.oldStartM?.toFixed(3) ?? '?'}–{transformDomain.oldEndM?.toFixed(3) ?? '?'} m</strong></span>
                         <span>Domain transform NEW<br/><strong>{transformDomain.newStartM?.toFixed(3) ?? '?'}–{transformDomain.newEndM?.toFixed(3) ?? '?'} m</strong></span>
-                        <span>Knot weld terkunci<br/><strong>{tieInMetrics.transform?.knotCount ?? tieInMetrics.transform?.knots?.length ?? '?'}</strong></span>
+                        <span>Locked weld knots<br/><strong>{tieInMetrics.transform?.knotCount ?? tieInMetrics.transform?.knots?.length ?? '?'}</strong></span>
                         <span>Anchor aligned<br/><strong>{tieInMetrics.alignedPairCount ?? tieInMetrics.inlierPairCount}</strong></span>
                         <span>Anchor unaligned<br/><strong>{tieInMetrics.unalignedPairCount ?? Math.max(0, tieInMetrics.matchedPairCount - tieInMetrics.inlierPairCount)}</strong></span>
-                        <span>Span residual P95<br/><strong>{tieInMetrics.spanResidual ? `${tieInMetrics.spanResidual.p95AbsM.toFixed(3)} m` : 'Tidak tersedia'}</strong></span>
+                        <span>Span residual P95<br/><strong>{tieInMetrics.spanResidual ? `${tieInMetrics.spanResidual.p95AbsM.toFixed(3)} m` : 'Not available'}</strong></span>
                       </div>
                       {tieInMetrics.evidenceOverlap && (
                         <p className="mt-3 border-t border-blue-200 pt-2 text-blue-700">
-                          Evidence envelope (termasuk fitting non-knot): OLD {tieInMetrics.evidenceOverlap.oldStartM.toFixed(3)}–{tieInMetrics.evidenceOverlap.oldEndM.toFixed(3)} m; NEW {tieInMetrics.evidenceOverlap.newStartM.toFixed(3)}–{tieInMetrics.evidenceOverlap.newEndM.toFixed(3)} m.
+                          Evidence envelope (including non-knot fittings): OLD {tieInMetrics.evidenceOverlap.oldStartM.toFixed(3)}–{tieInMetrics.evidenceOverlap.oldEndM.toFixed(3)} m; NEW {tieInMetrics.evidenceOverlap.newStartM.toFixed(3)}–{tieInMetrics.evidenceOverlap.newEndM.toFixed(3)} m.
                         </p>
                       )}
                       <p className="mt-1 text-blue-700">
-                        Affine RMSE {tieInMetrics.residualRmseM.toFixed(3)} m hanya diagnostic; mapping final mengikuti knot piecewise.
+                        Affine RMSE {tieInMetrics.residualRmseM.toFixed(3)} m is diagnostic only; the final mapping follows the piecewise knots.
                         {tieInMetrics.robustFit?.method ? ` Fit: ${tieInMetrics.robustFit.method}.` : ''}
                       </p>
                     </div>
@@ -451,7 +451,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
 
             <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-6">
               <h3 className="font-bold text-gray-800">Exclude noisy GW area from Tie-In</h3>
-              <p className="mt-1 text-sm text-gray-600">Area ini tidak dihapus dari file. Anchor di rentang tersebut hanya dikeluarkan dari estimasi Tie-In dan tetap tercatat di hasil/audit.</p>
+              <p className="mt-1 text-sm text-gray-600">This area is not removed from the file. Anchors in the range are only excluded from the tie-in estimate and stay recorded in the results/audit.</p>
               <div className="mt-4 grid items-end gap-3 md:grid-cols-[130px_1fr_1fr_auto]">
                 <label className="text-xs font-semibold text-gray-600">Run
                   <select value={rangeDraft.run} onChange={(event) => setRangeDraft((current) => ({ ...current, run: event.target.value as 'OLD' | 'NEW' }))} className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm"><option value="OLD">OLD</option><option value="NEW">NEW master</option></select>
@@ -468,7 +468,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                   setRangeDraft((current) => ({ ...current, startM: '', endM: '' }));
                 }} className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40"><FiPlus className="mr-1 inline" />Exclude</button>
               </div>
-              {excludedRanges.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{excludedRanges.map((range, index) => <span key={`${range.run}-${range.startM}-${range.endM}-${index}`} className="rounded-full border border-amber-200 bg-white px-3 py-1 text-xs font-semibold text-amber-800">{range.run} {Math.min(range.startM, range.endM)}–{Math.max(range.startM, range.endM)} m <button type="button" aria-label={`Hapus excluded range ${range.run} ${range.startM} sampai ${range.endM} meter`} onClick={() => setExcludedRanges((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="ml-2 text-red-600"><FiTrash2 className="inline" /></button></span>)}</div>}
+              {excludedRanges.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{excludedRanges.map((range, index) => <span key={`${range.run}-${range.startM}-${range.endM}-${index}`} className="rounded-full border border-amber-200 bg-white px-3 py-1 text-xs font-semibold text-amber-800">{range.run} {Math.min(range.startM, range.endM)}–{Math.max(range.startM, range.endM)} m <button type="button" aria-label={`Remove excluded range ${range.run} ${range.startM} to ${range.endM} meters`} onClick={() => setExcludedRanges((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="ml-2 text-red-600"><FiTrash2 className="inline" /></button></span>)}</div>}
             </div>
 
             {/* Engineer sign-off on evidence that failed a gate. Partial Run has
@@ -481,7 +481,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                 <div className="flex items-start gap-4">
                   <button
                     type="button"
-                    aria-label="Setujui transform tie-in dengan catatan review"
+                    aria-label="Accept the tie-in transform with a review note"
                     aria-pressed={selection === 'acknowledged'}
                     onClick={(event) => { event.stopPropagation(); setSelection('acknowledged'); }}
                     className={`mt-1 flex h-5 w-5 items-center justify-center rounded-full border-2 ${selection === 'acknowledged' ? 'border-amber-600' : 'border-amber-300'}`}
@@ -490,22 +490,22 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                   </button>
                   <div className="flex-1">
                     <div className="mb-2 flex items-center justify-between">
-                      <h3 className="text-lg font-bold text-gray-800">Terima dengan Review Sign-off</h3>
+                      <h3 className="text-lg font-bold text-gray-800">Accept with Review Sign-off</h3>
                       {selection === 'acknowledged' && <span className="rounded-full bg-amber-600 px-2 py-1 text-xs font-bold uppercase tracking-wider text-white">Selected</span>}
                     </div>
                     <p className="mb-4 text-sm text-gray-600">
-                      Transform piecewise OLD → NEW tetap dipakai apa adanya — bukan scalar offset. Yang berubah hanya
-                      statusnya: alignment berjalan atas tanggung jawab engineering, dan alasan gate di atas ikut
-                      tercatat di audit trail hasil.
+                      The piecewise OLD → NEW transform is still used as-is — not a scalar offset. Only its
+                      status changes: the alignment proceeds under engineering responsibility, and the gate reasons
+                      above are recorded in the result audit trail.
                     </p>
                     {selection === 'acknowledged' && (
                       <label className="block animate-fade-in text-xs font-semibold text-gray-600">
-                        Catatan review (opsional, masuk audit)
+                        Review note (optional, recorded in the audit)
                         <textarea
                           value={acknowledgementNote}
                           onChange={(event) => setAcknowledgementNote(event.target.value.slice(0, 500))}
                           rows={2}
-                          placeholder="Contoh: overlap pendek karena partial run 2012 hanya mencakup segmen hilir; anchor sudah diverifikasi manual."
+                          placeholder="Example: short overlap because the 2012 partial run only covers the downstream segment; anchors verified manually."
                           className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm font-normal"
                         />
                       </label>
@@ -523,7 +523,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
               <div className="flex items-start gap-4">
                 <button
                   type="button"
-                  aria-label="Gunakan manual override"
+                  aria-label="Use manual override"
                   aria-pressed={manualSelected}
                   disabled={!manualAllowed}
                   onClick={(event) => { event.stopPropagation(); setSelection('manual'); }}
@@ -538,8 +538,8 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                   </div>
                   <p className="text-gray-600 mb-4 text-sm">
                     {manualAllowed
-                      ? 'Mode kompatibilitas untuk perbandingan full-run legacy.'
-                      : 'Dinonaktifkan untuk Partial Run: scalar offset tidak cukup untuk mengendalikan drift dan missing weld.'}
+                      ? 'Compatibility mode for legacy full-run comparisons.'
+                      : 'Disabled for Partial Run: a scalar offset cannot control drift and missing welds.'}
                   </p>
                   
                   {manualSelected && (
@@ -555,7 +555,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                         <span className="absolute right-4 top-3 text-gray-400 font-medium">m</span>
                       </div>
                       <p className="text-sm text-gray-500">
-                        Mode kompatibilitas: nilai ini ditambahkan ke odometer NEW. Untuk hasil otomatis, sistem memakai transform OLD → NEW yang lebih akurat.
+                        Compatibility mode: this value is added to the NEW odometer. For automatic results the system uses the more accurate OLD → NEW transform.
                       </p>
                     </div>
                   )}
@@ -579,12 +579,12 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
         {!loading && !canContinue && (
           <p className="flex-1 text-right text-sm text-gray-500" role="status">
             {!activeResolved && selection === null
-              ? 'Pilih salah satu opsi di atas untuk melanjutkan.'
+              ? 'Select one of the options above to continue.'
               : !activeResolved && selection === 'manual' && manualOffset === ''
-                ? 'Masukkan nilai offset manual terlebih dahulu.'
+                ? 'Enter a manual offset value first.'
                 : unresolvedPairs.length > 0
-                  ? `Masih perlu diselesaikan: ${unresolvedPairs.map((pair) => pair.label).join(', ')}.`
-                  : 'Opsi yang dipilih belum memiliki evidence yang sah.'}
+                  ? `Still to resolve: ${unresolvedPairs.map((pair) => pair.label).join(', ')}.`
+                  : 'The selected option does not have valid evidence yet.'}
           </p>
         )}
         <button

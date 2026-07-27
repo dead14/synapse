@@ -9,6 +9,7 @@ import {
   Legend
 } from 'chart.js';
 import type { Plugin } from 'chart.js';
+import { parseClockToDegrees } from '../../utils/clock';
 
 ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend);
 
@@ -23,34 +24,43 @@ interface OrientationVsDistanceChartProps {
   };
 }
 
+const asNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '-') return null;
+  const parsed = parseFloat(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const isMatchedRow = (row: any) => row['Match/Unmatch'] === 'Matched' || row['Match/Unmatch'] === 'Match';
+
+/** Clock position (HH:MM, numeric hours, or Excel serial) in degrees, or null when absent. */
+const clockDegrees = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '-' || String(value).trim() === '') return null;
+  const degrees = parseClockToDegrees(value);
+  return Number.isFinite(degrees) ? degrees : null;
+};
+
 export default function OrientationVsDistanceChart({ data, filters }: OrientationVsDistanceChartProps) {
   const chartRef = useRef<any>(null);
 
   const chartData = useMemo(() => {
-    const validData = data.slice(1);
-
     const run1Matched: any[] = [];
     const run1Unmatched: any[] = [];
     const run2Matched: any[] = [];
     const run2Unmatched: any[] = [];
     const lines: any[] = [];
 
-    validData.forEach(row => {
-      // Run 1 Data
-      const dist1 = typeof row['DATA LAMA 2020 (Vendor Lama)  >'] === 'number' 
-        ? row['DATA LAMA 2020 (Vendor Lama)  >'] - 0.1
-        : null;
-      const orient1 = parseFloat(row['Unnamed: 34']);
+    data.forEach(row => {
+      // Run 1 (OLD) data
+      const dist1 = asNumber(row['Log Dist OLD (m)']);
+      const orient1 = clockDegrees(row["O'Clock OLD"]);
 
-      // Run 2 Data
-      const dist2 = typeof row['<  DATA BARU 2025 (Vendor Baru)'] === 'number'
-        ? row['<  DATA BARU 2025 (Vendor Baru)']
-        : null;
-      const orient2 = parseFloat(row['Unnamed: 7']);
+      // Run 2 (NEW) data
+      const dist2 = asNumber(row['Log Dist NEW (m)']);
+      const orient2 = clockDegrees(row["O'Clock NEW"]);
 
-      const isMatched = row['Match/Unmatch'] === 'Matched';
+      const isMatched = isMatchedRow(row);
 
-      if (dist1 !== null && !isNaN(orient1)) {
+      if (dist1 !== null && orient1 !== null) {
         const pt = { x: dist1, y: orient1, raw: row, isRun1: true };
         if (isMatched) {
           if (filters.matched === 'Both' || filters.matched === 'Run 1') run1Matched.push(pt);
@@ -59,7 +69,7 @@ export default function OrientationVsDistanceChart({ data, filters }: Orientatio
         }
       }
 
-      if (dist2 !== null && !isNaN(orient2)) {
+      if (dist2 !== null && orient2 !== null) {
         const pt = { x: dist2, y: orient2, raw: row, isRun1: false };
         if (isMatched) {
           if (filters.matched === 'Both' || filters.matched === 'Run 2') run2Matched.push(pt);
@@ -69,13 +79,16 @@ export default function OrientationVsDistanceChart({ data, filters }: Orientatio
       }
 
       // Add line if matched
-      if (isMatched && dist1 !== null && !isNaN(orient1) && dist2 !== null && !isNaN(orient2)) {
+      if (isMatched && dist1 !== null && orient1 !== null && dist2 !== null && orient2 !== null) {
         lines.push({ x1: dist1, y1: orient1, x2: dist2, y2: orient2, color: 'black' });
       }
     });
 
     return { run1Matched, run1Unmatched, run2Matched, run2Unmatched, lines };
   }, [data, filters]);
+
+  const hasPoints = chartData.run1Matched.length + chartData.run1Unmatched.length
+    + chartData.run2Matched.length + chartData.run2Unmatched.length > 0;
 
   const matchLinesPlugin: Plugin = {
     id: 'matchLinesPlugin',
@@ -188,10 +201,15 @@ export default function OrientationVsDistanceChart({ data, filters }: Orientatio
 
   return (
     <div className="w-full h-full relative" style={{ minHeight: '400px' }}>
-      <Scatter 
+      {!hasPoints && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-gray-400">
+          No orientation (o'clock) values available in this result set
+        </div>
+      )}
+      <Scatter
         ref={chartRef}
-        data={{ datasets }} 
-        options={options} 
+        data={{ datasets }}
+        options={options}
         plugins={[matchLinesPlugin]}
       />
     </div>

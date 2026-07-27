@@ -75,7 +75,7 @@ const MAX_POLL_ATTEMPTS = 180;
 
 function asComparisonRows(value: unknown): ComparisonRow[] {
   if (!Array.isArray(value)) {
-    throw new Error('Respons hasil alignment tidak memiliki data perbandingan yang valid.');
+    throw new Error('Alignment result response did not include valid comparison data.');
   }
 
   return value.filter((row): row is ComparisonRow => Boolean(row) && typeof row === 'object' && !Array.isArray(row));
@@ -86,17 +86,17 @@ function waitForPoll(signal?: AbortSignal): Promise<void> {
     const timer = window.setTimeout(resolve, POLL_INTERVAL_MS);
     signal?.addEventListener('abort', () => {
       window.clearTimeout(timer);
-      reject(new DOMException('Permintaan dibatalkan.', 'AbortError'));
+      reject(new DOMException('Request cancelled.', 'AbortError'));
     }, { once: true });
   });
 }
 
 function jobProgressMessage(state: JobResponse['state'] | undefined, progress: number): string {
-  if (state === 'waiting' || state === 'queued') return 'Menunggu worker alignment...';
-  if (state === 'retrying') return 'Mencoba kembali proses alignment...';
-  if (progress < 25) return 'Memuat data ILI dari database...';
-  if (progress < 80) return 'Mencocokkan welding group dan anomali...';
-  return 'Menyusun hasil alignment...';
+  if (state === 'waiting' || state === 'queued') return 'Waiting for the alignment worker...';
+  if (state === 'retrying') return 'Retrying the alignment process...';
+  if (progress < 25) return 'Loading ILI data from the database...';
+  if (progress < 80) return 'Matching welding groups and anomalies...';
+  return 'Assembling the alignment results...';
 }
 
 export async function fetchAlignmentResult(
@@ -122,7 +122,7 @@ export async function fetchAlignmentResult(
   };
 
   const loadCompletedResult = async (audit?: ConservationAudit): Promise<AlignmentFetchResult> => {
-    reportProgress(90, 'Selesai diproses. Memuat hasil...');
+    reportProgress(90, 'Processing complete. Loading results...');
     const comparison: ComparisonRow[] = [];
     let cursor: string | null = null;
     do {
@@ -135,10 +135,10 @@ export async function fetchAlignmentResult(
       cursor = page.nextCursor;
       reportProgress(
         cursor ? 95 : 99,
-        `${comparison.length.toLocaleString()} baris hasil dimuat...`,
+        `${comparison.length.toLocaleString()} result rows loaded...`,
       );
     } while (cursor);
-    reportProgress(100, 'Selesai!');
+    reportProgress(100, 'Done!');
     return { comparison, audit };
   };
 
@@ -164,7 +164,7 @@ export async function fetchAlignmentResult(
     }
 
     if (job.state === 'failed') {
-      throw new Error(job.failedReason || 'Alignment gagal diproses.');
+      throw new Error(job.failedReason || 'Alignment processing failed.');
     }
 
     const estimatedProgress = Math.min(
@@ -178,7 +178,7 @@ export async function fetchAlignmentResult(
     await waitForPoll(signal);
   }
 
-  throw new Error('Waktu tunggu alignment habis. Silakan coba buka sesi ini kembali.');
+  throw new Error('Alignment timed out. Reopen this session to try again.');
 }
 
 export async function fetchAlignmentComparison(

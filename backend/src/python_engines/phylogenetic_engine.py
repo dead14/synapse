@@ -18,6 +18,7 @@ import sys
 import os
 import json
 import logging
+import re
 import numpy as np
 from dataclasses import asdict
 
@@ -26,6 +27,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 sys.path.insert(0, os.path.dirname(__file__))
 
 from models import SessionLocal, AlignmentSession, ILIFeature, SurveyRun
+from engine.phylogenesis.filogenesis_core import (
+    DEFAULT_SAMPLING_INTERVAL_M,
+    MAX_SIGNAL_SAMPLES,
+    resolve_sampling_interval,
+)
 from engine.phylogenesis.pipeline_service import (
     run_phylogenetic_alignment,
     load_ancestral_anchors,
@@ -34,6 +40,16 @@ from engine.phylogenesis.pipeline_service import (
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("phylogenetic_engine")
+
+# Mirrors dtw_engine._alignment_feature_kind's weld classification: 'Weld',
+# 'Girth Weld', 'GW' and seam-weld labels are girth-weld evidence, not
+# anomalies. A bare upper() membership test routed "Girth Weld" rows into the
+# corrosion buckets.
+_WELD_KIND_PATTERN = re.compile(r"\b(?:gw|weld|girth|seam)\b")
+
+
+def _is_weld_kind(feature_type) -> bool:
+    return bool(_WELD_KIND_PATTERN.search(str(feature_type or "").strip().lower()))
 
 
 def _resolve_phylogenetic_runs(params_json: dict) -> list[dict]:
@@ -63,7 +79,51 @@ def _resolve_phylogenetic_runs(params_json: dict) -> list[dict]:
     return runs
 
 
-def _build_signal_from_features(session, run_id: int) -> np.ndarray:
+def _load_run_odometers(session, run_id: int) -> np.ndarray:
+    """Ordered log distances for a run, as a float array.
+
+    Only the odometer column is selected: the signal builder needs nothing
+    else, and pulling whole ORM rows for a 200k-feature run costs hundreds of
+    megabytes for data that is discarded immediately.
+    """
+    rows = (
+        session.query(ILIFeature.log_distance_m)
+        .filter(ILIFeature.run_id == run_id)
+        .order_by(ILIFeature.log_distance_m)
+        .all()
+    )
+    if not rows:
+        return np.zeros(0)
+    return np.array(
+        [float(value) if value is not None else 0.0 for (value,) in rows],
+        dtype=float,
+    )
+
+
+def _resolve_pair_sampling_interval(odometer_sets) -> tuple[float, bool]:
+    """Shared sampling step for a pair of runs.
+
+    ``pipeline_service`` converts block boundaries to indices with a single
+    interval, so both signals of a pair must be sampled identically.  The step
+    is driven by whichever run is longer.
+
+    Accuracy tradeoff: coarsening multiplies the odometer quantisation of every
+    warping index by the same factor.  At the 20_000-sample cap a 4 km run
+    resolves to 0.2 m instead of 0.1 m, still finer than the tools' own
+    odometer repeatability, but the caller reports the effective step so the
+    result is never read as 0.1 m precision.
+    """
+    longest = 0.0
+    for odometers in odometer_sets:
+        if odometers.size:
+            longest = max(longest, float(odometers.max()))
+    return resolve_sampling_interval(longest, DEFAULT_SAMPLING_INTERVAL_M, MAX_SIGNAL_SAMPLES)
+
+
+def _build_signal_from_odometers(
+    odometers: np.ndarray,
+    sampling_interval: float = DEFAULT_SAMPLING_INTERVAL_M,
+) -> np.ndarray:
     """Build a synthetic MFL-like signal from feature odometers.
 
     The phylogenetic core expects a 1-D signal array resampled at a fixed
@@ -71,27 +131,28 @@ def _build_signal_from_features(session, run_id: int) -> np.ndarray:
     impulse signal from the feature odometer positions — the DTW still
     works because the algorithm constrains via anchor positions.
     """
-    features = (
-        session.query(ILIFeature)
-        .filter(ILIFeature.run_id == run_id)
-        .order_by(ILIFeature.log_distance_m)
-        .all()
-    )
-    if not features:
+    if odometers.size == 0:
         return np.zeros(100)
 
-    max_dist = max(f.log_distance_m or 0 for f in features)
-    sampling = 0.1  # metres
-    length = int(max_dist / sampling) + 10
-    length = max(length, 100)
+    max_dist = float(odometers.max())
+    length = max(int(max_dist / sampling_interval) + 10, 100)
     signal = np.zeros(length)
-
-    for f in features:
-        idx = int((f.log_distance_m or 0) / sampling)
-        if 0 <= idx < length:
-            signal[idx] = 1.0
-
+    indices = (odometers / sampling_interval).astype(np.int64)
+    indices = indices[(indices >= 0) & (indices < length)]
+    signal[indices] = 1.0
     return signal
+
+
+def _build_signal_from_features(
+    session,
+    run_id: int,
+    sampling_interval: float | None = None,
+) -> np.ndarray:
+    """Convenience wrapper: load a run's odometers and build its signal."""
+    odometers = _load_run_odometers(session, run_id)
+    if sampling_interval is None:
+        sampling_interval, _coarsened = _resolve_pair_sampling_interval([odometers])
+    return _build_signal_from_odometers(odometers, sampling_interval)
 
 
 def _feature_to_row(feature: ILIFeature, run_label: str, match_status: str,
@@ -162,6 +223,7 @@ def _feature_to_row(feature: ILIFeature, run_label: str, match_status: str,
 def perform_phylogenetic_alignment(session_id: int):
     """Run the full phylogenetic alignment pipeline for a session."""
     db_session = SessionLocal()
+    raw_conn = None
     try:
         sess = db_session.query(AlignmentSession).filter(
             AlignmentSession.id == session_id
@@ -190,10 +252,12 @@ def perform_phylogenetic_alignment(session_id: int):
         if not pipeline_id:
             raise RuntimeError("Cannot resolve pipeline_id for this session")
 
-        # Use raw psycopg2 connection for the phylogenesis engine
+        # Use raw psycopg2 connection for the phylogenesis engine.
+        # Closed deterministically in the finally block below.
         raw_conn = db_session.get_bind().raw_connection()
 
         all_pair_results = []
+        failed_pairs = []
         combined_report_summary = {
             "pairs": [],
             "total_matches": 0,
@@ -214,9 +278,23 @@ def perform_phylogenetic_alignment(session_id: int):
                 target_id, target_run.get("year"),
             )
 
-            signal_source = _build_signal_from_features(db_session, source_id)
-            signal_target = _build_signal_from_features(db_session, target_id)
+            source_odometers = _load_run_odometers(db_session, source_id)
+            target_odometers = _load_run_odometers(db_session, target_id)
+            sampling_interval, resolution_coarsened = _resolve_pair_sampling_interval(
+                [source_odometers, target_odometers]
+            )
+            if resolution_coarsened:
+                logger.warning(
+                    "Signal resolution coarsened to %.3f m (from %.3f m) so neither "
+                    "run exceeds %d samples; warping indices now localise features "
+                    "to %.3f m instead of %.3f m",
+                    sampling_interval, DEFAULT_SAMPLING_INTERVAL_M, MAX_SIGNAL_SAMPLES,
+                    sampling_interval, DEFAULT_SAMPLING_INTERVAL_M,
+                )
+            signal_source = _build_signal_from_odometers(source_odometers, sampling_interval)
+            signal_target = _build_signal_from_odometers(target_odometers, sampling_interval)
 
+            pair_error = None
             try:
                 report = run_phylogenetic_alignment(
                     db_conn=raw_conn,
@@ -225,10 +303,16 @@ def perform_phylogenetic_alignment(session_id: int):
                     target_run_id=target_id,
                     signal_source=signal_source,
                     signal_target=signal_target,
+                    sampling_interval=sampling_interval,
                 )
             except Exception as e:
-                logger.error("Pair %d failed: %s", pair_idx + 1, e)
+                # A crashed pair is a failure, not "nothing matched". Record
+                # it so the run as a whole can fail instead of silently
+                # reporting every feature as Only OLD / Only NEW.
+                logger.exception("Pair %d (run %d -> run %d) crashed", pair_idx + 1, source_id, target_id)
                 report = None
+                pair_error = str(e)
+                failed_pairs.append({"pair_index": pair_idx, "error": pair_error})
 
             # Build output rows for this pair
             source_features = {
@@ -289,7 +373,15 @@ def perform_phylogenetic_alignment(session_id: int):
                 "matched": len(matched_rows),
                 "only_old": len(only_old_rows),
                 "only_new": len(only_new_rows),
+                "status": "error" if pair_error is not None else "completed",
+                # Resolution metadata: every warping index for this pair is
+                # quantised to this step, so downstream readers must not treat
+                # the result as 0.1 m precision when it was coarsened.
+                "signal_sampling_interval_m": sampling_interval,
+                "signal_resolution_coarsened": resolution_coarsened,
             }
+            if pair_error is not None:
+                pair_summary["error"] = pair_error
             if report:
                 pair_summary["ransac_inliers"] = report.ransac_inliers
                 pair_summary["ransac_outliers"] = report.ransac_outliers
@@ -316,9 +408,7 @@ def perform_phylogenetic_alignment(session_id: int):
 
         for pair_result in all_pair_results:
             for row in pair_result["anomaly_matched"]:
-                ft_old = (row.get("old_feature_type") or "").upper()
-                ft_new = (row.get("new_feature_type") or "").upper()
-                if ft_old in ("GW", "WELD") or ft_new in ("GW", "WELD"):
+                if _is_weld_kind(row.get("old_feature_type")) or _is_weld_kind(row.get("new_feature_type")):
                     gw_locked.append(row)
                 else:
                     anomaly_matched.append(row)
@@ -351,6 +441,11 @@ def perform_phylogenetic_alignment(session_id: int):
                 ),
             },
         }
+        if failed_pairs:
+            json_output["success"] = False
+            json_output["error"] = (
+                f"{len(failed_pairs)} of {len(runs) - 1} alignment pair(s) crashed"
+            )
 
         result_path = os.environ.get("ALIGNMENT_RESULT_FILE")
         if result_path:
@@ -362,11 +457,39 @@ def perform_phylogenetic_alignment(session_id: int):
             print(json.dumps(json_output))
             print("___RESULT_JSON_END___")
 
+        if failed_pairs:
+            # The result payload above carries the per-pair statuses; the
+            # process itself must still exit nonzero so the worker does not
+            # record a crashed run as a successful alignment.
+            raise RuntimeError(
+                "; ".join(
+                    f"pair {f['pair_index'] + 1} crashed: {f['error']}"
+                    for f in failed_pairs
+                )
+            )
+
         total_m = combined_report_summary["total_matches"]
         print(f"\n[DONE] Phylogenetic alignment complete: {total_m} matches across {len(runs)-1} pairs")
 
     finally:
+        if raw_conn is not None:
+            raw_conn.close()
         db_session.close()
+
+
+def _force_utf8_io():
+    """Never let the locale codepage decide how requests are decoded.
+
+    Node sets PYTHONIOENCODING, but this keeps the engine correct when it is
+    run by hand.  ``errors='replace'`` matters as much as the encoding: an
+    encode error while printing the result envelope would kill the run after
+    the alignment already succeeded.  Mirrors dtw_engine._force_utf8_io.
+    """
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
 
 
 def main(argv=None):
@@ -388,4 +511,5 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    _force_utf8_io()
     sys.exit(main())

@@ -13,7 +13,7 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     {/* Last resort: catches failures in the providers and layout themselves,
         which sit above the per-route boundary. */}
-    <ErrorBoundary scope="Aplikasi">
+    <ErrorBoundary scope="Application">
       <BrowserRouter>
         <ThemeProvider>
           <AuthProvider>

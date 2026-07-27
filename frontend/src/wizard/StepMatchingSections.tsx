@@ -197,9 +197,9 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
     <div className="sectioning-light-shell">
       <div className="sectioning-light-header">
         <div>
-          <p className="sectioning-light-eyebrow">NEW ADALAH MASTER SPATIAL</p>
+          <p className="sectioning-light-eyebrow">NEW IS THE SPATIAL MASTER</p>
           <h2>GW View &amp; Sectioning</h2>
-          <p>Klik dua GW pada jalur. OLD hanya menjadi lane pembanding; merah berarti GW lama missing di master NEW.</p>
+          <p>Click two GWs on the line. OLD is only a comparison lane; red means a legacy GW is missing from the NEW master.</p>
         </div>
         <div className="sectioning-light-actions">
           <button type="button" onClick={() => setViewMode('schematic')} className={viewMode === 'schematic' ? 'is-active' : ''}><FiTarget /> GW View</button>
@@ -209,7 +209,7 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
 
       {pairs.length > 1 && (
         <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 bg-brand-50/60 px-5 py-3">
-          <span className="text-xs font-bold uppercase tracking-wide text-brand-700">Section untuk pasangan</span>
+          <span className="text-xs font-bold uppercase tracking-wide text-brand-700">Sections per run pair</span>
           {pairs.map((pair) => {
             const count = sectionsForPair(allSections, pair, primaryPair).length;
             const isActive = pair.key === activePair?.key;
@@ -234,8 +234,8 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
         <span>NEW axis: <strong>{activePair?.newRun?.year || config?.summaryData?.masterRun?.year || '-'}</strong></span>
         <span>Locked GW: <strong>{lockedGws.length}</strong></span>
         <span>Bend inferred: <strong className="is-warning">{features.stats.bendCount}</strong></span>
-        <span>Missing di NEW: <strong className="is-danger">{features.stats.missingGwCount}</strong></span>
-        <span>Coverage: <strong className={validationError ? 'is-danger' : 'is-success'}>{validationError ? 'Perlu diperbaiki' : sections.length ? `${coverage.toFixed(1)}%` : 'Optional · global'}</strong></span>
+        <span>Missing in NEW: <strong className="is-danger">{features.stats.missingGwCount}</strong></span>
+        <span>Coverage: <strong className={validationError ? 'is-danger' : 'is-success'}>{validationError ? 'Needs attention' : sections.length ? `${coverage.toFixed(1)}%` : 'Optional · global'}</strong></span>
       </div>
 
       <div className="sectioning-light-layout">
@@ -243,7 +243,7 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
           <div className="sectioning-light-toolbar">
             <span>View mode</span>
             <button type="button" onClick={() => setViewMode('schematic')} className={viewMode === 'schematic' ? 'is-selected' : ''}><FiTarget /> Longitudinal</button>
-            <span className="sectioning-light-toolbar__hint" style={{flex: 1}}>{canInspectGwPrecisely(zoom) ? 'Klik marker GW untuk memilih batas section' : 'Zoom minimal 600% untuk memilih GW dengan presisi'}</span>
+            <span className="sectioning-light-toolbar__hint" style={{flex: 1}}>{canInspectGwPrecisely(zoom) ? 'Click a GW marker to pick section boundaries' : 'Zoom to at least 600% to select GWs precisely'}</span>
             <div className="flex items-center gap-2">
               <button type="button" onClick={() => setZoom(1)} className="px-3 py-1 bg-white border border-gray-200 rounded text-xs text-gray-600 hover:bg-gray-50 font-bold">Fit</button>
               <div className="flex items-center border border-gray-200 rounded overflow-hidden bg-white ml-2">
@@ -264,21 +264,21 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
             ) : Array.isArray(config?.pipelineRoute) && config.pipelineRoute.length >= 2 ? (
               <SectionMap sections={displaySections} features={features} selectedGWs={selectedGws} onGwClick={handleGwClick} drawnRoute={config.pipelineRoute} />
             ) : (
-              <div className="sectioning-light-empty"><FiMap size={30} /><strong>Koordinat rute belum diisi</strong><span>GW View tetap dapat dipakai; peta bersifat optional.</span></div>
+              <div className="sectioning-light-empty"><FiMap size={30} /><strong>Route coordinates not set</strong><span>GW View still works; the map is optional.</span></div>
             )}
           </div>
           {inspectedGw && <GwPositionCard feature={inspectedGw} onDismiss={() => setInspectedGw(null)} />}
           <div className="sectioning-light-bends">
             <div className="sectioning-light-subhead"><strong>Bends ({bendFeatures.length})</strong><span>Inferred physical features</span></div>
             <div className="sectioning-light-bend-grid">
-              {isLoadingMasterEvidence && <span className="sectioning-light-muted">Memuat lokasi bend dari data master…</span>}
+              {isLoadingMasterEvidence && <span className="sectioning-light-muted">Loading bend locations from master data…</span>}
               {bendFeatures.map((bend, index) => <div key={bend.id}><span>◆</span><strong>BEND {String(index + 1).padStart(2, '0')}</strong><small>{(bend.dist / 1000).toFixed(2)} km / {bendAngleDeg(bend).toFixed(0)}°</small></div>)}
-              {!isLoadingMasterEvidence && bendFeatures.length === 0 && <span className="sectioning-light-muted">Belum ada bend terdeteksi dari data master.</span>}
+              {!isLoadingMasterEvidence && bendFeatures.length === 0 && <span className="sectioning-light-muted">No bends detected from master data yet.</span>}
             </div>
           </div>
           <div className="sectioning-light-overview">
             <strong>Overview</strong>
-            <span>{(features.stats.totalLength / 1000).toFixed(1)} km · {coverage.toFixed(1)}% tercakup section</span>
+            <span>{(features.stats.totalLength / 1000).toFixed(1)} km · {coverage.toFixed(1)}% covered by sections</span>
             <div><i style={{ width: `${Math.min(100, Math.max(1, coverage))}%` }} /></div>
           </div>
         </div>
@@ -308,7 +308,7 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
             // other pairs keep the distances resolved when they were edited.
             return isActivePair ? resolveSectionDistances(section, lockedGws) : section;
           }),
-        })} className="flex items-center gap-2 rounded-xl bg-gray-900 px-6 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">Simpan &amp; Lanjut <FiChevronRight /></button>
+        })} className="flex items-center gap-2 rounded-xl bg-gray-900 px-6 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">Save &amp; Continue <FiChevronRight /></button>
       </div>
     </div>
   );

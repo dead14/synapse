@@ -1,5 +1,8 @@
+import io
+import json
 import sys
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 import numpy as np
@@ -180,6 +183,66 @@ class HungarianToleranceTests(unittest.TestCase):
                 edges = self.engine.build_sparse_cost_edges([old], [new], [], [])
                 self.assertEqual(matrix[0][0], self.engine.INF_COST)
                 self.assertEqual(edges, [])
+
+    def test_scalar_pair_cost_is_the_single_source_of_truth(self):
+        # The sparse edge loop used to score each candidate by calling
+        # build_cost_matrix([old], [new], ...)[0][0]: a fresh 1x1 numpy array
+        # and a full re-resolve of every weight and tolerance per edge. Both
+        # paths now share pair_cost, so they must agree cell for cell.
+        old_features = [
+            self.feature(100.0),
+            self.feature(100.0, dist_to_us_gw_m=2.0),
+            self.feature(100.0, clock_position="12:00", length_mm=10.0, width_mm=8.0),
+            self.feature(100.0, length_mm=10.0),
+        ]
+        new_features = [
+            self.feature(99.7),
+            self.feature(99.9),
+            self.feature(100.1, dist_to_us_gw_m=2.05),
+            self.feature(100.2, clock_position="12:10", length_mm=18.0, width_mm=40.0),
+            self.feature(100.3, length_mm=61.0),
+        ]
+
+        matrix = self.engine.build_cost_matrix(old_features, new_features, [], [])
+        settings = self.engine.resolve_cost_settings(None)
+        for i, old in enumerate(old_features):
+            corrected = old["abs_distance_m"] + self.engine._interpolate_offset(
+                old["abs_distance_m"], [], []
+            )
+            for j, new in enumerate(new_features):
+                self.assertEqual(
+                    matrix[i][j],
+                    self.engine.pair_cost(old, new, corrected, settings),
+                    f"cell ({i}, {j})",
+                )
+
+        edges = self.engine.build_sparse_cost_edges(old_features, new_features, [], [])
+        for old_index, new_index, cost in edges:
+            self.assertEqual(cost, matrix[old_index][new_index])
+        dense_edges = {
+            (i, j)
+            for i in range(len(old_features))
+            for j in range(len(new_features))
+            if matrix[i][j] < self.engine.INF_COST
+        }
+        self.assertEqual({(i, j) for i, j, _cost in edges}, dense_edges)
+
+    def test_pair_cost_honours_per_section_tolerance_overrides(self):
+        old = self.feature(100.0, length_mm=10.0)
+        new = self.feature(100.3, length_mm=61.0)
+        overrides = {"ds_gw_distance_tolerance": 0.5, "length_tolerance": 100.0}
+
+        settings = self.engine.resolve_cost_settings(overrides)
+        scalar = self.engine.pair_cost(old, new, 100.0, settings)
+        dense = self.engine.build_cost_matrix([old], [new], [], [], overrides)[0][0]
+
+        self.assertEqual(scalar, dense)
+        self.assertLess(scalar, self.engine.INF_COST)
+        # Without the override the same pair is rejected on both counts.
+        self.assertEqual(
+            self.engine.build_cost_matrix([old], [new], [], [])[0][0],
+            self.engine.INF_COST,
+        )
 
     def test_reads_common_upstream_gw_distance_column_alias(self):
         value = self.engine._read_us_gw_distance({"Dist. to U/S GW (m)": "2.35"})
@@ -608,6 +671,13 @@ class OrderedAnomalyMatchingTests(unittest.TestCase):
         self.assertEqual(len(pairs), 1)
         self.assertIn(pairs[0], {(0, 1), (1, 0)})
 
+    def test_gw_pair_key_tolerates_a_missing_odometer(self):
+        # Orphan pairs legitimately miss one odometer; float(None) used to raise.
+        key = HungarianAnomalyAlignmentEngine._gw_pair_key(
+            {"old_id": "o1", "new_id": "n1", "old_odometer": None, "new_odometer": 12.0}
+        )
+        self.assertEqual(key, "o1::n1::None::12.000000")
+
     def test_section_boundaries_must_use_locked_gw_pairs_and_not_overlap(self):
         locked = [
             {"old_id": "o1", "new_id": "n1", "old_odometer": 0.0, "new_odometer": 1.0},
@@ -806,6 +876,124 @@ class GwMonotonicityTests(unittest.TestCase):
     def test_empty_and_single_pair_are_trivially_monotonic(self):
         HungarianAnomalyAlignmentEngine._assert_monotonic_gw_pairs([])
         HungarianAnomalyAlignmentEngine._assert_monotonic_gw_pairs(self.pairs((10.0, 110.0)))
+
+
+class FieldFallbackTests(unittest.TestCase):
+    """A legitimate 0.0 reading must never fall through to another key."""
+
+    def test_first_present_prefers_zero_over_fallback_keys(self):
+        record = {"depth_pct": 0.0, "depth": 55.0}
+        self.assertEqual(
+            hungarian_engine._first_present(record, "depth_pct", "depth"), 0.0
+        )
+
+    def test_first_present_skips_none_and_blank_strings(self):
+        self.assertEqual(
+            hungarian_engine._first_present({"depth_pct": None, "depth": 7.5}, "depth_pct", "depth"),
+            7.5,
+        )
+        self.assertEqual(
+            hungarian_engine._first_present({"length_mm": "   ", "length": 3.0}, "length_mm", "length"),
+            3.0,
+        )
+        self.assertIsNone(hungarian_engine._first_present({}, "depth_pct", "depth"))
+
+    def test_fetch_data_preserves_zero_valued_readings_and_id(self):
+        params = {
+            "summaryData": {
+                "newRun": {
+                    "rawFeatures": [{
+                        "id": 0,
+                        "feature_id": "vendor-1",
+                        "type": "metal loss",
+                        "dist": 100.0,
+                        "depth_pct": 0.0,
+                        "depth": 55.0,
+                        "length_mm": 0.0,
+                        "length": 44.0,
+                        "width_mm": 0.0,
+                        "width": 33.0,
+                    }]
+                }
+            },
+        }
+        engine = HungarianTieInOffsetTests.engine_with_params(params)
+
+        feature = engine.fetch_data(is_old_run=False)[0]
+
+        self.assertEqual(feature["depth_pct"], 0.0)
+        self.assertEqual(feature["length_mm"], 0.0)
+        self.assertEqual(feature["width_mm"], 0.0)
+        # A vendor row id of 0 must not fall through to feature_id.
+        self.assertEqual(feature["id"], "0")
+
+
+class MissingSurveyYearTests(unittest.TestCase):
+    """Missing survey years disable growth output instead of fabricating a span."""
+
+    @staticmethod
+    def engine_with_years(old_year, new_year):
+        engine = HungarianAnomalyAlignmentEngine.__new__(HungarianAnomalyAlignmentEngine)
+        engine.run_1_year = old_year
+        engine.run_2_year = new_year
+        return engine
+
+    def test_year_span_requires_both_survey_years(self):
+        self.assertEqual(self.engine_with_years(2021, 2026)._growth_year_span(), 5)
+        self.assertIsNone(self.engine_with_years(None, 2026)._growth_year_span())
+        self.assertIsNone(self.engine_with_years(2021, None)._growth_year_span())
+
+    def test_missing_year_produces_a_review_warning_entry(self):
+        warnings = self.engine_with_years(None, 2026)._missing_survey_year_warnings()
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["code"], "MISSING_SURVEY_YEAR")
+        self.assertEqual(warnings[0]["severity"], "REVIEW")
+        self.assertIn("OLD", warnings[0]["message"])
+        self.assertEqual(
+            self.engine_with_years(2021, 2026)._missing_survey_year_warnings(), []
+        )
+
+    def test_run_year_is_never_fabricated_from_the_current_date(self):
+        self.assertIsNone(HungarianAnomalyAlignmentEngine._run_year({}))
+        self.assertEqual(HungarianAnomalyAlignmentEngine._run_year({"year": "2024"}), 2024)
+        self.assertEqual(HungarianAnomalyAlignmentEngine._run_year({"surveyYear": 2019}), 2019)
+
+    def test_payload_reports_missing_year_and_skips_growth(self):
+        engine = HungarianAnomalyAlignmentEngine.__new__(HungarianAnomalyAlignmentEngine)
+        engine.session_id = 7
+        engine.session = FakeSession(SimpleNamespace(params_json={
+            "gwMatchesFinal": [],
+            "gwOrphans": [],
+        }))
+        engine.run_1_year = None
+        engine.run_2_year = 2026
+        engine.clock_tolerance = 15.0
+        engine.us_gw_distance_tolerance = 1.0
+        engine.ds_gw_distance_tolerance = 1.0
+        engine.length_tolerance = 400.0
+        engine.fetch_data = lambda is_old_run: (
+            [{"id": "old-ml", "abs_distance_m": 10.0, "depth_pct": 10.0, "length_mm": None,
+              "width_mm": None, "dist_to_us_gw_m": None, "clock_position": None,
+              "originalType": "metal loss"}]
+            if is_old_run else
+            [{"id": "new-ml", "abs_distance_m": 10.1, "depth_pct": 20.0, "length_mm": None,
+              "width_mm": None, "dist_to_us_gw_m": None, "clock_position": None,
+              "originalType": "metal loss"}]
+        )
+        engine.get_gw_matches = lambda: []
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            engine.perform_alignment()
+        payload = output.getvalue().split("___RESULT_JSON_BEGIN___\n", 1)[1].split("\n___RESULT_JSON_END___", 1)[0]
+        result = json.loads(payload)
+
+        matched = result["anomaly_matched"][0]
+        self.assertEqual(matched["Depth Growth (%WT/yr)"], "-")
+        self.assertEqual(matched["Length Growth (mm/yr)"], "-")
+        self.assertIsNone(matched["Run Year OLD"])
+        self.assertEqual(matched["Run Year NEW"], 2026)
+        self.assertEqual(result["audit"]["warnings"][0]["code"], "MISSING_SURVEY_YEAR")
 
 
 class DistanceCoercionTests(unittest.TestCase):

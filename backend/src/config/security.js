@@ -29,6 +29,19 @@ function isOriginAllowed(origin, allowedOrigins) {
     return !origin || allowedOrigins.includes(origin);
 }
 
+// Express accepts a hop count, booleans, and preset/CIDR strings ('loopback',
+// '10.0.0.0/8', comma lists) for 'trust proxy'.  Accepting only /^\d+$/ meant
+// TRUST_PROXY=true was silently ignored, req.ip stayed the proxy address for
+// every client, and the login rate limiter became a global lockout.
+function resolveTrustProxy(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return undefined;
+    if (/^\d+$/.test(raw)) return Number(raw);
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    return raw;
+}
+
 function createCorsOptions(env = process.env) {
     const allowedOrigins = getAllowedOrigins(env);
     return {
@@ -66,5 +79,6 @@ module.exports = {
     createCorsOptions,
     getAllowedOrigins,
     isOriginAllowed,
+    resolveTrustProxy,
     securityHeaders,
 };

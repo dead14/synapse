@@ -13,11 +13,13 @@ function startConfiguredWorkers({
     // required even when BullMQ consumers run in a separate service.
     startPythonWorkers();
 
-    if (!queueWorkersEnabled(env)) return;
+    if (!queueWorkersEnabled(env)) return [];
 
-    startIngestionWorker();
-    startAlignmentWorker();
+    // Returned so shutdown can close the in-process BullMQ consumers and stop
+    // them from picking up jobs mid-exit.
+    const queueWorkers = [startIngestionWorker(), startAlignmentWorker()];
     log(JSON.stringify({ event: 'worker_started', workers: ['ili-ingestion', 'ili-alignment'] }));
+    return queueWorkers;
 }
 
 module.exports = { queueWorkersEnabled, startConfiguredWorkers };

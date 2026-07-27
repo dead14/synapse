@@ -13,6 +13,7 @@ import { NumberField } from '../../components/ffs/FfsPrimitives';
 import { apiFetch } from '../../utils/api';
 import { fetchAlignmentResult, type ComparisonRow } from '../../utils/alignment';
 import { getAlignmentImportReadiness, mapAlignmentRowsToFfs } from '../../lib/ffs/alignmentImport';
+import { useToast } from '../../components/common/ToastProvider';
 
 interface PipelineRun {
   id: string;
@@ -27,7 +28,8 @@ interface PipelineRun {
 
 export default function FfsSetupPage() {
   const navigate = useNavigate();
-  
+  const toast = useToast();
+
   // Setup State
   const [lineName, setLineName] = useState('');
   const [method, setMethod] = useState<'original' | 'modified'>('modified');
@@ -85,7 +87,7 @@ export default function FfsSetupPage() {
         setSelectedRunId(initial);
       })
       .catch((caught) => {
-        if (!cancelled) setAlignmentError(caught instanceof Error ? caught.message : 'Riwayat alignment tidak dapat dimuat.');
+        if (!cancelled) setAlignmentError(caught instanceof Error ? caught.message : 'The alignment history could not be loaded.');
       })
       .finally(() => {
         if (!cancelled) setAlignmentLoading(false);
@@ -116,11 +118,11 @@ export default function FfsSetupPage() {
   const runAssessment = () => {
     if (!file) return;
     if (!iliDate) {
-      alert('Please select an ILI Inspection Date');
+      toast.error('Select an ILI inspection date first.');
       return;
     }
     if (!lineName) {
-      alert('Please enter a Pipeline / Line Name');
+      toast.error('Enter a pipeline / line name first.');
       return;
     }
 
@@ -133,7 +135,7 @@ export default function FfsSetupPage() {
       complete: async (results) => {
         const missing = validateHeaders(results.meta.fields || []);
         if (missing.length > 0) {
-          alert(`Missing required columns: \n${missing.join('\n')}`);
+          toast.error(`Missing required columns:\n${missing.join('\n')}`);
           setIsProcessing(false);
           return;
         }
@@ -161,7 +163,7 @@ export default function FfsSetupPage() {
         navigate('/ffs/results', { state: { results: ffsResults, config, screening } });
       },
       error: (err) => {
-        alert('CSV parse error: ' + err.message);
+        toast.error('CSV parse error: ' + err.message);
         setIsProcessing(false);
       }
     });
@@ -182,7 +184,7 @@ export default function FfsSetupPage() {
       const selected = runs.find((run) => run.id === selectedRunId);
       if (!lineName && selected) setLineName(selected.pipelineName);
     } catch (caught) {
-      setAlignmentError(caught instanceof Error ? caught.message : 'Hasil alignment tidak dapat dimuat.');
+      setAlignmentError(caught instanceof Error ? caught.message : 'The alignment results could not be loaded.');
     } finally {
       setAlignmentLoading(false);
     }
@@ -203,7 +205,7 @@ export default function FfsSetupPage() {
         fallbackLengthGrowthMmPerYear: Number(fallbackLengthGrowth),
       }, selectedRunId);
       if (imported.accepted.length === 0) {
-        throw new Error(imported.rejected[0]?.reason || 'Tidak ada NEW-run anomaly yang layak dinilai dengan FFS.');
+        throw new Error(imported.rejected[0]?.reason || 'No NEW-run anomalies are eligible for FFS assessment.');
       }
       const rows = imported.accepted.map((item) => item.row);
       const dataErrors = validateData(rows);
@@ -233,7 +235,7 @@ export default function FfsSetupPage() {
         },
       });
     } catch (caught) {
-      setAlignmentError(caught instanceof Error ? caught.message : 'Import alignment gagal diproses.');
+      setAlignmentError(caught instanceof Error ? caught.message : 'The alignment import could not be processed.');
     } finally {
       setIsProcessing(false);
     }

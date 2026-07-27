@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import SectionModal from './SectionModal';
+import ConfirmDialog from '../components/common/ConfirmDialog';
 import SectioningSchematic from './SectioningSchematic';
 import SectionList from './SectionList';
 import SectionMap from './SectionMap';
@@ -31,6 +32,7 @@ export default function IliSectioningPage() {
   const [selectedGWs, setSelectedGWs] = useState<any[]>([]); // stores up to 2 GW objects
   const [inspectedGw, setInspectedGw] = useState<any | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [showClearAllConfirm, setShowClearAllConfirm] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>({ status: 'idle' });
   const [sectionError, setSectionError] = useState<string | null>(null);
   const [routeError, setRouteError] = useState<string | null>(null);
@@ -82,7 +84,7 @@ export default function IliSectioningPage() {
       try {
         const urlParams = new URLSearchParams(window.location.search);
         const resolvedSessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
-        if (!resolvedSessionId) throw new Error('ID sesi tidak ditemukan.');
+        if (!resolvedSessionId) throw new Error('Session ID not found.');
         setSessionId(resolvedSessionId);
         const sessData = await apiFetch<{ config?: any }>(`/api/wizard/session/${encodeURIComponent(resolvedSessionId)}`, { signal: controller.signal });
         const config = sessData.config || {};
@@ -135,7 +137,7 @@ export default function IliSectioningPage() {
       setSaveState({ status: 'saved' });
     } catch (e) {
       console.error("Failed to save sections", e);
-      setSaveState({ status: 'error', message: (e as Error).message || 'Gagal menyimpan ke server.' });
+      setSaveState({ status: 'error', message: (e as Error).message || 'Failed to save to the server.' });
     }
   };
 
@@ -162,10 +164,7 @@ export default function IliSectioningPage() {
   }, [selectedGWs]);
 
   const handleClearAll = () => {
-    if (window.confirm("Are you sure you want to delete ALL sections?")) {
-      setSections([]);
-      saveSpatialState([]);
-    }
+    setShowClearAllConfirm(true);
   };
 
   const handleExport = () => {
@@ -379,10 +378,10 @@ export default function IliSectioningPage() {
           <span className="text-green-600 text-xs uppercase tracking-wider">operational</span>
         </div>
         <div className="flex items-center gap-4" aria-live="polite">
-          {saveState.status === 'saving' && <span className="text-xs font-semibold text-gray-500">Menyimpan…</span>}
-          {saveState.status === 'saved' && <span className="text-xs font-semibold text-green-600">Tersimpan</span>}
+          {saveState.status === 'saving' && <span className="text-xs font-semibold text-gray-500">Saving…</span>}
+          {saveState.status === 'saved' && <span className="text-xs font-semibold text-green-600">Saved</span>}
           {saveState.status === 'error' && (
-            <span className="text-xs font-semibold text-red-600" role="alert">Gagal menyimpan: {saveState.message}</span>
+            <span className="text-xs font-semibold text-red-600" role="alert">Save failed: {saveState.message}</span>
           )}
         </div>
       </header>
@@ -455,9 +454,9 @@ export default function IliSectioningPage() {
           <div className="p-6 border-b border-gray-100 flex flex-col gap-4">
             <div className="flex justify-between items-start">
               <div>
-                <div className="text-[10px] font-bold text-blue-600 tracking-widest uppercase mb-1">NEW ADALAH MASTER SPATIAL</div>
+                <div className="text-[10px] font-bold text-blue-600 tracking-widest uppercase mb-1">NEW IS THE SPATIAL MASTER</div>
                 <h2 className="text-xl font-bold text-gray-900">GW View & Sectioning</h2>
-                <p className="text-sm text-gray-500">Klik dua GW pada jalur. OLD hanya menjadi lane pembanding; merah berarti GW lama missing di master NEW.</p>
+                <p className="text-sm text-gray-500">Click two GWs on the line. OLD is only a comparison lane; red means a legacy GW is missing from the NEW master.</p>
               </div>
               <div className="flex gap-3">
                 <button type="button" onClick={() => setViewMode('schematic')} className={`px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 ${viewMode === 'schematic' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'} border transition-colors`}>GW View</button>
@@ -470,7 +469,7 @@ export default function IliSectioningPage() {
               <div className="flex-1 border-r border-gray-100 pr-4"><span className="text-gray-500 mr-2">Master NEW:</span><span className="text-green-600">{sessionConfig?.summaryData?.masterRun?.year ?? sessionConfig?.summaryData?.newRun?.year ?? '2026'}</span></div>
               <div className="flex-1 border-r border-gray-100 px-4"><span className="text-gray-500 mr-2">Locked GW:</span><span className="text-green-600">{features?.stats?.gwCount ?? 0}</span></div>
               <div className="flex-1 border-r border-gray-100 px-4"><span className="text-gray-500 mr-2">Bend inferred:</span><span className="text-orange-500">{features?.stats?.bendCount ?? 0}</span></div>
-              <div className="flex-1 border-r border-gray-100 px-4"><span className="text-gray-500 mr-2">Missing di NEW:</span><span className={features?.stats?.missingGwCount > 0 ? 'text-red-500' : 'text-green-600'}>{features?.stats?.missingGwCount ?? 0}</span></div>
+              <div className="flex-1 border-r border-gray-100 px-4"><span className="text-gray-500 mr-2">Missing in NEW:</span><span className={features?.stats?.missingGwCount > 0 ? 'text-red-500' : 'text-green-600'}>{features?.stats?.missingGwCount ?? 0}</span></div>
               <div className="flex-1 pl-4"><span className="text-gray-500 mr-2">Coverage:</span><span className={coverage > 0 ? 'text-green-600' : 'text-gray-500'}>{sections.length === 0 ? 'Optional · global' : `${coverage.toFixed(1)}%`}</span></div>
             </div>
           </div>
@@ -481,22 +480,22 @@ export default function IliSectioningPage() {
               <div className="text-sm font-medium text-gray-700">
                 Longitudinal view
                 <span className="ml-3 text-xs font-normal text-gray-500">
-                  {zoom >= 6 ? 'Klik marker GW untuk memilih batas section' : 'Zoom minimal 600% untuk memilih GW dengan presisi'}
-                  <span className="ml-2 text-gray-400">· ctrl + scroll untuk zoom</span>
+                  {zoom >= 6 ? 'Click a GW marker to pick section boundaries' : 'Zoom to at least 600% to select GWs precisely'}
+                  <span className="ml-2 text-gray-400">· ctrl + scroll to zoom</span>
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <button type="button" onClick={() => setZoom(1)} className="px-3 py-1.5 bg-white border border-gray-200 rounded-md text-sm text-gray-600 hover:bg-gray-50 flex items-center gap-2"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg> Fit</button>
                 <div className="flex items-center border border-gray-200 rounded-md overflow-hidden bg-white ml-2">
-                  <button type="button" aria-label="Perkecil" onClick={() => setZoom(clampSchematicZoom(zoom - 0.5))} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">−</button>
+                  <button type="button" aria-label="Zoom out" onClick={() => setZoom(clampSchematicZoom(zoom - 0.5))} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">−</button>
                   <div className="w-px h-4 bg-gray-200"></div>
                   <button type="button" onClick={() => setZoom(1)} className={`px-3 py-1.5 text-sm ${zoom === 1 ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>100%</button>
                   <div className="w-px h-4 bg-gray-200"></div>
-                  <button type="button" aria-label="Perbesar" onClick={() => setZoom(clampSchematicZoom(zoom + 0.5))} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">+</button>
+                  <button type="button" aria-label="Zoom in" onClick={() => setZoom(clampSchematicZoom(zoom + 0.5))} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">+</button>
                   <div className="w-px h-4 bg-gray-200"></div>
                   <button type="button" onClick={() => setZoom(MAX_SCHEMATIC_ZOOM)} className={`px-3 py-1.5 text-sm ${zoom === MAX_SCHEMATIC_ZOOM ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>{MAX_SCHEMATIC_ZOOM * 100}%</button>
                 </div>
-                <input type="range" aria-label="Tingkat zoom" min="0.5" max={MAX_SCHEMATIC_ZOOM} step="0.5" value={zoom} onChange={(e) => setZoom(clampSchematicZoom(Number(e.target.value)))} className="w-24 ml-2 accent-blue-600" />
+                <input type="range" aria-label="Zoom level" min="0.5" max={MAX_SCHEMATIC_ZOOM} step="0.5" value={zoom} onChange={(e) => setZoom(clampSchematicZoom(Number(e.target.value)))} className="w-24 ml-2 accent-blue-600" />
               </div>
             </div>
           )}
@@ -594,7 +593,7 @@ export default function IliSectioningPage() {
                   {/* Route Setup Panel */}
                   <div className="absolute top-4 left-4 z-[1000] bg-white rounded-2xl border border-gray-200 shadow-xl w-[380px] p-6 text-gray-800 font-sans pointer-events-auto">
                     <div className="flex justify-between items-start mb-4">
-                      <h2 className="text-xl font-bold text-gray-900">Pengaturan Jalur Pipa</h2>
+                      <h2 className="text-xl font-bold text-gray-900">Pipeline Route Setup</h2>
                       <button 
                         onClick={() => { updateDrawnRoute([]); setPickingMode(null); }} 
                         className="text-xs font-bold text-red-500 hover:text-red-700 underline"
@@ -606,11 +605,11 @@ export default function IliSectioningPage() {
                     <div className="flex flex-col gap-5">
                       {/* START GW */}
                       <div>
-                        <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">START (WELD PERTAMA)</label>
+                        <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">START (FIRST WELD)</label>
                         <div className="grid grid-cols-2 gap-2 mb-2">
                           <input 
                             type="text" 
-                            placeholder="Lat (Desimal / DMS)" 
+                            placeholder="Lat (Decimal / DMS)" 
                             value={routeForm.startLat} 
                             onChange={e => setRouteForm(f => ({...f, startLat: e.target.value}))}
                             onBlur={e => setRouteForm(f => ({...f, startLat: normalizeCoordinateField(e.target.value)}))}
@@ -618,7 +617,7 @@ export default function IliSectioningPage() {
                           />
                           <input 
                             type="text" 
-                            placeholder="Lng (Desimal / DMS)" 
+                            placeholder="Lng (Decimal / DMS)" 
                             value={routeForm.startLng} 
                             onChange={e => setRouteForm(f => ({...f, startLng: e.target.value}))} 
                             onBlur={e => setRouteForm(f => ({...f, startLng: normalizeCoordinateField(e.target.value)}))}
@@ -633,17 +632,17 @@ export default function IliSectioningPage() {
                               : 'bg-white border-gray-300 text-gray-600 hover:border-gray-400'
                           }`}
                         >
-                          {pickingMode === 'start' ? 'Pilih Titik di Peta...' : 'Pilih di Peta'}
+                          {pickingMode === 'start' ? 'Picking a point on the map...' : 'Pick on Map'}
                         </button>
                       </div>
 
                       {/* END GW */}
                       <div>
-                        <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">END (WELD TERAKHIR)</label>
+                        <label className="block text-xs text-gray-700 mb-1 font-bold tracking-wider">END (LAST WELD)</label>
                         <div className="grid grid-cols-2 gap-2 mb-2">
                           <input 
                             type="text" 
-                            placeholder="Lat (Desimal / DMS)" 
+                            placeholder="Lat (Decimal / DMS)" 
                             value={routeForm.endLat} 
                             onChange={e => setRouteForm(f => ({...f, endLat: e.target.value}))} 
                             onBlur={e => setRouteForm(f => ({...f, endLat: normalizeCoordinateField(e.target.value)}))}
@@ -651,7 +650,7 @@ export default function IliSectioningPage() {
                           />
                           <input 
                             type="text" 
-                            placeholder="Lng (Desimal / DMS)" 
+                            placeholder="Lng (Decimal / DMS)" 
                             value={routeForm.endLng} 
                             onChange={e => setRouteForm(f => ({...f, endLng: e.target.value}))} 
                             onBlur={e => setRouteForm(f => ({...f, endLng: normalizeCoordinateField(e.target.value)}))}
@@ -666,22 +665,22 @@ export default function IliSectioningPage() {
                               : 'bg-white border-gray-300 text-gray-600 hover:border-gray-400'
                           }`}
                         >
-                          {pickingMode === 'end' ? 'Pilih Titik di Peta...' : 'Pilih di Peta'}
+                          {pickingMode === 'end' ? 'Picking a point on the map...' : 'Pick on Map'}
                         </button>
                       </div>
 
                       {/* COMPARE LENGTHS */}
                       <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 font-mono text-sm">
                         <div className="flex justify-between items-center mb-1">
-                          <span className="text-gray-500">Jarak Peta:</span> 
+                          <span className="text-gray-500">Map distance:</span> 
                           <strong className="text-gray-900">{(mapDistanceMeters / 1000).toFixed(3)} km</strong>
                         </div>
                         <div className="flex justify-between items-center mb-2">
-                          <span className="text-gray-500">Panjang ILI:</span> 
+                          <span className="text-gray-500">ILI length:</span> 
                           <strong className="text-gray-900">{features?.stats ? (features.stats.totalLength / 1000).toFixed(3) : 0} km</strong>
                         </div>
                         <div className="flex justify-between items-center pt-2 border-t border-gray-200">
-                          <span className="text-gray-700 font-bold">Selisih:</span> 
+                          <span className="text-gray-700 font-bold">Difference:</span> 
                           <strong className={`${features?.stats && Math.abs(mapDistanceMeters - features.stats.totalLength) > 1000 ? 'text-red-600' : 'text-blue-600'}`}>
                             {features?.stats ? Math.abs(mapDistanceMeters - features.stats.totalLength).toFixed(0) : 0} m
                           </strong>
@@ -702,11 +701,11 @@ export default function IliSectioningPage() {
                             const lng2 = parseCoordinate(routeForm.endLng);
 
                             if (lat1 === null || lng1 === null || lat2 === null || lng2 === null) {
-                              setRouteError('Koordinat Start dan End belum terisi dengan format yang dikenali (desimal, DDM, atau DMS).');
+                              setRouteError('Start and End coordinates are missing or not in a recognized format (decimal, DDM, or DMS).');
                               return;
                             }
                             if (lat1 === lat2 && lng1 === lng2) {
-                              setRouteError('Titik Start dan End tidak boleh sama, jaraknya akan jadi 0 meter.');
+                              setRouteError('Start and End points must not be identical; the distance would be 0 meters.');
                               return;
                             }
                             setRouteError(null);
@@ -720,12 +719,12 @@ export default function IliSectioningPage() {
                           }}
                           className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-6 py-2.5 text-sm font-bold transition-colors shadow-sm"
                         >
-                          Terapkan Garis Lurus (2 Titik)
+                          Apply Straight Line (2 Points)
                         </button>
                         
                         <div className="flex items-center justify-center gap-2">
                           <div className="h-px bg-gray-200 flex-1"></div>
-                          <span className="text-[10px] text-gray-400 font-bold tracking-widest">ATAU</span>
+                          <span className="text-[10px] text-gray-400 font-bold tracking-widest">OR</span>
                           <div className="h-px bg-gray-200 flex-1"></div>
                         </div>
                         
@@ -737,7 +736,7 @@ export default function IliSectioningPage() {
                               : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
                           }`}
                         >
-                          {pickingMode === 'route' ? 'Selesai Gambar Rute' : 'Gambar Rute Bebas'}
+                          {pickingMode === 'route' ? 'Finish Drawing Route' : 'Draw Freehand Route'}
                         </button>
                       </div>
                     </div>
@@ -839,6 +838,21 @@ export default function IliSectioningPage() {
           />
         );
       })()}
+
+      {showClearAllConfirm && (
+        <ConfirmDialog
+          title="Delete all sections?"
+          message="This removes every section from this session. This action cannot be undone."
+          confirmLabel="Delete All"
+          danger
+          onConfirm={() => {
+            setSections([]);
+            saveSpatialState([]);
+            setShowClearAllConfirm(false);
+          }}
+          onCancel={() => setShowClearAllConfirm(false)}
+        />
+      )}
     </div>
   );
 }

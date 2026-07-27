@@ -8,6 +8,7 @@ import {
   Tooltip,
   Legend
 } from 'chart.js';
+import { corrosionRateMmPerYear } from './CrVsDistanceChart';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
 
@@ -26,24 +27,20 @@ interface CrDistributionChartProps {
 export default function CrDistributionChart({ data, filters }: CrDistributionChartProps) {
 
   const chartData = useMemo(() => {
-    const validData = data.slice(1);
-    
-    const YEARS_DIFF = 5; 
     const crValues: number[] = [];
 
-    validData.forEach(row => {
-      const isMatched = row['Match/Unmatch'] === 'Matched';
-      
-      const depth1 = parseFloat(row['Unnamed: 37']);
-      const depth2 = parseFloat(row['Unnamed: 10']);
+    data.forEach(row => {
+      const isMatched = row['Match/Unmatch'] === 'Matched' || row['Match/Unmatch'] === 'Match';
+      const cr = corrosionRateMmPerYear(row);
+      if (cr === null) return;
 
-      if (isMatched && !isNaN(depth1) && !isNaN(depth2)) {
+      if (isMatched) {
         if (filters.matched === 'Both' || filters.matched === 'Run 2') {
-           crValues.push((depth2 - depth1) / YEARS_DIFF);
+          crValues.push(cr);
         }
-      } else if (!isMatched && !isNaN(depth2)) {
+      } else {
         if (filters.unmatched === 'Both' || filters.unmatched === 'Run 2') {
-           crValues.push(depth2 / YEARS_DIFF);
+          crValues.push(cr);
         }
       }
     });
@@ -72,7 +69,7 @@ export default function CrDistributionChart({ data, filters }: CrDistributionCha
       }
     });
 
-    return { labels, bins };
+    return { labels, bins, count: crValues.length };
   }, [data, filters]);
 
   const datasets = [
@@ -110,9 +107,14 @@ export default function CrDistributionChart({ data, filters }: CrDistributionCha
 
   return (
     <div className="w-full h-full relative" style={{ minHeight: '400px' }}>
-      <Bar 
-        data={{ labels: chartData.labels, datasets }} 
-        options={options} 
+      {chartData.count === 0 && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-gray-400">
+          No corrosion rate could be derived (requires NEW depth, wall thickness, and run years)
+        </div>
+      )}
+      <Bar
+        data={{ labels: chartData.labels, datasets }}
+        options={options}
       />
     </div>
   );

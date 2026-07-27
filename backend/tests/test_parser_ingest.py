@@ -287,30 +287,167 @@ class FeatureClassificationTests(unittest.TestCase):
 
 
 class UnitDetectionTests(unittest.TestCase):
-    def test_imperial_distance_detected_from_column_headers(self):
-        columns = ["Feature ID", "Distance (ft)", "Feature Type"]
-        field_map = {"Distance (ft)": "log_distance_m"}
-        result = db_ingest.detect_source_units(columns, field_map)
-        self.assertEqual(result["distances"], "imperial")
+    """Units are read per mapped column, from that column's own header only."""
 
-    def test_metric_distance_detected_from_column_headers(self):
-        columns = ["Feature ID", "Log Distance (m)", "Type"]
-        field_map = {"Log Distance (m)": "log_distance_m"}
-        result = db_ingest.detect_source_units(columns, field_map)
-        self.assertEqual(result["distances"], "metric")
+    def test_imperial_distance_detected_from_the_mapped_header(self):
+        units = db_ingest.detect_source_units({"log_distance_m": ["Distance (ft)"]})
+        self.assertEqual(units["log_distance_m"], "imperial")
+
+    def test_metric_distance_detected_from_the_mapped_header(self):
+        units = db_ingest.detect_source_units({"log_distance_m": ["Log Distance (m)"]})
+        self.assertEqual(units["log_distance_m"], "metric")
 
     def test_imperial_dimensions_detected(self):
-        columns = ["ID", "Distance", "Length (in)", "Width (inches)"]
-        field_map = {"Length (in)": "length_mm", "Width (inches)": "width_mm"}
-        result = db_ingest.detect_source_units(columns, field_map)
-        self.assertEqual(result["dimensions"], "imperial")
+        units = db_ingest.detect_source_units({
+            "length_mm": ["Length (in)"],
+            "width_mm": ["Width (inches)"],
+        })
+        self.assertEqual(units["length_mm"], "imperial")
+        self.assertEqual(units["width_mm"], "imperial")
 
     def test_no_units_when_headers_are_ambiguous(self):
-        columns = ["Feature ID", "Log Distance", "Feature Type"]
-        field_map = {"Log Distance": "log_distance_m"}
-        result = db_ingest.detect_source_units(columns, field_map)
-        self.assertIsNone(result["distances"])
-        self.assertIsNone(result["dimensions"])
+        units = db_ingest.detect_source_units({
+            "log_distance_m": ["Log Distance"],
+            "length_mm": ["Length"],
+        })
+        self.assertIsNone(units["log_distance_m"])
+        self.assertIsNone(units["length_mm"])
+
+    def test_bare_english_words_in_and_ft_are_not_unit_tokens(self):
+        units = db_ingest.detect_source_units({
+            "length_mm": ["Length in axial direction"],
+            "log_distance_m": ["Distance ft from launcher"],
+        })
+        self.assertIsNone(units["length_mm"])
+        self.assertIsNone(units["log_distance_m"])
+
+    def test_dotted_and_bracketed_imperial_tokens_are_explicit(self):
+        units = db_ingest.detect_source_units({
+            "length_mm": ["Length in."],
+            "width_mm": ["Width [in]"],
+            "log_distance_m": ["Chainage ft."],
+        })
+        self.assertEqual(units["length_mm"], "imperial")
+        self.assertEqual(units["width_mm"], "imperial")
+        self.assertEqual(units["log_distance_m"], "imperial")
+
+    def test_explicit_metric_marker_in_the_same_header_wins(self):
+        units = db_ingest.detect_source_units({
+            "length_mm": ["Length [in] (mm)"],
+            "wall_thickness_mm": ["Wall thickness in mm"],
+        })
+        self.assertEqual(units["length_mm"], "metric")
+        self.assertEqual(units["wall_thickness_mm"], "metric")
+
+
+class PerColumnUnitConversionTests(unittest.TestCase):
+    """Unit tokens must come from the mapped column's own header.
+
+    Regression: the imperial regexes were matched against every header joined
+    into one string, and the imperial branch was tested before metric.  The
+    bare English word "in" (header "Depth in % WT") converted
+    wall/length/width by 25.4 even when those columns said "(mm)", and a
+    stray "ft" in an unrelated column rescaled the whole odometer axis.
+    """
+
+    CASES = [
+        {
+            "name": "metric_vendor_headers_containing_the_word_in_stay_metric",
+            "raw": {
+                "Abs. Distance (m)": [100.0],
+                "Wall Thickness (mm)": [10.0],
+                "Length (mm)": [50.0],
+                "Width (mm)": [30.0],
+                "Depth in % WT": [12.0],
+                "Feature Type": ["Metal Loss"],
+            },
+            "field_map": {
+                "Abs. Distance (m)": "log_distance_m",
+                "Wall Thickness (mm)": "wall_thickness_mm",
+                "Length (mm)": "length_mm",
+                "Width (mm)": "width_mm",
+                "Depth in % WT": "depth_pct",
+                "Feature Type": "feature_type",
+            },
+            "expected_conversions": {},
+            "expected_values": {
+                "log_distance_m": 100.0,
+                "wall_thickness_mm": 10.0,
+                "length_mm": 50.0,
+                "width_mm": 30.0,
+            },
+        },
+        {
+            "name": "true_imperial_vendor_headers_convert",
+            "raw": {
+                "Distance (ft)": [100.0],
+                "Length (in)": [4.0],
+                "Width [in]": [2.0],
+                "Wall Thickness in.": [0.5],
+                "Feature Type": ["Metal Loss"],
+            },
+            "field_map": {
+                "Distance (ft)": "log_distance_m",
+                "Length (in)": "length_mm",
+                "Width [in]": "width_mm",
+                "Wall Thickness in.": "wall_thickness_mm",
+                "Feature Type": "feature_type",
+            },
+            "expected_conversions": {
+                "log_distance_m": "ft_to_m",
+                "length_mm": "in_to_mm",
+                "width_mm": "in_to_mm",
+                "wall_thickness_mm": "in_to_mm",
+            },
+            "expected_values": {
+                "log_distance_m": 100.0 * 0.3048,
+                "length_mm": 4.0 * 25.4,
+                "width_mm": 2.0 * 25.4,
+                "wall_thickness_mm": 0.5 * 25.4,
+            },
+        },
+        {
+            "name": "mixed_units_convert_only_the_imperial_columns",
+            "raw": {
+                "Distance (ft)": [100.0],
+                "Length (mm)": [50.0],
+                "Feature Type": ["Metal Loss"],
+            },
+            "field_map": {
+                "Distance (ft)": "log_distance_m",
+                "Length (mm)": "length_mm",
+                "Feature Type": "feature_type",
+            },
+            "expected_conversions": {"log_distance_m": "ft_to_m"},
+            "expected_values": {
+                "log_distance_m": 100.0 * 0.3048,
+                "length_mm": 50.0,
+            },
+        },
+        {
+            "name": "stray_ft_in_an_unmapped_column_does_not_rescale_the_odometer",
+            "raw": {
+                "Log Distance (m)": [100.0],
+                "Elevation ft": [30.0],
+                "Feature Type": ["Weld"],
+            },
+            "field_map": {
+                "Log Distance (m)": "log_distance_m",
+                "Feature Type": "feature_type",
+            },
+            "expected_conversions": {},
+            "expected_values": {"log_distance_m": 100.0},
+        },
+    ]
+
+    def test_unit_conversion_uses_only_the_mapped_columns_own_header(self):
+        for case in self.CASES:
+            with self.subTest(case=case["name"]):
+                raw = pd.DataFrame(case["raw"])
+                universal, audit = db_ingest.normalize_ingestion_frame(raw, case["field_map"])
+                self.assertEqual(audit["unit_conversions"], case["expected_conversions"])
+                for field, expected in case["expected_values"].items():
+                    self.assertAlmostEqual(universal[field].iloc[0], expected, places=4)
 
     def test_imperial_distance_conversion_applied(self):
         raw = pd.DataFrame({

@@ -2,7 +2,17 @@ const crypto = require('node:crypto');
 
 const JWT_ISSUER = 'synapse-api';
 const JWT_AUDIENCE = 'synapse-web';
-const JWT_EXPIRES_IN = '7d';
+// 24 hours bounds how long a token can outlive the revocation checks that
+// depend on it reaching the server (token_version / is_active are enforced
+// per request, but a shorter lifetime still caps offline replay).
+const DEFAULT_JWT_EXPIRES_IN = '24h';
+
+function resolveJwtExpiresIn(env = process.env) {
+    const configured = typeof env.JWT_EXPIRES_IN === 'string' ? env.JWT_EXPIRES_IN.trim() : '';
+    return configured || DEFAULT_JWT_EXPIRES_IN;
+}
+
+const JWT_EXPIRES_IN = resolveJwtExpiresIn();
 
 let cachedJwtSecret;
 let warnedAboutEphemeralSecret = false;
@@ -38,9 +48,11 @@ function getJwtSecret() {
 }
 
 module.exports = {
+    DEFAULT_JWT_EXPIRES_IN,
     JWT_AUDIENCE,
     JWT_EXPIRES_IN,
     JWT_ISSUER,
     getJwtSecret,
+    resolveJwtExpiresIn,
     resolveJwtSecret,
 };

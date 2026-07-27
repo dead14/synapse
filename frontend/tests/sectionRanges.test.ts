@@ -34,8 +34,8 @@ test('section ranges are validated regardless of the order the welds were clicke
 });
 
 test('section validation rejects empty names, zero length, and unusable distances', () => {
-  assert.match(validateSectionRange([], { id: 'a', name: '  ', startM: 0, endM: 10 })!, /Nama section/);
-  assert.match(validateSectionRange([], range('a', 40, 40))!, /harus berbeda/);
+  assert.match(validateSectionRange([], { id: 'a', name: '  ', startM: 0, endM: 10 })!, /Section name/);
+  assert.match(validateSectionRange([], range('a', 40, 40))!, /must be different/);
   assert.match(validateSectionRange([], range('a', Number.NaN, 10))!, /log distance/);
 });
 

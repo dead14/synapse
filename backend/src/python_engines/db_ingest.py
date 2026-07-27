@@ -56,17 +56,27 @@ PARSER_VERSION = "agnostic-ili-parser-2026.07"
 SCHEMA_VERSION = "universal-ili-v1"
 QUALITY_GATE_VERSION = "ingestion-quality-gate-2026.07"
 
-_IMPERIAL_DISTANCE_RE = re.compile(
-    r"\b(?:ft|feet|foot)\b|(?<!\w)(?:\(ft\)|\(feet\))", re.IGNORECASE,
+# A unit only counts when it is an explicit token: parenthesised "(ft)",
+# bracketed "[in]", dotted "ft." / "in.", or an unambiguous full word.  The
+# bare English words "in" ("Depth in % WT") and "ft" must never trigger a
+# conversion.
+_IMPERIAL_DISTANCE_TOKEN_RE = re.compile(
+    r"[\(\[]\s*(?:ft|feet|foot)\s*\.?\s*[\)\]]"  # "(ft)", "[ft]", "(feet.)"
+    r"|\bft\.(?!\w)"                             # "ft." with an explicit dot
+    r"|\b(?:feet|foot)\b",                       # unambiguous full words
+    re.IGNORECASE,
 )
-_IMPERIAL_DIMENSION_RE = re.compile(
-    r"\b(?:in|inch|inches)\b|(?<!\w)(?:\(in\)|\(inch\)|\(inches\))", re.IGNORECASE,
+_IMPERIAL_DIMENSION_TOKEN_RE = re.compile(
+    r"[\(\[]\s*(?:in|inch|inches)\s*\.?\s*[\)\]]"  # "(in)", "[in]", "(inch.)"
+    r"|\bin\.(?!\w)"                               # "in." with an explicit dot
+    r"|\b(?:inch|inches)\b",                       # unambiguous full words
+    re.IGNORECASE,
 )
-_METRIC_DISTANCE_RE = re.compile(
-    r"(?<!\w)\(m\)|(?<!\w)(?:meters?|metre)\b", re.IGNORECASE,
+_METRIC_DISTANCE_TOKEN_RE = re.compile(
+    r"[\(\[]\s*m\s*[\)\]]|\b(?:meters?|metres?)\b", re.IGNORECASE,
 )
-_METRIC_DIMENSION_RE = re.compile(
-    r"(?<!\w)\(mm\)|(?<!\w)millimete?r", re.IGNORECASE,
+_METRIC_DIMENSION_TOKEN_RE = re.compile(
+    r"[\(\[]\s*mm\s*[\)\]]|\bmm\b|\bmillimet(?:er|re)s?\b", re.IGNORECASE,
 )
 
 DISTANCE_FIELDS = {"log_distance_m", "dist_to_us_gw_m", "joint_length_m"}
@@ -76,29 +86,47 @@ FT_TO_M = 0.3048
 IN_TO_MM = 25.4
 
 
-def detect_source_units(raw_columns, field_map):
-    """Infer the source unit system from column header text.
+def detect_source_units(field_sources):
+    """Infer the unit of each mapped distance/dimension column from its own header.
 
-    Returns a dict ``{"distances": "imperial"|"metric"|None,
-                       "dimensions": "imperial"|"metric"|None}``.
+    ``field_sources`` maps a universal field name to the source header(s)
+    actually bound to it.  Scanning every header joined into one string used to
+    let the word "in" in an unrelated column ("Depth in % WT") convert
+    wall/length/width by 25.4, and a stray "ft" rescale the whole odometer
+    axis.  A unit is now assigned per column, only from an explicit token, and
+    an explicit metric marker ("(mm)", "(m)", "mm") in the same header wins
+    over an imperial one.
+
+    Returns ``{field_name: "imperial"|"metric"|None}``.
     """
-    all_headers = " | ".join(str(c) for c in raw_columns)
-    mapped_headers = " | ".join(str(c) for c in field_map.keys())
-    combined = f"{all_headers} | {mapped_headers}"
+    units = {}
+    for field, headers in field_sources.items():
+        if field in DISTANCE_FIELDS:
+            imperial_re, metric_re = _IMPERIAL_DISTANCE_TOKEN_RE, _METRIC_DISTANCE_TOKEN_RE
+        elif field in DIMENSION_FIELDS:
+            imperial_re, metric_re = _IMPERIAL_DIMENSION_TOKEN_RE, _METRIC_DIMENSION_TOKEN_RE
+        else:
+            continue
+        unit = None
+        for header in headers:
+            text = str(header)
+            if metric_re.search(text):
+                unit = "metric"
+                break
+            if imperial_re.search(text):
+                unit = "imperial"
+        units[field] = unit
+    return units
 
-    distances = None
-    if _IMPERIAL_DISTANCE_RE.search(combined):
-        distances = "imperial"
-    elif _METRIC_DISTANCE_RE.search(combined):
-        distances = "metric"
 
-    dimensions = None
-    if _IMPERIAL_DIMENSION_RE.search(combined):
-        dimensions = "imperial"
-    elif _METRIC_DIMENSION_RE.search(combined):
-        dimensions = "metric"
-
-    return {"distances": distances, "dimensions": dimensions}
+def _summarize_source_units(field_units, fields):
+    """Collapse per-field units into the audit's legacy group value."""
+    group_units = {field_units.get(field) for field in fields}
+    if "imperial" in group_units:
+        return "imperial"
+    if "metric" in group_units:
+        return "metric"
+    return None
 
 
 def build_quality_gate(audit):
@@ -149,7 +177,9 @@ def _source_kind(file_path):
     if magic.startswith(XLSX_MAGIC):
         return "excel"
     if magic.startswith(LEGACY_XLS_MAGIC):
-        raise ValueError("Format .xls lama tidak didukung; simpan ulang sebagai .xlsx atau .csv.")
+        raise ValueError(
+            "The legacy .xls format is not supported; re-save the file as .xlsx or .csv."
+        )
     if path.suffix.casefold() in {".xlsx", ".xlsm"}:
         return "excel"
     return "csv"
@@ -172,7 +202,8 @@ def detect_header_row(preview, synonym_lookup, max_scan=30):
 
     if best_index is None or len(best_fields) < 2:
         raise ValueError(
-            "Baris header tidak ditemukan: log_distance_m dan sedikitnya satu kolom ILI lain wajib dikenali."
+            "No header row found: log_distance_m and at least one other ILI column "
+            "must be recognisable."
         )
 
     return best_index, len(best_fields)
@@ -230,7 +261,7 @@ def _load_xlsx_table(file_path, synonym_lookup, preview_rows):
                 selected = (worksheet, preview, header_index, matched_fields)
 
         if selected is None:
-            raise ValueError("Tidak ada worksheet dengan header ILI yang dapat dikenali.")
+            raise ValueError("No worksheet contains a recognisable ILI header row.")
 
         worksheet, preview, header_index, matched_fields = selected
         headers = _unique_headers(preview[header_index])
@@ -274,7 +305,7 @@ def load_source_table(file_path, synonym_lookup, preview_rows=30):
         for index, column in enumerate(raw.columns)
     ]
     if raw.empty:
-        raise ValueError("File ILI tidak memiliki baris data setelah header.")
+        raise ValueError("The ILI file has no data rows after its header.")
     return raw, header_index, matched_fields
 
 
@@ -324,12 +355,15 @@ def summarize_feature_counts(frame):
 
 def normalize_ingestion_frame(raw, field_map):
     if raw.empty:
-        raise ValueError("File ILI tidak memiliki baris data.")
+        raise ValueError("The ILI file has no data rows.")
 
     universal = pd.DataFrame(
         {field: pd.Series(pd.NA, index=raw.index, dtype="object") for field in DATABASE_FIELDS}
     )
 
+    # Track which source header(s) fed each universal column, so unit
+    # detection can inspect the mapped column's own header only.
+    bound_sources = {}
     for raw_column, universal_column in field_map.items():
         if universal_column not in DATABASE_FIELDS or raw_column not in raw.columns:
             continue
@@ -337,6 +371,7 @@ def normalize_ingestion_frame(raw, field_map):
             universal[universal_column] = raw[raw_column].copy()
         else:
             universal[universal_column] = universal[universal_column].combine_first(raw[raw_column])
+        bound_sources.setdefault(universal_column, []).append(raw_column)
 
     for universal_column in DATABASE_FIELDS:
         if _nonempty_mask(universal[universal_column]).any():
@@ -344,9 +379,12 @@ def normalize_ingestion_frame(raw, field_map):
         matched_column, similarity = find_best_col(universal_column, raw.columns, 0.55)
         if matched_column is not None and similarity >= 0.55:
             universal[universal_column] = raw[matched_column]
+            # The fallback replaces the column wholesale, so it also replaces
+            # any previously recorded (empty) source header.
+            bound_sources[universal_column] = [matched_column]
 
     if not _nonempty_mask(universal["log_distance_m"]).any():
-        raise ValueError("Kolom log_distance_m tidak berhasil dipetakan.")
+        raise ValueError("The log_distance_m column could not be mapped.")
 
     numeric_coercions = {}
     for field in NUMERIC_FIELDS:
@@ -363,20 +401,26 @@ def normalize_ingestion_frame(raw, field_map):
             numeric_coercions[field] = coerced_count
         universal[field] = converted.where(finite, np.nan)
 
-    source_units = detect_source_units(raw.columns, field_map)
+    field_units = detect_source_units(bound_sources)
     unit_conversions = {}
-    if source_units["distances"] == "imperial":
-        for field in DISTANCE_FIELDS:
-            mask = universal[field].notna()
-            if mask.any():
-                universal.loc[mask, field] = universal.loc[mask, field] * FT_TO_M
-                unit_conversions[field] = "ft_to_m"
-    if source_units["dimensions"] == "imperial":
-        for field in DIMENSION_FIELDS:
-            mask = universal[field].notna()
-            if mask.any():
-                universal.loc[mask, field] = universal.loc[mask, field] * IN_TO_MM
-                unit_conversions[field] = "in_to_mm"
+    for field in DISTANCE_FIELDS:
+        if field_units.get(field) != "imperial":
+            continue
+        mask = universal[field].notna()
+        if mask.any():
+            universal.loc[mask, field] = universal.loc[mask, field] * FT_TO_M
+            unit_conversions[field] = "ft_to_m"
+    for field in DIMENSION_FIELDS:
+        if field_units.get(field) != "imperial":
+            continue
+        mask = universal[field].notna()
+        if mask.any():
+            universal.loc[mask, field] = universal.loc[mask, field] * IN_TO_MM
+            unit_conversions[field] = "in_to_mm"
+    source_units = {
+        "distances": _summarize_source_units(field_units, DISTANCE_FIELDS),
+        "dimensions": _summarize_source_units(field_units, DIMENSION_FIELDS),
+    }
 
     universal["clock_position"] = universal["clock_position"].apply(
         lambda value: None if pd.isna(value) else normalize_clock(value)
@@ -398,7 +442,7 @@ def normalize_ingestion_frame(raw, field_map):
     rejected_rows = int((~valid_distance).sum())
     universal = universal.loc[valid_distance].copy()
     if universal.empty:
-        raise ValueError("Tidak ada baris dengan log_distance_m numerik dan finite.")
+        raise ValueError("No row has a numeric, finite log_distance_m.")
 
     universal["joint_number"] = universal["joint_number"].apply(
         lambda value: int(value) if pd.notna(value) else None
@@ -494,7 +538,9 @@ def ingest_csv(
 ):
     synonym_lookup = load_field_synonym_lookup()
     if not synonym_lookup:
-        error = RuntimeError("Kamus sinonim parser kosong; jalankan seed_dictionary.py terlebih dahulu.")
+        error = RuntimeError(
+            "The parser synonym dictionary is empty; run seed_dictionary.py first."
+        )
         error.code = "PARSER_DICTIONARY_UNAVAILABLE"
         raise error
 

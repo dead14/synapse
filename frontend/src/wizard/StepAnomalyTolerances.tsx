@@ -120,18 +120,18 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
         <div className="mb-6 rounded-xl border border-brand-200 bg-brand-50/60 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-bold text-gray-800">Toleransi per pasangan run</h3>
+              <h3 className="text-sm font-bold text-gray-800">Per-run-pair tolerances</h3>
               <p className="mt-0.5 text-xs text-gray-600">
                 {perPairEnabled
-                  ? 'Tiap pasangan memakai toleransinya sendiri. Pilih pasangan di bawah untuk mengaturnya.'
-                  : `Satu set toleransi dipakai untuk ${pairs.length} pasangan. Aktifkan bila rentang tahunnya berbeda jauh.`}
+                  ? 'Each pair uses its own tolerances. Select a pair below to configure it.'
+                  : `One tolerance set applies to all ${pairs.length} pairs. Enable this when the year spans differ widely.`}
               </p>
             </div>
             <button
               type="button"
               role="switch"
               aria-checked={perPairEnabled}
-              aria-label="Atur toleransi terpisah untuk tiap pasangan run"
+              aria-label="Configure separate tolerances for each run pair"
               onClick={() => setPerPairEnabled((value) => !value)}
               className={`relative h-6 w-12 shrink-0 rounded-full shadow-inner transition-colors ${perPairEnabled ? 'bg-brand-500' : 'bg-gray-300'}`}
             >
@@ -190,7 +190,7 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
             value={clockTol} onChange={(e) => setClockTol(parseInt(e.target.value))}
             className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
           />
-          <p className="text-xs text-gray-500">Hard gate circular: kandidat ditolak jika selisih O&apos;Clock melebihi nilai ini. Clock yang kosong tidak otomatis ditolak.</p>
+          <p className="text-xs text-gray-500">Circular hard gate: candidates are rejected when the O&apos;Clock difference exceeds this value. Empty clock values are not rejected automatically.</p>
         </div>
 
         {/* US GW Tolerance */}
@@ -209,7 +209,7 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
               aria-describedby="use-us-gw-distance-help"
             />
             <label htmlFor="use-us-gw-distance" className="text-xs font-semibold text-gray-700 cursor-pointer">
-              Gunakan Dist. U/S GW untuk matching
+              Use Dist. U/S GW for matching
             </label>
           </div>
           <input 
@@ -220,8 +220,8 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
           />
           <p id="use-us-gw-distance-help" className="text-xs text-gray-500">
             {useUsGwDistance
-              ? 'Hanya gunakan jika nilai Dist. U/S GW tersedia dan dapat dipercaya.'
-              : 'Nonaktif: nilai Dist. U/S GW diabaikan; batas posisi U/S dan D/S tetap digunakan.'}
+              ? 'Only enable this when Dist. U/S GW values are available and trustworthy.'
+              : 'Off: Dist. U/S GW values are ignored; the U/S and D/S position limits still apply.'}
           </p>
         </div>
 
@@ -249,13 +249,13 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
             value={lengthTol} onChange={(e) => setLengthTol(parseInt(e.target.value))}
             className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
           />
-          <p className="text-xs text-gray-500">Hard gate: kandidat ditolak jika selisih length melebihi nilai ini.</p>
+          <p className="text-xs text-gray-500">Hard gate: candidates are rejected when the length difference exceeds this value.</p>
         </div>
 
       </div>
 
       <p className="mb-8 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-        Depth tidak dipakai untuk memilih pasangan. Setelah Hungarian selesai, depth NEW yang lebih kecil dari OLD ditandai sebagai validasi fisika untuk review.
+        Depth is not used to select pairs. After Hungarian matching completes, NEW depths smaller than OLD are flagged as a physics validation for review.
       </p>
 
       <div className="flex justify-between border-t border-gray-100 pt-6">

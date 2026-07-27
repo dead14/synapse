@@ -26,14 +26,14 @@ export function findOverlappingSection(sections: SectionRange[], candidate: Sect
  * Returns an operator-facing message, or null when the range can be saved.
  */
 export function validateSectionRange(sections: SectionRange[], candidate: SectionRange): string | null {
-  if (!candidate.name.trim()) return 'Nama section tidak boleh kosong.';
+  if (!candidate.name.trim()) return 'Section name must not be empty.';
   if (!Number.isFinite(candidate.startM) || !Number.isFinite(candidate.endM)) {
-    return 'Batas section tidak memiliki log distance yang valid.';
+    return 'Section boundaries do not have a valid log distance.';
   }
   const { start, end } = ordered(candidate);
-  if (end - start <= 0) return 'Start dan End GW harus berbeda.';
+  if (end - start <= 0) return 'Start and End GW must be different.';
   const clash = findOverlappingSection(sections, candidate);
-  return clash ? `Section overlap dengan "${clash.name}".` : null;
+  return clash ? `Section overlaps with "${clash.name}".` : null;
 }
 
 /**
