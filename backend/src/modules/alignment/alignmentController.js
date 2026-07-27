@@ -179,6 +179,37 @@ function recoverLegacyCanonicalGwEvidence(config, persistedConfig) {
     const recovered = preserveCanonicalGwEvidence(config, persistedConfig);
     const evidence = { ...(recovered.pairGwEvidence || {}) };
     const persistedResults = persistedConfig?.pairGwResults || {};
+    const primary = primarySessionRunPair(persistedConfig || {});
+
+    // Some legacy/client snapshots removed the pair container while retaining
+    // the canonical result at the session root. Restore it only for the
+    // session's primary pair and only when the server signature still proves
+    // that the result belongs to the current matching settings.
+    if (primary && !evidence[primary.key] && persistedConfig?.gwReview) {
+        const rootLocks = Array.isArray(recovered.canonicalGwLocks)
+            ? recovered.canonicalGwLocks
+            : persistedConfig?.gwMatchesFinal;
+        const expectedSignature = canonicalSignatureForConfig(
+            pairScopedSignatureConfig(config, primary.key),
+            { oldRunId: primary.oldRunId, newRunId: primary.newRunId },
+        );
+        const canonicalSignature = persistedConfig?.gwCanonicalSignature
+            ?? persistedConfig?.gwReviewSignature;
+        if (
+            Array.isArray(rootLocks)
+            && canonicalSignaturesEqual(canonicalSignature, expectedSignature)
+            && canonicalSignaturesEqual(persistedConfig?.gwReviewSignature, expectedSignature)
+        ) {
+            try {
+                evidence[primary.key] = {
+                    canonicalGwLocks: normalizeCanonicalGwLocks(rootLocks),
+                    gwCanonicalSignature: expectedSignature,
+                };
+            } catch {
+                // Invalid legacy locks must still be recalculated by the DTW engine.
+            }
+        }
+    }
 
     for (const [pairKey, result] of Object.entries(persistedResults)) {
         if (evidence[pairKey] || !result?.gwReview || !Array.isArray(result.gwMatchesFinal)) continue;
@@ -204,7 +235,6 @@ function recoverLegacyCanonicalGwEvidence(config, persistedConfig) {
     }
 
     if (Object.keys(evidence).length > 0) recovered.pairGwEvidence = evidence;
-    const primary = primarySessionRunPair(persistedConfig || {});
     if (!Array.isArray(recovered.canonicalGwLocks) && primary && evidence[primary.key]) {
         recovered.canonicalGwLocks = evidence[primary.key].canonicalGwLocks;
         recovered.gwCanonicalSignature = evidence[primary.key].gwCanonicalSignature;
