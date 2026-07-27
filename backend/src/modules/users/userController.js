@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const pool = require('../../config/db');
 const { invalidatePrincipal } = require('../../middlewares/principalCache');
 const { validateEmail } = require('../auth/authValidation');
+const { writeAuditLog } = require('../audit/auditLog');
 const {
     buildUserMutationScope,
     canAssignRole,
@@ -69,11 +70,31 @@ exports.createUser = async (req, res) => {
         return res.status(403).json({ error: 'Users can only be created in your organization' });
     }
     try {
+        const capacity = await pool.query(
+            `SELECT o.max_users, COUNT(u.id) AS user_count
+             FROM organizations o LEFT JOIN users u ON u.organization_id = o.id
+             WHERE o.id = $1 AND o.is_active = true
+             GROUP BY o.id`,
+            [organizationId],
+        );
+        if (!capacity.rowCount) {
+            return res.status(403).json({ error: 'Organization is inactive or unavailable' });
+        }
+        if (Number(capacity.rows[0].user_count) >= Number(capacity.rows[0].max_users)) {
+            return res.status(409).json({ error: 'Organization user limit has been reached' });
+        }
         const passwordHash = await bcrypt.hash(password, 12);
         const result = await pool.query(
             'INSERT INTO users (organization_id, username, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, username, email, role, is_active, created_at',
             [organizationId, username, email, passwordHash, role]
         );
+        await writeAuditLog({
+            userId: req.user.id,
+            organizationId,
+            action: 'User created',
+            target: `user:${result.rows[0].id}; role=${role}`,
+            ipAddress: req.ip,
+        });
         return res.status(201).json(result.rows[0]);
     } catch (err) {
         console.error('Create user error:', err);
@@ -99,13 +120,20 @@ exports.resetPassword = async (req, res) => {
         // Credential rotation also bumps token_version: sessions issued with
         // the old password must not survive the reset.
         const result = await pool.query(
-            `UPDATE users SET password_hash = $1, token_version = COALESCE(token_version, 0) + 1, updated_at = NOW() WHERE ${scope.clause} RETURNING id`,
+            `UPDATE users SET password_hash = $1, token_version = COALESCE(token_version, 0) + 1, updated_at = NOW() WHERE ${scope.clause} RETURNING id, organization_id`,
             [passwordHash, ...scope.values],
         );
         if (result.rowCount === 0) {
             return res.status(404).json({ error: 'User not found' });
         }
         invalidatePrincipal(id);
+        await writeAuditLog({
+            userId: req.user.id,
+            organizationId: result.rows[0].organization_id,
+            action: 'Password reset by administrator',
+            target: `user:${id}`,
+            ipAddress: req.ip,
+        });
         return res.json({ message: 'Password reset successful' });
     } catch (err) {
         console.error('Reset password error:', err);
@@ -128,13 +156,20 @@ exports.toggleStatus = async (req, res) => {
         // user's live sessions, and reactivation must not resurrect tokens
         // that were issued before the account was disabled.
         const result = await pool.query(
-            `UPDATE users SET is_active = $1, token_version = COALESCE(token_version, 0) + 1, updated_at = NOW() WHERE ${scope.clause} RETURNING id`,
+            `UPDATE users SET is_active = $1, token_version = COALESCE(token_version, 0) + 1, updated_at = NOW() WHERE ${scope.clause} RETURNING id, organization_id`,
             [is_active, ...scope.values],
         );
         if (result.rowCount === 0) {
             return res.status(404).json({ error: 'User not found' });
         }
         invalidatePrincipal(id);
+        await writeAuditLog({
+            userId: req.user.id,
+            organizationId: result.rows[0].organization_id,
+            action: is_active ? 'User activated' : 'User deactivated',
+            target: `user:${id}`,
+            ipAddress: req.ip,
+        });
         return res.json({ message: 'User status updated' });
     } catch (err) {
         console.error('Update status error:', err);

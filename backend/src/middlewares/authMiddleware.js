@@ -136,6 +136,11 @@ function requireAdmin(req, res, next) {
     }
 }
 
+function requireSuperAdmin(req, res, next) {
+    if (req.user?.role === 'super_admin') return next();
+    return res.status(403).json({ error: 'Requires master admin privileges' });
+}
+
 module.exports = {
     AUTH_COOKIE_NAME,
     authMiddleware,
@@ -145,6 +150,7 @@ module.exports = {
     getAuthCookieOptions,
     parseCookieHeader,
     requireAdmin,
+    requireSuperAdmin,
     setAuthCookie,
     signAuthToken,
     verifyAuthToken,

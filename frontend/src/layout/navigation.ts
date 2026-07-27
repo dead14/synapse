@@ -60,5 +60,16 @@ export const navigationGroups: NavigationGroup[] = [
 ];
 
 export function navigationForRole(role: string | undefined): NavigationGroup[] {
-  return navigationGroups.filter((group) => !group.roles || (role ? group.roles.includes(role) : false));
+  const groups = navigationGroups.filter((group) => !group.roles || (role ? group.roles.includes(role) : false));
+  if (role !== 'super_admin') return groups;
+  return [
+    ...groups,
+    {
+      label: 'Master administration',
+      roles: ['super_admin'],
+      items: [
+        { label: 'System control', path: '/master-admin', description: 'Organizations, limits, recovery, and audit evidence' },
+      ],
+    },
+  ];
 }

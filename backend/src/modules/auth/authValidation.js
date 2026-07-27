@@ -17,6 +17,13 @@ function validateLoginInput(input = {}) {
     return { ok: true, value: { email, password } };
 }
 
+function validatePasswordResetRequest(input = {}) {
+    const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : '';
+    return validateEmail(email)
+        ? { ok: true, value: { email } }
+        : { ok: false, error: 'A valid email address is required' };
+}
+
 function validateRegistrationInput(input = {}) {
     const orgName = typeof input.orgName === 'string' ? input.orgName.trim() : '';
     const username = typeof input.username === 'string' ? input.username.trim() : '';
@@ -45,5 +52,6 @@ function validateRegistrationInput(input = {}) {
 module.exports = {
     validateEmail,
     validateLoginInput,
+    validatePasswordResetRequest,
     validateRegistrationInput,
 };

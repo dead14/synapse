@@ -10,12 +10,12 @@ const { getDashboardOverviewRows } = require('./dashboardRepository');
 exports.getActivityLogs = async (req, res) => {
     try {
         const result = await pool.query(
-            `SELECT a.id, u.username as user, a.action, a.target, a.created_at as timestamp, a.ip_address
+            `SELECT a.id, u.username as user, a.action, a.target, a.timestamp, a.ip_address AS ip
              FROM activity_logs a
              LEFT JOIN users u ON a.user_id = u.id
              WHERE a.organization_id = $1
-             ORDER BY a.created_at DESC
-             LIMIT 10`,
+             ORDER BY a.timestamp DESC
+             LIMIT 100`,
             [req.user.orgId]
         );
         res.json(result.rows);

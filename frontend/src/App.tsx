@@ -15,6 +15,8 @@ const IliComparisonPage = lazy(() => import('./IliComparisonPage'));
 const IliSectioningPage = lazy(() => import('./sectioning/IliSectioningPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const RegisterPage = lazy(() => import('./pages/RegisterPage'));
+const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
+const MasterAdminPage = lazy(() => import('./pages/MasterAdmin/MasterAdminPage'));
 const FfsSetupPage = lazy(() => import('./pages/FFS/FfsSetupPage'));
 const FfsResultsPage = lazy(() => import('./pages/FFS/FfsResultsPage'));
 const UserList = lazy(() => import('./pages/Users/UserList'));
@@ -60,6 +62,7 @@ function RequireAuth() {
 
 // Keep in sync with the Administration group in layout/navigation.ts.
 const ADMIN_ROLES = ['admin', 'super_admin'];
+const MASTER_ADMIN_ROLES = ['super_admin'];
 
 /** Route-level role enforcement: navigation only hides the links, so any
  * authenticated user could still deep-link into the admin workspaces. */
@@ -96,6 +99,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<RegisterPage />} />
+        <Route path="/reset-password" element={<ForgotPasswordPage />} />
 
         <Route element={<RequireAuth />}>
           <Route element={<AppLayout />}>
@@ -122,6 +126,9 @@ export default function App() {
               <Route path="/roles" element={<Roles />} />
               <Route path="/activity-logs" element={<ActivityLogs />} />
               <Route path="/organizations" element={<Organizations />} />
+            </Route>
+            <Route element={<RequireRole roles={MASTER_ADMIN_ROLES} />}>
+              <Route path="/master-admin" element={<MasterAdminPage />} />
             </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Route>

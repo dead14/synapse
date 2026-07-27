@@ -30,7 +30,18 @@ test('ensures one tenant-scoped pipeline before concurrent ingestion jobs start'
     assert.deepEqual(pipeline, { id: 41 });
     assert.match(pool.calls[0].text, /INSERT INTO pipelines/i);
     assert.match(pool.calls[0].text, /ON CONFLICT \(organization_id, lower\(name\)\)/i);
+    assert.match(pool.calls[0].text, /o\.is_active = true/i);
+    assert.match(pool.calls[0].text, /o\.max_pipelines/i);
     assert.deepEqual(pool.calls[0].values, [9, 'North Line']);
+});
+
+test('returns null when an inactive organization or full pipeline quota rejects creation', async () => {
+    const pool = recordingPool([]);
+    const pipeline = await ensureOwnedPipeline(pool, {
+        organizationId: 9,
+        pipelineName: 'Over quota',
+    });
+    assert.equal(pipeline, null);
 });
 
 test('finds a matching persisted run by organization, pipeline, and source checksum', async () => {

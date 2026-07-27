@@ -5,7 +5,19 @@ function asJson(value) {
 async function ensureOwnedPipeline(pool, { organizationId, pipelineName }) {
     const result = await pool.query(
         `INSERT INTO pipelines (organization_id, name)
-         VALUES ($1, $2)
+         SELECT o.id, $2
+         FROM organizations o
+         WHERE o.id = $1
+           AND o.is_active = true
+           AND (
+               EXISTS (
+                   SELECT 1 FROM pipelines existing
+                   WHERE existing.organization_id = o.id
+                     AND lower(existing.name) = lower($2)
+               )
+               OR (SELECT COUNT(*) FROM pipelines counted
+                   WHERE counted.organization_id = o.id) < o.max_pipelines
+           )
          ON CONFLICT (organization_id, lower(name)) WHERE organization_id IS NOT NULL
          DO UPDATE SET name = EXCLUDED.name
          RETURNING id`,
