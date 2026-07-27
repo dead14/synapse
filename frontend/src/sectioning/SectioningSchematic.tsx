@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import type { SectionDef, SpatialFeatures, SpatialFeature } from './types';
-import { displayDistanceOnMaster } from './historicalLanes';
+import { longitudinalAxisExtent } from './historicalLanes';
 import { canInspectGwPrecisely, clampSchematicZoom, shouldShowUnmatchedMarkerLabel } from './viewOptions';
 import { sectionColor } from './sectionColors';
 import { bendDefinition } from './bendGeometry';
@@ -28,6 +28,8 @@ interface BendGeometry {
 interface RouteGeometry {
   width: number;
   routeHeight: number;
+  axisStart: number;
+  axisEnd: number;
   bends: BendGeometry[];
   path: string;
   positionAt: (distance: number) => Point & { unit: Point };
@@ -36,6 +38,8 @@ interface RouteGeometry {
 
 function buildRouteGeometry(features: SpatialFeatures, zoom: number): RouteGeometry {
   const totalLength = Math.max(features.stats.totalLength, 1);
+  const extent = longitudinalAxisExtent(totalLength, features.historicalLanes);
+  const axisLength = Math.max(extent.end - extent.start, 1);
   const scale = Math.max(0.08, 0.32 * zoom);
   const paddingX = 90;
   const baselineY = 125;
@@ -54,14 +58,14 @@ function buildRouteGeometry(features: SpatialFeatures, zoom: number): RouteGeome
   });
 
   const positionAt = (distance: number) => {
-    const clamped = Math.max(0, Math.min(totalLength, distance));
+    const clamped = Math.max(extent.start, Math.min(extent.end, distance));
     return {
-      x: paddingX + clamped * scale,
+      x: paddingX + (clamped - extent.start) * scale,
       y: baselineY,
       unit: { x: 1, y: 0 },
     };
   };
-  const path = `M ${paddingX} ${baselineY} L ${paddingX + totalLength * scale} ${baselineY}`;
+  const path = `M ${positionAt(0).x} ${baselineY} L ${positionAt(totalLength).x} ${baselineY}`;
   const rangePath = (startM: number, endM: number) => {
     const start = positionAt(Math.min(startM, endM));
     const end = positionAt(Math.max(startM, endM));
@@ -69,8 +73,10 @@ function buildRouteGeometry(features: SpatialFeatures, zoom: number): RouteGeome
   };
 
   return {
-    width: Math.max(1000, totalLength * scale + paddingX * 2),
+    width: Math.max(1000, axisLength * scale + paddingX * 2),
     routeHeight: 180,
+    axisStart: extent.start,
+    axisEnd: extent.end,
     bends,
     path,
     positionAt,
@@ -93,7 +99,10 @@ export default function SectioningSchematic({
   const geometry = useMemo(() => buildRouteGeometry(features, zoom), [features, zoom]);
   const historyStartY = geometry.routeHeight + 55;
   const totalHeight = historyStartY + Math.max(80, features.historicalLanes.length * 48 + 35);
-  const markerStep = Math.max(100, Math.ceil(features.stats.totalLength / 10 / 100) * 100);
+  const axisLength = geometry.axisEnd - geometry.axisStart;
+  const markerStep = Math.max(100, Math.ceil(axisLength / 10 / 100) * 100);
+  const firstMarker = Math.ceil(geometry.axisStart / markerStep) * markerStep;
+  const markerCount = Math.floor((geometry.axisEnd - firstMarker) / markerStep) + 1;
   const showUnmatchedLabels = shouldShowUnmatchedMarkerLabel(zoom);
   const canInspectGws = canInspectGwPrecisely(zoom);
 
@@ -137,9 +146,9 @@ export default function SectioningSchematic({
             {/* KP Axis */}
             <g className="kp-axis" transform="translate(0, 40)">
               <text x="24" y="0" fontSize="11" fontWeight="bold" fill="#64748b">KP (km)</text>
-              <line x1={geometry.positionAt(0).x} y1="15" x2={geometry.positionAt(features.stats.totalLength).x} y2="15" stroke="#cbd5e1" strokeWidth="1" />
-              {Array.from({ length: Math.floor(features.stats.totalLength / markerStep) + 1 }).map((_, index) => {
-                const distance = index * markerStep;
+              <line x1={geometry.positionAt(geometry.axisStart).x} y1="15" x2={geometry.positionAt(geometry.axisEnd).x} y2="15" stroke="#cbd5e1" strokeWidth="1" />
+              {Array.from({ length: markerCount }).map((_, index) => {
+                const distance = firstMarker + index * markerStep;
                 const x = geometry.positionAt(distance).x;
                 const isMajor = distance % 2000 === 0 || distance === 0;
                 if (!isMajor && zoom < 1.5) return null; // hide minor ticks when zoomed out
@@ -257,7 +266,7 @@ export default function SectioningSchematic({
               const masterDistance = Number(gw.rawData.masterDistance);
               if (gw.status !== 'MATCHED' || !Number.isFinite(masterDistance)) return null;
               const master = geometry.positionAt(masterDistance);
-              const historical = geometry.positionAt(displayDistanceOnMaster(gw));
+              const historical = geometry.positionAt(gw.dist);
               const historicalY = historyStartY + laneIndex * 48;
               return (
                 <line
@@ -282,11 +291,11 @@ export default function SectioningSchematic({
               return (
                 <g key={lane.id}>
                   <text x="24" y={y + 4} fontSize="12" fontWeight="bold" fill="#475569">OLD {lane.year || laneIndex + 1}</text>
-                  <line x1={geometry.positionAt(0).x} y1={y} x2={geometry.positionAt(features.stats.totalLength).x} y2={y} stroke="#64748b" strokeOpacity=".3" strokeWidth="2" />
+                  <line x1={geometry.positionAt(geometry.axisStart).x} y1={y} x2={geometry.positionAt(geometry.axisEnd).x} y2={y} stroke="#64748b" strokeOpacity=".3" strokeWidth="2" />
                   
                   {/* Historical GWs */}
                   {(lane.gws || []).map((gw, gwIndex) => {
-                    const x = geometry.positionAt(displayDistanceOnMaster(gw)).x;
+                    const x = geometry.positionAt(gw.dist).x;
                     const unmatched = gw.status !== 'MATCHED';
                     const isSelected = selectedGWs.some((s) => s.id === gw.id && s.runRole === 'HISTORICAL');
                     

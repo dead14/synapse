@@ -11,6 +11,7 @@ import { clampTooltipPosition } from '../utils/tooltipPosition';
 import { gwReviewKey, normalizeGwReview, selectReviewedGwLocks, type GwReviewDisposition, type GwReviewState } from '../domain/alignmentReview';
 import { buildTimelineModel, sourceOdometerOffset, type TimelineEvidence, type TimelineGeometry } from '../domain/gwTimeline';
 import { buildGwReviewTransitionPayload } from './gwReviewTransition';
+import { pairResultForPersistence } from './gwPairReviewPersistence';
 import { pairGwResult, pairTieIn, primaryRunPair, resolveRunPairs } from '../domain/runPairs';
 import type { MatchingSection } from './matchingSections';
 
@@ -597,16 +598,19 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
           ? { ...liveSnapshot(), gwMatchesFinal: reviewedLocks }
           : parkedPairs.current[pair.key];
         if (!state) continue;
-        pairGwResults[pair.key] = {
-          gwMatchesFinal: state.gwMatchesFinal,
-          gwOrphans: state.gwOrphans,
-          gwReview: state.gwReview,
-          gwReviewSignature: state.reviewSignature,
-          ota: state.ota,
-          dtwOn: state.dtwOn,
-          useValveAnchor: state.useValveAnchor,
-          strictPenalty: state.strictPenalty,
+        const scopedTieIn = pairTieIn(rawConfig, pair) || {};
+        const pairConfig = {
+          ...rawConfig,
+          ...scopedTieIn,
+          summaryData: { ...rawConfig?.summaryData, oldRun: pair.oldRun, newRun: pair.newRun },
         };
+        const currentSignature = buildReviewSignature(pairConfig, {
+          ota: state.ota,
+          strictPenalty: state.strictPenalty,
+          useValveAnchor: state.useValveAnchor,
+          dtwOn: state.dtwOn,
+        });
+        pairGwResults[pair.key] = pairResultForPersistence(state, currentSignature);
       }
       const primary = primaryPair ? pairGwResults[primaryPair.key] : undefined;
       await onNext({
@@ -619,8 +623,11 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
           dtwOn: primary?.dtwOn ?? dtwOn,
           gwMatchesFinal: primary?.gwMatchesFinal ?? reviewedLocks,
           gwOrphans: primary?.gwOrphans ?? gwOrphans,
-          gwReview: primary?.gwReview ?? gwReview,
-          gwReviewSignature: primary?.gwReviewSignature ?? reviewSignature.current,
+          // Never promote the visible pair's review into the primary pair.
+          // When the primary review is stale these remain undefined and are
+          // omitted by JSON.stringify, avoiding the unscoped signature check.
+          gwReview: primary?.gwReview,
+          gwReviewSignature: primary?.gwReviewSignature ?? null,
           sessionRevision,
           sectionOtaOverrides: perSectionOtaEnabled ? sectionOtaOverrides : undefined,
         }),
