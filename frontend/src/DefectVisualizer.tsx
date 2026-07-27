@@ -3,7 +3,7 @@ import { useState, useMemo, useEffect } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Text } from '@react-three/drei';
-import { FiBox, FiX } from 'react-icons/fi';
+import { FiBox, FiChevronDown, FiChevronUp, FiX } from 'react-icons/fi';
 import Modal from './components/common/Modal';
 import LaneTimeline, { type SpoolRange } from './components/comparison/LaneTimeline';
 import { apiFetch } from './utils/api';
@@ -231,6 +231,7 @@ const DefectOverlayInstancedMesh = ({ spoolData, renderLength, sLength, startDis
 
 export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx }: DefectVisualizerProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const [modalViewMode, setModalViewMode] = useState<'2D' | '3D'>('3D');
   const [spoolRange, setSpoolRange] = useState<SpoolRange | null>(null);
   const [inspected, setInspected] = useState<{ feature: LaneFeature; lane: ComparisonLane } | null>(null);
@@ -468,26 +469,41 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
           <span className="text-xs" style={{ color: 'var(--syn-muted, #727a6d)' }}>
             {lanes.length} inspection {lanes.length === 1 ? 'run' : 'runs'} · {data.length.toLocaleString()} comparison rows
           </span>
-          <span className="text-xs" style={{ color: 'var(--syn-muted, #727a6d)' }}>
-            Click two girth welds on one lane to open that spool in 3D
-          </span>
+          {!isCollapsed && (
+            <span className="text-xs" style={{ color: 'var(--syn-muted, #727a6d)' }}>
+              Click two girth welds on one lane to open that spool in 3D
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
-          {spoolRange && (
+          {spoolRange && !isCollapsed && (
             <button onClick={() => setIsModalOpen(true)} className="syn-btn syn-btn--sm syn-btn--ink">
               <FiBox size={14} /> 3D View ({(spoolRange.endM - spoolRange.startM).toFixed(1)} m)
             </button>
           )}
+          {/* Reviewing rows sometimes needs the whole viewport for the table. */}
+          <button
+            type="button"
+            onClick={() => setIsCollapsed((collapsed) => !collapsed)}
+            className="syn-btn syn-btn--sm syn-btn--outline"
+            style={{ minHeight: '1.6rem', fontSize: '0.66rem' }}
+            aria-expanded={!isCollapsed}
+          >
+            {isCollapsed ? <FiChevronDown size={13} /> : <FiChevronUp size={13} />}
+            {isCollapsed ? 'Show lanes' : 'Hide lanes'}
+          </button>
         </div>
       </div>
 
-      <LaneTimeline
-        lanes={lanes}
-        unalignedRuns={unalignedRuns}
-        selectedRowIdx={selectedRowIdx}
-        onFeatureClick={openFeature}
-        onSpoolRangeChange={setSpoolRange}
-      />
+      {!isCollapsed && (
+        <LaneTimeline
+          lanes={lanes}
+          unalignedRuns={unalignedRuns}
+          selectedRowIdx={selectedRowIdx}
+          onFeatureClick={openFeature}
+          onSpoolRangeChange={setSpoolRange}
+        />
+      )}
 
       {/* 3D Modal */}
       {isModalOpen && (
