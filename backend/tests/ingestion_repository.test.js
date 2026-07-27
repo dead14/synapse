@@ -32,6 +32,8 @@ test('ensures one tenant-scoped pipeline before concurrent ingestion jobs start'
     assert.match(pool.calls[0].text, /ON CONFLICT \(organization_id, lower\(name\)\)/i);
     assert.match(pool.calls[0].text, /o\.is_active = true/i);
     assert.match(pool.calls[0].text, /o\.max_pipelines/i);
+    assert.match(pool.calls[0].text, /SELECT o\.id, \$2::text/i);
+    assert.match(pool.calls[0].text, /lower\(\$2::text\)/i);
     assert.deepEqual(pool.calls[0].values, [9, 'North Line']);
 });
 

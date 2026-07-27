@@ -5,7 +5,7 @@ function asJson(value) {
 async function ensureOwnedPipeline(pool, { organizationId, pipelineName }) {
     const result = await pool.query(
         `INSERT INTO pipelines (organization_id, name)
-         SELECT o.id, $2
+         SELECT o.id, $2::text
          FROM organizations o
          WHERE o.id = $1
            AND o.is_active = true
@@ -13,7 +13,7 @@ async function ensureOwnedPipeline(pool, { organizationId, pipelineName }) {
                EXISTS (
                    SELECT 1 FROM pipelines existing
                    WHERE existing.organization_id = o.id
-                     AND lower(existing.name) = lower($2)
+                     AND lower(existing.name) = lower($2::text)
                )
                OR (SELECT COUNT(*) FROM pipelines counted
                    WHERE counted.organization_id = o.id) < o.max_pipelines
