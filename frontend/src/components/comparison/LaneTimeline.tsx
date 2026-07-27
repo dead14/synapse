@@ -35,16 +35,15 @@ type FeatureFilter = 'all' | 'anomaly' | 'attention';
 
 const GUTTER = 66;
 const RIGHT_PAD = 14;
-const LANE_HEAD = 18; // run identity + live readout
-const GW_ROW = 12; // girth-weld markers and joint-length labels
+const LANE_HEAD = 26;
+const GW_ROW = 20;
 const CLOCK_TOP = LANE_HEAD + GW_ROW;
-// Tight enough that several runs and the results table share one screen, still
-// ~5 px per clock hour so a 30-minute difference is visible.
-const CLOCK_H = 58;
-const NOCLOCK_H = 12; // features whose tally carries no clock position
+const CLOCK_H = 140;
+const NOCLOCK_H = 24;
 const LANE_H = CLOCK_TOP + CLOCK_H + NOCLOCK_H + 2;
-const AXIS_H = 20;
-const NAV_H = 30;
+const LANE_GAP = 10;
+const AXIS_H = 22;
+const NAV_H = 32;
 const MIN_SPAN_M = 0.5;
 const MAX_LANES_ON_SCREEN = 3;
 const MAX_MARKS_PER_LANE = 900;
@@ -320,9 +319,9 @@ export default function LaneTimeline({
         result.push({
           key: `${index}-${feature.key}`,
           x1: mToX(feature.position),
-          y1: index * LANE_H + clockToY(feature.clockDeg ?? 0),
+          y1: index * (LANE_H + LANE_GAP) + clockToY(feature.clockDeg ?? 0),
           x2: mToX(partner.position),
-          y2: (index + 1) * LANE_H + clockToY(partner.clockDeg ?? 0),
+          y2: (index + 1) * (LANE_H + LANE_GAP) + clockToY(partner.clockDeg ?? 0),
           drift: (partner.rawM ?? 0) - (feature.rawM ?? 0),
         });
       }
@@ -497,7 +496,7 @@ export default function LaneTimeline({
           touchAction: 'none',
           // Every run gets a full lane, but past three the stack would push the
           // results table off the page, so the extra lanes scroll instead.
-          maxHeight: LANE_H * Math.min(lanes.length, MAX_LANES_ON_SCREEN),
+          maxHeight: (LANE_H + LANE_GAP) * Math.min(lanes.length, MAX_LANES_ON_SCREEN),
           overflowY: lanes.length > MAX_LANES_ON_SCREEN ? 'auto' : 'visible',
         }}
         tabIndex={0}
@@ -514,7 +513,7 @@ export default function LaneTimeline({
           const emptyOnAxis = axis === 'aligned' && !lane.alignedAvailable;
           const readout = readouts?.[laneIndex] ?? null;
           return (
-            <svg key={lane.runId} width={width} height={LANE_H} className="block" style={{ borderBottom: '1px solid var(--syn-line)' }}>
+            <svg key={lane.runId} width={width} height={LANE_H} className="block" style={{ borderBottom: '1px solid var(--syn-line)', marginBottom: laneIndex < laneViews.length - 1 ? LANE_GAP : 0 }}>
               <rect x={GUTTER} y={LANE_HEAD} width={chartWidth} height={LANE_H - LANE_HEAD} fill="var(--syn-surface)" />
 
               {/* Joint bands: alternating shading makes the girth-weld pitch readable at a glance */}
@@ -535,14 +534,14 @@ export default function LaneTimeline({
                   <g key={`clock-${hour}`}>
                     <line x1={GUTTER} y1={y} x2={GUTTER + chartWidth} y2={y} stroke="var(--syn-line)" strokeWidth={major ? 0.8 : 0.4} strokeDasharray={major ? '4 4' : '2 6'} />
                     {major && (
-                      <text x={GUTTER - 6} y={y} textAnchor="end" dominantBaseline="central" fontSize="8.5" fontWeight="700" fill="var(--syn-muted)">
+                      <text x={GUTTER - 6} y={y} textAnchor="end" dominantBaseline="central" fontSize="10" fontWeight="700" fill="var(--syn-muted)">
                         {hourLabel(hour % 12)}
                       </text>
                     )}
                   </g>
                 );
               })}
-              <text x={GUTTER - 6} y={CLOCK_TOP + CLOCK_H + NOCLOCK_H / 2} textAnchor="end" dominantBaseline="central" fontSize="7" fontWeight="700" fill="var(--syn-muted)">
+              <text x={GUTTER - 6} y={CLOCK_TOP + CLOCK_H + NOCLOCK_H / 2} textAnchor="end" dominantBaseline="central" fontSize="9" fontWeight="700" fill="var(--syn-muted)">
                 no clock
               </text>
 
@@ -558,10 +557,10 @@ export default function LaneTimeline({
                   <g key={`gw-${weld.key}`}>
                     <line x1={x} y1={CLOCK_TOP} x2={x} y2={LANE_H} stroke={weldColor} strokeWidth={spoolEdge ? 1.8 : 1} strokeDasharray={paired ? '' : '3 3'} />
                     <circle
-                      cx={x} cy={LANE_HEAD + GW_ROW / 2} r={4}
+                      cx={x} cy={LANE_HEAD + GW_ROW / 2} r={5.5}
                       fill={spoolEdge ? '#eab308' : 'var(--syn-surface-raised)'}
                       stroke={weldColor}
-                      strokeWidth={spoolEdge ? 2 : 1}
+                      strokeWidth={spoolEdge ? 2 : 1.2}
                       style={{ cursor: onSpoolRangeChange ? 'pointer' : 'default' }}
                       role="button"
                       tabIndex={0}
@@ -589,7 +588,7 @@ export default function LaneTimeline({
                     y={LANE_HEAD + GW_ROW / 2}
                     textAnchor="middle"
                     dominantBaseline="central"
-                    fontSize="7.5"
+                    fontSize="9"
                     fontWeight="700"
                     fill="var(--syn-muted)"
                   >
@@ -606,7 +605,7 @@ export default function LaneTimeline({
                 const y = hasClock ? clockToY(feature.clockDeg as number) : CLOCK_TOP + CLOCK_H + NOCLOCK_H / 2;
                 const selected = isSelected(feature);
                 const color = colorMode === 'depth' ? depthColor(feature.depthPct) : STATUS_COLOR[feature.status];
-                const radius = selected ? 6.5 : 3 + clamp((feature.depthPct ?? 0) / 100, 0, 1) * 3.5;
+                const radius = selected ? 8 : 4 + clamp((feature.depthPct ?? 0) / 100, 0, 1) * 4;
                 return (
                   <g
                     key={`mark-${feature.key}`}
@@ -643,10 +642,10 @@ export default function LaneTimeline({
 
               {/* Lane header: run identity plus a live readout in that run own odometer */}
               <rect x={0} y={0} width={width} height={LANE_HEAD} fill="var(--syn-surface-raised)" />
-              <text x={6} y={LANE_HEAD / 2} dominantBaseline="central" fontSize="9.5" fontWeight="800" fill="var(--syn-ink)">
+              <text x={6} y={LANE_HEAD / 2} dominantBaseline="central" fontSize="11.5" fontWeight="800" fill="var(--syn-ink)">
                 {lane.label}
               </text>
-              <text x={GUTTER + 4} y={LANE_HEAD / 2} dominantBaseline="central" fontSize="8.5" fontWeight="600" fill="var(--syn-muted)" fontFamily="var(--syn-font-data)">
+              <text x={GUTTER + 4} y={LANE_HEAD / 2} dominantBaseline="central" fontSize="10" fontWeight="600" fill="var(--syn-muted)" fontFamily="var(--syn-font-data)">
                 {emptyOnAxis
                   ? 'no alignment onto the newest run — switch to Reported LD'
                   : readout
@@ -665,7 +664,7 @@ export default function LaneTimeline({
 
         {/* Connectors between runs, drawn over the lane stack */}
         {links.length > 0 && (
-          <svg width={width} height={laneViews.length * LANE_H} className="absolute left-0 top-0" style={{ pointerEvents: 'none' }} aria-hidden="true">
+          <svg width={width} height={laneViews.length * (LANE_H + LANE_GAP)} className="absolute left-0 top-0" style={{ pointerEvents: 'none' }} aria-hidden="true">
             {links.map((link) => (
               <line
                 key={link.key}

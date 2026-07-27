@@ -178,7 +178,7 @@ export default function IliComparisonPage() {
             <JobProgressBar progress={jobProgress} message={jobMessage} />
           </div>
         ) : (
-          <div className="mt-1 flex h-[calc(100vh-100px)] flex-col gap-2">
+          <div className="mt-1 flex flex-col gap-2">
             {/* Handoff to the corrosion review — the only route into FFS. */}
             {sessionId && (
               <div
@@ -246,7 +246,7 @@ export default function IliComparisonPage() {
                 tall and the table rendered its header over nothing. Giving it
                 `flex-1 min-h-0` hands it the leftover height as a definite
                 size, which is what its internal scroll container needs. */}
-            <div className="flex min-h-0 flex-1 flex-col" style={{ minHeight: '14rem' }}>
+            <div className="flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
               <ResultsPanel
                 data={visibleData}
                 loading={loading}
