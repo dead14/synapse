@@ -240,6 +240,80 @@ def _node_score(old_anchor, new_anchor):
     return score
 
 
+def _node_score_row(old_anchor, columns):
+    """``_node_score(old_anchor, new_anchors[j])`` for every j at once.
+
+    Same arithmetic as the scalar function, evaluated over prepared NEW
+    columns.  ``test_tiein_engine`` pins the two against each other.
+    """
+    type_match = columns["type_code"] == columns["type_index"].get(old_anchor.type, -1)
+    base = 2.0 if old_anchor.type == "weld" else (5.0 if old_anchor.type == "flange" else 4.0)
+    score = np.full(columns["count"], base, dtype=float)
+
+    old_wall = old_anchor.wall_thickness_mm
+    if old_wall is not None:
+        difference = np.abs(old_wall - columns["wall"])
+        both = columns["has_wall"]
+        score += np.where(both & (difference <= 0.5), 1.5, 0.0)
+        score -= np.where(both & (difference > 1.0), 2.0, 0.0)
+
+    old_joint = old_anchor.joint_length_m
+    if old_joint is not None and old_joint > 0.0:
+        new_joint = columns["joint"]
+        both = columns["has_joint"] & (new_joint > 0.0)
+        joint_difference = np.abs(old_joint - new_joint)
+        largest = np.maximum(old_joint, new_joint)
+        score += np.where(
+            both & (joint_difference <= np.maximum(0.1, 0.05 * largest)), 2.5, 0.0
+        )
+        score -= np.where(
+            both
+            & (joint_difference > np.maximum(0.5, 0.20 * largest))
+            & ~(joint_difference <= np.maximum(0.1, 0.05 * largest)),
+            1.5,
+            0.0,
+        )
+
+    old_clock = old_anchor.clock_position
+    if old_clock is not None:
+        both = columns["has_clock"]
+        clock_difference = np.abs(old_clock - columns["clock"])
+        clock_difference = np.minimum(clock_difference, 12.0 - clock_difference)
+        score += np.where(both & (clock_difference <= 0.5), 1.0, 0.0)
+        score -= np.where(both & (clock_difference > 1.5), 0.5, 0.0)
+
+    return np.where(type_match, score, -np.inf)
+
+
+def _prepare_anchor_columns(anchors):
+    """Column arrays for the NEW anchors, built once per search."""
+    count = len(anchors)
+    type_index = {}
+    for anchor in anchors:
+        type_index.setdefault(anchor.type, len(type_index))
+    return {
+        "count": count,
+        "type_index": type_index,
+        "type_code": np.array([type_index[a.type] for a in anchors], dtype=np.int32),
+        "dist": np.array([a.dist for a in anchors], dtype=float),
+        "wall": np.array(
+            [a.wall_thickness_mm if a.wall_thickness_mm is not None else 0.0 for a in anchors],
+            dtype=float,
+        ),
+        "has_wall": np.array([a.wall_thickness_mm is not None for a in anchors]),
+        "joint": np.array(
+            [a.joint_length_m if a.joint_length_m is not None else 0.0 for a in anchors],
+            dtype=float,
+        ),
+        "has_joint": np.array([a.joint_length_m is not None for a in anchors]),
+        "clock": np.array(
+            [a.clock_position if a.clock_position is not None else 0.0 for a in anchors],
+            dtype=float,
+        ),
+        "has_clock": np.array([a.clock_position is not None for a in anchors]),
+    }
+
+
 def _span_score(old_span, new_span, skipped_count):
     if old_span <= 0.0 or new_span <= 0.0:
         return float("-inf")
@@ -259,13 +333,69 @@ def _span_score(old_span, new_span, skipped_count):
     return length_score - 4.6 * skipped_count
 
 
-def _trace_path(previous, end_i, end_j):
-    path = []
-    current = (end_i, end_j)
-    while current is not None:
-        path.append(current)
-        current = previous[current[0]][current[1]]
-    return path[::-1]
+def _span_score_row(old_span, new_spans, skipped_count):
+    """``_span_score`` for one OLD span against a whole vector of NEW spans.
+
+    This is the physical drift gate the DP is banded by: a transition only
+    exists where the two spans agree to within ``max(3 m, 25 %)``, so the
+    reachable predecessor set is a physical band around the OLD span rather
+    than every earlier cell.
+    """
+    if old_span <= 0.0:
+        return np.full(new_spans.shape, -np.inf)
+    largest = np.maximum(old_span, new_spans)
+    absolute_error = np.abs(old_span - new_spans)
+    within_band = (
+        (new_spans > 0.0)
+        & (absolute_error <= np.maximum(3.0, 0.25 * largest))
+    )
+    tolerance = np.maximum(1.0, 0.05 * largest)
+    normalized_error = np.maximum(0.0, absolute_error - 0.15) / tolerance
+    length_score = np.where(
+        normalized_error <= 1.0,
+        5.0 * (1.0 - normalized_error),
+        -np.minimum(3.0, normalized_error - 1.0),
+    )
+    return np.where(within_band, length_score - 4.6 * skipped_count, -np.inf)
+
+
+_BACKPOINTER_STRIDE = MAX_SKIP_ANCHORS + 1
+_BACKPOINTER_STEPS = [
+    divmod(code, _BACKPOINTER_STRIDE)
+    for code in range(_BACKPOINTER_STRIDE * _BACKPOINTER_STRIDE)
+]
+
+
+def _trace_path(packed_backpointers, row_stride, end_i, end_j, stop_at=None):
+    """Walk a path back through the packed (old_step, new_step) backpointers.
+
+    ``packed_backpointers`` is the int8 backpointer grid as raw bytes; indexing
+    bytes yields a plain int, which keeps this loop out of numpy scalar
+    boxing — it runs once per candidate endpoint and there can be a million of
+    those at the MAX_OVERLAP_CELLS ceiling.
+
+    Returns ``(reversed_tail, merge_cell)``.  When ``stop_at`` is given the walk
+    halts at the first cell it contains and reports it, so a candidate that
+    merges into an already-accepted path costs only its own divergent tail
+    instead of a full re-trace.  Every cell has at most one predecessor, so the
+    paths form a forest and everything upstream of the meeting point is shared
+    verbatim.
+    """
+    tail = []
+    append = tail.append
+    steps = _BACKPOINTER_STEPS
+    i, j = end_i, end_j
+    while True:
+        cell = (i, j)
+        if stop_at is not None and cell in stop_at:
+            return tail, cell
+        append(cell)
+        code = packed_backpointers[i * row_stride + j]
+        if code == 0:
+            return tail, None
+        old_step, new_step = steps[code]
+        i -= old_step
+        j -= new_step
 
 
 def _candidate_from_path(path, score, old_anchors, new_anchors):
@@ -330,73 +460,168 @@ def _uniqueness_score(best, runner_up, ambiguous):
     return max(0.0, min(1.0, gap / _score_scale(best["score"])))
 
 
+def _ordered_endpoints(scores, path_lengths):
+    """Endpoint cells in descending ``(score, length, old_index, new_index)`` order.
+
+    Equivalent to ``sorted(..., reverse=True)`` over the dense tuple list the
+    engine used to materialise, but the keys never leave numpy: at the
+    MAX_OVERLAP_CELLS ceiling that list was a million Python tuples.
+    """
+    old_count, new_count = scores.shape
+    flat = np.flatnonzero(path_lengths.reshape(-1) >= 2)
+    if flat.size == 0:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), np.empty(0)
+    old_index = flat // new_count
+    new_index = flat - old_index * new_count
+    selected_scores = scores.reshape(-1)[flat]
+    selected_lengths = path_lengths.reshape(-1)[flat]
+    # lexsort's last key is primary; reversing a total order over unique
+    # (score, length, i, j) tuples reproduces reverse=True exactly.
+    order = np.lexsort(
+        (new_index, old_index, selected_lengths, selected_scores)
+    )[::-1]
+    return old_index[order], new_index[order], selected_scores[order]
+
+
 def find_overlap_candidates(old_anchors, new_anchors, max_candidates=3):
-    """Find monotonic local alignments using robust multi-anchor span transitions."""
+    """Find monotonic local alignments using robust multi-anchor span transitions.
+
+    The DP is evaluated one OLD anchor at a time, vectorised across the NEW
+    anchors.  Only cells whose node score is finite (same anchor type) take
+    part, and a transition only exists inside the physical span band enforced
+    by ``_span_score_row``.  State is three compact arrays instead of three
+    dense Python list-of-lists: float64 scores, int32 path lengths and a single
+    int8 backpointer per cell that packs (old_step, new_step).
+    """
     old_count, new_count = len(old_anchors), len(new_anchors)
     if old_count == 0 or new_count == 0:
         return []
 
-    scores = [[0.0] * new_count for _ in range(old_count)]
-    previous = [[None] * new_count for _ in range(old_count)]
-    path_lengths = [[0] * new_count for _ in range(old_count)]
+    columns = _prepare_anchor_columns(new_anchors)
+    new_dists = columns["dist"]
+    old_dists = np.array([anchor.dist for anchor in old_anchors], dtype=float)
+
+    scores = np.zeros((old_count, new_count), dtype=float)
+    path_lengths = np.zeros((old_count, new_count), dtype=np.int32)
+    # 0 means "chain starts here"; otherwise old_step * stride + new_step.
+    stride = MAX_SKIP_ANCHORS + 1
+    backpointers = np.zeros((old_count, new_count), dtype=np.int8)
+
+    # Span between NEW anchors that are `new_step` apart never depends on the
+    # OLD row, so it is built once instead of once per cell.
+    new_spans = {
+        new_step: new_dists[new_step:] - new_dists[:-new_step]
+        for new_step in range(1, MAX_SKIP_ANCHORS + 1)
+        if new_step < new_count
+    }
 
     for old_index, old_anchor in enumerate(old_anchors):
-        for new_index, new_anchor in enumerate(new_anchors):
-            node_score = _node_score(old_anchor, new_anchor)
-            if not math.isfinite(node_score):
-                continue
-            best_score = node_score
-            best_previous = None
-            best_length = 1
-            for old_step in range(1, min(MAX_SKIP_ANCHORS, old_index) + 1):
-                prior_old_index = old_index - old_step
-                for new_step in range(1, min(MAX_SKIP_ANCHORS, new_index) + 1):
-                    prior_new_index = new_index - new_step
-                    # Reachability, not sign.  A legitimate weld pair scores <= 0
-                    # whenever it carries a wall-thickness change (base 2.0 minus
-                    # up to 2.0), so testing the score truncated valid chains at
-                    # every WT transition and split one true alignment into two
-                    # short ones -> spurious AMBIGUOUS_OVERLAP.  path_lengths is
-                    # 0 only for cells that were skipped as non-finite.
-                    if path_lengths[prior_old_index][prior_new_index] <= 0:
-                        continue
-                    prior_score = scores[prior_old_index][prior_new_index]
-                    span_score = _span_score(
-                        old_anchor.dist - old_anchors[prior_old_index].dist,
-                        new_anchor.dist - new_anchors[prior_new_index].dist,
-                        old_step + new_step - 2,
-                    )
-                    if not math.isfinite(span_score):
-                        continue
-                    candidate_score = prior_score + node_score + span_score
-                    candidate_length = path_lengths[prior_old_index][prior_new_index] + 1
-                    if candidate_score > best_score or (
-                        math.isclose(candidate_score, best_score)
-                        and candidate_length > best_length
-                    ):
-                        best_score = candidate_score
-                        best_previous = (prior_old_index, prior_new_index)
-                        best_length = candidate_length
-            scores[old_index][new_index] = best_score
-            previous[old_index][new_index] = best_previous
-            path_lengths[old_index][new_index] = best_length
+        node = _node_score_row(old_anchor, columns)
+        feasible = np.isfinite(node)
+        if not feasible.any():
+            continue
 
-    endpoints = sorted(
-        (
-            (scores[old_index][new_index], path_lengths[old_index][new_index], old_index, new_index)
-            for old_index in range(old_count)
-            for new_index in range(new_count)
-            if path_lengths[old_index][new_index] >= 2
-        ),
-        reverse=True,
-    )
+        best_score = np.where(feasible, node, 0.0)
+        best_length = feasible.astype(np.int32)
+        best_back = np.zeros(new_count, dtype=np.int8)
+
+        for old_step in range(1, min(MAX_SKIP_ANCHORS, old_index) + 1):
+            prior_old_index = old_index - old_step
+            prior_scores = scores[prior_old_index]
+            prior_lengths = path_lengths[prior_old_index]
+            if not prior_lengths.any():
+                continue
+            old_span = old_dists[old_index] - old_dists[prior_old_index]
+            for new_step in range(1, MAX_SKIP_ANCHORS + 1):
+                if new_step >= new_count:
+                    break
+                target = slice(new_step, new_count)
+                prior = slice(0, new_count - new_step)
+                span_score = _span_score_row(
+                    old_span, new_spans[new_step], old_step + new_step - 2
+                )
+                # Reachability, not sign.  A legitimate weld pair scores <= 0
+                # whenever it carries a wall-thickness change (base 2.0 minus
+                # up to 2.0), so testing the score truncated valid chains at
+                # every WT transition and split one true alignment into two
+                # short ones -> spurious AMBIGUOUS_OVERLAP.  path_lengths is
+                # 0 only for cells that were skipped as non-finite.
+                usable = (
+                    (prior_lengths[prior] > 0)
+                    & np.isfinite(span_score)
+                    & feasible[target]
+                )
+                if not usable.any():
+                    continue
+                candidate_score = prior_scores[prior] + node[target] + span_score
+                candidate_length = prior_lengths[prior] + 1
+                incumbent_score = best_score[target]
+                incumbent_length = best_length[target]
+                close = np.abs(candidate_score - incumbent_score) <= 1e-09 * np.maximum(
+                    np.abs(candidate_score), np.abs(incumbent_score)
+                )
+                improves = usable & (
+                    (candidate_score > incumbent_score)
+                    | (close & (candidate_length > incumbent_length))
+                )
+                if not improves.any():
+                    continue
+                best_score[target] = np.where(improves, candidate_score, incumbent_score)
+                best_length[target] = np.where(improves, candidate_length, incumbent_length)
+                best_back[target] = np.where(
+                    improves,
+                    np.int8(old_step * stride + new_step),
+                    best_back[target],
+                )
+
+        scores[old_index] = best_score
+        path_lengths[old_index] = best_length
+        backpointers[old_index] = best_back
+
+    old_indexes, new_indexes, endpoint_scores = _ordered_endpoints(scores, path_lengths)
+    packed_backpointers = backpointers.tobytes()
     candidates = []
-    for score, _, old_index, new_index in endpoints:
-        path = _trace_path(previous, old_index, new_index)
-        candidate = _candidate_from_path(path, score, old_anchors, new_anchors)
+    accepted_paths = []
+    # cell -> [(candidate index, depth from the start of that candidate's path)].
+    # A cell shared by two accepted paths sits at the same depth in both, since
+    # everything upstream of it is the same chain.
+    claimed = {}
+
+    for position in range(old_indexes.size):
+        tail, merge_cell = _trace_path(
+            packed_backpointers,
+            new_count,
+            int(old_indexes[position]),
+            int(new_indexes[position]),
+            claimed,
+        )
+        if merge_cell is not None:
+            entries = claimed[merge_cell]
+            shared = entries[0][1] + 1
+            total_length = len(tail) + shared
+            # Paths that merge share exactly the cells upstream of the merge, so
+            # the family overlap _same_alignment_family computes is known here
+            # without materialising either pair set.
+            if any(
+                shared / max(1, min(total_length, len(accepted_paths[index])))
+                >= 0.5
+                for index, _depth in entries
+            ):
+                continue
+            index, depth = entries[0]
+            path = accepted_paths[index][:depth + 1] + tail[::-1]
+        else:
+            path = tail[::-1]
+
+        candidate = _candidate_from_path(
+            path, float(endpoint_scores[position]), old_anchors, new_anchors
+        )
         if any(_same_alignment_family(candidate, existing) for existing in candidates):
             continue
         candidates.append(candidate)
+        for depth, cell in enumerate(path):
+            claimed.setdefault(cell, []).append((len(accepted_paths), depth))
+        accepted_paths.append(path)
         if len(candidates) >= max_candidates:
             break
     return candidates

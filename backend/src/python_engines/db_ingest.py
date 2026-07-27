@@ -177,7 +177,9 @@ def _source_kind(file_path):
     if magic.startswith(XLSX_MAGIC):
         return "excel"
     if magic.startswith(LEGACY_XLS_MAGIC):
-        raise ValueError("Format .xls lama tidak didukung; simpan ulang sebagai .xlsx atau .csv.")
+        raise ValueError(
+            "The legacy .xls format is not supported; re-save the file as .xlsx or .csv."
+        )
     if path.suffix.casefold() in {".xlsx", ".xlsm"}:
         return "excel"
     return "csv"
@@ -200,7 +202,8 @@ def detect_header_row(preview, synonym_lookup, max_scan=30):
 
     if best_index is None or len(best_fields) < 2:
         raise ValueError(
-            "Baris header tidak ditemukan: log_distance_m dan sedikitnya satu kolom ILI lain wajib dikenali."
+            "No header row found: log_distance_m and at least one other ILI column "
+            "must be recognisable."
         )
 
     return best_index, len(best_fields)
@@ -258,7 +261,7 @@ def _load_xlsx_table(file_path, synonym_lookup, preview_rows):
                 selected = (worksheet, preview, header_index, matched_fields)
 
         if selected is None:
-            raise ValueError("Tidak ada worksheet dengan header ILI yang dapat dikenali.")
+            raise ValueError("No worksheet contains a recognisable ILI header row.")
 
         worksheet, preview, header_index, matched_fields = selected
         headers = _unique_headers(preview[header_index])
@@ -302,7 +305,7 @@ def load_source_table(file_path, synonym_lookup, preview_rows=30):
         for index, column in enumerate(raw.columns)
     ]
     if raw.empty:
-        raise ValueError("File ILI tidak memiliki baris data setelah header.")
+        raise ValueError("The ILI file has no data rows after its header.")
     return raw, header_index, matched_fields
 
 
@@ -352,7 +355,7 @@ def summarize_feature_counts(frame):
 
 def normalize_ingestion_frame(raw, field_map):
     if raw.empty:
-        raise ValueError("File ILI tidak memiliki baris data.")
+        raise ValueError("The ILI file has no data rows.")
 
     universal = pd.DataFrame(
         {field: pd.Series(pd.NA, index=raw.index, dtype="object") for field in DATABASE_FIELDS}
@@ -381,7 +384,7 @@ def normalize_ingestion_frame(raw, field_map):
             bound_sources[universal_column] = [matched_column]
 
     if not _nonempty_mask(universal["log_distance_m"]).any():
-        raise ValueError("Kolom log_distance_m tidak berhasil dipetakan.")
+        raise ValueError("The log_distance_m column could not be mapped.")
 
     numeric_coercions = {}
     for field in NUMERIC_FIELDS:
@@ -439,7 +442,7 @@ def normalize_ingestion_frame(raw, field_map):
     rejected_rows = int((~valid_distance).sum())
     universal = universal.loc[valid_distance].copy()
     if universal.empty:
-        raise ValueError("Tidak ada baris dengan log_distance_m numerik dan finite.")
+        raise ValueError("No row has a numeric, finite log_distance_m.")
 
     universal["joint_number"] = universal["joint_number"].apply(
         lambda value: int(value) if pd.notna(value) else None
@@ -535,7 +538,9 @@ def ingest_csv(
 ):
     synonym_lookup = load_field_synonym_lookup()
     if not synonym_lookup:
-        error = RuntimeError("Kamus sinonim parser kosong; jalankan seed_dictionary.py terlebih dahulu.")
+        error = RuntimeError(
+            "The parser synonym dictionary is empty; run seed_dictionary.py first."
+        )
         error.code = "PARSER_DICTIONARY_UNAVAILABLE"
         raise error
 

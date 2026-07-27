@@ -148,5 +148,186 @@ class ConstrainedDtwTracebackTests(unittest.TestCase):
         self.assertTrue(math.isinf(total_cost))
 
 
+def _full_matrix_dtw(cost_matrix, constraint_mask=None, sakoe_chiba_band=None):
+    """The pre-band reference DP, kept in the test rather than the engine.
+
+    Materialises the whole (n+1) x (m+1) accumulator, which is exactly what the
+    production implementation must never do; keeping it here lets the banded
+    solver be checked against it on inputs small enough to afford it.
+    """
+    n, m = cost_matrix.shape
+    combined = (
+        cost_matrix + constraint_mask if constraint_mask is not None
+        else cost_matrix.copy()
+    )
+    accumulated = np.full((n + 1, m + 1), np.inf)
+    accumulated[0, 0] = 0.0
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if sakoe_chiba_band is not None and abs(i * m / n - j) > sakoe_chiba_band:
+                continue
+            accumulated[i, j] = combined[i - 1, j - 1] + min(
+                accumulated[i - 1, j],
+                accumulated[i, j - 1],
+                accumulated[i - 1, j - 1],
+            )
+    if np.isinf(accumulated[n, m]):
+        return [], float("inf")
+    path = []
+    i, j = n, m
+    while i > 0 or j > 0:
+        path.append((i - 1, j - 1))
+        if i == 0:
+            j -= 1
+        elif j == 0:
+            i -= 1
+        else:
+            _, i, j = min(
+                [
+                    (accumulated[i - 1, j - 1], i - 1, j - 1),
+                    (accumulated[i - 1, j], i - 1, j),
+                    (accumulated[i, j - 1], i, j - 1),
+                ],
+                key=lambda candidate: candidate[0],
+            )
+    path.reverse()
+    return [(a, b) for (a, b) in path if a >= 0 and b >= 0], accumulated[n, m]
+
+
+class BandedDtwEquivalenceTests(unittest.TestCase):
+    """The banded solver must reproduce the full-matrix DP exactly.
+
+    Production signals are sampled at 0.1 m, so a 4 km run is 40k x 40k: four
+    float64 grids of 12.8 GB each, plus a pure-Python double loop over 1.6e9
+    cells. Nothing may allocate n*m any more, and the banded replacement has to
+    stay bit-compatible with the DP it replaces.
+    """
+
+    def _assert_same(self, source, target, constraints=None, band=None):
+        cost = filogenesis_core._compute_cost_matrix(source, target)
+        mask = (
+            filogenesis_core._build_constraint_mask(
+                len(source), len(target), constraints
+            )
+            if constraints
+            else None
+        )
+        expected_path, expected_cost = _full_matrix_dtw(cost, mask, band)
+
+        dense_path, dense_cost = filogenesis_core.dtw_constrained(cost, mask, band)
+        signal_path, signal_cost, stats = filogenesis_core.dtw_constrained_signals(
+            source, target, constraints, 0.1, band
+        )
+
+        self.assertEqual(dense_path, expected_path)
+        self.assertEqual(signal_path, expected_path)
+        if math.isinf(expected_cost):
+            self.assertTrue(math.isinf(dense_cost))
+            self.assertTrue(math.isinf(signal_cost))
+        else:
+            self.assertAlmostEqual(dense_cost, expected_cost, places=9)
+            self.assertAlmostEqual(signal_cost, expected_cost, places=9)
+        self.assertLessEqual(stats["banded_cells"], stats["full_cells"])
+
+    def test_unconstrained_signals_match_the_full_matrix(self):
+        rng = np.random.RandomState(0)
+        for _ in range(12):
+            n, m = int(rng.randint(3, 70)), int(rng.randint(3, 70))
+            self._assert_same(rng.rand(n), rng.rand(m))
+
+    def test_anchor_constrained_signals_match_the_full_matrix(self):
+        rng = np.random.RandomState(7)
+        for _ in range(12):
+            n, m = int(rng.randint(20, 80)), int(rng.randint(20, 80))
+            constraints = [
+                (int(rng.randint(0, n)), int(rng.randint(0, m)), float(rng.rand()))
+                for _ in range(int(rng.randint(1, 4)))
+            ]
+            self._assert_same(rng.rand(n), rng.rand(m), constraints)
+
+    def test_sakoe_chiba_band_matches_the_full_matrix(self):
+        rng = np.random.RandomState(11)
+        for _ in range(8):
+            n, m = int(rng.randint(20, 60)), int(rng.randint(20, 60))
+            self._assert_same(
+                rng.rand(n), rng.rand(m), band=int(rng.randint(1, 25))
+            )
+
+    def test_impulse_signals_match_the_full_matrix(self):
+        # Production signals are sparse impulses, so most costs are exactly 0
+        # and ties are everywhere. Tie-breaking must survive the rewrite.
+        rng = np.random.RandomState(3)
+        for _ in range(4):
+            source = np.zeros(150)
+            target = np.zeros(180)
+            source[rng.choice(150, 15, replace=False)] = 1.0
+            target[rng.choice(180, 15, replace=False)] = 1.0
+            self._assert_same(source, target)
+
+
+class BandedDtwMemoryTests(unittest.TestCase):
+    def test_twenty_thousand_samples_evaluate_far_fewer_than_n_times_m_cells(self):
+        size = 20_000
+        rng = np.random.RandomState(1)
+        source = np.zeros(size)
+        target = np.zeros(size)
+        source[rng.choice(size, size // 100, replace=False)] = 1.0
+        target[rng.choice(size, size // 100, replace=False)] = 1.0
+
+        path, total_cost, stats = filogenesis_core.dtw_constrained_signals(
+            source, target, None, 0.1
+        )
+
+        self.assertEqual(stats["full_cells"], size * size)
+        # Band bookkeeping, not RSS: the DP may only touch a Sakoe-Chiba strip.
+        radius = filogenesis_core.DTW_BAND_RADIUS_SAMPLES
+        self.assertLessEqual(stats["banded_cells"], size * (2 * radius + 1))
+        self.assertLess(stats["banded_cells"] * 10, stats["full_cells"])
+        self.assertTrue(path)
+        self.assertEqual(path[0], (0, 0))
+        self.assertEqual(path[-1], (size - 1, size - 1))
+        self.assertTrue(math.isfinite(total_cost))
+
+    def test_small_grids_still_run_unbanded(self):
+        # Below the cell budget the band is the whole grid, so results stay
+        # identical to the pre-band engine without any radius tuning.
+        rng = np.random.RandomState(2)
+        _path, _cost, stats = filogenesis_core.dtw_constrained_signals(
+            rng.rand(300), rng.rand(400), None, 0.1
+        )
+        self.assertEqual(stats["banded_cells"], stats["full_cells"])
+
+
+class SignalResolutionTests(unittest.TestCase):
+    def test_sampling_stays_native_below_the_cap(self):
+        interval, coarsened = filogenesis_core.resolve_sampling_interval(
+            1_000.0, 0.1, 20_000
+        )
+        self.assertEqual(interval, 0.1)
+        self.assertFalse(coarsened)
+
+    def test_sampling_coarsens_above_the_cap(self):
+        interval, coarsened = filogenesis_core.resolve_sampling_interval(
+            4_000.0, 0.1, 20_000
+        )
+        self.assertTrue(coarsened)
+        self.assertGreater(interval, 0.1)
+        self.assertLessEqual(4_000.0 / interval, 20_000)
+
+    def test_coarsened_step_stays_on_the_native_grid(self):
+        interval, _coarsened = filogenesis_core.resolve_sampling_interval(
+            9_999.0, 0.1, 20_000
+        )
+        self.assertAlmostEqual(interval / 0.1, round(interval / 0.1), places=9)
+
+    def test_empty_or_degenerate_runs_keep_the_native_step(self):
+        self.assertEqual(
+            filogenesis_core.resolve_sampling_interval(0.0), (0.1, False)
+        )
+        self.assertEqual(
+            filogenesis_core.resolve_sampling_interval(float("nan")), (0.1, False)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

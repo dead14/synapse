@@ -2,6 +2,7 @@ import json
 import sys
 
 import openpyxl
+from openpyxl.cell import WriteOnlyCell
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -13,10 +14,10 @@ NEW_HEADERS = [
     "ERF ASME NEW", "Psafe NEW (bar)", "Comment NEW",
 ]
 CENTER_HEADERS = [
-    "Odo Diff (m)\nNEW-OLD", "Dist GW Δ\nNEW-OLD", "O'Clock\nBerubah?",
+    "Odo Diff (m)\nNEW-OLD", "Dist GW Δ\nNEW-OLD", "O'Clock\nChanged?",
     "Clock Δ\n(deg)", "Depth Δ (%)\nNEW-OLD", "Length Δ(mm)\nNEW-OLD",
-    "Width Δ(mm)\nNEW-OLD", "Surface\nBerubah?", "Match\nStatus",
-    "Data\nKelengkapan",
+    "Width Δ(mm)\nNEW-OLD", "Surface\nChanged?", "Match\nStatus",
+    "Data\nCompleteness",
 ]
 OLD_HEADERS = [
     "Abs. Dist OLD (m)", "Feature Type OLD", "Identif. OLD", "Joint No. OLD",
@@ -24,6 +25,76 @@ OLD_HEADERS = [
     "Length OLD (mm)", "Width OLD (mm)", "Depth OLD (%WT)", "Surface OLD",
     "ERF ASME OLD", "Psafe OLD (bar)", "Comment OLD",
 ]
+
+# Every style object is built exactly once at import time.  openpyxl keeps one
+# Cell object per populated cell, and the report is 40 columns wide, so a
+# 100k-row comparison is four million cells: constructing a Font/Fill/Border
+# per cell (or even per row, as the status column used to) is what turned this
+# export into a multi-gigabyte job.  Write-only mode would drop the Cell
+# objects too, but it supports neither merged cells nor auto-filter nor
+# column/row dimensions, all of which this layout depends on.
+DARK_BLUE_FILL = PatternFill("solid", fgColor="1F4E79")
+BLUE_FILL = PatternFill("solid", fgColor="2E74B5")
+GOLD_FILL = PatternFill("solid", fgColor="BF9000")
+NEW_FILL = PatternFill("solid", fgColor="F0F6FC")
+CENTER_FILL = PatternFill("solid", fgColor="FFF8E7")
+OLD_FILL = PatternFill("solid", fgColor="F7F7F7")
+GREEN_FILL = PatternFill("solid", fgColor="C6EFCE")
+ORANGE_FILL = PatternFill("solid", fgColor="FCE4D6")
+YELLOW_FILL = PatternFill("solid", fgColor="FFF2CC")
+
+WHITE_BOLD_FONT = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+TITLE_FONT = Font(name="Calibri", size=12, bold=True, color="FFFFFF")
+MATCHED_FONT = Font(name="Calibri", size=10, bold=True, color="006100")
+BYPASSED_FONT = Font(name="Calibri", size=10, bold=True, color="7F6000")
+ONLY_FONT = Font(name="Calibri", size=10, bold=True, color="9C0006")
+
+CENTER_ALIGNMENT = Alignment(horizontal="center", vertical="center", wrap_text=True)
+LEFT_ALIGNMENT = Alignment(horizontal="left", vertical="center")
+RIGHT_ALIGNMENT = Alignment(horizontal="right", vertical="center")
+THIN_BORDER = Border(bottom=Side(style="thin", color="D9E2F3"))
+
+FIRST_CENTER_COLUMN = 16
+FIRST_OLD_COLUMN = 26
+STATUS_COLUMN = 24
+THREE_DECIMAL_COLUMNS = frozenset(
+    {1, 5, 6, 7, 16, 17, 20, 21, 22, 26, 30, 31, 32, 35, 36, 37}
+)
+ONE_DECIMAL_COLUMNS = frozenset({9, 10, 11, 34})
+STATUS_STYLES = (
+    ("matched", GREEN_FILL, MATCHED_FONT),
+    ("bypassed", YELLOW_FILL, BYPASSED_FONT),
+    ("only", ORANGE_FILL, ONLY_FONT),
+)
+
+
+def column_style_plan(column_count):
+    """Resolve each column's fill, alignments and number format once.
+
+    The per-cell decisions are a pure function of the column index and whether
+    the value is numeric, so they are hoisted out of the row loop entirely.
+    """
+    plan = []
+    for column in range(1, column_count + 1):
+        if column < FIRST_CENTER_COLUMN:
+            fill = NEW_FILL
+        elif column < FIRST_OLD_COLUMN:
+            fill = CENTER_FILL
+        else:
+            fill = OLD_FILL
+        text_alignment = (
+            CENTER_ALIGNMENT
+            if FIRST_CENTER_COLUMN <= column < FIRST_OLD_COLUMN
+            else LEFT_ALIGNMENT
+        )
+        if column in THREE_DECIMAL_COLUMNS:
+            number_format = "0.000"
+        elif column in ONE_DECIMAL_COLUMNS:
+            number_format = "0.0"
+        else:
+            number_format = None
+        plan.append((fill, text_alignment, number_format))
+    return plan
 
 
 def first_value(row, *keys):
@@ -117,11 +188,11 @@ def side_values(row, side):
 
 def completeness(new_values, old_values):
     if new_values[0] is None:
-        return "Hanya OLD"
+        return "OLD only"
     if old_values[0] is None:
-        return "Hanya NEW"
+        return "NEW only"
     dimensional_values = [new_values[8], new_values[9], new_values[10], old_values[8], old_values[9], old_values[10]]
-    return "Lengkap" if sum(value is not None for value in dimensional_values) >= 4 else "Keduanya terbatas"
+    return "Complete" if sum(value is not None for value in dimensional_values) >= 4 else "Both limited"
 
 
 def comparison_values(row, new_values, old_values):
@@ -152,6 +223,56 @@ def set_column_widths(ws):
         ws.column_dimensions[get_column_letter(index)].width = width
 
 
+def status_style(value):
+    """Fill and font for the Match Status cell, or (None, None)."""
+    status = str(value or "").lower()
+    for keyword, fill, font in STATUS_STYLES:
+        if keyword in status:
+            return fill, font
+    return None, None
+
+
+def styled_cell(worksheet, value, *, fill=None, font=None, alignment=None,
+                border=None, number_format=None):
+    cell = WriteOnlyCell(worksheet, value=value)
+    if fill is not None:
+        cell.fill = fill
+    if font is not None:
+        cell.font = font
+    if alignment is not None:
+        cell.alignment = alignment
+    if border is not None:
+        cell.border = border
+    if number_format is not None:
+        cell.number_format = number_format
+    return cell
+
+
+def build_data_row(worksheet, row, plan):
+    """One fully styled sheet row, built and handed straight to the writer."""
+    new_values = side_values(row, "NEW")
+    old_values = side_values(row, "OLD")
+    values = new_values + comparison_values(row, new_values, old_values) + old_values
+    status_fill, status_font = status_style(values[STATUS_COLUMN - 1])
+
+    cells = []
+    for column, value in enumerate(values, 1):
+        fill, text_alignment, number_format = plan[column - 1]
+        numeric = isinstance(value, (int, float))
+        if column == STATUS_COLUMN and status_fill is not None:
+            fill = status_fill
+        cells.append(styled_cell(
+            worksheet,
+            safe_cell_value(value),
+            fill=fill,
+            font=status_font if column == STATUS_COLUMN else None,
+            alignment=RIGHT_ALIGNMENT if numeric else text_alignment,
+            border=THIN_BORDER,
+            number_format=number_format if numeric else None,
+        ))
+    return cells
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage: python export_excel.py <input_json_path> <output_xlsx_path>")
@@ -160,77 +281,59 @@ def main():
     with open(sys.argv[1], "r", encoding="utf-8") as input_file:
         data = json.load(input_file)
 
-    workbook = openpyxl.Workbook()
-    worksheet = workbook.active
-    worksheet.title = "Comparison Report"
+    # Write-only mode streams each row to disk and drops it, so peak memory no
+    # longer scales with row count: a 100k-row comparison is four million cells
+    # that normal mode would keep alive as Cell objects until save().
+    # WriteOnlyWorksheet has no merge_cells() helper, but the merged-range
+    # collection it inherits is serialised normally, so the banner merges below
+    # survive; freeze panes, auto-filter and row/column dimensions are likewise
+    # supported as long as they are set before the rows are appended.
+    workbook = openpyxl.Workbook(write_only=True)
+    worksheet = workbook.create_sheet("Comparison Report")
     worksheet.sheet_view.showGridLines = False
     worksheet.freeze_panes = "P3"
-
-    dark_blue = PatternFill("solid", fgColor="1F4E79")
-    blue = PatternFill("solid", fgColor="2E74B5")
-    gold = PatternFill("solid", fgColor="BF9000")
-    new_fill = PatternFill("solid", fgColor="F0F6FC")
-    center_fill = PatternFill("solid", fgColor="FFF8E7")
-    old_fill = PatternFill("solid", fgColor="F7F7F7")
-    green_fill = PatternFill("solid", fgColor="C6EFCE")
-    orange_fill = PatternFill("solid", fgColor="FCE4D6")
-    yellow_fill = PatternFill("solid", fgColor="FFF2CC")
-    white_bold = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-    title_font = Font(name="Calibri", size=12, bold=True, color="FFFFFF")
-    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    left = Alignment(horizontal="left", vertical="center")
-    right = Alignment(horizontal="right", vertical="center")
-    thin_border = Border(bottom=Side(style="thin", color="D9E2F3"))
-
-    worksheet.merge_cells("A1:O1")
-    worksheet.merge_cells("P1:Y1")
-    worksheet.merge_cells("Z1:AN1")
-    for cell, value, fill in [
-        ("A1", "<  DATA NEW — HASIL ALIGNMENT", dark_blue),
-        ("P1", "KOMPARASI (NEW − OLD)", gold),
-        ("Z1", "DATA OLD — HASIL ALIGNMENT  >", dark_blue),
-    ]:
-        worksheet[cell] = value
-        worksheet[cell].fill = fill
-        worksheet[cell].font = title_font
-        worksheet[cell].alignment = center
     worksheet.row_dimensions[1].height = 24
+    worksheet.row_dimensions[2].height = 42
+    set_column_widths(worksheet)
+    worksheet.auto_filter.ref = f"A2:AN{max(2, len(data) + 2)}"
+    for span in ("A1:O1", "P1:Y1", "Z1:AN1"):
+        worksheet.merged_cells.add(span)
 
     headers = NEW_HEADERS + CENTER_HEADERS + OLD_HEADERS
-    for column, header in enumerate(headers, 1):
-        cell = worksheet.cell(row=2, column=column, value=header)
-        cell.fill = blue if column <= 15 or column >= 26 else gold
-        cell.font = white_bold
-        cell.alignment = center
-    worksheet.row_dimensions[2].height = 42
+    banner = [None] * len(headers)
+    for column, value in (
+        (1, "<  NEW DATA — ALIGNMENT RESULT"),
+        (FIRST_CENTER_COLUMN, "COMPARISON (NEW − OLD)"),
+        (FIRST_OLD_COLUMN, "OLD DATA — ALIGNMENT RESULT  >"),
+    ):
+        banner[column - 1] = styled_cell(
+            worksheet,
+            value,
+            fill=GOLD_FILL if column == FIRST_CENTER_COLUMN else DARK_BLUE_FILL,
+            font=TITLE_FONT,
+            alignment=CENTER_ALIGNMENT,
+        )
+    worksheet.append(banner)
 
-    for row_index, row in enumerate(data, 3):
-        new_values = side_values(row, "NEW")
-        old_values = side_values(row, "OLD")
-        values = new_values + comparison_values(row, new_values, old_values) + old_values
-        for column, value in enumerate(values, 1):
-            cell = worksheet.cell(row=row_index, column=column, value=safe_cell_value(value))
-            cell.fill = new_fill if column <= 15 else old_fill if column >= 26 else center_fill
-            cell.border = thin_border
-            cell.alignment = right if isinstance(value, (int, float)) else center if 16 <= column <= 25 else left
-            if column in {1, 5, 6, 7, 16, 17, 20, 21, 22, 26, 30, 31, 32, 35, 36, 37} and isinstance(value, (int, float)):
-                cell.number_format = "0.000"
-            elif column in {9, 10, 11, 34} and isinstance(value, (int, float)):
-                cell.number_format = "0.0"
-        status_cell = worksheet.cell(row=row_index, column=24)
-        status = str(status_cell.value or "").lower()
-        if "matched" in status:
-            status_cell.fill = green_fill
-            status_cell.font = Font(name="Calibri", size=10, bold=True, color="006100")
-        elif "bypassed" in status:
-            status_cell.fill = yellow_fill
-            status_cell.font = Font(name="Calibri", size=10, bold=True, color="7F6000")
-        elif "only" in status:
-            status_cell.fill = orange_fill
-            status_cell.font = Font(name="Calibri", size=10, bold=True, color="9C0006")
+    worksheet.append([
+        styled_cell(
+            worksheet,
+            header,
+            fill=(
+                BLUE_FILL
+                if column < FIRST_CENTER_COLUMN or column >= FIRST_OLD_COLUMN
+                else GOLD_FILL
+            ),
+            font=WHITE_BOLD_FONT,
+            alignment=CENTER_ALIGNMENT,
+        )
+        for column, header in enumerate(headers, 1)
+    ])
 
-    worksheet.auto_filter.ref = f"A2:AN{max(2, len(data) + 2)}"
-    set_column_widths(worksheet)
+    plan = column_style_plan(len(headers))
+    for row in data:
+        worksheet.append(build_data_row(worksheet, row, plan))
+
     workbook.save(sys.argv[2])
 
 

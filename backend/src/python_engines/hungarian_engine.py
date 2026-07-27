@@ -8,7 +8,7 @@ import math
 import re
 from dataclasses import dataclass
 from models import SessionLocal, ILIFeature, AlignmentResult, AlignmentSession
-from tiein_transform import map_old_to_new, validated_tiein_knots
+from tiein_transform import prepare_transform, validated_tiein_knots
 
 
 class EmptyDatasetError(RuntimeError):
@@ -288,9 +288,11 @@ class HungarianAnomalyAlignmentEngine:
         if not anomalies_1 or not anomalies_2:
             return []
         new_distances = [float(item["abs_distance_m"]) for item in anomalies_2]
-        overrides = tolerance_overrides or {}
-        upstream = float(overrides.get("us_gw_distance_tolerance", self.us_gw_distance_tolerance))
-        downstream = float(overrides.get("ds_gw_distance_tolerance", self.ds_gw_distance_tolerance))
+        settings = self.resolve_cost_settings(tolerance_overrides)
+        upstream = settings["us_gw_distance_tolerance"]
+        downstream = settings["ds_gw_distance_tolerance"]
+        score = self.pair_cost
+        infinite = self.INF_COST
         edges = []
         for old_index, old_feature in enumerate(anomalies_1):
             corrected = old_feature["abs_distance_m"] + self._interpolate_offset(
@@ -299,11 +301,11 @@ class HungarianAnomalyAlignmentEngine:
             first = bisect.bisect_left(new_distances, corrected - upstream)
             last = bisect.bisect_right(new_distances, corrected + downstream)
             for new_index in range(first, last):
-                new_feature = anomalies_2[new_index]
-                cost = self.build_cost_matrix(
-                    [old_feature], [new_feature], offset_table, offset_keys, tolerance_overrides,
-                )[0][0]
-                if cost < self.INF_COST:
+                # Scored directly instead of through a 1x1 build_cost_matrix
+                # call, which allocated a numpy array and re-resolved every
+                # weight and tolerance for each candidate edge.
+                cost = score(old_feature, anomalies_2[new_index], corrected, settings)
+                if cost < infinite:
                     edges.append((old_index, new_index, float(cost)))
         return edges
 
@@ -663,7 +665,11 @@ class HungarianAnomalyAlignmentEngine:
                 )
             )
             tie_in_knots = validated_tiein_knots(params_json)
-            
+            # Prepared once for the whole run: the knot search axis is O(knots)
+            # to build and this loop runs once per feature.
+            tie_in_transform = prepare_transform(tie_in_knots) if tie_in_knots else None
+
+
             # Map them into the format expected by the engine (abs_distance_m, id, depth_pct, length_mm, width_mm)
             mapped = []
             invalid_distance_count = 0
@@ -687,8 +693,8 @@ class HungarianAnomalyAlignmentEngine:
                     source_abs_dist = 0.0
                 else:
                     source_abs_dist = abs_dist
-                    if is_old_run and tie_in_knots:
-                        master_distance = map_old_to_new(abs_dist, tie_in_knots)
+                    if is_old_run and tie_in_transform is not None:
+                        master_distance = tie_in_transform(abs_dist)
                         tiein_outside_domain = master_distance is None
                         if master_distance is not None:
                             abs_dist = master_distance
@@ -1024,6 +1030,109 @@ class HungarianAnomalyAlignmentEngine:
         ]
         return anomalies, bypassed
 
+    def resolve_cost_settings(self, tolerance_overrides: dict | None = None) -> dict:
+        """Freeze the weights and tolerances one scoring pass will use.
+
+        These are constant for a whole segment, so resolving them per candidate
+        edge (which the sparse path did, via a 1x1 ``build_cost_matrix`` call)
+        is pure overhead.
+        """
+        overrides = tolerance_overrides or {}
+        return {
+            "w_gw": float(getattr(self, "w_gw", 3.0)),
+            "w_clock": float(getattr(self, "w_clock", 2.0)),
+            "w_length": float(getattr(self, "w_length", 1.0)),
+            "w_width": float(getattr(self, "w_width", 0.5)),
+            "clock_tolerance": float(overrides.get("clock_tolerance", self.clock_tolerance)),
+            "us_gw_distance_tolerance": float(overrides.get(
+                "us_gw_distance_tolerance", self.us_gw_distance_tolerance
+            )),
+            "ds_gw_distance_tolerance": float(overrides.get(
+                "ds_gw_distance_tolerance", self.ds_gw_distance_tolerance
+            )),
+            "length_tolerance": float(overrides.get("length_tolerance", self.length_tolerance)),
+            "use_us_gw_distance": overrides.get(
+                "use_us_gw_distance", getattr(self, "use_us_gw_distance", True),
+            ) is not False,
+            "require_us_gw_distance": bool(getattr(self, "require_us_gw_distance", False)),
+        }
+
+    def pair_cost(self, old_feature: dict, new_feature: dict,
+                  corrected_distance: float, settings: dict) -> float:
+        """Cost of one candidate pair, or ``INF_COST`` when a gate rejects it.
+
+        The single source of truth for pair scoring: the dense matrix builder
+        fills its cells with this, and the sparse edge loop calls it directly
+        instead of allocating a 1x1 matrix per edge.
+
+        ``corrected_distance`` is the OLD odometer already shifted onto the NEW
+        axis by the GW offset table; the caller resolves it once per OLD
+        feature rather than once per pair.
+        """
+        signed_distance = new_feature["abs_distance_m"] - corrected_distance
+        distance_tolerance = (
+            settings["ds_gw_distance_tolerance"]
+            if signed_distance >= 0
+            else settings["us_gw_distance_tolerance"]
+        )
+        # Keep the historical base tolerance as a floor.  The UI values
+        # refine the directional tolerance but must not make an existing
+        # valid alignment disappear merely because the default was 0.5 m.
+        # EDIT: Removed 0.5m floor to strictly obey UI input
+        if abs(signed_distance) > distance_tolerance:
+            return self.INF_COST
+
+        us_distance_tolerance = settings["us_gw_distance_tolerance"]
+        use_us_gw_distance = settings["use_us_gw_distance"]
+        base_cost = 0.0
+
+        # 1. GW Penalty
+        gw1 = old_feature.get("dist_to_us_gw_m")
+        gw2 = new_feature.get("dist_to_us_gw_m")
+        if (
+            use_us_gw_distance
+            and settings["require_us_gw_distance"]
+            and (gw1 is None or gw2 is None)
+        ):
+            return self.INF_COST
+        if use_us_gw_distance and gw1 is not None and gw2 is not None:
+            gw_distance_difference = abs(abs(gw1) - abs(gw2))
+            if gw_distance_difference > us_distance_tolerance:
+                return self.INF_COST
+            base_cost += settings["w_gw"] * (
+                gw_distance_difference / max(us_distance_tolerance, 0.001)
+            )
+
+        # 2. Clock Penalty
+        clock_tolerance = settings["clock_tolerance"]
+        cd = self._clock_diff(
+            old_feature.get("clock_position"), new_feature.get("clock_position")
+        )
+        if cd is not None:
+            if cd > clock_tolerance:
+                return self.INF_COST
+            base_cost += settings["w_clock"] * (cd / max(clock_tolerance, 1.0))
+
+        # 3. Length Penalty. Depth is deliberately excluded from pair
+        # selection and evaluated only after Hungarian as a physical
+        # growth/decrease warning.
+        length_tolerance = settings["length_tolerance"]
+        l1, l2 = old_feature.get("length_mm"), new_feature.get("length_mm")
+        if l1 is not None and l2 is not None:
+            length_difference = abs(l1 - l2)
+            if length_difference > length_tolerance:
+                return self.INF_COST
+            base_cost += settings["w_length"] * (
+                length_difference / max(length_tolerance, 1.0)
+            )
+
+        # 4. Width Penalty
+        wid1, wid2 = old_feature.get("width_mm"), new_feature.get("width_mm")
+        if wid1 is not None and wid2 is not None:
+            base_cost += settings["w_width"] * (min(abs(wid1 - wid2), 200.0) / 200.0)
+
+        return base_cost
+
     def build_cost_matrix(
         self,
         anomalies_1: list[dict],
@@ -1032,86 +1141,18 @@ class HungarianAnomalyAlignmentEngine:
         offset_keys: list[float] = None,
         tolerance_overrides: dict | None = None,
     ) -> np.ndarray:
-        n = len(anomalies_1)
-        m = len(anomalies_2)
-        cost = np.full((n, m), self.INF_COST, dtype=float)
-
-        w_gw = float(getattr(self, 'w_gw', 3.0))
-        w_clock = float(getattr(self, 'w_clock', 2.0))
-        w_length = float(getattr(self, 'w_length', 1.0))
-        w_width = float(getattr(self, 'w_width', 0.5))
-        overrides = tolerance_overrides or {}
-        clock_tolerance = float(overrides.get("clock_tolerance", self.clock_tolerance))
-        us_distance_tolerance = float(overrides.get(
-            "us_gw_distance_tolerance", self.us_gw_distance_tolerance
-        ))
-        ds_distance_tolerance = float(overrides.get(
-            "ds_gw_distance_tolerance", self.ds_gw_distance_tolerance
-        ))
-        length_tolerance = float(overrides.get("length_tolerance", self.length_tolerance))
-        use_us_gw_distance = overrides.get(
-            "use_us_gw_distance", getattr(self, "use_us_gw_distance", True),
-        ) is not False
+        """Dense scoring wrapper around :meth:`pair_cost`."""
+        cost = np.full((len(anomalies_1), len(anomalies_2)), self.INF_COST, dtype=float)
+        settings = self.resolve_cost_settings(tolerance_overrides)
+        score = self.pair_cost
 
         for i, f1 in enumerate(anomalies_1):
             corrected_dist = f1["abs_distance_m"] + self._interpolate_offset(
                 f1["abs_distance_m"], offset_table, offset_keys
             )
+            row = cost[i]
             for j, f2 in enumerate(anomalies_2):
-                signed_distance = f2["abs_distance_m"] - corrected_dist
-                diff = abs(signed_distance)
-                distance_tolerance = (
-                    ds_distance_tolerance
-                    if signed_distance >= 0
-                    else us_distance_tolerance
-                )
-                # Keep the historical base tolerance as a floor.  The UI values
-                # refine the directional tolerance but must not make an existing
-                # valid alignment disappear merely because the default was 0.5 m.
-                # EDIT: Removed 0.5m floor to strictly obey UI input
-                if diff <= distance_tolerance:
-                    base_cost = 0.0
-                    
-                    # 1. GW Penalty
-                    gw1 = f1.get("dist_to_us_gw_m")
-                    gw2 = f2.get("dist_to_us_gw_m")
-                    if (
-                        use_us_gw_distance
-                        and getattr(self, "require_us_gw_distance", False)
-                        and (gw1 is None or gw2 is None)
-                    ):
-                        continue
-                    if use_us_gw_distance and gw1 is not None and gw2 is not None:
-                        gw_distance_difference = abs(abs(gw1) - abs(gw2))
-                        if gw_distance_difference > us_distance_tolerance:
-                            continue
-                        base_cost += w_gw * (
-                            gw_distance_difference / max(us_distance_tolerance, 0.001)
-                        )
-                        
-                    # 2. Clock Penalty
-                    cd = self._clock_diff(f1.get("clock_position"), f2.get("clock_position"))
-                    if cd is not None:
-                        if cd > clock_tolerance:
-                            continue
-                        base_cost += w_clock * (cd / max(clock_tolerance, 1.0))
-                        
-                    # 3. Length Penalty. Depth is deliberately excluded from
-                    # pair selection and evaluated only after Hungarian as a
-                    # physical growth/decrease warning.
-                    l1, l2 = f1.get("length_mm"), f2.get("length_mm")
-                    if l1 is not None and l2 is not None:
-                        length_difference = abs(l1 - l2)
-                        if length_difference > length_tolerance:
-                            continue
-                        base_cost += w_length * (length_difference / max(length_tolerance, 1.0))
-                        
-                    # 4. Width Penalty
-                    wid1, wid2 = f1.get("width_mm"), f2.get("width_mm")
-                    if wid1 is not None and wid2 is not None:
-                        base_cost += w_width * (min(abs(wid1 - wid2), 200.0) / 200.0)
-                        
-                    cost[i][j] = base_cost
+                row[j] = score(f1, f2, corrected_dist, settings)
 
         return cost
 
@@ -1132,7 +1173,7 @@ class HungarianAnomalyAlignmentEngine:
             # brace-scanning fallback then stored an empty comparison as a
             # completed alignment.  Fail loudly instead.
             raise EmptyDatasetError(
-                f"Dataset kosong: OLD={len(anomalies_1_all)} NEW={len(anomalies_2_all)}"
+                f"Empty dataset: OLD={len(anomalies_1_all)} NEW={len(anomalies_2_all)}"
             )
 
         print("[2/5] Loading GW Matches from DB & Creating Segments...")
@@ -1377,7 +1418,7 @@ class HungarianAnomalyAlignmentEngine:
             matched_2 = set()
 
             for i, j in ordered_pairs:
-                # THRESHOLD GATE: Buang pasangan yang cost == INF_COST
+                # THRESHOLD GATE: drop any pair whose cost reached INF_COST.
                 pair_cost = (
                     selected_costs.get((i, j), self.INF_COST)
                     if selected_costs is not None
@@ -1406,7 +1447,8 @@ class HungarianAnomalyAlignmentEngine:
                     append_result(None, f2, "Only NEW")
                     total_new += 1
 
-        # BYPASS MECHANISM: c. gwOrphans/Excluded features langsung passthrough ke output
+        # BYPASS MECHANISM: gwOrphans / excluded features pass straight through
+        # into the output buckets.
         for f1 in excluded_old:
             append_result(f1, None, "Bypassed OLD")
         for f2 in excluded_new:
@@ -1416,7 +1458,7 @@ class HungarianAnomalyAlignmentEngine:
         for f2 in filtered_new:
             append_result(None, f2, "Filtered NEW")
 
-        # VALIDASI WAJIB (print sebagai log sebelum return)
+        # Mandatory validation counters, logged before returning.
         print(f"\n[VALIDATION] Total Anomaly Input OLD: {len(anomalies_1)}")
         print(f"[VALIDATION] Total Anomaly Input NEW: {len(anomalies_2)}")
         print(f"[VALIDATION] Total Excluded/Bypassed OLD: {len(excluded_old)}")
@@ -1698,7 +1740,7 @@ class HungarianAnomalyAlignmentEngine:
             print(json.dumps(json_output))
             print("___RESULT_JSON_END___")
         
-        print(f"\n[5/5] Selesai! Matched: {total_matched} | New: {total_new} | Missing: {total_missing}")
+        print(f"\n[5/5] Done. Matched: {total_matched} | New: {total_new} | Missing: {total_missing}")
         return results
 
 def main(argv=None):

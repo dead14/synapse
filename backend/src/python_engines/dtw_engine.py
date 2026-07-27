@@ -4,7 +4,7 @@ import math
 import re
 from bisect import bisect_left, bisect_right
 from tiein_transform import (
-    map_old_to_new,
+    prepare_transform,
     validated_tiein_knot_records,
     validated_tiein_knots,
 )
@@ -679,12 +679,15 @@ def _prepare_runs_in_master_space(data):
     excluded_new = []
 
     if transform_applied:
+        # One prepared mapper for the whole run: the knot search axis is built
+        # once instead of once per feature.
+        to_master = prepare_transform(knots)
         transformed_old = []
         for feature in old_run:
             distance = feature.get('dist')
             if not isinstance(distance, (int, float)) or not math.isfinite(distance):
                 continue
-            master_distance = map_old_to_new(float(distance), knots)
+            master_distance = to_master(float(distance))
             if master_distance is None:
                 excluded_old.append({
                     'id': feature.get('id'),
@@ -772,6 +775,7 @@ def _build_timeline_evidence(data, knots):
     if knots:
         old_source_start, new_target_start = knots[0]
         old_source_end, new_target_end = knots[-1]
+        to_master = prepare_transform(knots)
 
         def old_display_distance(source_distance):
             """Where an OLD feature sits on the master axis, for display only.
@@ -787,7 +791,7 @@ def _build_timeline_evidence(data, knots):
                 return new_target_start - (old_source_start - source_distance)
             if source_distance > old_source_end:
                 return new_target_end + (source_distance - old_source_end)
-            return map_old_to_new(source_distance, knots)
+            return to_master(source_distance)
 
         old_features = []
         for feature in raw_old:

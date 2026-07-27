@@ -184,6 +184,66 @@ class HungarianToleranceTests(unittest.TestCase):
                 self.assertEqual(matrix[0][0], self.engine.INF_COST)
                 self.assertEqual(edges, [])
 
+    def test_scalar_pair_cost_is_the_single_source_of_truth(self):
+        # The sparse edge loop used to score each candidate by calling
+        # build_cost_matrix([old], [new], ...)[0][0]: a fresh 1x1 numpy array
+        # and a full re-resolve of every weight and tolerance per edge. Both
+        # paths now share pair_cost, so they must agree cell for cell.
+        old_features = [
+            self.feature(100.0),
+            self.feature(100.0, dist_to_us_gw_m=2.0),
+            self.feature(100.0, clock_position="12:00", length_mm=10.0, width_mm=8.0),
+            self.feature(100.0, length_mm=10.0),
+        ]
+        new_features = [
+            self.feature(99.7),
+            self.feature(99.9),
+            self.feature(100.1, dist_to_us_gw_m=2.05),
+            self.feature(100.2, clock_position="12:10", length_mm=18.0, width_mm=40.0),
+            self.feature(100.3, length_mm=61.0),
+        ]
+
+        matrix = self.engine.build_cost_matrix(old_features, new_features, [], [])
+        settings = self.engine.resolve_cost_settings(None)
+        for i, old in enumerate(old_features):
+            corrected = old["abs_distance_m"] + self.engine._interpolate_offset(
+                old["abs_distance_m"], [], []
+            )
+            for j, new in enumerate(new_features):
+                self.assertEqual(
+                    matrix[i][j],
+                    self.engine.pair_cost(old, new, corrected, settings),
+                    f"cell ({i}, {j})",
+                )
+
+        edges = self.engine.build_sparse_cost_edges(old_features, new_features, [], [])
+        for old_index, new_index, cost in edges:
+            self.assertEqual(cost, matrix[old_index][new_index])
+        dense_edges = {
+            (i, j)
+            for i in range(len(old_features))
+            for j in range(len(new_features))
+            if matrix[i][j] < self.engine.INF_COST
+        }
+        self.assertEqual({(i, j) for i, j, _cost in edges}, dense_edges)
+
+    def test_pair_cost_honours_per_section_tolerance_overrides(self):
+        old = self.feature(100.0, length_mm=10.0)
+        new = self.feature(100.3, length_mm=61.0)
+        overrides = {"ds_gw_distance_tolerance": 0.5, "length_tolerance": 100.0}
+
+        settings = self.engine.resolve_cost_settings(overrides)
+        scalar = self.engine.pair_cost(old, new, 100.0, settings)
+        dense = self.engine.build_cost_matrix([old], [new], [], [], overrides)[0][0]
+
+        self.assertEqual(scalar, dense)
+        self.assertLess(scalar, self.engine.INF_COST)
+        # Without the override the same pair is rejected on both counts.
+        self.assertEqual(
+            self.engine.build_cost_matrix([old], [new], [], [])[0][0],
+            self.engine.INF_COST,
+        )
+
     def test_reads_common_upstream_gw_distance_column_alias(self):
         value = self.engine._read_us_gw_distance({"Dist. to U/S GW (m)": "2.35"})
 

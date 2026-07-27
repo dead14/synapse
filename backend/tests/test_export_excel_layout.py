@@ -33,14 +33,105 @@ class ExportExcelLayoutTests(unittest.TestCase):
             input_path.write_text(json.dumps(data), encoding="utf-8")
             subprocess.run([sys.executable, str(engine), str(input_path), str(output_path)], check=True)
             sheet = openpyxl.load_workbook(output_path, data_only=False).active
-            self.assertTrue(str(sheet["A1"].value).startswith("<  DATA NEW"))
-            self.assertTrue(str(sheet["P1"].value).startswith("KOMPARASI"))
-            self.assertTrue(str(sheet["Z1"].value).startswith("DATA OLD"))
+            self.assertTrue(str(sheet["A1"].value).startswith("<  NEW DATA"))
+            self.assertTrue(str(sheet["P1"].value).startswith("COMPARISON"))
+            self.assertTrue(str(sheet["Z1"].value).startswith("OLD DATA"))
             self.assertEqual(sheet["A3"].value, 10.5)
             self.assertEqual(sheet["C3"].value, "'=HYPERLINK(\"https://example.invalid\")")
             self.assertEqual(sheet["P3"].value, 0.75)
             self.assertEqual(sheet["X3"].value, "Matched")
             self.assertEqual(sheet["Z3"].value, 9.75)
+            # The status colour rule and the completeness verdict are what an
+            # operator reads first; both must survive the shared-style rewrite.
+            self.assertEqual(sheet["X3"].fill.fgColor.rgb, "00C6EFCE")
+            # Only depth is populated on both sides, so two of the six
+            # dimensional readings are present: the verdict is "Both limited".
+            self.assertEqual(sheet["Y3"].value, "Both limited")
+
+
+class StreamedWorkbookTests(unittest.TestCase):
+    """The sheet is streamed, and every style object is a module singleton.
+
+    The report is 40 columns wide, so a 100k-row export is four million cells.
+    Normal mode keeps all of them alive as Cell objects until save() and used
+    to build a fresh Font per row for the status column on top of that. The
+    export now runs in write-only mode with shared styles: 50k rows went from
+    884 MB of Python heap to 78 MB, with byte-identical formatting.
+    """
+
+    def test_workbook_is_created_in_write_only_mode(self):
+        engine_source = (
+            Path(__file__).parents[1] / "src" / "python_engines" / "export_excel.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("write_only=True", engine_source)
+
+    def test_streamed_layout_keeps_the_features_write_only_supports(self):
+        # merge_cells() does not exist on a WriteOnlyWorksheet, but the merged
+        # range collection it inherits is serialised, and freeze panes,
+        # auto-filter and dimensions all survive. This pins that contract.
+        engine = Path(__file__).parents[1] / "src" / "python_engines" / "export_excel.py"
+        data = [{"Log Dist NEW (m)": 1.0, "Log Dist OLD (m)": 0.5, "Match/Unmatch": "Only NEW"}]
+        with tempfile.TemporaryDirectory() as directory:
+            input_path = Path(directory) / "data.json"
+            output_path = Path(directory) / "report.xlsx"
+            input_path.write_text(json.dumps(data), encoding="utf-8")
+            subprocess.run(
+                [sys.executable, str(engine), str(input_path), str(output_path)], check=True
+            )
+            sheet = openpyxl.load_workbook(output_path).active
+            self.assertEqual(sheet.title, "Comparison Report")
+            self.assertEqual(
+                sorted(str(cells) for cells in sheet.merged_cells.ranges),
+                ["A1:O1", "P1:Y1", "Z1:AN1"],
+            )
+            self.assertEqual(sheet.freeze_panes, "P3")
+            self.assertEqual(sheet.auto_filter.ref, "A2:AN3")
+            self.assertEqual(sheet.column_dimensions["A"].width, 17)
+            self.assertEqual(sheet.row_dimensions[1].height, 24)
+            self.assertEqual(sheet.row_dimensions[2].height, 42)
+            self.assertFalse(sheet.sheet_view.showGridLines)
+            self.assertEqual(sheet["X3"].fill.fgColor.rgb, "00FCE4D6")
+
+    def test_status_style_matches_the_legacy_keyword_precedence(self):
+        self.assertIs(export_excel.status_style("Matched")[0], export_excel.GREEN_FILL)
+        self.assertIs(export_excel.status_style("Bypassed OLD")[0], export_excel.YELLOW_FILL)
+        self.assertIs(export_excel.status_style("Only NEW")[0], export_excel.ORANGE_FILL)
+        self.assertEqual(export_excel.status_style("-"), (None, None))
+        self.assertEqual(export_excel.status_style(None), (None, None))
+
+    def test_style_objects_are_module_level_singletons(self):
+        plan = export_excel.column_style_plan(40)
+        self.assertEqual(len(plan), 40)
+        fills = {id(fill) for fill, _alignment, _format in plan}
+        alignments = {id(alignment) for _fill, alignment, _format in plan}
+        self.assertEqual(len(fills), 3)
+        self.assertEqual(len(alignments), 2)
+        self.assertTrue(
+            all(fill in (export_excel.NEW_FILL, export_excel.CENTER_FILL, export_excel.OLD_FILL)
+                for fill, _alignment, _format in plan)
+        )
+
+    def test_column_plan_reproduces_the_legacy_per_cell_decisions(self):
+        for column, (fill, alignment, number_format) in enumerate(
+            export_excel.column_style_plan(40), 1
+        ):
+            expected_fill = (
+                export_excel.NEW_FILL if column <= 15
+                else export_excel.OLD_FILL if column >= 26
+                else export_excel.CENTER_FILL
+            )
+            expected_alignment = (
+                export_excel.CENTER_ALIGNMENT if 16 <= column <= 25
+                else export_excel.LEFT_ALIGNMENT
+            )
+            expected_format = (
+                "0.000" if column in {1, 5, 6, 7, 16, 17, 20, 21, 22, 26, 30, 31, 32, 35, 36, 37}
+                else "0.0" if column in {9, 10, 11, 34}
+                else None
+            )
+            self.assertIs(fill, expected_fill, f"column {column}")
+            self.assertIs(alignment, expected_alignment, f"column {column}")
+            self.assertEqual(number_format, expected_format, f"column {column}")
 
 
 class ClockHandlingTests(unittest.TestCase):

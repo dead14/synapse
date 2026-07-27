@@ -1,6 +1,9 @@
+import math
+import random
 import sys
+import time
 import unittest
-from datetime import time
+from datetime import time as time_of_day
 from pathlib import Path
 
 import numpy as np
@@ -78,7 +81,7 @@ class TieInEngineTests(unittest.TestCase):
                 "weld",
                 0.0,
                 feature_identification="Valve pipe",
-                clock_position=time(11, 24),
+                clock_position=time_of_day(11, 24),
             ),
             self.feature("joint-flange", "joint flange", 0.5),
             self.feature(
@@ -612,6 +615,203 @@ class TheilSenPairSamplingTests(unittest.TestCase):
         self.assertGreater(len(slopes_first), 0)
         self.assertTrue(np.array_equal(slopes_first, slopes_second))
         self.assertAlmostEqual(float(np.median(slopes_first)), 2.0, places=9)
+
+
+class PreparedTransformTests(unittest.TestCase):
+    """The knot search axis is built once per transform, not once per feature.
+
+    ``map_old_to_new`` rebuilt ``[knot[0] for knot in knots]`` on entry. Both
+    matchers call it once per feature against a single transform, so a 50k
+    feature run against a 10k knot transform rebuilt that list 50,000 times.
+    """
+
+    @staticmethod
+    def knots():
+        # Deliberately non-uniform spacing so interpolation actually varies.
+        return [
+            (0.0, 100.0),
+            (12.0, 112.4),
+            (25.5, 126.1),
+            (48.0, 149.0),
+            (100.0, 201.5),
+        ]
+
+    def probes(self):
+        return [
+            -5.0, 0.0, 0.001, 6.0, 12.0, 12.0001, 18.75, 25.5, 40.0,
+            48.0, 73.25, 99.999, 100.0, 100.5, 1_000.0,
+        ]
+
+    def test_prepared_transform_matches_map_old_to_new_everywhere(self):
+        import tiein_transform
+
+        knots = self.knots()
+        prepared = tiein_transform.prepare_transform(knots)
+        for distance in self.probes():
+            self.assertEqual(
+                prepared(distance),
+                tiein_transform.map_old_to_new(distance, knots),
+                f"distance {distance}",
+            )
+
+    def test_repeated_calls_return_identical_results(self):
+        import tiein_transform
+
+        knots = self.knots()
+        first = [tiein_transform.map_old_to_new(d, knots) for d in self.probes()]
+        second = [tiein_transform.map_old_to_new(d, knots) for d in self.probes()]
+        prepared = tiein_transform.prepare_transform(knots)
+        third = [prepared(d) for d in self.probes()]
+        self.assertEqual(first, second)
+        self.assertEqual(first, third)
+
+    def test_repeated_calls_reuse_one_prepared_axis(self):
+        import tiein_transform
+
+        knots = self.knots()
+        tiein_transform.map_old_to_new(6.0, knots)
+        prepared = tiein_transform._prepared_for(knots)
+        tiein_transform.map_old_to_new(40.0, knots)
+        self.assertIs(tiein_transform._prepared_for(knots), prepared)
+
+        # A different knot list must not be served the cached axis.
+        other = [(0.0, 0.0), (10.0, 20.0)]
+        self.assertEqual(tiein_transform.map_old_to_new(5.0, other), 10.0)
+        self.assertIsNot(tiein_transform._prepared_for(other), prepared)
+
+    def test_empty_and_degenerate_knot_lists_still_return_none(self):
+        import tiein_transform
+
+        self.assertIsNone(tiein_transform.map_old_to_new(5.0, []))
+        self.assertIsNone(tiein_transform.prepare_transform([])(5.0))
+        single = [(4.0, 9.0)]
+        self.assertEqual(tiein_transform.map_old_to_new(4.0, single), 9.0)
+        self.assertIsNone(tiein_transform.map_old_to_new(4.5, single))
+
+
+class NodeScoreVectorizationTests(unittest.TestCase):
+    """``_node_score_row`` is the DP's inner loop; it must be the scalar rule.
+
+    The overlap search evaluates the node score for every (OLD, NEW) pair, up
+    to MAX_OVERLAP_CELLS of them. It is computed a row at a time now, so the
+    vector form is pinned against the scalar one it replaced.
+    """
+
+    @staticmethod
+    def anchors(prefix, count, seed):
+        rng = random.Random(seed)
+        types = ["weld", "weld", "valve", "flange", "tee", "bend"]
+        walls = [None, 9.3, 9.5, 12.7]
+        joints = [None, 0.0, 6.0, 11.8, 12.0]
+        clocks = [None, 0.0, 3.0, 6.2, 11.9]
+        return [
+            tiein_engine.Anchor(
+                idx=index,
+                dist=round(index * 11.7 + rng.random(), 4),
+                type=rng.choice(types),
+                feature_id=f"{prefix}{index}",
+                wall_thickness_mm=rng.choice(walls),
+                joint_length_m=rng.choice(joints),
+                clock_position=rng.choice(clocks),
+            )
+            for index in range(count)
+        ]
+
+    def test_vectorised_row_matches_the_scalar_node_score(self):
+        old_anchors = self.anchors("o", 40, seed=1)
+        new_anchors = self.anchors("n", 55, seed=2)
+        columns = tiein_engine._prepare_anchor_columns(new_anchors)
+
+        for old_anchor in old_anchors:
+            row = tiein_engine._node_score_row(old_anchor, columns)
+            for index, new_anchor in enumerate(new_anchors):
+                expected = tiein_engine._node_score(old_anchor, new_anchor)
+                if math.isinf(expected):
+                    self.assertTrue(math.isinf(float(row[index])))
+                else:
+                    self.assertEqual(float(row[index]), expected)
+
+    def test_vectorised_span_row_matches_the_scalar_span_score(self):
+        new_spans = np.array([-1.0, 0.0, 0.4, 2.0, 11.9, 12.0, 12.4, 18.0, 40.0])
+        for old_span in (0.0, 0.5, 2.0, 12.0, 24.0):
+            for skipped in (0, 1, 3):
+                row = tiein_engine._span_score_row(old_span, new_spans, skipped)
+                for index, new_span in enumerate(new_spans):
+                    expected = tiein_engine._span_score(old_span, float(new_span), skipped)
+                    if math.isinf(expected):
+                        self.assertTrue(math.isinf(float(row[index])))
+                    else:
+                        self.assertAlmostEqual(float(row[index]), expected, places=12)
+
+
+class LargeOverlapSearchTests(unittest.TestCase):
+    """A full-length run pair must not fall back to quadratic Python.
+
+    Two 1000-weld runs is the MAX_OVERLAP_CELLS ceiling. The dense
+    list-of-lists DP took about 90 s and 290 MB there, so any regression to
+    per-cell Python work shows up immediately against this bound.
+    """
+
+    OFFSET_M = 137.5
+
+    @staticmethod
+    def welds(prefix, count, offset, seed=5):
+        # Irregular joint lengths keep the true alignment unique; a perfectly
+        # periodic run would tie at every shift.
+        rng = random.Random(seed)
+        features = []
+        distance = 0.0
+        for index in range(count):
+            distance += 10.0 + rng.random() * 4.0
+            features.append({
+                "id": f"{prefix}-{index}",
+                "type": "weld",
+                "dist": round(distance + offset, 4),
+                "wall_thickness_mm": 9.3,
+                "joint_length_m": 12.0,
+            })
+        return features
+
+    def test_thousand_weld_runs_recover_the_known_offset_quickly(self):
+        old_features = self.welds("o", 1000, 0.0)
+        new_features = self.welds("n", 1000, self.OFFSET_M)
+
+        started = time.perf_counter()
+        result = tiein_engine.calculate_tiein_offset(old_features, new_features)
+        elapsed = time.perf_counter() - started
+
+        self.assertTrue(result["success"], result.get("error"))
+        self.assertEqual(result["decision"]["status"], "AUTO_ACCEPTED")
+        self.assertEqual(result["alignedPairCount"], 1000)
+        self.assertAlmostEqual(
+            result["tieIn"]["newDistanceM"] - result["tieIn"]["oldDistanceM"],
+            self.OFFSET_M,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            result["overlap"]["newStartM"] - result["overlap"]["oldStartM"],
+            self.OFFSET_M,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            result["overlap"]["newEndM"] - result["overlap"]["oldEndM"],
+            self.OFFSET_M,
+            places=6,
+        )
+        self.assertAlmostEqual(result["offset"], -self.OFFSET_M, places=3)
+        self.assertLess(
+            elapsed, 5.0, f"overlap search took {elapsed:.1f}s; expected well under 5s"
+        )
+
+    def test_backpointer_store_is_one_byte_per_cell(self):
+        # The DP state is three compact arrays, not three N x M Python lists.
+        # Guarding the encoding here keeps _trace_path's packed-bytes walk valid.
+        self.assertEqual(
+            tiein_engine._BACKPOINTER_STRIDE, tiein_engine.MAX_SKIP_ANCHORS + 1
+        )
+        self.assertLessEqual(
+            tiein_engine._BACKPOINTER_STRIDE * tiein_engine._BACKPOINTER_STRIDE, 128
+        )
 
 
 if __name__ == "__main__":
