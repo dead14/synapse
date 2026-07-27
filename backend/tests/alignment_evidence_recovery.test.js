@@ -141,6 +141,41 @@ test('does not attach a root canonical result to a pair after matching settings 
     assert.equal(repaired.pairGwEvidence, undefined);
 });
 
+test('review normalization keeps canonical pair evidence recovered before save', () => {
+    const references = { oldRunId: 8, newRunId: 9 };
+    const signature = canonicalSignatureForConfig({
+        ota: 7.8,
+        strictPenalty: false,
+        useValveAnchor: true,
+        dtwOn: true,
+    }, references);
+    const rootState = pairState(signature);
+    const persisted = {
+        summaryData: {
+            runPairs: [{ oldRun: { runId: 8 }, newRun: { runId: 9 } }],
+            masterRun: { runId: 9 },
+        },
+        ota: 7.8,
+        strictPenalty: false,
+        useValveAnchor: true,
+        dtwOn: true,
+        gwReviewSignature: signature,
+        gwReview: rootState.gwReview,
+        canonicalGwLocks: rootState.gwMatchesFinal,
+        gwCanonicalSignature: signature,
+        pairGwResults: {},
+    };
+    const recovered = alignmentController.recoverLegacyCanonicalGwEvidence(persisted, persisted);
+
+    const normalized = alignmentController.normalizeRecoveredAlignmentReview(
+        recovered,
+        persisted,
+        { featureCounts: null },
+    );
+
+    assert.equal(normalized.pairGwEvidence['8->9'].canonicalGwLocks.length, 1);
+});
+
 test('does not recover legacy canonical evidence when matching settings are stale', () => {
     const references = { oldRunId: 8, newRunId: 9 };
     const signature = canonicalSignatureForConfig({
