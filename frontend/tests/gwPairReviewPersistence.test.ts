@@ -61,3 +61,29 @@ test('canonicalGwReviewSignature changes when the pair tie-in transform changes'
     canonicalGwReviewSignature(changedTransform, settings),
   );
 });
+
+test('canonicalGwReviewSignature ignores persisted TIE-IN object key order', () => {
+  const settings = { ota: 1.5, strictPenalty: false, useValveAnchor: true, dtwOn: true };
+  const first = {
+    summaryData: { oldRun: { runId: 13 }, newRun: { runId: 14 } },
+    tieInDecision: { status: 'AUTO_ACCEPTED' },
+    tieInTransform: {
+      direction: 'OLD_TO_NEW',
+      knots: [{ oldDistanceM: 4.243, newDistanceM: 1868.81 }],
+    },
+    tieInExcludedRanges: [{ startM: 10, endM: 25 }],
+  };
+  const reloaded = {
+    ...first,
+    tieInTransform: {
+      knots: [{ newDistanceM: 1868.81, oldDistanceM: 4.243 }],
+      direction: 'OLD_TO_NEW',
+    },
+    tieInExcludedRanges: [{ endM: 25, startM: 10 }],
+  };
+
+  assert.equal(
+    canonicalGwReviewSignature(first, settings),
+    canonicalGwReviewSignature(reloaded, settings),
+  );
+});

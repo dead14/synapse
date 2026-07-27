@@ -42,6 +42,7 @@ const { alignmentQueue } = require('./alignmentWorker');
 const {
     canonicalSignature,
     canonicalSignatureForConfig,
+    canonicalSignaturesEqual,
 } = require('./alignmentSignature');
 const {
     ALIGNMENT_ENGINE_VERSION,
@@ -556,7 +557,10 @@ exports.saveWizardState = async (req, res) => {
                     const references = getPersistedRunReferences(session.params_json || {});
                     const featureCounts = await countOwnedRunFeatures(pool, references, req.user.orgId);
                     if (config.gwReview !== undefined
-                        && session.params_json?.gwCanonicalSignature !== canonicalSignatureForConfig(config, references)) {
+                        && !canonicalSignaturesEqual(
+                            session.params_json?.gwCanonicalSignature,
+                            canonicalSignatureForConfig(config, references),
+                        )) {
                         throw reviewPersistenceError('GW matching settings changed. Recalculate the canonical matching result before saving review decisions.');
                     }
                     configToPersist = normalizeAlignmentReviewForPersistence(config, {
@@ -580,7 +584,10 @@ exports.saveWizardState = async (req, res) => {
                             pairScopedSignatureConfig(config, pairKey),
                             { oldRunId: pair.oldRunId, newRunId: pair.newRunId },
                         );
-                        if (session.params_json?.pairGwEvidence?.[pairKey]?.gwCanonicalSignature !== expected) {
+                        if (!canonicalSignaturesEqual(
+                            session.params_json?.pairGwEvidence?.[pairKey]?.gwCanonicalSignature,
+                            expected,
+                        )) {
                             throw reviewPersistenceError(`GW matching settings changed for pair ${pairKey}. Recalculate that pair before saving its review decisions.`);
                         }
                     }
