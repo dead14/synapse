@@ -11,7 +11,7 @@ import { clampTooltipPosition } from '../utils/tooltipPosition';
 import { gwReviewKey, normalizeGwReview, selectReviewedGwLocks, type GwReviewDisposition, type GwReviewState } from '../domain/alignmentReview';
 import { buildTimelineModel, sourceOdometerOffset, type TimelineEvidence, type TimelineGeometry } from '../domain/gwTimeline';
 import { buildGwReviewTransitionPayload } from './gwReviewTransition';
-import { pairResultForPersistence } from './gwPairReviewPersistence';
+import { canonicalGwReviewSignature, pairResultForPersistence } from './gwPairReviewPersistence';
 import { pairGwResult, pairTieIn, primaryRunPair, resolveRunPairs } from '../domain/runPairs';
 import type { MatchingSection } from './matchingSections';
 
@@ -26,30 +26,13 @@ interface StepGwSimulatorProps {
   config?: any;
 }
 
-function runReviewIdentity(run: any) {
-  const runId = Number(run?.runId);
-  if (Number.isSafeInteger(runId) && runId > 0) return { runId };
-  const checksum = run?.sourceChecksum || run?.checksum;
-  if (checksum) return { checksum };
-  return (run?.rawFeatures || []).map((feature: any) => [
-    feature.id ?? feature.feature_id,
-    feature.dist ?? feature.log_distance_m ?? feature.distance,
-  ]);
-}
-
 function buildReviewSignature(config: any, settings: {
   ota: number;
   strictPenalty: boolean;
   useValveAnchor: boolean;
   dtwOn: boolean;
 }) {
-  return JSON.stringify({
-    ...settings,
-    oldRun: runReviewIdentity(config?.summaryData?.oldRun),
-    newRun: runReviewIdentity(config?.summaryData?.newRun),
-    tieInEvidenceToken: config?.tieInEvidenceToken || null,
-    globalOffset: Number(config?.globalOffset) || 0,
-  });
+  return canonicalGwReviewSignature(config, settings);
 }
 
 /** One run pair's matching result and the operator's review of it. */
