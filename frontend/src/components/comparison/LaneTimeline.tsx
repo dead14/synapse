@@ -38,12 +38,15 @@ const RIGHT_PAD = 14;
 const LANE_HEAD = 18; // run identity + live readout
 const GW_ROW = 12; // girth-weld markers and joint-length labels
 const CLOCK_TOP = LANE_HEAD + GW_ROW;
-const CLOCK_H = 84;
+// Tight enough that several runs and the results table share one screen, still
+// ~5 px per clock hour so a 30-minute difference is visible.
+const CLOCK_H = 58;
 const NOCLOCK_H = 12; // features whose tally carries no clock position
 const LANE_H = CLOCK_TOP + CLOCK_H + NOCLOCK_H + 2;
-const AXIS_H = 22;
-const NAV_H = 44;
+const AXIS_H = 20;
+const NAV_H = 30;
 const MIN_SPAN_M = 0.5;
+const MAX_LANES_ON_SCREEN = 3;
 const MAX_MARKS_PER_LANE = 900;
 const MAX_LINKS = 500;
 const DRAG_THRESHOLD_PX = 3;
@@ -330,25 +333,34 @@ export default function LaneTimeline({
   // Two weld clicks pick a spool. The 3D pipe draws both runs on one body, so
   // the range it receives is always on the master odometer even when the lanes
   // are displayed at their reported log distances.
+  // Two weld clicks pick a spool. The click handler only moves the selection —
+  // reading `spool` from the closure would miss a second click that lands
+  // before React re-renders — and the parent is told about the resulting range
+  // from an effect, because notifying it from inside a state updater would
+  // update one component while another is rendering.
   const handleWeldClick = (weld: LaneFeature, lane: ComparisonLane) => {
-    if (!onSpoolRangeChange) return;
-    setSpool((current) => {
-      if (!current || current.endKey !== null || current.laneLabel !== lane.label) {
-        onSpoolRangeChange(null);
-        return { startKey: weld.key, endKey: null, laneLabel: lane.label };
-      }
-      const first = lane.gws.find((candidate) => candidate.key === current.startKey);
-      const next = { startKey: current.startKey, endKey: weld.key, laneLabel: lane.label };
-      if (!first || first.key === weld.key || first.alignedM === null || weld.alignedM === null) {
-        onSpoolRangeChange(null);
-        return next;
-      }
-      const startM = Math.min(first.alignedM, weld.alignedM);
-      const endM = Math.max(first.alignedM, weld.alignedM);
-      onSpoolRangeChange(endM - startM < 0.01 ? null : { startM, endM, laneLabel: lane.label });
-      return next;
-    });
+    setSpool((current) => (
+      !current || current.endKey !== null || current.laneLabel !== lane.label
+        ? { startKey: weld.key, endKey: null, laneLabel: lane.label }
+        : { startKey: current.startKey, endKey: weld.key, laneLabel: lane.label }
+    ));
   };
+
+  // The 3D pipe draws both runs on one body, so the range it receives is always
+  // on the master odometer even when the lanes show their reported distances.
+  useEffect(() => {
+    if (!onSpoolRangeChange) return;
+    const lane = spool === null ? undefined : lanes.find((candidate) => candidate.label === spool.laneLabel);
+    const first = lane?.gws.find((gw) => gw.key === spool?.startKey);
+    const last = lane?.gws.find((gw) => gw.key === spool?.endKey);
+    if (!first || !last || first.alignedM === null || last.alignedM === null) {
+      onSpoolRangeChange(null);
+      return;
+    }
+    const startM = Math.min(first.alignedM, last.alignedM);
+    const endM = Math.max(first.alignedM, last.alignedM);
+    onSpoolRangeChange(endM - startM < 0.01 ? null : { startM, endM, laneLabel: lane.label });
+  }, [spool, lanes, onSpoolRangeChange]);
 
   const jumpTo = (event: React.FormEvent) => {
     event.preventDefault();
@@ -382,7 +394,7 @@ export default function LaneTimeline({
     <div ref={containerRef} className="flex flex-col">
       {/* Controls */}
       <div
-        className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2"
+        className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-1.5"
         style={{ borderBottom: '1px solid var(--syn-line)', background: 'var(--syn-surface)' }}
       >
         <div className="flex items-center gap-1.5">
@@ -480,7 +492,14 @@ export default function LaneTimeline({
       <div
         ref={laneStackRef}
         className="relative select-none active:cursor-grabbing"
-        style={{ cursor: 'crosshair', touchAction: 'none' }}
+        style={{
+          cursor: 'crosshair',
+          touchAction: 'none',
+          // Every run gets a full lane, but past three the stack would push the
+          // results table off the page, so the extra lanes scroll instead.
+          maxHeight: LANE_H * Math.min(lanes.length, MAX_LANES_ON_SCREEN),
+          overflowY: lanes.length > MAX_LANES_ON_SCREEN ? 'auto' : 'visible',
+        }}
         tabIndex={0}
         role="application"
         aria-label="Run comparison lanes. Arrow keys pan, plus and minus zoom."
@@ -691,23 +710,23 @@ export default function LaneTimeline({
       {/* Navigator over the full pipeline */}
       <div className="relative" style={{ background: 'var(--syn-surface)' }}>
         <svg width={width} height={NAV_H} className="block">
-          <rect x={GUTTER} y={14} width={chartWidth} height={16} rx={4} fill="var(--syn-canvas-strong)" />
+          <rect x={GUTTER} y={9} width={chartWidth} height={12} rx={3} fill="var(--syn-canvas-strong)" />
           {laneViews.map(({ lane }, index) => {
-            const bandHeight = 14 / laneViews.length;
+            const bandHeight = 10 / laneViews.length;
             return (
               <g key={`nav-${lane.runId}`}>
                 {lane.gws.map((gw) => {
                   const position = featureAxisValue(gw, axis);
                   if (position === null) return null;
-                  const y = 15 + index * bandHeight;
+                  const y = 10 + index * bandHeight;
                   return <line key={`nav-gw-${gw.key}`} x1={navMToX(position)} y1={y} x2={navMToX(position)} y2={y + bandHeight} stroke="var(--syn-line-strong)" strokeWidth="0.5" />;
                 })}
               </g>
             );
           })}
           <rect
-            x={navMToX(viewStart)} y={10}
-            width={Math.max(6, (viewSpan / totalSpan) * chartWidth)} height={24} rx={4}
+            x={navMToX(viewStart)} y={6}
+            width={Math.max(6, (viewSpan / totalSpan) * chartWidth)} height={18} rx={3}
             fill="rgba(21, 94, 239, 0.16)" stroke="var(--syn-info)" strokeWidth="1.5"
             style={{ cursor: 'grab' }}
             onPointerDown={onNavPointerDown('move')}
@@ -716,7 +735,7 @@ export default function LaneTimeline({
             onPointerCancel={endNavDrag}
           />
           <rect
-            x={navMToX(viewStart) - 3} y={10} width={6} height={24} rx={2} fill="var(--syn-info)"
+            x={navMToX(viewStart) - 3} y={6} width={6} height={18} rx={2} fill="var(--syn-info)"
             style={{ cursor: 'ew-resize' }}
             onPointerDown={onNavPointerDown('left')}
             onPointerMove={onNavPointerMove}
@@ -724,26 +743,27 @@ export default function LaneTimeline({
             onPointerCancel={endNavDrag}
           />
           <rect
-            x={navMToX(viewEnd) - 3} y={10} width={6} height={24} rx={2} fill="var(--syn-info)"
+            x={navMToX(viewEnd) - 3} y={6} width={6} height={18} rx={2} fill="var(--syn-info)"
             style={{ cursor: 'ew-resize' }}
             onPointerDown={onNavPointerDown('right')}
             onPointerMove={onNavPointerMove}
             onPointerUp={endNavDrag}
             onPointerCancel={endNavDrag}
           />
-          <text x={GUTTER} y={NAV_H - 3} fontSize="7.5" fontWeight="600" fill="var(--syn-muted)">{extent.min.toFixed(0)} m</text>
-          <text x={GUTTER + chartWidth} y={NAV_H - 3} textAnchor="end" fontSize="7.5" fontWeight="600" fill="var(--syn-muted)">{extent.max.toFixed(0)} m</text>
+          <text x={6} y={NAV_H / 2} dominantBaseline="central" fontSize="7.5" fontWeight="700" fill="var(--syn-muted)">
+            {extent.min.toFixed(0)}–{extent.max.toFixed(0)} m
+          </text>
         </svg>
-        <button type="button" onClick={() => panBy(-viewSpan * 0.5)} className="absolute left-1 top-2 w-6 h-6 rounded-full flex items-center justify-center" style={{ background: 'var(--syn-surface-raised)', border: '1px solid var(--syn-line)' }} aria-label="Pan left">
-          <FiChevronLeft size={13} />
+        <button type="button" onClick={() => panBy(-viewSpan * 0.5)} className="absolute left-0.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: 'var(--syn-surface-raised)', border: '1px solid var(--syn-line)' }} aria-label="Pan left">
+          <FiChevronLeft size={11} />
         </button>
-        <button type="button" onClick={() => panBy(viewSpan * 0.5)} className="absolute right-1 top-2 w-6 h-6 rounded-full flex items-center justify-center" style={{ background: 'var(--syn-surface-raised)', border: '1px solid var(--syn-line)' }} aria-label="Pan right">
-          <FiChevronRight size={13} />
+        <button type="button" onClick={() => panBy(viewSpan * 0.5)} className="absolute right-0.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: 'var(--syn-surface-raised)', border: '1px solid var(--syn-line)' }} aria-label="Pan right">
+          <FiChevronRight size={11} />
         </button>
       </div>
 
       {/* Legend */}
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-3 py-1.5" style={{ background: 'var(--syn-surface)', borderTop: '1px solid var(--syn-line)' }}>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-0.5 px-3 py-1" style={{ background: 'var(--syn-surface)', borderTop: '1px solid var(--syn-line)' }}>
         <span className="text-xs" style={{ color: 'var(--syn-muted)' }}>
           {viewStart.toFixed(2)}–{viewEnd.toFixed(2)} m of {totalSpan.toFixed(2)} m · drag or scroll to move · ctrl+scroll to zoom
         </span>

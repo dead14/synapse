@@ -229,23 +229,34 @@ export default function IliComparisonPage() {
               </div>
             )}
 
-            {/* Alignment comparison chart (always visible when data available) */}
+            {/* Alignment comparison chart (always visible when data available).
+                It keeps its natural height — the lanes carry a run each and
+                must not be sliced in half to make room for the table. */}
             {visibleData.length > 0 && (
-              <Suspense fallback={<LoadingSpinner label="Loading comparison chart..." />}>
-                <DefectVisualizer data={visibleData} selectedRowIdx={selectedRowIdx} onSelectRowIdx={setSelectedRowIdx} />
-              </Suspense>
+              <div className="shrink-0">
+                <Suspense fallback={<LoadingSpinner label="Loading comparison chart..." />}>
+                  <DefectVisualizer data={visibleData} selectedRowIdx={selectedRowIdx} onSelectRowIdx={setSelectedRowIdx} />
+                </Suspense>
+              </div>
             )}
 
-            {/* Data table */}
-            <ResultsPanel
-              data={visibleData}
-              loading={loading}
-              onOpenAnalytics={() => setShowAdvancedCharts(true)}
-              selectedRowIdx={selectedRowIdx}
-              onSelectRowIdx={setSelectedRowIdx}
-              onUpdateMatch={handleUpdateMatch}
-              audit={audit}
-            />
+            {/* Data table. ResultsPanel asks for `h-full`, which as a direct
+                flex child meant 100% of the whole workspace: it and the chart
+                shrank against each other until the row area was zero pixels
+                tall and the table rendered its header over nothing. Giving it
+                `flex-1 min-h-0` hands it the leftover height as a definite
+                size, which is what its internal scroll container needs. */}
+            <div className="flex min-h-0 flex-1 flex-col" style={{ minHeight: '14rem' }}>
+              <ResultsPanel
+                data={visibleData}
+                loading={loading}
+                onOpenAnalytics={() => setShowAdvancedCharts(true)}
+                selectedRowIdx={selectedRowIdx}
+                onSelectRowIdx={setSelectedRowIdx}
+                onUpdateMatch={handleUpdateMatch}
+                audit={audit}
+              />
+            </div>
           </div>
         )}
       </div>
