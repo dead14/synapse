@@ -392,23 +392,23 @@
 }
 
 .results-tabs {
-  min-height: 3.75rem;
+  min-height: 2.4rem;
   align-items: stretch;
   background: var(--syn-surface) !important;
 }
 
 .results-tabs button:not(.results-tab) {
-  min-height: 2.15rem;
-  padding: 0.4rem 0.65rem !important;
-  font-size: 0.68rem !important;
+  min-height: 1.8rem;
+  padding: 0.3rem 0.55rem !important;
+  font-size: 0.66rem !important;
 }
 
 .results-tab {
-  min-height: 3.75rem;
+  min-height: 2.4rem;
   border-bottom-width: 2px !important;
-  padding-inline: 1rem !important;
+  padding-inline: 0.7rem !important;
   color: var(--syn-muted) !important;
-  font-size: 0.78rem !important;
+  font-size: 0.72rem !important;
   font-weight: 750 !important;
 }
 
@@ -464,20 +464,20 @@
 }
 
 .results-filters {
-  gap: 0.5rem !important;
+  gap: 0.35rem !important;
   background: var(--syn-surface) !important;
   border-color: var(--syn-line) !important;
-  padding: 0.6rem 0.75rem !important;
+  padding: 0.35rem 0.65rem !important;
 }
 
 .results-filters label {
-  min-height: 2rem;
-  gap: 0.4rem !important;
+  min-height: 1.65rem;
+  gap: 0.3rem !important;
   border: 1px solid transparent;
-  border-radius: 0.4rem;
-  padding: 0.35rem 0.55rem;
+  border-radius: 0.35rem;
+  padding: 0.2rem 0.45rem;
   color: var(--syn-ink-soft);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 700;
 }
 
@@ -492,24 +492,25 @@
 }
 
 .results-toolbar {
-  min-height: 3.5rem;
-  gap: 0.75rem;
+  min-height: 2.4rem;
+  gap: 0.5rem;
   border-color: var(--syn-line) !important;
-  padding: 0.65rem 0.75rem !important;
+  padding: 0.35rem 0.65rem !important;
 }
 
 .results-toolbar > div:first-child {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
   color: var(--syn-info);
 }
 
 .results-toolbar input[type='text'] {
-  width: min(20rem, 36vw);
-  min-height: 2.5rem;
-  border-radius: 0.5rem !important;
-  padding-left: 2.25rem !important;
+  width: min(14rem, 28vw);
+  min-height: 1.85rem;
+  border-radius: 0.4rem !important;
+  padding-left: 1.85rem !important;
+  font-size: 0.72rem !important;
 }
 
 .results-toolbar__reset {
@@ -547,26 +548,26 @@
 }
 
 .results-table th {
-  min-height: 3.5rem;
-  padding: 0.55rem 0.65rem !important;
+  min-height: 2.5rem;
+  padding: 0.3rem 0.5rem !important;
   color: var(--syn-muted) !important;
-  font-size: 0.6rem !important;
-  line-height: 1.25;
+  font-size: 0.58rem !important;
+  line-height: 1.2;
   white-space: normal !important;
   vertical-align: top;
 }
 
 .results-table th input {
-  min-height: 1.55rem !important;
+  min-height: 1.35rem !important;
   border-color: var(--syn-line) !important;
   background: var(--syn-surface-raised) !important;
-  padding: 0.25rem 0.4rem !important;
-  font: 0.56rem var(--syn-font-data) !important;
+  padding: 0.2rem 0.35rem !important;
+  font: 0.55rem var(--syn-font-data) !important;
 }
 
 .results-table td {
-  height: 1.9rem;
-  padding: 0.45rem 0.65rem !important;
+  height: 1.5rem;
+  padding: 0.25rem 0.5rem !important;
   border-color: var(--syn-line) !important;
   color: var(--syn-ink-soft);
   text-align: center !important;

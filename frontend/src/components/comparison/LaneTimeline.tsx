@@ -304,27 +304,31 @@ export default function LaneTimeline({
   );
 
   // Connectors are what turn N lanes into one comparison: per feature they show
-  // how far the same defect moved between two consecutive runs.
+  // how far the same defect moved between two consecutive runs.  Lanes are
+  // displayed newest-first, so the older lane sits at index+1 and holds the
+  // features that carry `forwardRowIndex` pointing into the newer lane above.
   const links = useMemo(() => {
     if (!showLinks || laneViews.length < 2) return [];
     const result: Array<{ key: string; x1: number; y1: number; x2: number; y2: number; drift: number }> = [];
     for (let index = 0; index < laneViews.length - 1 && result.length < MAX_LINKS; index += 1) {
-      const byBackRow = new Map<number, PlacedFeature>();
-      laneViews[index + 1].marks.forEach((feature) => {
-        if (feature.backRowIndex !== null) byBackRow.set(feature.backRowIndex, feature);
+      const newerLane = laneViews[index];
+      const olderLane = laneViews[index + 1];
+      const newerByBackRow = new Map<number, PlacedFeature>();
+      newerLane.marks.forEach((feature) => {
+        if (feature.backRowIndex !== null) newerByBackRow.set(feature.backRowIndex, feature);
       });
-      for (const feature of laneViews[index].marks) {
+      for (const feature of olderLane.marks) {
         if (result.length >= MAX_LINKS) break;
         if (feature.forwardRowIndex === null || !feature.matchedForward) continue;
-        const partner = byBackRow.get(feature.forwardRowIndex);
+        const partner = newerByBackRow.get(feature.forwardRowIndex);
         if (!partner) continue;
         result.push({
           key: `${index}-${feature.key}`,
-          x1: mToX(feature.position),
-          y1: index * (LANE_H + LANE_GAP) + clockToY(feature.clockDeg ?? 0),
-          x2: mToX(partner.position),
-          y2: (index + 1) * (LANE_H + LANE_GAP) + clockToY(partner.clockDeg ?? 0),
-          drift: (partner.rawM ?? 0) - (feature.rawM ?? 0),
+          x1: mToX(partner.position),
+          y1: index * (LANE_H + LANE_GAP) + clockToY(partner.clockDeg ?? 0),
+          x2: mToX(feature.position),
+          y2: (index + 1) * (LANE_H + LANE_GAP) + clockToY(feature.clockDeg ?? 0),
+          drift: (feature.rawM ?? 0) - (partner.rawM ?? 0),
         });
       }
     }
