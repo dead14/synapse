@@ -13,6 +13,18 @@ export interface AlignmentImportProvenance {
   alignmentSessionId: string;
   sourceFeatureKey: string;
   featureId: string;
+  /** Engineer's note from the Corrosion Analysis review, when one was given. */
+  selectionReason: string | null;
+}
+
+/**
+ * The Corrosion Analysis outcome. FFS is not allowed to widen this: a feature
+ * that is not in `selectedKeys` was not released by an engineer and must not be
+ * assessed. See docs/specs/ffs-alignment-gated-intake.md.
+ */
+export interface AlignmentSelection {
+  selectedKeys: Set<string>;
+  reasons?: Record<string, string>;
 }
 
 export interface AcceptedAlignmentRow {
@@ -36,6 +48,8 @@ export interface AlignmentImportReadinessInput {
   iliDate: string;
   selectedRunId: string;
   alignmentRowCount: number;
+  /** Features released by the Corrosion Analysis review for this session. */
+  selectedFeatureCount: number;
   outerDiameterMm: string;
   smysMpa: string;
   designFactor: string;
@@ -76,6 +90,9 @@ export function getAlignmentImportReadiness(input: AlignmentImportReadinessInput
   if (!input.iliDate) reasons.push('Select the ILI inspection date.');
   if (!input.selectedRunId) reasons.push('Select a completed alignment session.');
   else if (input.alignmentRowCount === 0) reasons.push('Load the selected alignment result first.');
+  else if (input.selectedFeatureCount === 0) {
+    reasons.push('Release at least one feature in Corrosion Analysis for this session.');
+  }
 
   const od = strictNumber(input.outerDiameterMm);
   if (od === null || od < 50) reasons.push('Outer diameter must be at least 50 mm.');
@@ -124,8 +141,12 @@ export function mapAlignmentRowsToFfs(
   comparison: ComparisonRow[],
   engineering: AlignmentEngineeringInputs,
   alignmentSessionId: string,
+  selection: AlignmentSelection,
 ): AlignmentImportResult {
   assertEngineeringInputs(engineering);
+  if (!selection || !(selection.selectedKeys instanceof Set)) {
+    throw new Error('A saved Corrosion Analysis selection is required before an FFS assessment.');
+  }
 
   const accepted: AcceptedAlignmentRow[] = [];
   const rejected: RejectedAlignmentRow[] = [];
@@ -135,6 +156,10 @@ export function mapAlignmentRowsToFfs(
     const featureId = text(source['Identif. NEW'], text(source['Feature ID NEW'], sourceFeatureKey || 'Unknown'));
     if (!sourceFeatureKey) {
       rejected.push({ featureId, reason: 'Row does not contain a NEW-run feature.' });
+      continue;
+    }
+    if (!selection.selectedKeys.has(sourceFeatureKey)) {
+      rejected.push({ featureId, reason: 'Not selected in Corrosion Analysis.' });
       continue;
     }
 
@@ -192,9 +217,14 @@ export function mapAlignmentRowsToFfs(
         'Design Factor': numericText(engineering.designFactor),
         'Outer Diameter Ds': numericText(engineering.outerDiameterMm),
         'SMYS [MPa]': numericText(engineering.smysMpa),
-        'Operating Pressure Pâ‚€ [MPa]': numericText(engineering.operatingPressureMpa),
+        'Operating Pressure P₀ [MPa]': numericText(engineering.operatingPressureMpa),
       },
-      provenance: { alignmentSessionId, sourceFeatureKey, featureId },
+      provenance: {
+        alignmentSessionId,
+        sourceFeatureKey,
+        featureId,
+        selectionReason: selection.reasons?.[sourceFeatureKey]?.trim() || null,
+      },
       warnings,
     });
   }

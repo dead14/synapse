@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, lazy, Suspense } from 'react';
+import { Link } from 'react-router-dom';
 import ResultsPanel from './ResultsPanel';
 import { fetchAlignmentResult, type ComparisonRow, type ConservationAudit } from './utils/alignment';
 import { RUN_PAIR_COLUMN, runPairLabels, withRunPairColumn } from './utils/alignmentDisplay';
@@ -178,6 +179,25 @@ export default function IliComparisonPage() {
           </div>
         ) : (
           <div className="mt-1 flex h-[calc(100vh-100px)] flex-col gap-2">
+            {/* Handoff to the corrosion review — the only route into FFS. */}
+            {sessionId && (
+              <div
+                className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
+                style={{ borderRadius: 'var(--syn-radius-control)', border: '1px solid var(--syn-line)', background: 'var(--syn-surface)' }}
+              >
+                <span className="text-xs" style={{ color: 'var(--syn-text-muted, #64748b)' }}>
+                  Alignment complete. Review the corrosion condition to release features for fitness-for-service.
+                </span>
+                <Link
+                  to={`/alignment/${encodeURIComponent(sessionId)}/corrosion`}
+                  className="syn-btn syn-btn--sm syn-btn--lime"
+                  style={{ minHeight: '1.75rem', fontSize: '0.68rem' }}
+                >
+                  Corrosion Analysis →
+                </Link>
+              </div>
+            )}
+
             {/* Run pair filter */}
             {pairLabels.length > 1 && (
               <div className="flex flex-wrap items-center gap-2 px-3 py-2" style={{ borderRadius: 'var(--syn-radius-control)', border: '1px solid var(--syn-line)', background: 'var(--syn-surface)' }}>
