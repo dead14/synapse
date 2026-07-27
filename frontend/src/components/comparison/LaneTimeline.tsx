@@ -100,7 +100,7 @@ export default function LaneTimeline({
   const containerRef = useRef<HTMLDivElement>(null);
   const laneStackRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(960);
-  const [axis, setAxis] = useState<AxisMode>('raw');
+  const [axis, setAxis] = useState<AxisMode>('aligned');
   const [colorMode, setColorMode] = useState<ColorMode>('status');
   const [filter, setFilter] = useState<FeatureFilter>('all');
   const [showLinks, setShowLinks] = useState(true);
@@ -280,9 +280,11 @@ export default function LaneTimeline({
     )
   ), [selectedRowIdx]);
 
-  // Sorting and projecting a run is axis work, not viewport work: doing it here
-  // keeps panning, zooming and cursor movement off the hot path.
-  const placements = useMemo(() => lanes.map((lane) => placeLane(lane, axis)), [lanes, axis]);
+  // Reverse lanes so master (newest) is at top, old at bottom. Sorting and projecting
+  // is axis work, not viewport work: doing it here keeps panning, zooming and cursor
+  // movement off the hot path.
+  const reversedLanes = useMemo(() => [...lanes].reverse(), [lanes]);
+  const placements = useMemo(() => reversedLanes.map((lane) => placeLane(lane, axis)), [reversedLanes, axis]);
 
   const laneViews = useMemo(() => placements.map((placement) => {
     const windowed = laneFeaturesInWindow(placement, viewStart, viewEnd, MAX_MARKS_PER_LANE, isSelected);
