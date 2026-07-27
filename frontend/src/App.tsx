@@ -17,6 +17,7 @@ const LoginPage = lazy(() => import('./pages/LoginPage'));
 const RegisterPage = lazy(() => import('./pages/RegisterPage'));
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
 const MasterAdminPage = lazy(() => import('./pages/MasterAdmin/MasterAdminPage'));
+const CorrosionAnalysisPage = lazy(() => import('./pages/Corrosion/CorrosionAnalysisPage'));
 const FfsSetupPage = lazy(() => import('./pages/FFS/FfsSetupPage'));
 const FfsResultsPage = lazy(() => import('./pages/FFS/FfsResultsPage'));
 const UserList = lazy(() => import('./pages/Users/UserList'));
@@ -110,6 +111,7 @@ export default function App() {
             <Route path="/alignment" element={<AlignmentPage />} />
             <Route path="/ili-comparison" element={<IliComparisonPage />} />
             <Route path="/ili-sectioning" element={<IliSectioningPage />} />
+            <Route path="/alignment/:sessionId/corrosion" element={<CorrosionAnalysisPage />} />
             <Route path="/ffs" element={<FfsSetupPage />} />
             <Route path="/ffs/results" element={<FfsResultsPage />} />
             <Route path="/integrity/:capability" element={<CapabilityWorkspacePage />} />

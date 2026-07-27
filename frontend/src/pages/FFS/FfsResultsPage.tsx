@@ -21,6 +21,7 @@ import FfsStatisticsPanel from '../../components/ffs/FfsStatisticsPanel';
 import FfsSummaryCards from '../../components/ffs/FfsSummaryCards';
 import { Callout, NumberField, Panel } from '../../components/ffs/FfsPrimitives';
 import { exportResultsWorkbook } from '../../lib/ffs/exports';
+import type { AlignmentImportProvenance } from '../../lib/ffs/alignmentImport';
 import { screenResults } from '../../lib/ffs/screening';
 import {
   DEFAULT_SCREENING_CONFIG,
@@ -49,7 +50,7 @@ interface LocationState {
   screening?: FfsScreeningConfig;
   alignmentImport?: {
     sessionId: string;
-    accepted: unknown[];
+    accepted: AlignmentImportProvenance[];
     rejected: unknown[];
     warningCount: number;
   };
@@ -127,7 +128,7 @@ export default function FfsResultsPage() {
           <SynButton
             variant="lime"
             size="sm"
-            onClick={() => exportResultsWorkbook(screened, config, screening)}
+            onClick={() => exportResultsWorkbook(screened, config, screening, state.alignmentImport?.accepted)}
           >
             <span className="inline-flex items-center gap-2">
               <FiDownload /> Export Excel

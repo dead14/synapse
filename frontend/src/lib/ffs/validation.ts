@@ -19,10 +19,11 @@ const POSITIVE_COLS = [
 
 const NON_NEGATIVE_COLS = [REQUIRED_COLUMNS[0], REQUIRED_COLUMNS[3], REQUIRED_COLUMNS[8], REQUIRED_COLUMNS[9]];
 
-export function validateHeaders(headers: string[]): string[] {
-  return REQUIRED_COLUMNS.filter((column) => !headers.includes(column));
-}
-
+/**
+ * Validates the dataset handed to the engine. Since intake is alignment-only,
+ * this guards the mapper's output rather than a user-supplied file: the mapper
+ * can still produce values outside the B31G domain.
+ */
 export function validateData(rows: Record<string, string>[]): ValidationError[] {
   const errors: ValidationError[] = [];
   rows.forEach((row, index) => {

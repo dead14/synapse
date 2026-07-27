@@ -2,6 +2,7 @@ import * as XLSX from 'xlsx';
 import type { DistributionTable, WorstRow } from './statistics.ts';
 import type { NarrativeBlock } from './narrative.ts';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from './types.ts';
+import type { AlignmentImportProvenance } from './alignmentImport.ts';
 
 function triggerDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -30,6 +31,7 @@ export function exportResultsWorkbook(
   items: FfsScreenedResult[],
   config: FfsConfig,
   screening: FfsScreeningConfig,
+  provenance: AlignmentImportProvenance[] = [],
 ): void {
   const workbook = XLSX.utils.book_new();
 
@@ -93,6 +95,31 @@ export function exportResultsWorkbook(
   sheet['!cols'] = header.map((label) => ({ wch: Math.min(22, Math.max(10, label.length + 2)) }));
   sheet['!freeze'] = { xSplit: 0, ySplit: 1 };
   XLSX.utils.book_append_sheet(workbook, sheet, 'Assessment');
+
+  // The dataset the engine actually consumed, with the Corrosion Analysis
+  // decision that released each feature. This is the auditable record of what
+  // went in — the assessment sheet only shows what came out.
+  if (provenance.length > 0) {
+    const sourceHeader = [
+      'Feature ID', 'Alignment source key', 'Alignment session', 'Selection reason',
+      'LD [m]', 'Section', 'Surface', 'Orientation', 'Max depth [%WT]', 'Length [mm]',
+      'Width [mm]', 'Nominal wall thickness [mm]', 'CR depth [mm/y]', 'CR length [mm/y]',
+    ];
+    const sourceRows = items.map((item) => {
+      const n = item.nominal;
+      const record = provenance[item.index];
+      return [
+        record?.featureId ?? '', record?.sourceFeatureKey ?? '', record?.alignmentSessionId ?? '',
+        record?.selectionReason ?? '',
+        n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2),
+        num(n.width, 2), num(n.wall, 2), num(n.crDepth, 4), num(n.crLength, 4),
+      ];
+    });
+    const sourceSheet = XLSX.utils.aoa_to_sheet([sourceHeader, ...sourceRows]);
+    sourceSheet['!cols'] = sourceHeader.map((label) => ({ wch: Math.min(26, Math.max(12, label.length + 2)) }));
+    sourceSheet['!freeze'] = { xSplit: 0, ySplit: 1 };
+    XLSX.utils.book_append_sheet(workbook, sourceSheet, 'Source data');
+  }
 
   const blob = new Blob([XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
