@@ -107,10 +107,12 @@ const complianceRoutes = require('./modules/compliance/complianceRoutes');
 const directAssessmentRoutes = require('./modules/directAssessment/directAssessmentRoutes');
 const fieldMeasurementRoutes = require('./modules/fieldMeasurements/fieldMeasurementRoutes');
 const ingestionRoutes = require('./modules/ingestion/ingestionRoutes');
+const masterAdminRoutes = require('./modules/masterAdmin/masterAdminRoutes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/organizations', organizationRoutes);
+app.use('/api/master-admin', masterAdminRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/inspection-runs', inspectionRoutes);
 app.use('/api/ingestion-jobs', ingestionRoutes);

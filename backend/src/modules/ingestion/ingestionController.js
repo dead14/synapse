@@ -30,10 +30,15 @@ exports.enqueueIngestion = async ({ file, pipelineName, surveyYear, vendor, user
         error.code = 'PARSER_DICTIONARY_UNAVAILABLE';
         throw error;
     }
-    await ensureOwnedPipeline(pool, {
+    const pipeline = await ensureOwnedPipeline(pool, {
         organizationId: user.orgId,
         pipelineName,
     });
+    if (!pipeline) {
+        const error = new Error('Organization is inactive or its pipeline limit has been reached.');
+        error.code = 'ORGANIZATION_LIMIT_REACHED';
+        throw error;
+    }
     const stored = await storage.putFile(file.path, {
         organizationId: user.orgId,
         sourceName: file.originalname,

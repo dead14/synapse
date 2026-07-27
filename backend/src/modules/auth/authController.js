@@ -11,6 +11,7 @@ const {
 const { bumpTokenVersion } = require('../../middlewares/principalCache');
 const {
     validateLoginInput,
+    validatePasswordResetRequest,
     validateRegistrationInput,
 } = require('./authValidation');
 
@@ -126,7 +127,8 @@ exports.login = async (req, res) => {
                     o.name as org_name
              FROM users u
              JOIN organizations o ON u.organization_id = o.id
-             WHERE u.email = $1 AND COALESCE(u.is_active, true) = true`,
+             WHERE u.email = $1 AND COALESCE(u.is_active, true) = true
+               AND COALESCE(o.is_active, true) = true`,
             [email]
         );
         if (result.rows.length === 0) {
@@ -156,6 +158,43 @@ exports.login = async (req, res) => {
     } catch (err) {
         console.error('Login error:', err);
         return res.status(500).json({ error: 'Login failed' });
+    }
+};
+
+exports.requestPasswordReset = async (req, res) => {
+    const validation = validatePasswordResetRequest(req.body);
+    if (!validation.ok) return res.status(400).json({ error: validation.error });
+
+    // The same response is returned whether the email exists or not to prevent
+    // account enumeration from this unauthenticated endpoint.
+    const response = {
+        message: 'If the account exists, a recovery request has been sent to the master administrator.',
+    };
+    try {
+        const user = await pool.query(
+            `SELECT u.id, u.organization_id
+             FROM users u JOIN organizations o ON o.id = u.organization_id
+             WHERE u.email = $1 AND u.is_active = true AND o.is_active = true`,
+            [validation.value.email],
+        );
+        if (user.rowCount) {
+            const account = user.rows[0];
+            await pool.query(
+                `INSERT INTO password_reset_requests
+                    (user_id, organization_id, requested_ip)
+                 SELECT $1, $2, $3
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM password_reset_requests
+                     WHERE user_id = $1 AND status = 'pending'
+                       AND requested_at > NOW() - INTERVAL '15 minutes'
+                 )`,
+                [account.id, account.organization_id, req.ip],
+            );
+        }
+        return res.status(202).json(response);
+    } catch (error) {
+        console.error('Password reset request error:', error);
+        return res.status(202).json(response);
     }
 };
 
