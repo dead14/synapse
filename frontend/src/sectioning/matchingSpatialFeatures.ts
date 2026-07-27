@@ -105,7 +105,10 @@ export function buildMatchingSpatialFeatures({
     const distance = finiteDistance(row);
     const type = featureType(row);
     if (distance === null || !isWeld(type)) return [];
-    const id = String(row.id ?? row.sourceFeatureId ?? `NEW-GW-${index + 1}`);
+    // Persisted anchors carry `id` as the database row key, while matching
+    // evidence uses the inspection's `feature_id`. Prefer the latter so a
+    // canonical lock can reconnect to the master marker after reload.
+    const id = String(row.feature_id ?? row.id ?? row.sourceFeatureId ?? `NEW-GW-${index + 1}`);
     const pair = matchedMasterPair(id, distance);
     return [{
       id,
@@ -174,7 +177,7 @@ export function buildMatchingSpatialFeatures({
     const type = featureType(row);
     if (distance === null || isWeld(type) || !isVisiblePhysicalFeature(type)) return [];
     return [{
-      id: String(row.id ?? row.sourceFeatureId ?? `MASTER-${index + 1}`),
+      id: String(row.feature_id ?? row.id ?? row.sourceFeatureId ?? `MASTER-${index + 1}`),
       dist: distance,
       type: type || 'other',
       runRole: 'MASTER',
