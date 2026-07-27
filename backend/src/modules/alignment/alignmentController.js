@@ -168,6 +168,52 @@ function pairScopedSignatureConfig(config, pairKey) {
     };
 }
 
+/**
+ * Repair sessions written by the short-lived client snapshot bug: they retain
+ * a reviewed GW result but lost the server-side canonical evidence needed to
+ * validate it on the next wizard save.  Only recover evidence that was already
+ * stored on the session and whose settings signature still matches the current
+ * request; changed settings must continue to require a fresh DTW run.
+ */
+function recoverLegacyCanonicalGwEvidence(config, persistedConfig) {
+    const recovered = preserveCanonicalGwEvidence(config, persistedConfig);
+    const evidence = { ...(recovered.pairGwEvidence || {}) };
+    const persistedResults = persistedConfig?.pairGwResults || {};
+
+    for (const [pairKey, result] of Object.entries(persistedResults)) {
+        if (evidence[pairKey] || !result?.gwReview || !Array.isArray(result.gwMatchesFinal)) continue;
+        const [oldValue, newValue] = pairKey.split('->');
+        const pair = findSessionRunPair(persistedConfig || {}, {
+            oldRunId: Number(oldValue),
+            newRunId: Number(newValue),
+        });
+        if (!pair) continue;
+        const expectedSignature = canonicalSignatureForConfig(
+            pairScopedSignatureConfig(config, pairKey),
+            { oldRunId: pair.oldRunId, newRunId: pair.newRunId },
+        );
+        if (!canonicalSignaturesEqual(result.gwReviewSignature, expectedSignature)) continue;
+        try {
+            evidence[pairKey] = {
+                canonicalGwLocks: normalizeCanonicalGwLocks(result.gwMatchesFinal),
+                gwCanonicalSignature: expectedSignature,
+            };
+        } catch {
+            // Invalid legacy locks must still be recalculated by the DTW engine.
+        }
+    }
+
+    if (Object.keys(evidence).length > 0) recovered.pairGwEvidence = evidence;
+    const primary = primarySessionRunPair(persistedConfig || {});
+    if (!Array.isArray(recovered.canonicalGwLocks) && primary && evidence[primary.key]) {
+        recovered.canonicalGwLocks = evidence[primary.key].canonicalGwLocks;
+        recovered.gwCanonicalSignature = evidence[primary.key].gwCanonicalSignature;
+    }
+    return recovered;
+}
+
+exports.recoverLegacyCanonicalGwEvidence = recoverLegacyCanonicalGwEvidence;
+
 function requireServerTieInEvidence(payload, organizationId) {
     if (payload?.tieInTransform === undefined || payload?.tieInTransform === null) return;
     const valid = verifyTieInEvidence(
@@ -550,7 +596,7 @@ exports.saveWizardState = async (req, res) => {
             // evidence recorded when DTW completed. Preserve that evidence
             // across every later step so Sectioning cannot lose its canonical
             // locks and reject the next save.
-            let configToPersist = preserveCanonicalGwEvidence(config, session.params_json);
+            let configToPersist = recoverLegacyCanonicalGwEvidence(config, session.params_json);
             try {
                 if (requiresReviewBoundary) {
                     const references = getPersistedRunReferences(session.params_json || {});
@@ -561,7 +607,7 @@ exports.saveWizardState = async (req, res) => {
                     if (config.gwReview !== undefined
                         && !sameGwReviewDecisions(config.gwReview, session.params_json?.gwReview)
                         && !canonicalSignaturesEqual(
-                            session.params_json?.gwCanonicalSignature,
+                            configToPersist.gwCanonicalSignature,
                             canonicalSignatureForConfig(config, references),
                         )) {
                         throw reviewPersistenceError('GW matching settings changed. Recalculate the canonical matching result before saving review decisions.');
@@ -592,19 +638,17 @@ exports.saveWizardState = async (req, res) => {
                             { oldRunId: pair.oldRunId, newRunId: pair.newRunId },
                         );
                         if (!canonicalSignaturesEqual(
-                            session.params_json?.pairGwEvidence?.[pairKey]?.gwCanonicalSignature,
+                            configToPersist.pairGwEvidence?.[pairKey]?.gwCanonicalSignature,
                             expected,
                         )) {
                             throw reviewPersistenceError(`GW matching settings changed for pair ${pairKey}. Recalculate that pair before saving its review decisions.`);
                         }
                     }
                     const pairGwResults = normalizePairGwResultsForPersistence(configToPersist, {
-                        pairGwEvidence: session.params_json?.pairGwEvidence,
+                        pairGwEvidence: configToPersist.pairGwEvidence,
                     });
                     if (pairGwResults !== undefined) configToPersist.pairGwResults = pairGwResults;
-                    if (Array.isArray(session.params_json?.canonicalGwLocks)) {
-                        configToPersist.canonicalGwLocks = session.params_json.canonicalGwLocks;
-                        configToPersist.gwCanonicalSignature = session.params_json.gwCanonicalSignature;
+                    if (Array.isArray(configToPersist.canonicalGwLocks)) {
                         if (config.gwReview === undefined) {
                             configToPersist.gwMatchesFinal = session.params_json.gwMatchesFinal || [];
                         }
