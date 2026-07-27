@@ -38,7 +38,6 @@ export default function IliComparisonPage() {
   const [jobMessage, setJobMessage] = useState('Sending data to the queue...');
   const [isProcessing, setIsProcessing] = useState(false);
   const [showAdvancedCharts, setShowAdvancedCharts] = useState(false);
-  const [showVisualizer, setShowVisualizer] = useState(false);
   const [selectedRowIdx, setSelectedRowIdx] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState('');
@@ -165,30 +164,30 @@ export default function IliComparisonPage() {
   };
 
   return (
-    <div className="results-workspace font-outfit py-6 text-gray-800 overflow-x-hidden w-full">
-      <div className="app-page-shell flex flex-col gap-5">
+    <div className="results-workspace py-4 overflow-x-hidden w-full">
+      <div className="app-page-shell flex flex-col gap-3">
         {error && (
-          <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
+          <div role="alert" className="syn-alert syn-alert--danger">
+            <div>{error}</div>
           </div>
         )}
 
         {isProcessing ? (
-          <div className="mt-2 rounded-2xl border border-blue-100 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.06)]">
+          <div className="syn-panel mt-2">
             <JobProgressBar progress={jobProgress} message={jobMessage} />
           </div>
         ) : (
-          <div className="mt-2 flex h-[calc(100vh-120px)] flex-col gap-3">
+          <div className="mt-1 flex h-[calc(100vh-100px)] flex-col gap-2">
+            {/* Run pair filter */}
             {pairLabels.length > 1 && (
-              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-2.5">
-                <span className="text-xs font-bold uppercase tracking-wide text-blue-700">Run pair</span>
+              <div className="flex flex-wrap items-center gap-2 px-3 py-2" style={{ borderRadius: 'var(--syn-radius-control)', border: '1px solid var(--syn-line)', background: 'var(--syn-surface)' }}>
+                <span className="syn-kicker" style={{ fontSize: '0.6rem' }}>Run pair</span>
                 <button
                   type="button"
                   aria-pressed={pairFilter === null}
                   onClick={() => setPairFilter(null)}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                    pairFilter === null ? 'bg-blue-600 text-white shadow-sm' : 'border border-blue-200 bg-white text-blue-700 hover:bg-blue-100'
-                  }`}
+                  className={`syn-btn syn-btn--sm ${pairFilter === null ? 'syn-btn--ink' : 'syn-btn--outline'}`}
+                  style={{ minHeight: '1.75rem', fontSize: '0.68rem' }}
                 >
                   All ({data.length.toLocaleString()})
                 </button>
@@ -200,9 +199,8 @@ export default function IliComparisonPage() {
                       type="button"
                       aria-pressed={pairFilter === label}
                       onClick={() => { setPairFilter(label); setSelectedRowIdx(null); }}
-                      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                        pairFilter === label ? 'bg-blue-600 text-white shadow-sm' : 'border border-blue-200 bg-white text-blue-700 hover:bg-blue-100'
-                      }`}
+                      className={`syn-btn syn-btn--sm ${pairFilter === label ? 'syn-btn--ink' : 'syn-btn--outline'}`}
+                      style={{ minHeight: '1.75rem', fontSize: '0.68rem' }}
                     >
                       {label} ({count.toLocaleString()})
                     </button>
@@ -210,6 +208,15 @@ export default function IliComparisonPage() {
                 })}
               </div>
             )}
+
+            {/* Alignment comparison chart (always visible when data available) */}
+            {visibleData.length > 0 && (
+              <Suspense fallback={<LoadingSpinner label="Loading comparison chart..." />}>
+                <DefectVisualizer data={visibleData} selectedRowIdx={selectedRowIdx} onSelectRowIdx={setSelectedRowIdx} />
+              </Suspense>
+            )}
+
+            {/* Data table */}
             <ResultsPanel
               data={visibleData}
               loading={loading}
@@ -219,31 +226,6 @@ export default function IliComparisonPage() {
               onUpdateMatch={handleUpdateMatch}
               audit={audit}
             />
-          </div>
-        )}
-
-        {visibleData.length > 0 && !isProcessing && (
-          <div>
-            {!showVisualizer ? (
-              <button
-                onClick={() => setShowVisualizer(true)}
-                className="w-full py-3 rounded-xl border-2 border-dashed border-blue-300 text-blue-500 hover:bg-blue-50 hover:border-blue-400 transition-all font-medium text-sm flex items-center justify-center gap-2"
-              >
-                Show Alignment Timeline Viewer (3D Chart)
-              </button>
-            ) : (
-              <div className="relative">
-                <button
-                  onClick={() => setShowVisualizer(false)}
-                  className="absolute top-2 right-2 z-10 bg-white border border-gray-200 rounded-full px-3 py-1 text-xs text-gray-500 hover:bg-gray-100 shadow-sm"
-                >
-                  Hide Chart
-                </button>
-                <Suspense fallback={<LoadingSpinner label="Loading Alignment Timeline Viewer..." />}>
-                  <DefectVisualizer data={visibleData} selectedRowIdx={selectedRowIdx} onSelectRowIdx={setSelectedRowIdx} />
-                </Suspense>
-              </div>
-            )}
           </div>
         )}
       </div>
