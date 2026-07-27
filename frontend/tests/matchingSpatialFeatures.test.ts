@@ -66,3 +66,18 @@ test('buildMatchingSpatialFeatures keeps a locked master weld matched when persi
   assert.equal(features.gws.find((gw) => gw.id === 'NEW-001')?.status, 'MATCHED');
   assert.equal(features.gws.find((gw) => gw.id === 'NEW-001')?.rawData.oldId, 'OLD-001');
 });
+
+test('buildMatchingSpatialFeatures matches persisted anchor feature_id instead of its database row id', () => {
+  const features = buildMatchingSpatialFeatures({
+    masterRun: { year: '2026' },
+    historicalRuns: [{ name: 'ILI 2024', year: '2024' }],
+    masterRows: [{ id: 9876, feature_id: 'NEW-001', type: 'Weld', log_distance_m: 9 }],
+    lockedGws: [{
+      key: 'OLD-001::NEW-001::8.900000::9.000000',
+      oldId: 'OLD-001', oldDistance: 8.9,
+      newId: 'NEW-001', newDistance: 9,
+    }],
+  });
+
+  assert.equal(features.gws.find((gw) => gw.id === 'NEW-001')?.status, 'MATCHED');
+});
