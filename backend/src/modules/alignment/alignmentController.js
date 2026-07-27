@@ -244,6 +244,16 @@ function recoverLegacyCanonicalGwEvidence(config, persistedConfig) {
 
 exports.recoverLegacyCanonicalGwEvidence = recoverLegacyCanonicalGwEvidence;
 
+function normalizeRecoveredAlignmentReview(configToPersist, persistedConfig, { featureCounts } = {}) {
+    return normalizeAlignmentReviewForPersistence(configToPersist, {
+        featureCounts,
+        canonicalGwLocks: persistedConfig?.canonicalGwLocks,
+        existingDataReview: persistedConfig?.dataReview,
+    });
+}
+
+exports.normalizeRecoveredAlignmentReview = normalizeRecoveredAlignmentReview;
+
 function requireServerTieInEvidence(payload, organizationId) {
     if (payload?.tieInTransform === undefined || payload?.tieInTransform === null) return;
     const valid = verifyTieInEvidence(
@@ -642,11 +652,11 @@ exports.saveWizardState = async (req, res) => {
                         )) {
                         throw reviewPersistenceError('GW matching settings changed. Recalculate the canonical matching result before saving review decisions.');
                     }
-                    configToPersist = normalizeAlignmentReviewForPersistence(config, {
-                        featureCounts,
-                        canonicalGwLocks: session.params_json?.canonicalGwLocks,
-                        existingDataReview: session.params_json?.dataReview,
-                    });
+                    configToPersist = normalizeRecoveredAlignmentReview(
+                        configToPersist,
+                        session.params_json,
+                        { featureCounts },
+                    );
                     for (const [pairKey, pairResult] of Object.entries(config.pairGwResults || {})) {
                         if (pairResult?.gwReview === undefined
                             || sameGwReviewDecisions(
