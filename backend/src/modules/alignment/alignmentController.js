@@ -39,6 +39,7 @@ const {
 } = require('./alignmentStrategyCapabilities');
 const { buildTieInEvidence, signTieInEvidence, verifyTieInEvidence } = require('./tieInEvidence');
 const ingestionController = require('../ingestion/ingestionController');
+const { toIngestionUploadErrorResponse } = require('../ingestion/ingestionErrors');
 const { alignmentQueue } = require('./alignmentWorker');
 const {
     canonicalSignature,
@@ -300,16 +301,8 @@ exports.uploadCsv = async (req, res) => {
     } catch (error) {
         fs.unlink(file.path, () => {});
         console.error('Failed to queue ingestion:', error);
-        if (error.code === 'PARSER_DICTIONARY_UNAVAILABLE') {
-            return res.status(503).json({
-                error: error.message,
-                code: error.code,
-            });
-        }
-        return res.status(503).json({
-            error: 'Ingestion queue is unavailable',
-            code: 'INGESTION_QUEUE_UNAVAILABLE',
-        });
+        const response = toIngestionUploadErrorResponse(error);
+        return res.status(response.status).json(response.body);
     }
 };
 

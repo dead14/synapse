@@ -1,6 +1,7 @@
 const { randomUUID } = require('crypto');
 const pool = require('../../config/db');
 const { ingestionQueue } = require('./ingestionQueue');
+const { queueUnavailableError } = require('./ingestionErrors');
 const {
     ensureOwnedPipeline,
     findOwnedPersistedRunByChecksum,
@@ -76,13 +77,17 @@ exports.enqueueIngestion = async ({ file, pipelineName, surveyYear, vendor, user
             objectKey: stored.key,
         }, { jobId });
     } catch (error) {
-        await repository.updateIngestionJob(pool, jobId, {
-            state: 'failed',
-            errorCode: 'QUEUE_UNAVAILABLE',
-            errorMessage: 'Ingestion queue is unavailable',
-            completedAt: new Date(),
-        });
-        throw error;
+        try {
+            await repository.updateIngestionJob(pool, jobId, {
+                state: 'failed',
+                errorCode: 'QUEUE_UNAVAILABLE',
+                errorMessage: 'Ingestion queue is unavailable',
+                completedAt: new Date(),
+            });
+        } catch (updateError) {
+            console.error('Failed to record unavailable ingestion queue:', updateError);
+        }
+        throw queueUnavailableError(error);
     }
     return { kind: 'queued', job: created };
 };
