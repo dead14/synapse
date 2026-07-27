@@ -1,13 +1,15 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { FiChevronLeft, FiChevronRight } from 'react-icons/fi';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  calculateViewportWindow,
   rawLdForTimelineMarker,
   type GwTimelineMatch,
   type TimelineFeatureEvidence,
   type TimelineGeometry,
   type TimelineStatus,
 } from '../domain/gwTimeline';
+
+type ViewportWindow = ReturnType<typeof calculateViewportWindow>;
 
 type Props = {
   matches: GwTimelineMatch[];
@@ -21,12 +23,6 @@ type Props = {
   onSelectMatch: (match: GwTimelineMatch) => void;
 };
 
-const CHART_H = 100;
-const AXIS_LEFT = 56;
-const AXIS_RIGHT = 16;
-const NAV_H = 56;
-const NAV_PAD = 48;
-
 const distanceLabel = (distance: number) => (
   Math.abs(distance) >= 1_000 ? `${(distance / 1_000).toFixed(2)} km` : `${distance.toFixed(2)} m`
 );
@@ -34,6 +30,11 @@ const distanceLabel = (distance: number) => (
 const sameDistance = (left: unknown, right: number) => (
   Number.isFinite(Number(left)) && Math.abs(Number(left) - right) < 0.0005
 );
+
+const distancePercent = (distance: number, domain: TimelineGeometry['domain']) => {
+  const span = Math.max(1e-9, domain.endM - domain.startM);
+  return Math.min(100, Math.max(0, ((distance - domain.startM) / span) * 100));
+};
 
 const featureKind = (feature: TimelineFeatureEvidence) => {
   const value = String(feature.type ?? '').trim().toLowerCase();
@@ -54,13 +55,69 @@ const matchForFeature = (
   return sameDistance(side === 'old' ? candidate.oldVal : candidate.newVal, feature.displayDistanceM);
 });
 
-const colorForStatus = (status: TimelineStatus) => {
-  if (status === 'matched') return '#22c55e'; // green
-  if (status === 'missing') return '#ef4444'; // red
-  if (status === 'review') return '#f97316'; // orange
-  if (status === 'excluded') return '#94a3b8'; // slate
-  return 'var(--syn-muted, #727a6d)';
+const sourceDistance = (match: GwTimelineMatch, side: 'old' | 'new') => {
+  return rawLdForTimelineMarker(null, match, side);
 };
+
+const spacingBetween = (left: GwTimelineMatch, right: GwTimelineMatch, side: 'old' | 'new') => {
+  const leftDistance = sourceDistance(left, side);
+  const rightDistance = sourceDistance(right, side);
+  return leftDistance === null || rightDistance === null
+    ? null
+    : Math.abs(rightDistance - leftDistance);
+};
+
+function TrackMarker({
+  position,
+  sourcePosition,
+  domain,
+  match,
+  side,
+  status,
+  selected,
+  onSelect,
+}: {
+  position: number;
+  sourcePosition?: number | null;
+  domain: TimelineGeometry['domain'];
+  match?: GwTimelineMatch;
+  side: 'old' | 'new';
+  status: TimelineStatus;
+  selected: boolean;
+  onSelect: (match: GwTimelineMatch) => void;
+}) {
+  const label = distanceLabel(position);
+  const rawLd = rawLdForTimelineMarker(sourcePosition, match, side);
+  const rawSourceLabel = rawLd === null ? ' · source LD unavailable' : ` · source LD ${distanceLabel(rawLd)}`;
+  const markerLabel = `${label} · ${status}${match ? ' pair' : ' feature'}${rawSourceLabel}`;
+
+  return (
+    <button
+      type="button"
+      className={`gw-pipeline-marker is-${status}${selected ? ' is-selected' : ''}`}
+      style={{ insetInlineStart: `${distancePercent(position, domain)}%` }}
+      aria-label={markerLabel}
+      aria-pressed={match ? selected : undefined}
+      onClick={() => match && onSelect(match)}
+    >
+      <span aria-hidden="true" />
+      <small>{label}</small>
+      <span className="gw-pipeline-marker__raw-label" aria-hidden="true">{rawLd === null ? 'source LD unavailable' : `source LD ${distanceLabel(rawLd)}`}</span>
+    </button>
+  );
+}
+
+function FeatureMarkers({ values, type, domain }: { values: number[]; type: 'valve' | 'tee'; domain: TimelineGeometry['domain'] }) {
+  return values.filter(Number.isFinite).map((position, index) => (
+    <span
+      key={`${type}-${position}-${index}`}
+      className={`gw-pipeline-feature is-${type}`}
+      style={{ insetInlineStart: `${distancePercent(position, domain)}%` }}
+      title={`${type === 'valve' ? 'Valve' : 'Tee'} · ${distanceLabel(position)}`}
+      aria-hidden="true"
+    />
+  ));
+}
 
 export default function GwPipelineCanvas({
   matches,
@@ -73,60 +130,17 @@ export default function GwPipelineCanvas({
   statusFor,
   onSelectMatch,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [containerWidth, setContainerWidth] = useState(900);
-  
-  const [viewStart, setViewStart] = useState<number | null>(null);
-  const [viewEnd, setViewEnd] = useState<number | null>(null);
-  const [navDrag, setNavDrag] = useState<{ startX: number; origStart: number; origEnd: number } | null>(null);
-
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState<ViewportWindow>({ leftPercent: 0, widthPercent: 100 });
   const [previousSelectedId, setPreviousSelectedId] = useState<string>('');
   const [currentSelectedId, setCurrentSelectedId] = useState<string>('');
 
-  // Measure container
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const obs = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect?.width;
-      if (w) setContainerWidth(w);
-    });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
-
-  const startDist = timeline.domain.startM;
-  const endDist = timeline.domain.endM;
-  const totalLength = Math.max(10, endDist - startDist);
-
-  useEffect(() => {
-    if (viewStart === null) {
-      const windowSize = Math.min(totalLength, 40);
-      setViewStart(startDist);
-      setViewEnd(startDist + windowSize);
-    }
-  }, [viewStart, startDist, totalLength]);
-
-  useEffect(() => {
-    if (viewStart !== null && viewEnd !== null) {
-       const center = (viewStart + viewEnd) / 2;
-       const span = Math.max(10, totalLength * (100 / zoom));
-       let ns = center - span / 2;
-       let ne = center + span / 2;
-       if (ns < startDist) { ne += startDist - ns; ns = startDist; }
-       if (ne > endDist) { ns -= ne - endDist; ne = endDist; }
-       setViewStart(Math.max(startDist, ns));
-       setViewEnd(Math.min(endDist, ne));
-    }
-  }, [zoom, startDist, endDist, totalLength]); // Explicit zoom dependency to pan correctly when buttons click
-
-  const vStart = viewStart ?? startDist;
-  const vEnd = viewEnd ?? endDist;
-  const viewSpan = Math.max(0.1, vEnd - vStart);
-  const chartWidth = Math.max(100, containerWidth - AXIS_LEFT - AXIS_RIGHT);
-
-  const mToX = useCallback((m: number) => AXIS_LEFT + ((m - vStart) / viewSpan) * chartWidth, [vStart, viewSpan, chartWidth]);
-
+  const domain = timeline.domain;
+  const domainSpan = Math.max(1, domain.endM - domain.startM);
+  const axisTicks = useMemo(
+    () => Array.from({ length: 7 }, (_, index) => domain.startM + (domainSpan / 6) * index),
+    [domain.startM, domainSpan],
+  );
   const oldGwFeatures = useMemo(
     () => timeline.oldFeatures.filter((feature) => featureKind(feature) === 'weld'),
     [timeline.oldFeatures],
@@ -135,8 +149,57 @@ export default function GwPipelineCanvas({
     () => timeline.newFeatures.filter((feature) => featureKind(feature) === 'weld'),
     [timeline.newFeatures],
   );
+  const matchByOldId = useMemo(() => {
+    const map = new Map<string, GwTimelineMatch>();
+    for (const m of matches) {
+      if (m.oldId != null) map.set(String(m.oldId), m);
+    }
+    return map;
+  }, [matches]);
+  const matchByNewId = useMemo(() => {
+    const map = new Map<string, GwTimelineMatch>();
+    for (const m of matches) {
+      if (m.newId != null) map.set(String(m.newId), m);
+    }
+    return map;
+  }, [matches]);
+  const coverageStyle = (coverage: TimelineGeometry['oldCoverage']) => {
+    if (!coverage) return { display: 'none' };
+    const startPercent = distancePercent(coverage.startM, domain);
+    const endPercent = distancePercent(coverage.endM, domain);
+    return {
+      insetInlineStart: `${startPercent}%`,
+      width: `${Math.max(0, endPercent - startPercent)}%`,
+    };
+  };
+
+  const updateViewport = () => {
+    const element = scrollRef.current;
+    if (!element) return;
+    setViewport(calculateViewportWindow(element));
+  };
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const frame = requestAnimationFrame(updateViewport);
+    const observer = new ResizeObserver(updateViewport);
+    observer.observe(element);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [zoom, matches.length]);
+
+  const panTo = (centerPercent: number) => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const left = (centerPercent / 100) * element.scrollWidth - element.clientWidth / 2;
+    element.scrollTo({ left: Math.max(0, left), behavior: 'auto' });
+  };
 
   const selectedId = selectedMatchId === undefined ? '' : String(selectedMatchId);
+  const contentWidth = `${Math.max(100, Math.min(10000, zoom))}%`;
 
   useEffect(() => {
     if (selectedId && selectedId !== currentSelectedId) {
@@ -145,173 +208,15 @@ export default function GwPipelineCanvas({
     }
   }, [selectedId, currentSelectedId]);
 
-  const handleNavMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    setNavDrag({ startX: e.clientX, origStart: vStart, origEnd: vEnd });
-  }, [vStart, vEnd]);
-
-  useEffect(() => {
-    if (!navDrag) return;
-    const onMove = (e: MouseEvent) => {
-      const navWidth = containerWidth - NAV_PAD * 2;
-      const pxPerMeter = navWidth / totalLength;
-      const deltaPx = e.clientX - navDrag.startX;
-      const deltaM = deltaPx / pxPerMeter;
-      let newStart = navDrag.origStart + deltaM;
-      let newEnd = navDrag.origEnd + deltaM;
-      if (newStart < startDist) { newEnd += startDist - newStart; newStart = startDist; }
-      if (newEnd > endDist) { newStart -= newEnd - endDist; newEnd = endDist; }
-      setViewStart(Math.max(startDist, newStart));
-      setViewEnd(Math.min(endDist, newEnd));
-    };
-    const onUp = () => setNavDrag(null);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-  }, [navDrag, containerWidth, totalLength, startDist, endDist]);
-
-  const shiftView = useCallback((direction: -1 | 1) => {
-    const step = viewSpan * 0.3;
-    let ns = vStart + direction * step;
-    let ne = vEnd + direction * step;
-    if (ns < startDist) { ne += startDist - ns; ns = startDist; }
-    if (ne > endDist) { ns -= ne - endDist; ne = endDist; }
-    setViewStart(Math.max(startDist, ns));
-    setViewEnd(Math.min(endDist, ne));
-  }, [vStart, vEnd, viewSpan, startDist, endDist]);
-
-  const renderNavigator = () => {
-    const navWidth = containerWidth - NAV_PAD * 2;
-    const navMToX = (m: number) => NAV_PAD + ((m - startDist) / totalLength) * navWidth;
-    const winLeft = navMToX(vStart);
-    const winRight = navMToX(vEnd);
-    const winWidth = Math.max(4, winRight - winLeft);
-
-    const gwList = Array.from(new Set([...oldGwFeatures, ...newGwFeatures].map(f => f.displayDistanceM))).sort((a, b) => a - b);
-    const sampledGwList = gwList.filter((_, i) => i % Math.max(1, Math.floor(gwList.length / 50)) === 0);
-
-    return (
-      <div className="relative select-none" style={{ height: NAV_H }}>
-        <svg width={containerWidth} height={NAV_H} className="block">
-          <rect x={NAV_PAD} y={20} width={navWidth} height={16} rx={4} fill="var(--syn-canvas-strong, #dfe5dc)" />
-          {sampledGwList.map((dist, i) => {
-            const x = navMToX(dist);
-            return (
-              <g key={`nav-gw-${i}`}>
-                <line x1={x} y1={18} x2={x} y2={38} stroke="var(--syn-muted, #727a6d)" strokeWidth="1" />
-                <circle cx={x} cy={28} r={2.5} fill="var(--syn-muted, #727a6d)" />
-              </g>
-            );
-          })}
-          {sampledGwList.filter((_, i) => i % Math.max(1, Math.floor(sampledGwList.length / 10)) === 0 || i === sampledGwList.length - 1).map((dist, i) => (
-            <text key={`nav-label-${i}`} x={navMToX(dist)} y={50} textAnchor="middle" fontSize="8" fontWeight="700" fill="var(--syn-muted, #727a6d)">
-              {dist.toFixed(0)}
-            </text>
-          ))}
-          <rect
-            x={winLeft} y={16} width={winWidth} height={24} rx={4}
-            fill="rgba(59,130,246,0.15)" stroke="#3b82f6" strokeWidth="1.5"
-            className="cursor-grab active:cursor-grabbing"
-            onMouseDown={handleNavMouseDown}
-          />
-          <line x1={winLeft + winWidth / 2 - 6} y1={24} x2={winLeft + winWidth / 2 - 6} y2={34} stroke="#3b82f6" strokeWidth="1" strokeLinecap="round" />
-          <line x1={winLeft + winWidth / 2} y1={24} x2={winLeft + winWidth / 2} y2={34} stroke="#3b82f6" strokeWidth="1" strokeLinecap="round" />
-          <line x1={winLeft + winWidth / 2 + 6} y1={24} x2={winLeft + winWidth / 2 + 6} y2={34} stroke="#3b82f6" strokeWidth="1" strokeLinecap="round" />
-        </svg>
-
-        <button type="button" onClick={() => shiftView(-1)} className="absolute left-1 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full flex items-center justify-center" style={{ background: 'var(--syn-surface-raised, #fff)', border: '1px solid var(--syn-line, #d4d9d0)' }} aria-label="Shift view left">
-          <FiChevronLeft size={14} />
-        </button>
-        <button type="button" onClick={() => shiftView(1)} className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full flex items-center justify-center" style={{ background: 'var(--syn-surface-raised, #fff)', border: '1px solid var(--syn-line, #d4d9d0)' }} aria-label="Shift view right">
-          <FiChevronRight size={14} />
-        </button>
-      </div>
-    );
-  };
-
-  const renderPanel = (side: 'new' | 'old', label: string) => {
-    const isNew = side === 'new';
-    const features = isNew ? timeline.newFeatures : timeline.oldFeatures;
-    const yOffset = isNew ? 0 : CHART_H + 18;
-
-    return (
-      <g transform={`translate(0, ${yOffset})`}>
-        <rect x={AXIS_LEFT} y={0} width={chartWidth} height={CHART_H} fill="var(--syn-surface, #fbfcf9)" />
-        <text x={8} y={CHART_H / 2} textAnchor="middle" dominantBaseline="central" fontSize="9" fontWeight="800" fill="var(--syn-info, #155eef)" transform={`rotate(-90 8 ${CHART_H / 2})`} letterSpacing="0.08em">
-          {isNew ? 'NEW' : 'OLD'}
-        </text>
-        <text x={AXIS_LEFT + 6} y={13} fontSize="10" fontWeight="700" fill="var(--syn-muted, #727a6d)" letterSpacing="0.04em">{label}</text>
-        
-        <line x1={AXIS_LEFT} y1={CHART_H / 2} x2={AXIS_LEFT + chartWidth} y2={CHART_H / 2} stroke="var(--syn-line, #d4d9d0)" strokeWidth="0.5" strokeDasharray="3 3" />
-        
-        {features.map((f, i) => {
-          const x = mToX(f.displayDistanceM);
-          if (x < AXIS_LEFT - 10 || x > AXIS_LEFT + chartWidth + 10) return null;
-          
-          const match = matchForFeature(matches, f, side);
-          const status = match ? statusFor(match) : 'missing';
-          const isSel = match && String(match.id) === selectedId;
-          const color = colorForStatus(status);
-          const kind = featureKind(f);
-
-          return (
-            <g
-              key={`${side}-${i}`}
-              className={match ? 'cursor-pointer' : ''}
-              onClick={() => match && onSelectMatch(match)}
-              style={{ pointerEvents: match ? 'all' : 'none' }}
-            >
-              <line x1={x} y1={0} x2={x} y2={CHART_H} stroke="var(--syn-line, #d4d9d0)" strokeWidth="1" strokeDasharray="2 4" />
-              {isSel && <circle cx={x} cy={CHART_H / 2} r={11} fill="none" stroke={color} strokeWidth="1.5" strokeDasharray="2 2" opacity="0.5" />}
-              
-              {kind === 'weld' && <circle cx={x} cy={CHART_H / 2} r={isSel ? 7 : 5} fill={color} stroke={isSel ? '#151711' : '#fff'} strokeWidth={1.5} />}
-              {kind === 'valve' && <rect x={x - (isSel?5:4)} y={CHART_H / 2 - (isSel?5:4)} width={isSel?10:8} height={isSel?10:8} fill="none" stroke={color} strokeWidth={2} />}
-              {kind === 'tee' && <polygon points={`${x},${CHART_H / 2 - (isSel?6:5)} ${x - (isSel?5:4)},${CHART_H / 2 + (isSel?5:4)} ${x + (isSel?5:4)},${CHART_H / 2 + (isSel?5:4)}`} fill="none" stroke={color} strokeWidth={2} />}
-            </g>
-          );
-        })}
-      </g>
-    );
-  };
-
-  const renderDistanceAxis = () => {
-    const tickCount = Math.min(20, Math.max(5, Math.floor(chartWidth / 60)));
-    const step = viewSpan / tickCount;
-    const ticks: number[] = [];
-    for (let i = 0; i <= tickCount; i++) ticks.push(vStart + i * step);
-    return (
-      <g transform={`translate(0, ${CHART_H})`}>
-        <rect x={AXIS_LEFT} y={0} width={chartWidth} height={18} fill="var(--syn-surface, #fbfcf9)" />
-        {ticks.map((m, i) => {
-          const x = mToX(m);
-          if (x < AXIS_LEFT - 10 || x > AXIS_LEFT + chartWidth + 10) return null;
-          return (
-            <g key={`xtick-${i}`}>
-              <line x1={x} y1={0} x2={x} y2={4} stroke="var(--syn-line-strong, #b7beb2)" strokeWidth="1" />
-              <text x={x} y={14} textAnchor="middle" fontSize="8" fontWeight="600" fill="var(--syn-muted, #727a6d)">{m.toFixed(0)} m</text>
-            </g>
-          );
-        })}
-      </g>
-    );
-  };
-
   const prevMatch = matches.find(m => String(m.id) === previousSelectedId);
   const currMatch = matches.find(m => String(m.id) === currentSelectedId);
   const isMeasuring = prevMatch && currMatch && prevMatch.id !== currMatch.id;
-  const spacingBetween = (left: GwTimelineMatch, right: GwTimelineMatch, side: 'old' | 'new') => {
-    const leftDistance = rawLdForTimelineMarker(null, left, side);
-    const rightDistance = rawLdForTimelineMarker(null, right, side);
-    return leftDistance === null || rightDistance === null
-      ? null
-      : Math.abs(rightDistance - leftDistance);
-  };
-  const rawOldSpool = isMeasuring && prevMatch && currMatch ? spacingBetween(prevMatch, currMatch, 'old') : null;
-  const rawNewSpool = isMeasuring && prevMatch && currMatch ? spacingBetween(prevMatch, currMatch, 'new') : null;
-  const masterOldSpool = isMeasuring && prevMatch && currMatch
+  const rawOldSpool = isMeasuring ? spacingBetween(prevMatch, currMatch, 'old') : null;
+  const rawNewSpool = isMeasuring ? spacingBetween(prevMatch, currMatch, 'new') : null;
+  const masterOldSpool = isMeasuring
     ? Math.abs(Number(currMatch.oldVal) - Number(prevMatch.oldVal))
     : null;
-  const masterNewSpool = isMeasuring && prevMatch && currMatch
+  const masterNewSpool = isMeasuring
     ? Math.abs(Number(currMatch.newVal) - Number(prevMatch.newVal))
     : null;
   const lengthDifference = rawOldSpool !== null && rawNewSpool !== null
@@ -319,10 +224,18 @@ export default function GwPipelineCanvas({
     : null;
 
   return (
-    <div ref={containerRef} className="syn-panel flex flex-col overflow-hidden gw-pipeline relative" style={{ padding: 0, background: 'var(--syn-surface, #fbfcf9)', border: '1px solid var(--syn-line, #d4d9d0)', borderRadius: '0.5rem' }}>
-      
+    <div className="gw-pipeline" style={{ position: 'relative' }}>
       {isMeasuring && (
-        <div style={{ margin: '0.75rem', background: '#eff6ff', padding: '0.75rem 1rem', borderRadius: '0.5rem', border: '1px solid #93c5fd', display: 'flex', gap: '1rem', alignItems: 'center' }}>
+        <div style={{
+          margin: '0 0 0.75rem',
+          background: '#eff6ff',
+          padding: '0.75rem 1rem',
+          borderRadius: '0.5rem',
+          border: '1px solid #93c5fd',
+          display: 'flex',
+          gap: '1rem',
+          alignItems: 'center'
+        }}>
           <strong style={{color: '#1d4ed8', fontSize: '0.875rem'}}>Selected GW spacing</strong>
           <div style={{fontSize: '0.875rem', display: 'flex', gap: '1.25rem', fontWeight: 600, flexWrap: 'wrap'}}>
             <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>OLD raw:</span> {rawOldSpool !== null && Number.isFinite(rawOldSpool) ? distanceLabel(rawOldSpool) : '-'}</div>
@@ -330,53 +243,101 @@ export default function GwPipelineCanvas({
             <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>LD:</span> <strong style={{ color: lengthDifference !== null && lengthDifference <= 0.5 ? '#15803d' : '#b45309' }}>{lengthDifference !== null ? distanceLabel(lengthDifference) : '-'}</strong></div>
             <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>Master:</span> {masterOldSpool !== null && masterNewSpool !== null && Number.isFinite(masterOldSpool) && Number.isFinite(masterNewSpool) ? `${distanceLabel(masterOldSpool)} / ${distanceLabel(masterNewSpool)}` : '-'}</div>
           </div>
-          <button onClick={() => setPreviousSelectedId('')} style={{background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5, padding: 0, fontSize: '1.2rem', marginLeft: 'auto'}} aria-label="Close measurement">✕</button>
+          <button onClick={() => setPreviousSelectedId('')} style={{background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5, padding: 0, fontSize: '1.2rem'}} aria-label="Close measurement">✕</button>
         </div>
       )}
-
-      {isLoading && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white/50 backdrop-blur-[1px]">
-           <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-500 rounded-full animate-spin mb-2" />
-           <span className="text-sm font-semibold text-gray-700">Updating alignment...</span>
-        </div>
-      )}
-
-      <svg width={containerWidth} height={CHART_H * 2 + 18} className="block relative z-0">
-        <g opacity={0.6}>
-          {matches.map((match, i) => {
-             const status = statusFor(match);
-             if (status === 'missing') return null;
-             
-             const xNew = mToX(Number(match.newVal));
-             const xOld = mToX(Number(match.oldVal));
-             
-             if ((xNew < AXIS_LEFT && xOld < AXIS_LEFT) || (xNew > AXIS_LEFT + chartWidth && xOld > AXIS_LEFT + chartWidth)) return null;
-             
-             const isSel = String(match.id) === selectedId;
-             const color = colorForStatus(status);
-             const strokeWidth = isSel ? 2 : 1;
-             const lineOpacity = isSel ? 1 : 0.4;
-             
-             return (
-                <line 
-                  key={`link-${i}`} 
-                  x1={xNew} y1={CHART_H} 
-                  x2={xOld} y2={CHART_H + 18} 
-                  stroke={color} strokeWidth={strokeWidth} opacity={lineOpacity}
-                />
-             );
+      <div className="gw-pipeline-overview">
+        <div className="gw-pipeline-overview__track" aria-hidden="true">
+          {matches.map((match, index) => {
+            const position = Number(match.newVal ?? match.oldVal);
+            if (!Number.isFinite(position)) return null;
+            return <i key={String(match.id ?? index)} className={`is-${statusFor(match)}`} style={{ insetInlineStart: `${distancePercent(position, domain)}%` }} />;
           })}
-        </g>
-        
-        {renderPanel('new', newRunLabel)}
-        {renderDistanceAxis()}
-        {renderPanel('old', oldRunLabel)}
-      </svg>
-      
-      <div style={{ borderTop: '1px solid var(--syn-line, #d4d9d0)', background: 'var(--syn-surface, #fbfcf9)' }}>
-        {renderNavigator()}
+          <span className="gw-pipeline-overview__window" style={{ insetInlineStart: `${viewport.leftPercent}%`, width: `${viewport.widthPercent}%` }} />
+        </div>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="0.1"
+          value={viewport.leftPercent + viewport.widthPercent / 2}
+          disabled={viewport.widthPercent >= 99.9}
+          aria-label="Timeline viewport position"
+          onChange={(event) => panTo(Number(event.target.value))}
+        />
       </div>
 
+      <div ref={scrollRef} className="gw-pipeline-scroll" onScroll={updateViewport}>
+        <div className="gw-pipeline-canvas" style={{ width: contentWidth }}>
+          <div className="gw-pipeline-axis" aria-hidden="true">
+            {axisTicks.map((tick) => <span key={tick} style={{ insetInlineStart: `${distancePercent(tick, domain)}%` }}>{distanceLabel(tick)}</span>)}
+          </div>
+
+          <div className="gw-pipeline-row is-new" aria-label={newRunLabel}>
+            <strong>{newRunLabel}</strong>
+            <div className="gw-pipeline-track" style={coverageStyle(timeline.newCoverage)} aria-hidden="true" />
+            <FeatureMarkers values={timeline.newValves} type="valve" domain={domain} />
+            <FeatureMarkers values={timeline.newTees} type="tee" domain={domain} />
+            {newGwFeatures.map((feature, index) => {
+              const position = feature.displayDistanceM;
+              const match = (feature.id != null ? matchByNewId.get(String(feature.id)) : undefined)
+                ?? matchForFeature(matches, feature, 'new');
+              const status = match ? statusFor(match) : 'missing';
+              return <TrackMarker key={`new-${String(feature.id ?? position)}-${index}`} position={position} sourcePosition={feature.sourceDistanceM} domain={domain} match={match} side="new" status={status} selected={Boolean(match && String(match.id) === selectedId)} onSelect={onSelectMatch} />;
+            })}
+          </div>
+
+          <svg className="gw-pipeline-links" viewBox="0 0 1000 300" preserveAspectRatio="none" aria-hidden="true">
+            {matches.map((match, index) => {
+              const oldPosition = Number(match.oldVal);
+              const newPosition = Number(match.newVal);
+              if (!Number.isFinite(oldPosition) || !Number.isFinite(newPosition)) return null;
+              const status = statusFor(match);
+              if (status === 'missing') return null;
+              const isSelected = String(match.id) === selectedId;
+              return <line key={String(match.id ?? index)} className={`is-${status}${isSelected ? ' is-selected' : ''}`} x1={distancePercent(newPosition, domain) * 10} y1="105" x2={distancePercent(oldPosition, domain) * 10} y2="228" />;
+            })}
+          </svg>
+
+          <div className="gw-pipeline-row is-old" aria-label={oldRunLabel}>
+            <strong>{oldRunLabel}</strong>
+            <div className="gw-pipeline-track" style={coverageStyle(timeline.oldCoverage)} aria-hidden="true" />
+            <FeatureMarkers values={timeline.oldValves} type="valve" domain={domain} />
+            <FeatureMarkers values={timeline.oldTees} type="tee" domain={domain} />
+            {oldGwFeatures.map((feature, index) => {
+              const position = feature.displayDistanceM;
+              const match = (feature.id != null ? matchByOldId.get(String(feature.id)) : undefined)
+                ?? matchForFeature(matches, feature, 'old');
+              const status = match ? statusFor(match) : 'missing';
+              return <TrackMarker key={`old-${String(feature.id ?? position)}-${index}`} position={position} sourcePosition={feature.sourceDistanceM} domain={domain} match={match} side="old" status={status} selected={Boolean(match && String(match.id) === selectedId)} onSelect={onSelectMatch} />;
+            })}
+          </div>
+
+          {/* A degenerate domain means nothing ever populated the extent, so the
+              matcher has not produced evidence.  A real domain with no matches
+              is a genuine result — the runs were compared and nothing paired —
+              and telling the operator to "run the matcher" there sends them to
+              re-run a job that already completed. */}
+          {!isLoading && matches.length === 0 && (
+            domain.endM > domain.startM ? (
+              <div className="gw-pipeline-empty" role="status">
+                <strong>Matcher finished with no pairs</strong>
+                <span>
+                  Anchors from both runs were read, but none paired within the current tolerance.
+                  Loosen the OTA, review the Tie-in setup result, or confirm both runs actually
+                  cover the same pipeline segment.
+                </span>
+              </div>
+            ) : (
+              <div className="gw-pipeline-empty" role="status">
+                <strong>No match evidence yet</strong>
+                <span>Run the matcher or adjust the source inspections to populate this timeline.</span>
+              </div>
+            )
+          )}
+          {isLoading && <div className="gw-pipeline-loading" role="status" aria-live="polite"><span aria-hidden="true" />Updating alignment…</div>}
+        </div>
+      </div>
     </div>
   );
 }
