@@ -85,11 +85,13 @@ test('each lane keeps its own reported log distance and never borrows the other 
 
   assert.equal(olderAnomaly?.rawM, 105.4);
   assert.equal(masterAnomaly?.rawM, 107.5);
-  // Aligned view uses the engine's own mapped value verbatim for the last pair.
-  assert.equal(olderAnomaly?.alignedM, 107.4);
+  // Calibrated view snaps a matched pair onto its partner's own raw distance
+  // (107.5), not the engine's mapped-but-approximate 107.4, so matched
+  // features sit at the exact same X on the chart.
+  assert.equal(olderAnomaly?.alignedM, 107.5);
   assert.equal(masterAnomaly?.alignedM, 107.5);
   assert.equal(featureAxisValue(olderAnomaly!, 'raw'), 105.4);
-  assert.equal(featureAxisValue(olderAnomaly!, 'aligned'), 107.4);
+  assert.equal(featureAxisValue(olderAnomaly!, 'aligned'), 107.5);
 });
 
 test('girth welds stay on the lane of the run that reported them', () => {
