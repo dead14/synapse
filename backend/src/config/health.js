@@ -26,7 +26,6 @@ async function runCheck(label, run, timeoutMs) {
                     () => reject(new Error(`${label} check timed out after ${timeoutMs}ms`)),
                     timeoutMs,
                 );
-                timer.unref?.();
             }),
         ]);
         return { status: 'ok' };
