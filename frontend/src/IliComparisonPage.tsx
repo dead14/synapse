@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, lazy, Suspense } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import ResultsPanel from './ResultsPanel';
 import {
   fetchAlignmentResult,
@@ -16,6 +16,7 @@ import {
   type InterventionEvent,
 } from './utils/interventions';
 import { createPipelineExportData } from './utils/alignmentExport';
+import { resolveAlignmentSessionId } from './utils/alignmentSession';
 
 const DefectVisualizer = lazy(() => import('./DefectVisualizer'));
 
@@ -97,6 +98,7 @@ export default function IliComparisonPage({
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedRowIdx, setSelectedRowIdx] = useState<number | null>(null);
   const navigate = useNavigate();
+  const location = useLocation();
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState('');
   const [audit, setAudit] = useState<ConservationAudit | undefined>();
@@ -107,6 +109,13 @@ export default function IliComparisonPage({
     [baseData, interventions],
   );
   const includedData = useMemo(() => includedInterventionRows(data), [data]);
+  const requestedSessionId = resolveAlignmentSessionId({
+    sharedSessionId,
+    search: location.search,
+    storedSessionId: sharedSessionId
+      ? ''
+      : localStorage.getItem('synapse_last_session_id'),
+  });
 
   // A chain result concatenates every pair's rows. Without a way to isolate one
   // transition they read as a single undifferentiated comparison.
@@ -128,15 +137,17 @@ export default function IliComparisonPage({
 
     const loadData = async () => {
       try {
-        const params = new URLSearchParams(window.location.search);
-        const sessionId = sharedSessionId
-          || params.get('sessionId')
-          || localStorage.getItem('synapse_last_session_id')
-          || '';
-        if (!sessionId) throw new Error('Session ID not found. Select a pipeline first.');
-        setSessionId(sessionId);
-
+        if (!requestedSessionId) throw new Error('Session ID not found. Select a pipeline first.');
+        setSessionId(requestedSessionId);
+        setLoading(true);
         setIsProcessing(true);
+        setError(null);
+        setBaseData([]);
+        setInterventions([]);
+        setAudit(undefined);
+        setPipelineExportData({});
+        setPairFilter(null);
+        setSelectedRowIdx(null);
         setJobProgress(5);
         setJobMessage('Checking alignment status...');
         const progress = (value: number, message: string) => {
@@ -150,11 +161,11 @@ export default function IliComparisonPage({
             progress,
             controller.signal,
           )
-          : fetchAlignmentResult(sessionId, progress, controller.signal);
+          : fetchAlignmentResult(requestedSessionId, progress, controller.signal);
         const sessionPromise = readOnly
           ? Promise.resolve({ config: { interventions: [] as InterventionEvent[] } })
           : apiFetch<{ config?: Record<string, unknown> & { interventions?: InterventionEvent[] } }>(
-            `/api/wizard/session/${encodeURIComponent(sessionId)}`,
+            `/api/wizard/session/${encodeURIComponent(requestedSessionId)}`,
             { signal: controller.signal },
           );
         const [alignment, session] = await Promise.all([
@@ -179,7 +190,7 @@ export default function IliComparisonPage({
 
     void loadData();
     return () => controller.abort();
-  }, [readOnly, sharedId, sharedSessionId, sharedToken]);
+  }, [readOnly, requestedSessionId, sharedId, sharedToken]);
 
   const saveIntervention = async (event: InterventionEvent): Promise<InterventionEvent> => {
     if (!sessionId) throw new Error('Intervention cancelled because no session is available.');
@@ -408,6 +419,7 @@ export default function IliComparisonPage({
                 audit={audit}
                 exportData={includedData}
                 pipelineData={pipelineExportData}
+                sessionId={sessionId}
               />
             </div>
           </div>

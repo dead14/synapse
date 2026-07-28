@@ -1,3 +1,13 @@
+import type { PublicShareKind } from './publicShareSnapshot.ts';
+
+export function publicShareScopeKey(
+  kind: PublicShareKind,
+  title: string,
+  sourceRef?: string,
+): string {
+  return JSON.stringify([kind, title, sourceRef ?? '']);
+}
+
 export function publicShareUrl(
   id: string,
   accessToken: string,

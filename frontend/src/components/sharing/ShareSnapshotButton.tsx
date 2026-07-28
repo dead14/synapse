@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { FiCheck, FiCopy, FiLink, FiTrash2, FiX } from 'react-icons/fi';
 
 import Modal from '../common/Modal.tsx';
@@ -11,6 +11,7 @@ import {
   revokePublicShare,
   type CreatedPublicShare,
 } from '../../lib/sharing/publicShareClient.ts';
+import { publicShareScopeKey } from '../../lib/sharing/publicShareLink.ts';
 import {
   buildPublicShareSnapshot,
   type PublicShareKind,
@@ -67,6 +68,14 @@ export default function ShareSnapshotButton({
   const [created, setCreated] = useState<CreatedLink | null>(null);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const shareScope = publicShareScopeKey(kind, title, sourceRef);
+
+  useEffect(() => {
+    setIsOpen(false);
+    setCreated(null);
+    setError('');
+    setCopied(false);
+  }, [shareScope]);
 
   if (!user || !PUBLISHER_ROLES.has(user.role) || !user.orgId) return null;
 

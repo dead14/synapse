@@ -79,6 +79,7 @@ interface ResultsPanelProps {
   };
   exportData?: any[];
   pipelineData?: Record<string, unknown>;
+  sessionId?: string;
 }
 
 /** Parse a clock value to hours (0..12) regardless of format ("HH:MM" or Excel serial fraction). */
@@ -319,6 +320,7 @@ export default function ResultsPanel({
   audit,
   exportData,
   pipelineData,
+  sessionId = '',
 }: ResultsPanelProps) {
   const data = useMemo(() => {
     let flattened: any[] = [];
@@ -352,11 +354,6 @@ export default function ResultsPanel({
   }, [rawData]);
 
   const toast = useToast();
-  const shareSessionId = useMemo(() => (
-    new URLSearchParams(window.location.search).get('sessionId')
-    || localStorage.getItem('synapse_last_session_id')
-    || ''
-  ), []);
   const [isExporting, setIsExporting] = useState(false);
   const [activeTab, setActiveTab] = useState('Results');
   const [radioFilter, setRadioFilter] = useState('All');
@@ -466,8 +463,6 @@ export default function ResultsPanel({
     if (readOnly) return;
     const fetchSections = async () => {
       try {
-        const urlParams = new URLSearchParams(window.location.search);
-        const sessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
         if (sessionId) {
           const sessData = await apiFetch<{ config?: { sections?: any[]; matchingSections?: any[] } }>(`/api/wizard/session/${encodeURIComponent(sessionId)}`);
           const configuredSections = sessData.config?.matchingSections?.length
@@ -480,7 +475,7 @@ export default function ResultsPanel({
       }
     };
     fetchSections();
-  }, [readOnly]);
+  }, [readOnly, sessionId]);
 
   // Set specific important columns visible by default when data loads
   useEffect(() => {
@@ -891,8 +886,8 @@ export default function ResultsPanel({
               </button>
               <ShareSnapshotButton
                 kind="ILI_ALIGNMENT"
-                title={`Final ILI alignment${shareSessionId ? ` · Session ${shareSessionId}` : ''}`}
-                sourceRef={shareSessionId ? `alignment-session:${shareSessionId}` : undefined}
+                title={`Final ILI alignment${sessionId ? ` · Session ${sessionId}` : ''}`}
+                sourceRef={sessionId ? `alignment-session:${sessionId}` : undefined}
                 rows={includedInterventionRows(data)}
                 referenceOnly
                 summary={summaryCounts ? [

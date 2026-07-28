@@ -159,8 +159,12 @@ export default function PublicSharePage() {
 
     const controller = new AbortController();
     let isCurrent = true;
+    setShare(null);
     setIsLoading(true);
     setIsUnavailable(false);
+    setQuery('');
+    setPage(1);
+    setSelectedRow(null);
     void fetchPublicShare(id, accessToken, controller.signal)
       .then((result) => {
         if (isCurrent) setShare(result);
@@ -203,6 +207,7 @@ export default function PublicSharePage() {
   if (share.kind === 'ILI_ALIGNMENT') {
     return (
       <PublicIliAlignmentPreview
+        key={`${share.id}:${share.sourceRef ?? ''}`}
         share={share}
         accessToken={tokenFromLocationHash(location.hash)}
       />
