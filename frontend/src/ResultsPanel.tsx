@@ -51,6 +51,7 @@ const LazyScatterChart = lazy(() =>
 interface ResultsPanelProps {
   data: any;
   loading: boolean;
+  readOnly?: boolean;
   onOpenAnalytics?: () => void;
   selectedRowIdx?: number | null;
   onSelectRowIdx?: (idx: number | null) => void;
@@ -282,7 +283,7 @@ const ReassignDialog = ({ sourceRow, candidates, onPick, onCancel }: {
   );
 };
 
-export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, selectedRowIdx, onSelectRowIdx, onUpdateMatch }: ResultsPanelProps) {
+export default function ResultsPanel({ data: rawData, loading, readOnly = false, onOpenAnalytics, selectedRowIdx, onSelectRowIdx, onUpdateMatch }: ResultsPanelProps) {
   const data = useMemo(() => {
     let flattened: any[] = [];
     if (Array.isArray(rawData)) {
@@ -362,7 +363,9 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
   // Full screen state
   const [isFullScreen, setIsFullScreen] = useState(false);
 
-  const tabs = ['Results', 'ILI Run 1', 'ILI Run 2', 'Interventions'];
+  const tabs = readOnly
+    ? ['Results', 'ILI Run 1', 'ILI Run 2']
+    : ['Results', 'ILI Run 1', 'ILI Run 2', 'Interventions'];
   
   // Dynamic columns state
   const [showColumnFilter, setShowColumnFilter] = useState(false);
@@ -419,6 +422,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
 
   // Fetch sections
   useEffect(() => {
+    if (readOnly) return;
     const fetchSections = async () => {
       try {
         const urlParams = new URLSearchParams(window.location.search);
@@ -435,7 +439,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
       }
     };
     fetchSections();
-  }, []);
+  }, [readOnly]);
 
   // Set specific important columns visible by default when data loads
   useEffect(() => {
@@ -806,43 +810,47 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
               )}
             </div>
           )}
-          {onOpenAnalytics && (
+          {!readOnly && onOpenAnalytics && (
             <button onClick={onOpenAnalytics} className="syn-btn syn-btn--sm syn-btn--ink">
               <FiActivity size={14} />
               Analytics
             </button>
           )}
-          <button
-            onClick={() => {
-              const urlParams = new URLSearchParams(window.location.search);
-              const sessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
-              navigate(`/ili-sectioning?sessionId=${sessionId}`);
-            }}
-            className="syn-btn syn-btn--sm syn-btn--ink"
-          >
-            <FiMap size={14} />
-            Sectional
-          </button>
-          <button onClick={exportToExcel} disabled={isExporting} className="syn-btn syn-btn--sm syn-btn--lime">
-            <FiDownload size={14} />
-            {isExporting ? 'Exporting...' : 'Excel'}
-          </button>
-          <ShareSnapshotButton
-            kind="ILI_ALIGNMENT"
-            title={`Final ILI alignment${shareSessionId ? ` · Session ${shareSessionId}` : ''}`}
-            sourceRef={shareSessionId ? `alignment-session:${shareSessionId}` : undefined}
-            rows={data}
-            summary={summaryCounts ? [
-              { label: 'GW locked', value: summaryCounts.gwLocked },
-              { label: 'Anomaly matched', value: summaryCounts.anomalyMatched },
-              { label: 'Only OLD', value: summaryCounts.anomalyOnlyOld },
-              { label: 'Only NEW', value: summaryCounts.anomalyOnlyNew },
-            ] : undefined}
-            notes={[
-              'Final ILI comparison snapshot. Open any row to inspect the shared evidence; editing is disabled.',
-            ]}
-            label="Share result"
-          />
+          {!readOnly && (
+            <>
+              <button
+                onClick={() => {
+                  const urlParams = new URLSearchParams(window.location.search);
+                  const sessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
+                  navigate(`/ili-sectioning?sessionId=${sessionId}`);
+                }}
+                className="syn-btn syn-btn--sm syn-btn--ink"
+              >
+                <FiMap size={14} />
+                Sectional
+              </button>
+              <button onClick={exportToExcel} disabled={isExporting} className="syn-btn syn-btn--sm syn-btn--lime">
+                <FiDownload size={14} />
+                {isExporting ? 'Exporting...' : 'Excel'}
+              </button>
+              <ShareSnapshotButton
+                kind="ILI_ALIGNMENT"
+                title={`Final ILI alignment${shareSessionId ? ` · Session ${shareSessionId}` : ''}`}
+                sourceRef={shareSessionId ? `alignment-session:${shareSessionId}` : undefined}
+                rows={data}
+                summary={summaryCounts ? [
+                  { label: 'GW locked', value: summaryCounts.gwLocked },
+                  { label: 'Anomaly matched', value: summaryCounts.anomalyMatched },
+                  { label: 'Only OLD', value: summaryCounts.anomalyOnlyOld },
+                  { label: 'Only NEW', value: summaryCounts.anomalyOnlyNew },
+                ] : undefined}
+                notes={[
+                  'Final ILI comparison snapshot. Open any row to inspect the shared evidence; editing is disabled.',
+                ]}
+                label="Share result"
+              />
+            </>
+          )}
           <button
             onClick={() => setIsFullScreen(!isFullScreen)}
             className="syn-icon-button"
@@ -854,7 +862,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
         </div>
       </div>
 
-      {modalState.isOpen && (
+      {!readOnly && modalState.isOpen && (
         <ProbabilityModal
           sourceRow={modalState.sourceRow}
           targetRow={modalState.targetRow}
@@ -868,7 +876,7 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
         />
       )}
 
-      {reassignSource !== null && (
+      {!readOnly && reassignSource !== null && (
         <ReassignDialog
           sourceRow={reassignSource}
           candidates={reassignCandidates}
