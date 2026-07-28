@@ -3,7 +3,7 @@ import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, Fi
 import { apiFetch, apiUrl } from './utils/api';
 import Modal from './components/common/Modal';
 import { useToast } from './components/common/ToastProvider';
-import { createExcelExportRows, createRuncompReportRows } from './utils/alignmentExport';
+import { createAlignmentExportPayload } from './utils/alignmentExport';
 import {
   alignmentResultColumns,
   alignmentDisplayValue,
@@ -79,6 +79,7 @@ interface ResultsPanelProps {
   };
   exportData?: any[];
   pipelineData?: Record<string, unknown>;
+  sessionId?: string;
 }
 
 /** Parse a clock value to hours (0..12) regardless of format ("HH:MM" or Excel serial fraction). */
@@ -319,6 +320,7 @@ export default function ResultsPanel({
   audit,
   exportData,
   pipelineData,
+  sessionId = '',
 }: ResultsPanelProps) {
   const data = useMemo(() => {
     let flattened: any[] = [];
@@ -352,11 +354,6 @@ export default function ResultsPanel({
   }, [rawData]);
 
   const toast = useToast();
-  const shareSessionId = useMemo(() => (
-    new URLSearchParams(window.location.search).get('sessionId')
-    || localStorage.getItem('synapse_last_session_id')
-    || ''
-  ), []);
   const [isExporting, setIsExporting] = useState(false);
   const [activeTab, setActiveTab] = useState('Results');
   const [radioFilter, setRadioFilter] = useState('All');
@@ -466,8 +463,6 @@ export default function ResultsPanel({
     if (readOnly) return;
     const fetchSections = async () => {
       try {
-        const urlParams = new URLSearchParams(window.location.search);
-        const sessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
         if (sessionId) {
           const sessData = await apiFetch<{ config?: { sections?: any[]; matchingSections?: any[] } }>(`/api/wizard/session/${encodeURIComponent(sessionId)}`);
           const configuredSections = sessData.config?.matchingSections?.length
@@ -480,7 +475,7 @@ export default function ResultsPanel({
       }
     };
     fetchSections();
-  }, [readOnly]);
+  }, [readOnly, sessionId]);
 
   // Set specific important columns visible by default when data loads
   useEffect(() => {
@@ -760,23 +755,24 @@ export default function ResultsPanel({
     if (includedRows.length === 0) return;
     setIsExporting(true);
     try {
-      const exportRows = createExcelExportRows(includedRows);
-      const reportRows = createRuncompReportRows(includedRows);
       const response = await fetch(apiUrl('/api/alignment/export-excel'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         credentials: 'include',
-        body: JSON.stringify({
-          pipelineData: pipelineData || {},
-          report: reportRows,
-          comparison: exportRows,
-        })
+        body: JSON.stringify(createAlignmentExportPayload(
+          includedRows,
+          pipelineData || {},
+        )),
       });
       
       if (!response.ok) {
-        throw new Error('Failed to generate Excel file');
+        const payload = await response.json().catch(() => null);
+        const message = typeof payload?.error === 'string'
+          ? payload.error
+          : payload?.error?.message;
+        throw new Error(message || `Failed to generate Excel file (${response.status})`);
       }
       
       const blob = await response.blob();
@@ -791,7 +787,7 @@ export default function ResultsPanel({
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error("Failed to export Excel:", err);
-      toast.error('Failed to export the Excel file.');
+      toast.error(err instanceof Error ? err.message : 'Failed to export the Excel file.');
     } finally {
       setIsExporting(false);
     }
@@ -891,8 +887,8 @@ export default function ResultsPanel({
               </button>
               <ShareSnapshotButton
                 kind="ILI_ALIGNMENT"
-                title={`Final ILI alignment${shareSessionId ? ` · Session ${shareSessionId}` : ''}`}
-                sourceRef={shareSessionId ? `alignment-session:${shareSessionId}` : undefined}
+                title={`Final ILI alignment${sessionId ? ` · Session ${sessionId}` : ''}`}
+                sourceRef={sessionId ? `alignment-session:${sessionId}` : undefined}
                 rows={includedInterventionRows(data)}
                 referenceOnly
                 summary={summaryCounts ? [

@@ -6,6 +6,7 @@ import {
   type PublicShareKind,
 } from '../src/lib/sharing/publicShareSnapshot.ts';
 import {
+  publicShareScopeKey,
   publicShareUrl,
   tokenFromLocationHash,
 } from '../src/lib/sharing/publicShareLink.ts';
@@ -241,4 +242,19 @@ test('keeps the bearer secret in the URL fragment and recovers it safely', () =>
   assert.equal(url.hash, `#${secret}`);
   assert.equal(tokenFromLocationHash(url.hash), secret);
   assert.equal(tokenFromLocationHash('#%E0%A4%A'), '');
+});
+
+test('changes the share scope when the referenced alignment session changes', () => {
+  const firstLine = publicShareScopeKey(
+    'ILI_ALIGNMENT',
+    'Final ILI alignment',
+    'alignment-session:41',
+  );
+  const secondLine = publicShareScopeKey(
+    'ILI_ALIGNMENT',
+    'Final ILI alignment',
+    'alignment-session:42',
+  );
+
+  assert.notEqual(firstLine, secondLine);
 });

@@ -74,6 +74,16 @@ export function createRuncompReportRows(data: ExportRow[]): ExportRow[] {
   ));
 }
 
+export function createAlignmentExportPayload(
+  data: ExportRow[],
+  pipelineData: Record<string, unknown> = {},
+) {
+  return {
+    pipelineData,
+    report: createRuncompReportRows(data),
+  };
+}
+
 export function createPipelineExportData(config: any): ExportRow & { inspectionRuns: ExportRow[] } {
   const configured = config?.pipelineData && typeof config.pipelineData === 'object'
     ? config.pipelineData

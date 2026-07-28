@@ -1032,7 +1032,7 @@ exports.exportExcel = async (req, res) => {
             return res.status(504).json({ error: err.message, code: 'EXPORT_TIMEOUT' });
         }
         if (err.code === 'EXPORT_FAILED') {
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json({ error: err.message, code: 'EXPORT_FAILED' });
         }
         console.error('Failed to export Excel:', err);
         return res.status(500).json({ error: 'Failed to export Excel' });
