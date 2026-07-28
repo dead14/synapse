@@ -21,6 +21,7 @@ import {
 } from './matchingSections';
 import { fetchSectioningAnchors } from './sectioningEvidence';
 import { pairGwResult, primaryRunPair, resolveRunPairs, sectionsForPair } from '../domain/runPairs';
+import ShareSnapshotButton from '../components/sharing/ShareSnapshotButton';
 
 interface Props {
   config: any;
@@ -301,6 +302,22 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
       {validationError && <p role="alert" className="mx-5 mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{validationError}</p>}
       <div className="sectioning-light-footer">
         <button onClick={onBack} className="flex items-center gap-2 rounded-xl px-5 py-3 font-medium text-gray-600 hover:bg-gray-50"><FiChevronLeft /> GW Matching</button>
+        <ShareSnapshotButton
+          kind="SECTIONING"
+          title={`Sectioning${activePair?.label ? ` · ${activePair.label}` : ''}`}
+          sourceRef={config?.sessionId ? `alignment-session:${config.sessionId}` : undefined}
+          rows={displaySections}
+          summary={[
+            { label: 'Coverage', value: `${coverage.toFixed(1)}%` },
+            { label: 'Locked GW', value: lockedGws.length },
+            { label: 'Missing in NEW', value: features.stats.missingGwCount },
+          ]}
+          notes={[
+            'Sections are frozen against the NEW spatial master at the time this link was created.',
+          ]}
+          disabled={Boolean(validationError)}
+          label="Share sectioning"
+        />
         <button disabled={Boolean(validationError)} onClick={() => onNext({
           matchingSections: allSections.map((section) => {
             const isActivePair = sections.some((mine) => mine.id === section.id);

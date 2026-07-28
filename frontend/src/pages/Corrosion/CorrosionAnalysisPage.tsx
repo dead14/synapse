@@ -11,6 +11,7 @@ import {
 import PageMeta from '../../components/common/PageMeta';
 import SynButton from '../../components/ui/SynButton';
 import { useToast } from '../../components/common/ToastProvider';
+import ShareSnapshotButton from '../../components/sharing/ShareSnapshotButton';
 import { fetchAlignmentResult } from '../../utils/alignment';
 import {
   DEFAULT_SUGGESTION_RULE,
@@ -186,6 +187,11 @@ export default function CorrosionAnalysisPage() {
 
   const selectedCount = selected.size;
   const savedCount = review?.items.filter((item) => item.selected).length ?? 0;
+  const shareRows = useMemo(() => features.map((feature) => ({
+    ...feature,
+    selectedForFfs: selected.has(feature.sourceKey),
+    selectionReason: reasons[feature.sourceKey] || null,
+  })), [features, reasons, selected]);
 
   if (!sessionId) {
     return (
@@ -212,6 +218,23 @@ export default function CorrosionAnalysisPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <ShareSnapshotButton
+            kind="CORROSION"
+            title={`Corrosion Analysis · Session ${sessionId}`}
+            sourceRef={`alignment-session:${sessionId}`}
+            rows={shareRows}
+            summary={[
+              { label: 'Metal loss', value: summary.metalLoss },
+              { label: 'Assessable', value: summary.ffsReady },
+              { label: 'Active growth', value: summary.activeGrowth },
+              { label: 'Released to FFS', value: savedCount },
+            ]}
+            notes={[
+              'Frozen Corrosion Analysis review. Only the saved release state is shareable.',
+            ]}
+            disabled={loading || Boolean(error) || dirty}
+            label="Share analysis"
+          />
           <SynButton type="button" variant="outline" size="sm" onClick={() => navigate('/ili-comparison')}>
             <span className="inline-flex items-center gap-2"><FiArrowLeft /> Alignment results</span>
           </SynButton>

@@ -14,6 +14,7 @@ import { buildGwReviewTransitionPayload } from './gwReviewTransition';
 import { canonicalGwReviewSignature, pairResultForPersistence } from './gwPairReviewPersistence';
 import { pairGwResult, pairTieIn, primaryRunPair, resolveRunPairs } from '../domain/runPairs';
 import type { MatchingSection } from './matchingSections';
+import ShareSnapshotButton from '../components/sharing/ShareSnapshotButton';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip);
 
@@ -1107,6 +1108,21 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
             Still to match: {unreviewedPairs.map((pair) => pair.label).join(', ')}.
           </p>
         )}
+        <ShareSnapshotButton
+          kind="GW_ALIGNMENT"
+          title={`GW alignment${activePair?.label ? ` · ${activePair.label}` : ''}`}
+          sourceRef={config?.sessionId ? `alignment-session:${config.sessionId}` : undefined}
+          rows={timelineMatches}
+          summary={[
+            { label: 'Matched', value: matchedOnly.length },
+            { label: 'Run pair', value: activePair?.label || 'Primary pair' },
+          ]}
+          notes={[
+            'Frozen after the GW matching review. Dispositions are decision-support evidence, not approval.',
+          ]}
+          disabled={isCalculating || Boolean(loadError) || timelineMatches.length === 0}
+          label="Share GW view"
+        />
         <button
           type="button"
           disabled={isCalculating || isSavingReview || Boolean(loadError) || matches.length === 0 || unreviewedPairs.length > 0}

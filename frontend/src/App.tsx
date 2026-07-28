@@ -33,6 +33,7 @@ const RepairEvidencePage = lazy(() => import('./pages/Integrity/RepairEvidencePa
 const RiskWhatIfPage = lazy(() => import('./pages/Integrity/RiskWhatIfPage'));
 const DirectAssessmentPage = lazy(() => import('./pages/Integrity/DirectAssessmentPage'));
 const SubmissionAdditionalInfoPage = lazy(() => import('./pages/Submission/SubmissionAdditionalInfoPage'));
+const PublicSharePage = lazy(() => import('./pages/PublicShare/PublicSharePage'));
 
 function WorkspaceLoading({ label = 'Loading workspace' }: { label?: string }) {
   return (
@@ -101,6 +102,7 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<RegisterPage />} />
         <Route path="/reset-password" element={<ForgotPasswordPage />} />
+        <Route path="/share/:id" element={<PublicSharePage />} />
 
         <Route element={<RequireAuth />}>
           <Route element={<AppLayout />}>
