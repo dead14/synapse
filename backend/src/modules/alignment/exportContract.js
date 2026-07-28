@@ -58,10 +58,13 @@ function normalizeAlignmentExportPayload(body, { maxRows }) {
     if (Array.isArray(body.data) && body.comparison === undefined) {
         return validateRows(body.data, 'data', maxRows);
     }
+    const report = validateRows(body.report ?? [], 'report', maxRows);
     return {
         pipelineData: validatePipelineData(body.pipelineData),
-        report: validateRows(body.report ?? [], 'report', maxRows),
-        comparison: validateRows(body.comparison ?? [], 'comparison', maxRows),
+        report,
+        comparison: body.comparison === undefined
+            ? null
+            : validateRows(body.comparison, 'comparison', maxRows),
     };
 }
 

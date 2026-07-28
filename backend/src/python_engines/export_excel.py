@@ -219,8 +219,16 @@ def set_column_widths(ws):
     widths = [17, 20, 24, 14, 17, 17, 18, 15, 18, 18, 18, 18, 16, 16, 30,
               16, 16, 14, 14, 16, 17, 17, 14, 20, 19,
               17, 20, 24, 14, 17, 17, 18, 15, 18, 18, 18, 18, 16, 16, 30]
-    for index, width in enumerate(widths, 1):
-        ws.column_dimensions[get_column_letter(index)].width = width
+    plan = column_style_plan(len(widths))
+    for index, (width, (fill, alignment, number_format)) in enumerate(zip(widths, plan), 1):
+        dimension = ws.column_dimensions[get_column_letter(index)]
+        dimension.width = width
+        dimension.fill = fill
+        dimension.border = THIN_BORDER
+        if FIRST_CENTER_COLUMN <= index < FIRST_OLD_COLUMN:
+            dimension.alignment = alignment
+        if number_format is not None:
+            dimension.number_format = number_format
 
 
 def status_style(value):
@@ -248,28 +256,23 @@ def styled_cell(worksheet, value, *, fill=None, font=None, alignment=None,
     return cell
 
 
-def build_data_row(worksheet, row, plan):
-    """One fully styled sheet row, built and handed straight to the writer."""
+def build_data_row(worksheet, row):
+    """Build one row while leaving shared presentation styles on the columns."""
     new_values = side_values(row, "NEW")
     old_values = side_values(row, "OLD")
     values = new_values + comparison_values(row, new_values, old_values) + old_values
     status_fill, status_font = status_style(values[STATUS_COLUMN - 1])
 
-    cells = []
-    for column, value in enumerate(values, 1):
-        fill, text_alignment, number_format = plan[column - 1]
-        numeric = isinstance(value, (int, float))
-        if column == STATUS_COLUMN and status_fill is not None:
-            fill = status_fill
-        cells.append(styled_cell(
+    cells = [safe_cell_value(value) for value in values]
+    if status_fill is not None:
+        cells[STATUS_COLUMN - 1] = styled_cell(
             worksheet,
-            safe_cell_value(value),
-            fill=fill,
-            font=status_font if column == STATUS_COLUMN else None,
-            alignment=RIGHT_ALIGNMENT if numeric else text_alignment,
+            cells[STATUS_COLUMN - 1],
+            fill=status_fill,
+            font=status_font,
+            alignment=CENTER_ALIGNMENT,
             border=THIN_BORDER,
-            number_format=number_format if numeric else None,
-        ))
+        )
     return cells
 
 
@@ -377,16 +380,10 @@ def build_report_sheet(workbook, rows):
     worksheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{max(1, len(rows) + 1)}"
     append_header_row(worksheet, headers)
     for row in rows:
-        worksheet.append([
-            styled_cell(
-                worksheet,
-                safe_cell_value(row.get(header)),
-                fill=NEW_FILL,
-                alignment=RIGHT_ALIGNMENT if isinstance(row.get(header), (int, float)) else LEFT_ALIGNMENT,
-                border=THIN_BORDER,
-            )
-            for header in headers
-        ])
+        # This is the complete audit data sheet, not the presentation sheet.
+        # Plain write-only values avoid allocating and serialising a style
+        # object for every cell in large result sets.
+        worksheet.append([safe_cell_value(row.get(header)) for header in headers])
     for index, header in enumerate(headers, 1):
         worksheet.column_dimensions[get_column_letter(index)].width = min(34, max(12, len(str(header)) + 2))
     return worksheet
@@ -432,9 +429,8 @@ def build_comparison_sheet(workbook, data, title):
         )
         for column, header in enumerate(headers, 1)
     ])
-    plan = column_style_plan(len(headers))
     for row in data:
-        worksheet.append(build_data_row(worksheet, row, plan))
+        worksheet.append(build_data_row(worksheet, row))
     return worksheet
 
 
@@ -447,8 +443,12 @@ def main():
         data = json.load(input_file)
 
     if isinstance(data, dict):
-        comparison = data.get("comparison", [])
-        report = data.get("report", comparison)
+        comparison = data.get("comparison")
+        report = data.get("report")
+        if report is None:
+            report = comparison if isinstance(comparison, list) else []
+        if comparison is None:
+            comparison = report
         pipeline_data = data.get("pipelineData", {})
         workbook = openpyxl.Workbook(write_only=True)
         build_pipeline_sheet(
@@ -513,9 +513,8 @@ def main():
         for column, header in enumerate(headers, 1)
     ])
 
-    plan = column_style_plan(len(headers))
     for row in data:
-        worksheet.append(build_data_row(worksheet, row, plan))
+        worksheet.append(build_data_row(worksheet, row))
 
     workbook.save(sys.argv[2])
 

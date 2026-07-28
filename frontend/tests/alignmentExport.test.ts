@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createAlignmentExportPayload,
   createExcelExportRows,
   createPipelineExportData,
   createRuncompReportRows,
@@ -84,6 +85,19 @@ test('serializes structured engine evidence into safe report cells', () => {
 
   assert.equal(row.physics_warnings, '[{"code":"DEPTH_DECREASE"}]');
   assert.equal(row.scalar, 4);
+});
+
+test('sends one report row set and lets the server reuse it for comparison', () => {
+  const payload = createAlignmentExportPayload(
+    [{ 'Match/Unmatch': 'Matched', __origIdx: 7 }],
+    { pipelineName: 'North Line' },
+  );
+
+  assert.deepEqual(payload, {
+    pipelineData: { pipelineName: 'North Line' },
+    report: [{ 'Match/Unmatch': 'Matched' }],
+  });
+  assert.equal(Object.hasOwn(payload, 'comparison'), false);
 });
 
 test('pipeline export keeps uploaded metadata and derives inspection runs for legacy sessions', () => {

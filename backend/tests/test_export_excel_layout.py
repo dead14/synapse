@@ -53,6 +53,58 @@ class ExportExcelLayoutTests(unittest.TestCase):
             self.assertEqual(workbook["Runcomp Report"]["A2"].value, "2021 -> 2026")
             self.assertEqual(workbook["Runcomp Comparison"]["X3"].value, "Matched")
 
+    def test_report_only_payload_reuses_rows_for_the_comparison_sheet(self):
+        engine = Path(__file__).parents[1] / "src" / "python_engines" / "export_excel.py"
+        payload = {
+            "pipelineData": {"pipelineName": "North Line"},
+            "report": [{
+                "Log Dist NEW (m)": 10.5,
+                "Log Dist OLD (m)": 9.75,
+                "Match/Unmatch": "Matched",
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            input_path = Path(directory) / "data.json"
+            output_path = Path(directory) / "report.xlsx"
+            input_path.write_text(json.dumps(payload), encoding="utf-8")
+            subprocess.run([sys.executable, str(engine), str(input_path), str(output_path)], check=True)
+            workbook = openpyxl.load_workbook(output_path, data_only=False)
+
+            self.assertEqual(workbook["Runcomp Report"]["A2"].value, 10.5)
+            self.assertEqual(workbook["Runcomp Comparison"]["X3"].value, "Matched")
+
+    def test_report_body_is_plain_data_for_large_export_throughput(self):
+        workbook = openpyxl.Workbook(write_only=True)
+        export_excel.build_report_sheet(workbook, [{
+            "Identifier": "=1+1",
+            "Depth": 23,
+        }])
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "report.xlsx"
+            workbook.save(output_path)
+            sheet = openpyxl.load_workbook(output_path, data_only=False)["Runcomp Report"]
+
+            self.assertEqual(sheet["A2"].value, "'=1+1")
+            self.assertEqual(sheet["B2"].value, 23)
+            self.assertEqual(sheet["A2"].style_id, 0)
+            self.assertEqual(sheet["B2"].style_id, 0)
+
+    def test_comparison_body_uses_column_defaults_instead_of_per_cell_styles(self):
+        workbook = openpyxl.Workbook(write_only=True)
+        export_excel.build_comparison_sheet(workbook, [{
+            "Log Dist NEW (m)": 10.5,
+            "Log Dist OLD (m)": 9.75,
+            "Match/Unmatch": "Matched",
+        }], "Runcomp Comparison")
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "report.xlsx"
+            workbook.save(output_path)
+            sheet = openpyxl.load_workbook(output_path, data_only=False)["Runcomp Comparison"]
+
+            self.assertEqual(sheet["A3"].style_id, 0)
+            self.assertNotEqual(sheet.column_dimensions["A"].style_id, 0)
+            self.assertEqual(sheet["X3"].fill.fgColor.rgb, "00C6EFCE")
+
     def test_export_uses_new_status_old_layout_and_escapes_formula_text(self):
         engine = Path(__file__).parents[1] / "src" / "python_engines" / "export_excel.py"
         data = [{

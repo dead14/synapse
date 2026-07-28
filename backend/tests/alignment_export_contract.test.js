@@ -51,3 +51,13 @@ test('rejects oversized or non-scalar workbook data', () => {
         /report row fields must contain scalar values/,
     );
 });
+
+test('keeps comparison optional so one report payload can feed both data sheets', () => {
+    const payload = normalizeAlignmentExportPayload({
+        report: [{ 'Match/Unmatch': 'Matched' }],
+        pipelineData: {},
+    }, { maxRows: 100 });
+
+    assert.equal(payload.comparison, null);
+    assert.equal(payload.report.length, 1);
+});

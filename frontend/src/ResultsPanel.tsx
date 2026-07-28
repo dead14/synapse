@@ -3,7 +3,7 @@ import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, Fi
 import { apiFetch, apiUrl } from './utils/api';
 import Modal from './components/common/Modal';
 import { useToast } from './components/common/ToastProvider';
-import { createExcelExportRows, createRuncompReportRows } from './utils/alignmentExport';
+import { createAlignmentExportPayload } from './utils/alignmentExport';
 import {
   alignmentResultColumns,
   alignmentDisplayValue,
@@ -755,23 +755,24 @@ export default function ResultsPanel({
     if (includedRows.length === 0) return;
     setIsExporting(true);
     try {
-      const exportRows = createExcelExportRows(includedRows);
-      const reportRows = createRuncompReportRows(includedRows);
       const response = await fetch(apiUrl('/api/alignment/export-excel'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         credentials: 'include',
-        body: JSON.stringify({
-          pipelineData: pipelineData || {},
-          report: reportRows,
-          comparison: exportRows,
-        })
+        body: JSON.stringify(createAlignmentExportPayload(
+          includedRows,
+          pipelineData || {},
+        )),
       });
       
       if (!response.ok) {
-        throw new Error('Failed to generate Excel file');
+        const payload = await response.json().catch(() => null);
+        const message = typeof payload?.error === 'string'
+          ? payload.error
+          : payload?.error?.message;
+        throw new Error(message || `Failed to generate Excel file (${response.status})`);
       }
       
       const blob = await response.blob();
@@ -786,7 +787,7 @@ export default function ResultsPanel({
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error("Failed to export Excel:", err);
-      toast.error('Failed to export the Excel file.');
+      toast.error(err instanceof Error ? err.message : 'Failed to export the Excel file.');
     } finally {
       setIsExporting(false);
     }
