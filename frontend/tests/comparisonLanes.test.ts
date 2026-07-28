@@ -100,6 +100,18 @@ test('girth welds stay on the lane of the run that reported them', () => {
   assert.deepEqual(master.gws.map((gw) => gw.rawM), [102, 114]);
 });
 
+test('excluded rows are hidden from lanes without changing source row indexes', () => {
+  const rows: ComparisonRow[] = [
+    { ...twoRunRows[0], __excluded: true },
+    twoRunRows[2],
+  ];
+
+  const model = buildComparisonLanes(rows);
+
+  assert.equal(model.lanes.some((lane) => lane.features.some((feature) => feature.id === 'GW-O-1')), false);
+  assert.equal(model.lanes[0].features.find((feature) => feature.id === 'A-O-1')?.rowIndex, 1);
+});
+
 test('clock position is carried through at full resolution', () => {
   const [older] = buildComparisonLanes(twoRunRows).lanes;
   const anomaly = older.features.find((feature) => feature.id === 'A-O-1');

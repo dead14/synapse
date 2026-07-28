@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 
 import {
   deleteMatchingSection,
+  resolveSectionDistances,
   saveSectionRange,
+  sectionNameForComparisonRow,
+  type SectionBoundary,
   type LockedGwPair,
   type MatchingSection,
 } from '../src/wizard/matchingSections.ts';
@@ -14,6 +17,20 @@ const lockedGws: LockedGwPair[] = [
   { key: 'C', oldId: 'OLD-C', newId: 'NEW-C', oldDistance: 20, newDistance: 20 },
   { key: 'D', oldId: 'OLD-D', newId: 'NEW-D', oldDistance: 30, newDistance: 30 },
 ];
+
+const boundaries: SectionBoundary[] = [
+  ...lockedGws.map((pair) => ({ ...pair, side: 'MATCHED' as const, label: pair.newId, sourceDistance: pair.newDistance })),
+  {
+    key: 'UNMATCHED::NEW::NEW-X::15.000000',
+    side: 'NEW',
+    label: 'NEW-X',
+    oldId: null,
+    newId: 'NEW-X',
+    oldDistance: 15,
+    newDistance: 15,
+    sourceDistance: 15,
+  },
+].sort((left, right) => left.newDistance - right.newDistance);
 
 test('saveSectionRange creates and edits a weld-bounded section without overlap', () => {
   const fullRange: MatchingSection = {
@@ -46,4 +63,56 @@ test('deleteMatchingSection removes only the selected section', () => {
   ];
 
   assert.deepEqual(deleteMatchingSection(sections, 'first').map((section) => section.id), ['second']);
+});
+
+test('an explicit unmatched boundary can create and resolve a section range', () => {
+  const section: MatchingSection = {
+    id: 'tie-in',
+    name: 'Tie-in',
+    policy: 'REVIEW',
+    startGwKey: 'B',
+    endGwKey: 'UNMATCHED::NEW::NEW-X::15.000000',
+    startBoundary: boundaries.find((boundary) => boundary.key === 'B'),
+    endBoundary: boundaries.find((boundary) => boundary.side === 'NEW'),
+  };
+
+  const saved = saveSectionRange([], section, boundaries);
+  const resolved = resolveSectionDistances(saved[0], boundaries);
+
+  assert.equal(saved.length, 1);
+  assert.equal(resolved.newStartM, 10);
+  assert.equal(resolved.newEndM, 15);
+  assert.equal(resolved.oldEndM, 15);
+});
+
+test('assigns unmatched OLD and NEW features to the section whose side-specific range they cross', () => {
+  const sections: MatchingSection[] = [{
+    id: 'hl279',
+    name: 'HL279',
+    policy: 'MATCH',
+    startGwKey: 'A',
+    endGwKey: 'B',
+    oldStartM: 85.78,
+    oldEndM: 88.83,
+    newStartM: 85.467,
+    newEndM: 88.536,
+  }];
+
+  assert.equal(sectionNameForComparisonRow({
+    'Log Dist OLD (m)': 86.42,
+    'Log Dist NEW (m)': '-',
+    'Feature Type OLD': 'bend',
+  }, sections), 'HL279');
+
+  assert.equal(sectionNameForComparisonRow({
+    'Log Dist OLD (m)': '-',
+    'Log Dist NEW (m)': 86.398,
+    'Feature Type NEW': 'offtake tee',
+  }, sections), 'HL279');
+
+  assert.equal(sectionNameForComparisonRow({
+    'Log Dist OLD (m)': 90,
+    'Log Dist NEW (m)': '-',
+    'Feature Type OLD': 'marker',
+  }, sections), '-');
 });

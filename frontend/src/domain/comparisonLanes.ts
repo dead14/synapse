@@ -361,6 +361,7 @@ export function buildComparisonLanes(rows: readonly ComparisonRow[]): Comparison
   const byRun: Array<Map<string, Observation[]>> = Array.from({ length: runCount }, () => new Map());
 
   rows.forEach((row, rowIndex) => {
+    if (row.__excluded === true) return;
     const order = pairOrder.get(pairIndexOf(row));
     if (order === undefined) return;
     const oldPresent = present(row['Identif. OLD']) || num(row['Log Dist OLD (m)']) !== null

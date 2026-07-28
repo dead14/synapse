@@ -9,7 +9,12 @@ import {
 } from './utils/alignment';
 import { RUN_PAIR_COLUMN, runPairLabels, withRunPairColumn } from './utils/alignmentDisplay';
 import { apiFetch } from './utils/api';
-import { applyInterventions, type InterventionEvent } from './utils/interventions';
+import {
+  applyInterventions,
+  exclusionSide,
+  includedInterventionRows,
+  type InterventionEvent,
+} from './utils/interventions';
 
 const DefectVisualizer = lazy(() => import('./DefectVisualizer'));
 
@@ -52,7 +57,8 @@ export default function IliComparisonPage({
   const sharedId = shareAccess?.id;
   const sharedToken = shareAccess?.accessToken;
   const sharedSessionId = shareAccess?.sessionId;
-  const [data, setData] = useState<ComparisonRow[]>([]);
+  const [baseData, setBaseData] = useState<ComparisonRow[]>([]);
+  const [interventions, setInterventions] = useState<InterventionEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [jobProgress, setJobProgress] = useState(0);
   const [jobMessage, setJobMessage] = useState('Sending data to the queue...');
@@ -63,15 +69,22 @@ export default function IliComparisonPage({
   const [sessionId, setSessionId] = useState('');
   const [audit, setAudit] = useState<ConservationAudit | undefined>();
   const [pairFilter, setPairFilter] = useState<string | null>(null);
+  const data = useMemo(
+    () => applyInterventions(baseData, interventions),
+    [baseData, interventions],
+  );
+  const includedData = useMemo(() => includedInterventionRows(data), [data]);
 
   // A chain result concatenates every pair's rows. Without a way to isolate one
   // transition they read as a single undifferentiated comparison.
-  const pairLabels = useMemo(() => runPairLabels(data), [data]);
+  const pairLabels = useMemo(() => runPairLabels(includedData), [includedData]);
   // Interventions address rows by index into `data`, so a filtered view has to
   // carry the mapping back — otherwise reassigning a match while a pair is
   // selected would rewrite whichever unrelated rows sit at those offsets.
   const visibleRows = useMemo(() => {
-    const indexed = data.map((row, index) => ({ row, index }));
+    const indexed = data
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => includedInterventionRows([row]).length === 1);
     return pairFilter ? indexed.filter(({ row }) => row[RUN_PAIR_COLUMN] === pairFilter) : indexed;
   }, [data, pairFilter]);
   const visibleData = useMemo(() => visibleRows.map(({ row }) => row), [visibleRows]);
@@ -116,9 +129,8 @@ export default function IliComparisonPage({
           sessionPromise,
         ]);
         setAudit(alignment.audit);
-        setData(withRunPairColumn(
-          applyInterventions(alignment.comparison, session.config?.interventions || []),
-        ));
+        setBaseData(withRunPairColumn(alignment.comparison));
+        setInterventions(session.config?.interventions || []);
       } catch (caughtError) {
         if ((caughtError as Error).name !== 'AbortError') {
           setError(caughtError instanceof Error ? caughtError.message : 'Failed to load ILI results.');
@@ -134,6 +146,20 @@ export default function IliComparisonPage({
     void loadData();
     return () => controller.abort();
   }, [readOnly, sharedId, sharedSessionId, sharedToken]);
+
+  const saveIntervention = async (event: InterventionEvent): Promise<InterventionEvent> => {
+    if (!sessionId) throw new Error('Intervention cancelled because no session is available.');
+    const response = await apiFetch<{ event: InterventionEvent }>('/api/wizard/save-intervention', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, event }),
+    });
+    setInterventions((current) => (
+      current.some((item) => item.id === response.event.id)
+        ? current
+        : [...current, response.event]
+    ));
+    return response.event;
+  };
 
   const handleUpdateMatch = async (visibleSourceIdx: number, visibleTargetIdx: number, evidenceScore = 0) => {
     if (readOnly) return;
@@ -154,49 +180,101 @@ export default function IliComparisonPage({
       id: `intervention-${Date.now()}-${sourceIdx}-${targetIdx}`,
       type: 'REASSIGN_NEW', sourceNewKey, targetOldKey, evidenceScore,
     };
-    if (!sessionId) {
-      setError('Intervention cancelled because no session is available.');
-      return;
-    }
     try {
-      await apiFetch('/api/wizard/save-intervention', {
-        method: 'POST',
-        body: JSON.stringify({ sessionId, event }),
-      });
+      await saveIntervention(event);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Failed to save the intervention event.');
       return;
     }
-
-    setData((previousData) => {
-      const nextData = [...previousData];
-      const sourceRow = { ...nextData[sourceIdx] };
-      const targetRow = { ...nextData[targetIdx] };
-
-      // Capture the complete NEW payload before clearing the source row.  The
-      // previous implementation cleared Identif. NEW and then copied it, which
-      // made a successful manual intervention lose the NEW feature identity.
-      const newPayload = Object.fromEntries(
-        Object.keys(sourceRow)
-          .filter((key) => key.includes('NEW') || key === "O'Clock NEW")
-          .map((key) => [key, sourceRow[key]])
-      );
-      Object.entries(newPayload).forEach(([key, value]) => {
-        targetRow[key] = value;
-        sourceRow[key] = typeof value === 'number' ? Number.NaN : '-';
-      });
-
-      targetRow['Match/Unmatch'] = 'Match';
-      nextData[sourceIdx] = sourceRow;
-      nextData[targetIdx] = targetRow;
-
-      return nextData.filter((row) => {
-        const hasOld = row['Identif. OLD'] && row['Identif. OLD'] !== '-';
-        const hasNew = row['Identif. NEW'] && row['Identif. NEW'] !== '-';
-        return hasOld || hasNew;
-      });
-    });
     setError(null);
+  };
+
+  const handleExcludeSingle = async (visibleIdx: number) => {
+    if (readOnly) return;
+    const sourceIdx = toSourceIndex(visibleIdx);
+    const row = data[sourceIdx];
+    const side = row ? exclusionSide(row) : null;
+    const sourceKey = side ? String(row[`Source Key ${side}`] || '') : '';
+    if (!side || !sourceKey || sourceKey === '-') {
+      setError('Exclusion cancelled: select an unmatched OLD-only or NEW-only feature.');
+      return;
+    }
+    try {
+      await saveIntervention({
+        id: `exclude-feature-${Date.now()}-${sourceIdx}`,
+        type: 'EXCLUDE_FEATURE',
+        side,
+        pairIndex: Number(row.pair_index ?? 0),
+        sourceKey,
+      });
+      setSelectedRowIdx(null);
+      setError(null);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Failed to save the exclusion.');
+      throw caughtError;
+    }
+  };
+
+  const handleExcludeRange = async (visibleStartIdx: number, visibleEndIdx: number) => {
+    if (readOnly) return;
+    const startIdx = toSourceIndex(visibleStartIdx);
+    const endIdx = toSourceIndex(visibleEndIdx);
+    const startRow = data[startIdx];
+    const endRow = data[endIdx];
+    const side = startRow ? exclusionSide(startRow) : null;
+    const pairIndex = Number(startRow?.pair_index ?? 0);
+    const endPairIndex = Number(endRow?.pair_index ?? 0);
+    if (!side || !endRow || exclusionSide(endRow) !== side || pairIndex !== endPairIndex) {
+      setError('Range exclusion cancelled: both endpoints must be unmatched features on the same OLD or NEW side and run pair.');
+      return;
+    }
+    const startSourceKey = String(startRow[`Source Key ${side}`] || '');
+    const endSourceKey = String(endRow[`Source Key ${side}`] || '');
+    if (!startSourceKey || startSourceKey === '-' || !endSourceKey || endSourceKey === '-') {
+      setError('Range exclusion cancelled because an endpoint has no source key.');
+      return;
+    }
+    try {
+      await saveIntervention({
+        id: `exclude-range-${Date.now()}-${startIdx}-${endIdx}`,
+        type: 'EXCLUDE_RANGE',
+        side,
+        pairIndex,
+        startSourceKey,
+        endSourceKey,
+      });
+      setSelectedRowIdx(null);
+      setError(null);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Failed to save the range exclusion.');
+      throw caughtError;
+    }
+  };
+
+  const handleRestoreExclusion = async (visibleIdx: number) => {
+    if (readOnly) return;
+    const sourceIdx = toSourceIndex(visibleIdx);
+    const exclusionIds = Array.isArray(data[sourceIdx]?.__exclusionIds)
+      ? data[sourceIdx].__exclusionIds.filter((id): id is string => typeof id === 'string')
+      : [];
+    if (exclusionIds.length === 0) {
+      setError('Restore cancelled: the selected row has no active exclusion.');
+      return;
+    }
+    try {
+      for (const [offset, exclusionId] of exclusionIds.entries()) {
+        await saveIntervention({
+          id: `restore-exclusion-${Date.now()}-${sourceIdx}-${offset}`,
+          type: 'RESTORE_EXCLUSION',
+          exclusionId,
+        });
+      }
+      setSelectedRowIdx(null);
+      setError(null);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Failed to restore the exclusion.');
+      throw caughtError;
+    }
   };
 
   return (
@@ -244,10 +322,10 @@ export default function IliComparisonPage({
                   className={`syn-btn syn-btn--sm ${pairFilter === null ? 'syn-btn--ink' : 'syn-btn--outline'}`}
                   style={{ minHeight: '1.75rem', fontSize: '0.68rem' }}
                 >
-                  All ({data.length.toLocaleString()})
+                  All ({includedData.length.toLocaleString()})
                 </button>
                 {pairLabels.map((label) => {
-                  const count = data.filter((row) => row[RUN_PAIR_COLUMN] === label).length;
+                  const count = includedData.filter((row) => row[RUN_PAIR_COLUMN] === label).length;
                   return (
                     <button
                       key={label}
@@ -290,6 +368,9 @@ export default function IliComparisonPage({
                 selectedRowIdx={selectedRowIdx}
                 onSelectRowIdx={setSelectedRowIdx}
                 onUpdateMatch={readOnly ? undefined : handleUpdateMatch}
+                onExcludeSingle={readOnly ? undefined : handleExcludeSingle}
+                onExcludeRange={readOnly ? undefined : handleExcludeRange}
+                onRestoreExclusion={readOnly ? undefined : handleRestoreExclusion}
                 audit={audit}
               />
             </div>

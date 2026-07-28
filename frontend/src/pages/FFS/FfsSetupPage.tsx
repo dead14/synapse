@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { FiSettings, FiCheckCircle, FiAlertCircle, FiDatabase, FiRefreshCw, FiShield } from 'react-icons/fi';
+import {
+  FiAlertCircle,
+  FiCheckCircle,
+  FiDatabase,
+  FiDownload,
+  FiFileText,
+  FiRefreshCw,
+  FiSettings,
+  FiShield,
+  FiUploadCloud,
+} from 'react-icons/fi';
 import PageMeta from '../../components/common/PageMeta';
 import { validateData } from '../../lib/ffs/validation';
 import type { ValidationError } from '../../lib/ffs/validation';
@@ -9,6 +19,12 @@ import { DEFAULT_SCREENING_CONFIG, type FfsConfig, type FfsScreeningConfig } fro
 import SynButton from '../../components/ui/SynButton';
 import { NumberField } from '../../components/ffs/FfsPrimitives';
 import { fetchAlignmentResult, type ComparisonRow } from '../../utils/alignment';
+import { apiFetch } from '../../utils/api';
+import {
+  applyInterventions,
+  includedInterventionRows,
+  type InterventionEvent,
+} from '../../utils/interventions';
 import { getAlignmentImportReadiness, mapAlignmentRowsToFfs } from '../../lib/ffs/alignmentImport';
 import {
   fetchFfsCandidates,
@@ -17,11 +33,15 @@ import {
   type FfsBlockedSession,
   type FfsEligibleSession,
 } from '../../lib/corrosion/reviewClient';
+import {
+  downloadManualFfsTemplate,
+  MANUAL_FFS_ACCEPT,
+  readManualFfsFile,
+} from '../../lib/ffs/manualWorkbook.ts';
 
 /**
- * FFS intake. The only source of anomalies is an alignment session whose
- * Corrosion Analysis review released features for assessment — see
- * docs/specs/ffs-alignment-gated-intake.md.
+ * FFS intake supports either a reviewed alignment release or a separately
+ * traceable manual workbook. The two sources are never mixed in one assessment.
  */
 export default function FfsSetupPage() {
   const navigate = useNavigate();
@@ -39,6 +59,9 @@ export default function FfsSetupPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [errors, setErrors] = useState<ValidationError[]>([]);
+  const [sourceMode, setSourceMode] = useState<'released' | 'manual'>('released');
+  const [manualFile, setManualFile] = useState<File | null>(null);
+  const [manualRows, setManualRows] = useState<Record<string, string>[]>([]);
   const [sessions, setSessions] = useState<FfsEligibleSession[]>([]);
   const [blocked, setBlocked] = useState<FfsBlockedSession[]>([]);
   const [selectedRunId, setSelectedRunId] = useState('');
@@ -58,7 +81,7 @@ export default function FfsSetupPage() {
   const [fallbackDepthGrowth, setFallbackDepthGrowth] = useState('0');
   const [fallbackLengthGrowth, setFallbackLengthGrowth] = useState('0');
 
-  const readinessReasons = getAlignmentImportReadiness({
+  const alignmentReadinessReasons = getAlignmentImportReadiness({
     lineName,
     iliDate,
     selectedRunId,
@@ -71,6 +94,15 @@ export default function FfsSetupPage() {
     fallbackDepthGrowthMmPerYear: fallbackDepthGrowth,
     fallbackLengthGrowthMmPerYear: fallbackLengthGrowth,
   });
+  const manualReadinessReasons = [
+    ...(!lineName.trim() ? ['Enter the pipeline / line name.'] : []),
+    ...(!iliDate ? ['Select the ILI inspection date.'] : []),
+    ...(!manualFile ? ['Upload the completed FFS template.'] : []),
+    ...(manualFile && manualRows.length === 0 ? ['The uploaded workbook has no usable rows.'] : []),
+  ];
+  const readinessReasons = sourceMode === 'released'
+    ? alignmentReadinessReasons
+    : manualReadinessReasons;
 
   useEffect(() => {
     let cancelled = false;
@@ -114,12 +146,15 @@ export default function FfsSetupPage() {
     setSelectedKeys(new Set());
     setReasons({});
     try {
-      const [result, review] = await Promise.all([
+      const [result, review, sessionConfig] = await Promise.all([
         fetchAlignmentResult(sessionId, (pct, message) => {
           setProgress(pct);
           setAlignmentMessage(message);
         }),
         fetchFfsCandidates(sessionId),
+        apiFetch<{ config?: { interventions?: InterventionEvent[] } }>(
+          `/api/wizard/session/${encodeURIComponent(sessionId)}`,
+        ),
       ]);
       if (review.stale) {
         throw new Error('The alignment was re-run after the Corrosion Analysis review. Review it again before assessing.');
@@ -128,13 +163,16 @@ export default function FfsSetupPage() {
       if (keys.size === 0) {
         throw new Error('The Corrosion Analysis review for this session released no feature to FFS.');
       }
-      setAlignmentRows(result.comparison);
+      const includedRows = includedInterventionRows(
+        applyInterventions(result.comparison, sessionConfig.config?.interventions || []),
+      );
+      setAlignmentRows(includedRows);
       setSelectedKeys(keys);
       setReasons(Object.fromEntries(
         review.items.filter((item) => item.reason).map((item) => [item.sourceKey, item.reason as string]),
       ));
       setAlignmentMessage(
-        `${keys.size.toLocaleString()} released feature(s) out of ${result.comparison.length.toLocaleString()} comparison rows.`,
+        `${keys.size.toLocaleString()} released feature(s) out of ${includedRows.length.toLocaleString()} included comparison rows.`,
       );
       const session = sessions.find((item) => item.id === sessionId);
       if (!lineName && session) setLineName(session.pipelineName);
@@ -145,12 +183,60 @@ export default function FfsSetupPage() {
     }
   };
 
+  const loadManualFile = async (file: File | null) => {
+    setManualFile(file);
+    setManualRows([]);
+    setErrors([]);
+    setAlignmentError('');
+    setAlignmentMessage('');
+    if (!file) return;
+    try {
+      const parsed = await readManualFfsFile(file);
+      if (parsed.missingColumns.length > 0) {
+        throw new Error(`Missing required columns: ${parsed.missingColumns.join(', ')}`);
+      }
+      setManualRows(parsed.rows);
+      setAlignmentMessage(`${parsed.rows.length.toLocaleString()} manual row(s) ready for validation.`);
+    } catch (caught) {
+      setAlignmentError(caught instanceof Error ? caught.message : 'The manual workbook could not be read.');
+    }
+  };
+
   const runAssessment = async () => {
     if (readinessReasons.length > 0) return;
     setIsProcessing(true);
     setErrors([]);
     setAlignmentError('');
     try {
+      const config: FfsConfig = {
+        lineName,
+        method,
+        modifiedSa,
+        iliDate: new Date(iliDate),
+        highlightYears,
+      };
+
+      if (sourceMode === 'manual') {
+        const dataErrors = validateData(manualRows);
+        if (dataErrors.length > 0) {
+          setErrors(dataErrors);
+          return;
+        }
+        const ffsResults = await processAllRows(manualRows, config, setProgress);
+        navigate('/ffs/results', {
+          state: {
+            results: ffsResults,
+            config,
+            screening,
+            manualImport: {
+              fileName: manualFile?.name || 'manual workbook',
+              rowCount: manualRows.length,
+            },
+          },
+        });
+        return;
+      }
+
       const imported = mapAlignmentRowsToFfs(alignmentRows, {
         outerDiameterMm: Number(outerDiameterMm),
         smysMpa: Number(smysMpa),
@@ -172,13 +258,6 @@ export default function FfsSetupPage() {
         setErrors(dataErrors);
         return;
       }
-      const config: FfsConfig = {
-        lineName,
-        method,
-        modifiedSa,
-        iliDate: new Date(iliDate),
-        highlightYears,
-      };
       const ffsResults = await processAllRows(rows, config, setProgress);
       navigate('/ffs/results', {
         state: {
@@ -196,7 +275,7 @@ export default function FfsSetupPage() {
         },
       });
     } catch (caught) {
-      setAlignmentError(caught instanceof Error ? caught.message : 'The alignment import could not be processed.');
+      setAlignmentError(caught instanceof Error ? caught.message : 'The FFS source data could not be processed.');
     } finally {
       setIsProcessing(false);
     }
@@ -211,7 +290,7 @@ export default function FfsSetupPage() {
           <p className="syn-eyebrow">Fitness-for-service</p>
           <h1 className="syn-page__title">Assessment setup</h1>
           <p className="syn-page__subtitle">
-            Configure the method and run a traceable B31G assessment on the features released by Corrosion Analysis.
+            Run a traceable B31G assessment from a Corrosion Analysis release or a controlled manual workbook.
           </p>
         </div>
       </div>
@@ -402,10 +481,37 @@ export default function FfsSetupPage() {
         <div className="flex flex-col rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
           <div className="mb-5 flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-indigo-600 dark:text-indigo-400">
             <FiDatabase className="h-5 w-5" />
-            Released ILI data
+            ILI source data
           </div>
 
           <div className="flex-1 space-y-4">
+            <div className="grid grid-cols-2 rounded-lg border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-900">
+              {[
+                ['released', 'Released alignment', FiShield],
+                ['manual', 'Manual upload', FiUploadCloud],
+              ].map(([mode, label, Icon]) => (
+                <button
+                  key={mode as string}
+                  type="button"
+                  onClick={() => {
+                    setSourceMode(mode as 'released' | 'manual');
+                    setErrors([]);
+                    setAlignmentError('');
+                    setAlignmentMessage('');
+                  }}
+                  className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-xs font-semibold transition ${
+                    sourceMode === mode
+                      ? 'bg-white text-indigo-700 shadow-sm dark:bg-slate-800 dark:text-indigo-300'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" /> {label as string}
+                </button>
+              ))}
+            </div>
+
+            {sourceMode === 'released' ? (
+              <>
             <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 dark:border-indigo-900 dark:bg-indigo-950/20">
               <div className="flex items-start gap-3">
                 <FiShield className="mt-0.5 h-5 w-5 shrink-0 text-indigo-600" />
@@ -513,6 +619,67 @@ export default function FfsSetupPage() {
               Fallback growth rates are only used when a released anomaly has no measured growth. Use 0 only when
               that engineering assumption is intentional.
             </p>
+              </>
+            ) : (
+              <>
+                <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 dark:border-indigo-900 dark:bg-indigo-950/20">
+                  <div className="flex items-start gap-3">
+                    <FiFileText className="mt-0.5 h-5 w-5 shrink-0 text-indigo-600" />
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                        Upload the controlled FFS template
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Manual rows are assessed as a separate source and are never mixed with released alignment
+                        features. XLSX, XLS, and CSV files up to 10 MB are supported.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <SynButton
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="inline-flex w-full items-center justify-center gap-2"
+                  onClick={downloadManualFfsTemplate}
+                >
+                  <FiDownload /> Download FFS template
+                </SynButton>
+
+                <label
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    void loadManualFile(event.dataTransfer.files?.[0] || null);
+                  }}
+                  className="flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center transition hover:border-indigo-400 hover:bg-indigo-50/40 dark:border-slate-600 dark:bg-slate-900"
+                >
+                  <FiUploadCloud className="h-8 w-8 text-indigo-500" />
+                  <span className="mt-3 text-sm font-semibold text-slate-700 dark:text-slate-200">
+                    {manualFile?.name || 'Drop the completed template here'}
+                  </span>
+                  <span className="mt-1 text-xs text-slate-500">
+                    {manualRows.length > 0
+                      ? `${manualRows.length.toLocaleString()} row(s) loaded`
+                      : 'or click to browse XLSX, XLS, or CSV'}
+                  </span>
+                  <input
+                    type="file"
+                    accept={MANUAL_FFS_ACCEPT}
+                    className="sr-only"
+                    onChange={(event) => void loadManualFile(event.target.files?.[0] || null)}
+                  />
+                </label>
+
+                {alignmentMessage && (
+                  <p className="text-xs font-medium text-emerald-600">{alignmentMessage}</p>
+                )}
+                {alignmentError && (
+                  <p role="alert" className="text-xs font-medium text-red-600">{alignmentError}</p>
+                )}
+              </>
+            )}
 
             {readinessReasons.length > 0 && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
@@ -542,8 +709,8 @@ export default function FfsSetupPage() {
           <div className="flex items-center gap-3 border-b border-red-100 bg-red-50 px-6 py-4 dark:border-red-900/50 dark:bg-red-900/20">
             <FiAlertCircle className="h-5 w-5 text-red-500" />
             <span className="font-medium text-red-700 dark:text-red-400">
-              {errors.length} released feature value{errors.length > 1 ? 's' : ''} cannot be assessed — correct the
-              ILI data or de-select the feature in Corrosion Analysis.
+              {errors.length} source value{errors.length > 1 ? 's' : ''} cannot be assessed — correct the ILI data
+              {sourceMode === 'released' ? ' or de-select the feature in Corrosion Analysis.' : '.'}
             </span>
           </div>
           <div className="max-h-96 overflow-y-auto">

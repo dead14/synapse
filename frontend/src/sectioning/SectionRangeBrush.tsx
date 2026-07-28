@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 
-import type { LockedGwPair, MatchingSection } from '../wizard/matchingSections';
+import type { LockedGwPair, MatchingSection, SectionBoundary } from '../wizard/matchingSections';
 import { coverageGaps, formatKm, lockedIndexOf, snapToLockedGw } from './sectionBuilder';
 
 export interface BrushMarker {
@@ -11,7 +11,9 @@ export interface BrushMarker {
 }
 
 interface Props {
-  lockedGws: LockedGwPair[];
+  boundaries?: SectionBoundary[];
+  /** Compatibility input for previews and callers that only expose matched pairs. */
+  lockedGws?: LockedGwPair[];
   sections: MatchingSection[];
   markers?: BrushMarker[];
   /** Locked-GW indexes of the boundary currently being composed. */
@@ -31,6 +33,12 @@ const MARKER_GLYPH: Record<BrushMarker['kind'], string> = { bend: '◆', valve: 
  */
 export default function SectionRangeBrush({
   lockedGws,
+  boundaries = lockedGws?.map((pair) => ({
+    ...pair,
+    side: 'MATCHED' as const,
+    label: pair.newId,
+    sourceDistance: pair.newDistance,
+  })) ?? [],
   sections,
   markers = [],
   selection,
@@ -41,8 +49,8 @@ export default function SectionRangeBrush({
   const [drag, setDrag] = useState<{ anchorIndex: number; currentIndex: number } | null>(null);
   const [hoverM, setHoverM] = useState<number | null>(null);
 
-  const lineStart = lockedGws[0]?.newDistance ?? 0;
-  const lineEnd = lockedGws[lockedGws.length - 1]?.newDistance ?? 0;
+  const lineStart = boundaries[0]?.newDistance ?? 0;
+  const lineEnd = boundaries[boundaries.length - 1]?.newDistance ?? 0;
   const span = Math.max(1, lineEnd - lineStart);
 
   const toPercent = useCallback((metres: number) => ((metres - lineStart) / span) * 100, [lineStart, span]);
@@ -51,35 +59,35 @@ export default function SectionRangeBrush({
   const indexAtPointer = useCallback(
     (clientX: number): number | null => {
       const rail = railRef.current;
-      if (!rail || lockedGws.length === 0) return null;
+      if (!rail || boundaries.length === 0) return null;
       const bounds = rail.getBoundingClientRect();
       const fraction = Math.min(1, Math.max(0, (clientX - bounds.left) / Math.max(1, bounds.width)));
-      const snapped = snapToLockedGw(lockedGws, lineStart + fraction * span);
+      const snapped = snapToLockedGw(boundaries, lineStart + fraction * span);
       return snapped?.index ?? null;
     },
-    [lineStart, lockedGws, span],
+    [boundaries, lineStart, span],
   );
 
   const drawnSections = useMemo(
     () =>
       sections
         .map((section) => {
-          const startIndex = lockedIndexOf(lockedGws, section.startGwKey);
-          const endIndex = lockedIndexOf(lockedGws, section.endGwKey);
+          const startIndex = lockedIndexOf(boundaries, section.startGwKey);
+          const endIndex = lockedIndexOf(boundaries, section.endGwKey);
           if (startIndex < 0 || endIndex <= startIndex) return null;
           return {
             id: section.id,
             name: section.name,
             policy: section.policy,
-            left: toPercent(lockedGws[startIndex].newDistance),
-            width: toPercent(lockedGws[endIndex].newDistance) - toPercent(lockedGws[startIndex].newDistance),
+            left: toPercent(boundaries[startIndex].newDistance),
+            width: toPercent(boundaries[endIndex].newDistance) - toPercent(boundaries[startIndex].newDistance),
           };
         })
         .filter((entry): entry is NonNullable<typeof entry> => entry !== null),
-    [lockedGws, sections, toPercent],
+    [boundaries, sections, toPercent],
   );
 
-  const gaps = useMemo(() => coverageGaps(sections, lockedGws), [lockedGws, sections]);
+  const gaps = useMemo(() => coverageGaps(sections, boundaries), [boundaries, sections]);
 
   const active = drag
     ? { startIndex: Math.min(drag.anchorIndex, drag.currentIndex), endIndex: Math.max(drag.anchorIndex, drag.currentIndex) }
@@ -87,8 +95,8 @@ export default function SectionRangeBrush({
 
   const activeBand = active && active.endIndex > active.startIndex
     ? {
-        left: toPercent(lockedGws[active.startIndex].newDistance),
-        width: toPercent(lockedGws[active.endIndex].newDistance) - toPercent(lockedGws[active.startIndex].newDistance),
+        left: toPercent(boundaries[active.startIndex].newDistance),
+        width: toPercent(boundaries[active.endIndex].newDistance) - toPercent(boundaries[active.startIndex].newDistance),
       }
     : null;
 
@@ -128,7 +136,7 @@ export default function SectionRangeBrush({
     const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
     if (step === 0) return;
     event.preventDefault();
-    const limit = lockedGws.length - 1;
+    const limit = boundaries.length - 1;
     if (event.shiftKey) {
       const startIndex = Math.min(Math.max(0, selection.startIndex + step), selection.endIndex - 1);
       onSelect(startIndex, selection.endIndex);
@@ -138,7 +146,7 @@ export default function SectionRangeBrush({
     }
   };
 
-  if (lockedGws.length < 2) {
+  if (boundaries.length < 2) {
     return (
       <div className="ds-callout ds-callout--warning">
         <div className="ds-callout__body">
@@ -166,10 +174,10 @@ export default function SectionRangeBrush({
         aria-label="Drag across the pipeline to bound a section"
         aria-valuemin={lineStart}
         aria-valuemax={lineEnd}
-        aria-valuenow={active ? lockedGws[active.endIndex].newDistance : lineStart}
+        aria-valuenow={active ? boundaries[active.endIndex].newDistance : lineStart}
         aria-valuetext={
           active
-            ? `${formatKm(lockedGws[active.startIndex].newDistance)} to ${formatKm(lockedGws[active.endIndex].newDistance)}`
+            ? `${formatKm(boundaries[active.startIndex].newDistance)} to ${formatKm(boundaries[active.endIndex].newDistance)}`
             : 'No range selected'
         }
         onPointerDown={handlePointerDown}
@@ -227,10 +235,10 @@ export default function SectionRangeBrush({
       <p className="sec-brush__hint">
         {active && active.endIndex > active.startIndex ? (
           <>
-            <strong>{lockedGws[active.startIndex].newId}</strong> → <strong>{lockedGws[active.endIndex].newId}</strong>
+            <strong>{boundaries[active.startIndex].label}</strong> → <strong>{boundaries[active.endIndex].label}</strong>
             {' · '}
-            {formatKm(lockedGws[active.endIndex].newDistance - lockedGws[active.startIndex].newDistance)}
-            {' · snapped to locked GWs'}
+            {formatKm(boundaries[active.endIndex].newDistance - boundaries[active.startIndex].newDistance)}
+            {' · snapped to selectable GWs'}
           </>
         ) : (
           'Drag across the rail to bound a section. Release to snap both ends to the nearest locked GW.'

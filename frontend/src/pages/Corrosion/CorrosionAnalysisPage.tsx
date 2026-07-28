@@ -16,6 +16,12 @@ import {
 import PageMeta from '../../components/common/PageMeta';
 import { useToast } from '../../components/common/ToastProvider';
 import ShareSnapshotButton from '../../components/sharing/ShareSnapshotButton';
+import { apiFetch } from '../../utils/api';
+import {
+  applyInterventions,
+  includedInterventionRows,
+  type InterventionEvent,
+} from '../../utils/interventions';
 import {
   Badge,
   Button,
@@ -112,17 +118,24 @@ export default function CorrosionAnalysisPage() {
       setLoading(true);
       setError('');
       try {
-        const [result, saved] = await Promise.all([
+        const [result, saved, session] = await Promise.all([
           fetchAlignmentResult(sessionId, (pct, message) => {
             if (cancelled) return;
             setProgress(pct);
             setProgressMessage(message);
           }, controller.signal),
           fetchFfsCandidates(sessionId, controller.signal),
+          apiFetch<{ config?: { interventions?: InterventionEvent[] } }>(
+            `/api/wizard/session/${encodeURIComponent(sessionId)}`,
+            { signal: controller.signal },
+          ),
         ]);
         if (cancelled) return;
-        setComparison(result.comparison);
-        setFeatures(analyseComparison(result.comparison));
+        const includedRows = includedInterventionRows(
+          applyInterventions(result.comparison, session.config?.interventions || []),
+        );
+        setComparison(includedRows);
+        setFeatures(analyseComparison(includedRows));
         setReview(saved);
       } catch (caught) {
         if (cancelled || (caught instanceof DOMException && caught.name === 'AbortError')) return;

@@ -10,8 +10,16 @@
 
 import type { LockedGwPair, MatchingSection, SectionPolicy } from '../wizard/matchingSections';
 
-export interface SnapResult {
-  pair: LockedGwPair;
+export interface AxisBoundary {
+  key: string;
+  oldId: string | null;
+  newId: string | null;
+  oldDistance: number;
+  newDistance: number;
+}
+
+export interface SnapResult<T extends AxisBoundary = LockedGwPair> {
+  pair: T;
   index: number;
   /** Signed metres from the requested position to the GW it snapped to. */
   deviationM: number;
@@ -29,7 +37,7 @@ const DEFAULT_SEED: SectionSeed = { name: 'Section', sectionType: 'BUR', policy:
  * Nearest locked GW to a position on the NEW axis. `lockedGws` is sorted by
  * `newDistance` (guaranteed by `normalizeLockedGws`), so this binary searches.
  */
-export function snapToLockedGw(lockedGws: LockedGwPair[], targetM: number): SnapResult | null {
+export function snapToLockedGw<T extends AxisBoundary>(lockedGws: T[], targetM: number): SnapResult<T> | null {
   if (lockedGws.length === 0 || !Number.isFinite(targetM)) return null;
 
   let low = 0;
@@ -53,7 +61,7 @@ export function snapToLockedGw(lockedGws: LockedGwPair[], targetM: number): Snap
 }
 
 /** Index of the locked GW carrying this key, or -1. */
-export function lockedIndexOf(lockedGws: LockedGwPair[], key: string): number {
+export function lockedIndexOf<T extends Pick<AxisBoundary, 'key'>>(lockedGws: T[], key: string): number {
   return lockedGws.findIndex((pair) => pair.key === key);
 }
 
@@ -179,7 +187,7 @@ export function fillCoverageGaps(
 }
 
 /** Metres of NEW axis covered by these sections. */
-export function coveredLengthM(sections: MatchingSection[], lockedGws: LockedGwPair[]): number {
+export function coveredLengthM(sections: MatchingSection[], lockedGws: AxisBoundary[]): number {
   const byKey = new Map(lockedGws.map((pair) => [pair.key, pair]));
   const ranges = sections
     .map((section) => {
@@ -205,7 +213,7 @@ export function coveredLengthM(sections: MatchingSection[], lockedGws: LockedGwP
 /** Stretches of the line no section covers, for the gap indicator. */
 export function coverageGaps(
   sections: MatchingSection[],
-  lockedGws: LockedGwPair[],
+  lockedGws: AxisBoundary[],
 ): Array<{ startM: number; endM: number }> {
   if (lockedGws.length < 2) return [];
   const lineStart = lockedGws[0].newDistance;

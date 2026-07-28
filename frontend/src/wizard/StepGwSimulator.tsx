@@ -809,7 +809,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                       <input 
                         type="text" placeholder="Search GW..." 
                         value={searchQuery} onChange={(e) => {setSearchQuery(e.target.value); setCurrentPage(1);}}
-                        className="ds-input ds-input--sm" 
+                        className="ds-input ds-input--sm"
                       />
                     </div>
                     <button className="ds-btn ds-btn--ghost ds-btn--xs ds-btn--icon"><FiDownload size={14} /></button>

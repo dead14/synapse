@@ -2,13 +2,13 @@ import { useMemo, useState } from 'react';
 import { FiCornerDownLeft, FiCornerDownRight, FiSearch } from 'react-icons/fi';
 
 import { Button, Input, Segmented } from '../components/ds';
-import type { LockedGwPair } from '../wizard/matchingSections';
-import { formatKm, parsePosition, snapToLockedGw } from './sectionBuilder';
+import type { SectionBoundary } from '../wizard/matchingSections';
+import { formatKm, parsePosition, snapToLockedGw, type SnapResult } from './sectionBuilder';
 
 export type BoundaryEdge = 'start' | 'end';
 
 interface Props {
-  lockedGws: LockedGwPair[];
+  boundaries: SectionBoundary[];
   startIndex: number | null;
   endIndex: number | null;
   onSetBoundary: (edge: BoundaryEdge, index: number) => void;
@@ -17,30 +17,30 @@ interface Props {
 type Mode = 'kp' | 'weld';
 
 /** Typed KP with a live readout of what it will snap to. */
-function KpEntry({ lockedGws, onSetBoundary }: Pick<Props, 'lockedGws' | 'onSetBoundary'>) {
+function KpEntry({ boundaries, onSetBoundary }: Pick<Props, 'boundaries' | 'onSetBoundary'>) {
   const [unit, setUnit] = useState<'km' | 'm'>('km');
   const [startText, setStartText] = useState('');
   const [endText, setEndText] = useState('');
 
   const startSnap = useMemo(() => {
     const metres = parsePosition(startText, unit);
-    return metres === null ? null : snapToLockedGw(lockedGws, metres);
-  }, [lockedGws, startText, unit]);
+    return metres === null ? null : snapToLockedGw(boundaries, metres);
+  }, [boundaries, startText, unit]);
 
   const endSnap = useMemo(() => {
     const metres = parsePosition(endText, unit);
-    return metres === null ? null : snapToLockedGw(lockedGws, metres);
-  }, [endText, lockedGws, unit]);
+    return metres === null ? null : snapToLockedGw(boundaries, metres);
+  }, [boundaries, endText, unit]);
 
   const apply = () => {
     if (startSnap) onSetBoundary('start', startSnap.index);
     if (endSnap) onSetBoundary('end', endSnap.index);
   };
 
-  const deviationLabel = (snap: ReturnType<typeof snapToLockedGw>) => {
+  const deviationLabel = (snap: SnapResult<SectionBoundary> | null) => {
     if (!snap) return 'Enter a position';
     const sign = snap.deviationM >= 0 ? '−' : '+';
-    return `${snap.pair.newId} · ${formatKm(snap.pair.newDistance)} (${sign}${Math.abs(snap.deviationM).toFixed(2)} m)`;
+    return `${snap.pair.label} · ${formatKm(snap.pair.newDistance)} (${sign}${Math.abs(snap.deviationM).toFixed(2)} m)`;
   };
 
   return (
@@ -98,21 +98,22 @@ function KpEntry({ lockedGws, onSetBoundary }: Pick<Props, 'lockedGws' | 'onSetB
 }
 
 /** Searchable locked-GW list — set either boundary straight from the row. */
-function WeldPicker({ lockedGws, startIndex, endIndex, onSetBoundary }: Props) {
+function WeldPicker({ boundaries, startIndex, endIndex, onSetBoundary }: Props) {
   const [query, setQuery] = useState('');
 
   const rows = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const indexed = lockedGws.map((pair, index) => ({ pair, index }));
+    const indexed = boundaries.map((pair, index) => ({ pair, index }));
     if (!needle) return indexed.slice(0, 200);
     return indexed
       .filter(({ pair }) =>
-        pair.newId.toLowerCase().includes(needle)
-        || pair.oldId.toLowerCase().includes(needle)
+        pair.label.toLowerCase().includes(needle)
+        || pair.newId?.toLowerCase().includes(needle)
+        || pair.oldId?.toLowerCase().includes(needle)
         || pair.newDistance.toFixed(3).includes(needle)
         || (pair.newDistance / 1000).toFixed(3).includes(needle))
       .slice(0, 200);
-  }, [lockedGws, query]);
+  }, [boundaries, query]);
 
   return (
     <div className="sec-weld">
@@ -127,7 +128,7 @@ function WeldPicker({ lockedGws, startIndex, endIndex, onSetBoundary }: Props) {
           onChange={(event) => setQuery(event.target.value)}
         />
         <span className="ds-toolbar__hint" style={{ flex: '0 0 auto' }}>
-          {rows.length.toLocaleString()} of {lockedGws.length.toLocaleString()}
+          {rows.length.toLocaleString()} of {boundaries.length.toLocaleString()}
         </span>
       </div>
 
@@ -148,9 +149,9 @@ function WeldPicker({ lockedGws, startIndex, endIndex, onSetBoundary }: Props) {
               const isEnd = index === endIndex;
               return (
                 <tr key={pair.key} className={isStart || isEnd ? 'is-selected' : undefined}>
-                  <th scope="row">{pair.newId}</th>
+                  <th scope="row">{pair.newId ?? '—'}{pair.side === 'NEW' ? ' (unpaired)' : ''}</th>
                   <td className="ds-table__num">{pair.newDistance.toFixed(3)}</td>
-                  <td>{pair.oldId}</td>
+                  <td>{pair.oldId ?? '—'}{pair.side === 'OLD' ? ' (unpaired)' : ''}</td>
                   <td className="ds-table__num">{pair.oldDistance.toFixed(3)}</td>
                   <td style={{ textAlign: 'right' }}>
                     <span className="ds-table__actions">
@@ -158,7 +159,7 @@ function WeldPicker({ lockedGws, startIndex, endIndex, onSetBoundary }: Props) {
                         size="xs"
                         variant={isStart ? 'primary' : 'secondary'}
                         startIcon={<FiCornerDownRight aria-hidden="true" />}
-                        aria-label={`Set ${pair.newId} as section start`}
+                        aria-label={`Set ${pair.label} as section start`}
                         onClick={() => onSetBoundary('start', index)}
                       >
                         Start
@@ -167,7 +168,7 @@ function WeldPicker({ lockedGws, startIndex, endIndex, onSetBoundary }: Props) {
                         size="xs"
                         variant={isEnd ? 'primary' : 'secondary'}
                         startIcon={<FiCornerDownLeft aria-hidden="true" />}
-                        aria-label={`Set ${pair.newId} as section end`}
+                        aria-label={`Set ${pair.label} as section end`}
                         onClick={() => onSetBoundary('end', index)}
                       >
                         End

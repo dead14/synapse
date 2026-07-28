@@ -1,10 +1,10 @@
 import { FiEdit3, FiTrash2 } from 'react-icons/fi';
 import { formatLogDistance } from './gwPosition';
-import { resolveSectionDistances, type LockedGwPair, type MatchingSection } from '../wizard/matchingSections';
+import { resolveSectionDistances, type MatchingSection, type SectionBoundary } from '../wizard/matchingSections';
 
 interface Props {
   sections: MatchingSection[];
-  lockedGws: LockedGwPair[];
+  boundaries: SectionBoundary[];
   sectionTypes: Array<[string, string]>;
   onEdit: (sectionId: string) => void;
   onDelete: (sectionId: string) => void;
@@ -16,9 +16,9 @@ const policyLabel: Record<MatchingSection['policy'], string> = {
   BYPASS: 'Exclude',
 };
 
-export default function SectionTable({ sections, lockedGws, sectionTypes, onEdit, onDelete }: Props) {
+export default function SectionTable({ sections, boundaries, sectionTypes, onEdit, onDelete }: Props) {
   const typeLabel = new Map(sectionTypes);
-  const pairByKey = new Map(lockedGws.map((pair) => [pair.key, pair]));
+  const boundaryByKey = new Map(boundaries.map((boundary) => [boundary.key, boundary]));
 
   return (
     <section className="sectioning-light-section-table" aria-labelledby="section-table-title">
@@ -36,18 +36,20 @@ export default function SectionTable({ sections, lockedGws, sectionTypes, onEdit
         <div className="sectioning-light-section-table__scroll">
           <table>
             <thead>
-              <tr><th>Section</th><th>GW NEW bounds</th><th>Log distance NEW</th><th>Length</th><th>Type</th><th>Policy</th><th>Actions</th></tr>
+              <tr><th>Section</th><th>GW bounds</th><th>Log distance NEW</th><th>Length</th><th>Type</th><th>Policy</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {sections.map((section) => {
-                const resolved = resolveSectionDistances(section, lockedGws);
-                const start = pairByKey.get(section.startGwKey);
-                const end = pairByKey.get(section.endGwKey);
+                const resolved = resolveSectionDistances(section, boundaries);
+                const start = section.startBoundary ?? boundaryByKey.get(section.startGwKey);
+                const end = section.endBoundary ?? boundaryByKey.get(section.endGwKey);
                 const length = (resolved.newEndM ?? 0) - (resolved.newStartM ?? 0);
                 return (
                   <tr key={section.id}>
                     <th scope="row" data-label="Section">{section.name}</th>
-                    <td data-label="GW NEW bounds">{start?.newId ?? '-'} {'->'} {end?.newId ?? '-'}</td>
+                    <td data-label="GW bounds">
+                      {start ? `${start.side} ${start.label}` : '-'} {'->'} {end ? `${end.side} ${end.label}` : '-'}
+                    </td>
                     <td data-label="Log distance NEW" className="sectioning-light-section-table__number">{formatLogDistance(resolved.newStartM)} {'->'} {formatLogDistance(resolved.newEndM)}</td>
                     <td data-label="Length" className="sectioning-light-section-table__number">{length.toFixed(3)} m</td>
                     <td data-label="Type">{typeLabel.get(section.sectionType ?? 'UNCLASSIFIED') ?? 'Unclassified'}</td>

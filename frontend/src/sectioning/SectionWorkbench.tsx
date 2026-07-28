@@ -1,7 +1,7 @@
 import { FiCheck, FiEdit3, FiMove, FiX } from 'react-icons/fi';
 
 import { Badge, Button, Field, Input, Panel, PanelBody, PanelHeader, Select } from '../components/ds';
-import type { LockedGwPair, MatchingSection, SectionPolicy } from '../wizard/matchingSections';
+import type { LockedGwPair, MatchingSection, SectionBoundary, SectionPolicy } from '../wizard/matchingSections';
 import AutoSectionPresets from './AutoSectionPresets';
 import SectionBoundaryInputs, { type BoundaryEdge } from './SectionBoundaryInputs';
 import SectionRangeBrush, { type BrushMarker } from './SectionRangeBrush';
@@ -11,6 +11,7 @@ import type { SpatialFeature } from './types';
 
 interface Props {
   lockedGws: LockedGwPair[];
+  boundaries: SectionBoundary[];
   sections: MatchingSection[];
   markers: BrushMarker[];
   masterFeatures: SpatialFeature[];
@@ -39,6 +40,7 @@ interface Props {
  */
 export default function SectionWorkbench({
   lockedGws,
+  boundaries,
   sections,
   markers,
   masterFeatures,
@@ -57,8 +59,8 @@ export default function SectionWorkbench({
 }: Props) {
   const hasRange = startIndex !== null && endIndex !== null && endIndex > startIndex;
   const readyToSave = hasRange && draft.name.trim().length > 0;
-  const start = startIndex !== null ? lockedGws[startIndex] : null;
-  const end = endIndex !== null ? lockedGws[endIndex] : null;
+  const start = startIndex !== null ? boundaries[startIndex] : null;
+  const end = endIndex !== null ? boundaries[endIndex] : null;
 
   return (
     <div className="ds-stack">
@@ -79,7 +81,7 @@ export default function SectionWorkbench({
 
         <PanelBody className="ds-stack">
           <SectionRangeBrush
-            lockedGws={lockedGws}
+            boundaries={boundaries}
             sections={sections}
             markers={markers}
             selection={hasRange ? { startIndex: startIndex!, endIndex: endIndex! } : null}
@@ -91,12 +93,12 @@ export default function SectionWorkbench({
           <div className="sec-summary">
             <div className="sec-summary__cell">
               <span className="ds-stat__label">Start GW</span>
-              <span className="sec-summary__value">{start ? start.newId : '—'}</span>
+              <span className="sec-summary__value">{start ? `${start.side} ${start.label}` : '—'}</span>
               <span className="ds-stat__hint">{start ? formatKm(start.newDistance) : 'Not set'}</span>
             </div>
             <div className="sec-summary__cell">
               <span className="ds-stat__label">End GW</span>
-              <span className="sec-summary__value">{end ? end.newId : '—'}</span>
+              <span className="sec-summary__value">{end ? `${end.side} ${end.label}` : '—'}</span>
               <span className="ds-stat__hint">{end ? formatKm(end.newDistance) : 'Not set'}</span>
             </div>
             <div className="sec-summary__cell">
@@ -124,7 +126,7 @@ export default function SectionWorkbench({
           </div>
 
           <SectionBoundaryInputs
-            lockedGws={lockedGws}
+            boundaries={boundaries}
             startIndex={startIndex}
             endIndex={endIndex}
             onSetBoundary={onSetBoundary}

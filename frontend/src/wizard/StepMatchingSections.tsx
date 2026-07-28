@@ -10,6 +10,7 @@ import SectionWorkbench from '../sectioning/SectionWorkbench';
 import type { BrushMarker } from '../sectioning/SectionRangeBrush';
 import type { BoundaryEdge } from '../sectioning/SectionBoundaryInputs';
 import { lockedIndexOf } from '../sectioning/sectionBuilder';
+import { buildSectionBoundaries, sectionBoundaryForFeature } from '../sectioning/sectionBoundaries';
 import { buildMatchingSpatialFeatures } from '../sectioning/matchingSpatialFeatures';
 import { MAX_SCHEMATIC_ZOOM, canInspectGwPrecisely, clampSchematicZoom } from '../sectioning/viewOptions';
 import { coveragePercent } from '../sectioning/sectionRanges';
@@ -50,8 +51,6 @@ const SECTION_TYPES: Array<[string, string]> = [
   ['CAS', 'Cased'], ['OTH', 'Other'],
 ];
 const EMPTY_RUN: Record<string, unknown> = {};
-
-const lockedKey = (feature: SpatialFeature) => String(feature.rawData.lockedKey ?? '');
 
 export default function StepMatchingSections({ config, onBack, onNext }: Props) {
   const pairs = useMemo(() => resolveRunPairs(config?.summaryData), [config?.summaryData]);
@@ -131,22 +130,38 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
   // the same state.
   const [startIndex, setStartIndex] = useState<number | null>(null);
   const [endIndex, setEndIndex] = useState<number | null>(null);
+  const [includeUnmatchedGws, setIncludeUnmatchedGws] = useState(true);
   const [inspectedGw, setInspectedGw] = useState<SpatialFeature | null>(null);
   const [viewMode, setViewMode] = useState<'schematic' | 'map'>('schematic');
   const [zoom, setZoom] = useState(1);
+  const [viewerHeight, setViewerHeight] = useState(34);
   const [draft, setDraft] = useState<SectionDraft>({ name: 'Section 1', sectionType: 'BUR', policy: 'MATCH' });
   const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
-  const validationError = validateSectionOrder(sections, lockedGws);
+  const allBoundaries = useMemo(
+    () => buildSectionBoundaries(features, lockedGws, true),
+    [features, lockedGws],
+  );
+  const selectableBoundaries = useMemo(
+    () => includeUnmatchedGws
+      ? allBoundaries
+      : allBoundaries.filter((boundary) => boundary.side === 'MATCHED'),
+    [allBoundaries, includeUnmatchedGws],
+  );
+  const validationError = validateSectionOrder(sections, allBoundaries);
 
   // The schematic still highlights whichever GWs the boundaries resolve to.
   const selectedGws = useMemo(() => {
     const keys = [startIndex, endIndex]
-      .filter((index): index is number => index !== null && index >= 0 && index < lockedGws.length)
-      .map((index) => lockedGws[index].key);
+      .filter((index): index is number => index !== null && index >= 0 && index < selectableBoundaries.length)
+      .map((index) => selectableBoundaries[index].key);
+    const visibleGws = [
+      ...features.gws,
+      ...features.historicalLanes.flatMap((lane) => lane.gws),
+    ];
     return keys
-      .map((key) => features.gws.find((gw) => lockedKey(gw) === key))
+      .map((key) => visibleGws.find((gw) => sectionBoundaryForFeature(gw, lockedGws)?.key === key))
       .filter((gw): gw is SpatialFeature => Boolean(gw));
-  }, [endIndex, features.gws, lockedGws, startIndex]);
+  }, [endIndex, features.gws, features.historicalLanes, lockedGws, selectableBoundaries, startIndex]);
 
   const brushMarkers = useMemo<BrushMarker[]>(
     () =>
@@ -169,20 +184,23 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
   );
 
   const displaySections = useMemo<SectionDef[]>(() => sections.map((section) => {
-    const resolved = resolveSectionDistances(section, lockedGws);
-    const startFeature = features.gws.find((gw) => lockedKey(gw) === section.startGwKey);
-    const endFeature = features.gws.find((gw) => lockedKey(gw) === section.endGwKey);
+    const resolved = resolveSectionDistances(section, allBoundaries);
+    const startBoundary = section.startBoundary ?? allBoundaries.find((boundary) => boundary.key === section.startGwKey);
+    const endBoundary = section.endBoundary ?? allBoundaries.find((boundary) => boundary.key === section.endGwKey);
+    const visibleGws = [...features.gws, ...features.historicalLanes.flatMap((lane) => lane.gws)];
+    const startFeature = visibleGws.find((gw) => sectionBoundaryForFeature(gw, lockedGws)?.key === section.startGwKey);
+    const endFeature = visibleGws.find((gw) => sectionBoundaryForFeature(gw, lockedGws)?.key === section.endGwKey);
     return {
       id: section.id,
       name: section.name,
       type: section.sectionType || 'UNCLASSIFIED',
-      startGw: startFeature?.id || '', endGw: endFeature?.id || '',
+      startGw: startBoundary?.label || '', endGw: endBoundary?.label || '',
       startM: resolved.newStartM!, endM: resolved.newEndM!,
       length: resolved.newEndM! - resolved.newStartM!, notes: '',
       latStart: startFeature?.lat, lngStart: startFeature?.lng,
       latEnd: endFeature?.lat, lngEnd: endFeature?.lng,
     };
-  }), [features.gws, lockedGws, sections]);
+  }), [allBoundaries, features.gws, features.historicalLanes, lockedGws, sections]);
 
   const coverage = useMemo(
     () => coveragePercent(displaySections, features.stats.totalLength),
@@ -196,8 +214,9 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
 
   /** Clicking a marker on the schematic fills the next empty boundary. */
   const handleGwClick = (gw: SpatialFeature) => {
-    if (gw.runRole !== 'MASTER' || !lockedKey(gw)) return;
-    const index = lockedIndexOf(lockedGws, lockedKey(gw));
+    const boundary = sectionBoundaryForFeature(gw, lockedGws);
+    if (!boundary || (!includeUnmatchedGws && boundary.side !== 'MATCHED')) return;
+    const index = lockedIndexOf(selectableBoundaries, boundary.key);
     if (index < 0) return;
     if (startIndex === null || (endIndex !== null && startIndex !== null)) {
       setStartIndex(index);
@@ -243,6 +262,9 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
 
   const applySelectedSection = () => {
     if (startIndex === null || endIndex === null || endIndex <= startIndex || !draft.name.trim()) return;
+    const startBoundary = selectableBoundaries[startIndex];
+    const endBoundary = selectableBoundaries[endIndex];
+    if (!startBoundary || !endBoundary) return;
     const existing = editingSectionId ? sections.find((section) => section.id === editingSectionId) : undefined;
     const sectionId = editingSectionId ?? `section-${Date.now()}`;
     const nextSection: MatchingSection = {
@@ -251,10 +273,12 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
       name: draft.name.trim(),
       sectionType: draft.sectionType,
       policy: draft.policy,
-      startGwKey: lockedGws[startIndex].key,
-      endGwKey: lockedGws[endIndex].key,
+      startGwKey: startBoundary.key,
+      endGwKey: endBoundary.key,
+      startBoundary: startBoundary.side === 'MATCHED' ? undefined : startBoundary,
+      endBoundary: endBoundary.side === 'MATCHED' ? undefined : endBoundary,
     };
-    setSections((current) => saveSectionRange(current, nextSection, lockedGws));
+    setSections((current) => saveSectionRange(current, nextSection, allBoundaries));
     setStartIndex(null);
     setEndIndex(null);
     setEditingSectionId(null);
@@ -264,8 +288,14 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
   const editSection = (sectionId: string) => {
     const section = sections.find((item) => item.id === sectionId);
     if (!section) return;
-    const start = lockedIndexOf(lockedGws, section.startGwKey);
-    const end = lockedIndexOf(lockedGws, section.endGwKey);
+    const hasUnmatchedBoundary = Boolean(
+      (section.startBoundary && section.startBoundary.side !== 'MATCHED')
+      || (section.endBoundary && section.endBoundary.side !== 'MATCHED'),
+    );
+    if (hasUnmatchedBoundary && !includeUnmatchedGws) setIncludeUnmatchedGws(true);
+    const boundaries = hasUnmatchedBoundary ? allBoundaries : selectableBoundaries;
+    const start = lockedIndexOf(boundaries, section.startGwKey);
+    const end = lockedIndexOf(boundaries, section.endGwKey);
     if (start < 0 || end < 0) return;
     setDraft({ name: section.name, sectionType: section.sectionType ?? 'UNCLASSIFIED', policy: section.policy });
     setStartIndex(Math.min(start, end));
@@ -350,6 +380,7 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
 
       <SectionWorkbench
         lockedGws={lockedGws}
+        boundaries={selectableBoundaries}
         sections={sections}
         markers={brushMarkers}
         masterFeatures={masterFeatures}
@@ -378,7 +409,27 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
               ? 'Click a GW marker to fill the next empty boundary.'
               : 'Zoom past 600% to click individual GWs — or use the rail above.'}
           </span>
+          <label className="ds-toolbar__hint" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+            <input
+              type="checkbox"
+              checked={includeUnmatchedGws}
+              onChange={(event) => {
+                setIncludeUnmatchedGws(event.target.checked);
+                setStartIndex(null);
+                setEndIndex(null);
+                setEditingSectionId(null);
+              }}
+            />
+            Use unpaired GW
+          </label>
           <span className="ds-toolbar__spacer" />
+          <Button size="sm" variant="secondary" onClick={() => setViewerHeight((height) => Math.max(22, height - 6))}>
+            Shorter
+          </Button>
+          <span className="ds-readout">{viewerHeight} rem</span>
+          <Button size="sm" variant="secondary" onClick={() => setViewerHeight((height) => Math.min(60, height + 6))}>
+            Taller
+          </Button>
           <Button size="sm" variant="secondary" onClick={() => setZoom(1)}>Fit</Button>
           <div className="ds-btn-group">
             <Button size="sm" variant="secondary" iconOnly aria-label="Zoom out" onClick={() => setZoom(clampSchematicZoom(zoom - 0.5))}>−</Button>
@@ -401,9 +452,28 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
           />
         </div>
 
-        <div className="sectioning-light-viewer">
+        <div
+          className="sectioning-light-viewer"
+          style={{ height: `${viewerHeight}rem` }}
+          aria-label="Resizable GW sectioning viewer"
+        >
           {viewMode === 'schematic' ? (
-            <SectioningSchematic features={features} sections={displaySections} zoom={zoom} onZoomChange={setZoom} selectedGWs={selectedGws} onGwClick={handleGwClick} onInspectGw={setInspectedGw} />
+            <SectioningSchematic
+              features={features}
+              sections={displaySections}
+              zoom={zoom}
+              onZoomChange={setZoom}
+              selectedGWs={selectedGws}
+              onGwClick={handleGwClick}
+              onInspectGw={setInspectedGw}
+              unmatchedSelectionEnabled={includeUnmatchedGws}
+              selectedRange={startIndex !== null && endIndex !== null
+                ? {
+                    startM: selectableBoundaries[startIndex]?.newDistance ?? 0,
+                    endM: selectableBoundaries[endIndex]?.newDistance ?? 0,
+                  }
+                : null}
+            />
           ) : Array.isArray(config?.pipelineRoute) && config.pipelineRoute.length >= 2 ? (
             <SectionMap sections={displaySections} features={features} selectedGWs={selectedGws} onGwClick={handleGwClick} drawnRoute={config.pipelineRoute} />
           ) : (
@@ -434,7 +504,7 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
         </PanelBody>
       </Panel>
 
-      <SectionTable sections={sections} lockedGws={lockedGws} sectionTypes={SECTION_TYPES} onEdit={editSection} onDelete={deleteSection} />
+      <SectionTable sections={sections} boundaries={allBoundaries} sectionTypes={SECTION_TYPES} onEdit={editSection} onDelete={deleteSection} />
 
       {validationError && (
         <Callout tone="danger" role="alert" icon={<FiAlertTriangle aria-hidden="true" />} title="Section layout is not valid">
@@ -475,7 +545,7 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
                 const isActivePair = sections.some((mine) => mine.id === section.id);
                 // Only the pair on screen has its boundaries resolvable right now;
                 // other pairs keep the distances resolved when they were edited.
-                return isActivePair ? resolveSectionDistances(section, lockedGws) : section;
+                return isActivePair ? resolveSectionDistances(section, allBoundaries) : section;
               }),
             })}
           >

@@ -1,7 +1,7 @@
 import { FiCheck, FiEdit3, FiX } from 'react-icons/fi';
 import { formatLogDistance } from './gwPosition';
 import type { SpatialFeature } from './types';
-import type { MatchingSection } from '../wizard/matchingSections';
+import type { MatchingSection, SectionBoundary } from '../wizard/matchingSections';
 
 export interface SectionDraft {
   name: string;
@@ -12,6 +12,7 @@ export interface SectionDraft {
 interface Props {
   draft: SectionDraft;
   selectedGws: SpatialFeature[];
+  selectedBoundaries: SectionBoundary[];
   sectionTypes: Array<[string, string]>;
   isEditing: boolean;
   onDraftChange: (patch: Partial<SectionDraft>) => void;
@@ -19,16 +20,16 @@ interface Props {
   onCancel: () => void;
 }
 
-function boundarySummary(selectedGws: SpatialFeature[]) {
-  if (selectedGws.length === 0) return 'Click the first NEW GW on the line.';
-  if (selectedGws.length === 1) return `Start: ${selectedGws[0].id}. Select the end GW.`;
-  const [start, end] = selectedGws;
-  return `${start.id} -> ${end.id}. Length ${(end.dist - start.dist).toFixed(3)} m`;
+function boundarySummary(boundaries: SectionBoundary[]) {
+  if (boundaries.length !== 2) return 'Select two GW boundaries.';
+  const [start, end] = boundaries;
+  return `${start.label} -> ${end.label}. Length ${(end.newDistance - start.newDistance).toFixed(3)} m on NEW`;
 }
 
 export default function SectionComposer({
   draft,
   selectedGws,
+  selectedBoundaries,
   sectionTypes,
   isEditing,
   onDraftChange,
@@ -42,17 +43,22 @@ export default function SectionComposer({
       <header>
         <div>
           <p>{isEditing ? 'EDIT SECTION' : 'NEW SECTION'}</p>
-          <h3 id="section-composer-title">{isEditing ? 'Update the section from the selected welds' : 'Select two NEW GWs to create a section'}</h3>
+          <h3 id="section-composer-title">{isEditing ? 'Update the section from the selected welds' : 'Create a section from the selected GW range'}</h3>
         </div>
         <button type="button" className="sectioning-light-composer__dismiss" onClick={onCancel} aria-label="Cancel section entry">
           <FiX /> Cancel
         </button>
       </header>
 
-      <div className="sectioning-light-composer__boundary" role="status">{boundarySummary(selectedGws)}</div>
-      {selectedGws.length > 0 && (
+      <div className="sectioning-light-composer__boundary" role="status">{boundarySummary(selectedBoundaries)}</div>
+      {selectedBoundaries.length > 0 && (
         <div className="sectioning-light-composer__log-distance" aria-label="Section boundary log distances">
-          {selectedGws.map((gw) => <span key={`${gw.id}-${gw.dist}`}><b>{gw.id}</b> · Log distance NEW <strong>{formatLogDistance(gw.dist)}</strong></span>)}
+          {selectedBoundaries.map((boundary) => (
+            <span key={boundary.key}>
+              <b>{boundary.label}</b> · {boundary.side === 'MATCHED' ? 'MATCHED' : `${boundary.side}-only`}
+              {' · measured '}<strong>{formatLogDistance(boundary.sourceDistance)}</strong>
+            </span>
+          ))}
         </div>
       )}
 

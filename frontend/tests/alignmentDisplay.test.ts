@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   alignmentDisplayValue,
+  depthGrowthMmPerYear,
   isAlignmentDisplayMetadata,
   sortAlignmentRowsByMasterAxis,
 } from '../src/utils/alignmentDisplay.ts';
@@ -111,6 +112,27 @@ test('interleaves unmatched OLD and NEW rows on the canonical master axis', () =
     sortAlignmentRowsByMasterAxis(rows).map((row) => row.id),
     ['HU_CPA_2026-33844', 'HU_CPA_2024-28062', 'HU_CPA_2026-33845'],
   );
+});
+
+test('converts depth growth from percent wall thickness per year to millimetres per year', () => {
+  const usingNewWallThickness = depthGrowthMmPerYear({
+    'Depth Growth (%WT/yr)': 2.5,
+    'Wall WT OLD (mm)': 8,
+    'Wall WT NEW (mm)': 12,
+  });
+  assert.ok(Math.abs(usingNewWallThickness! - 0.3) < 1e-12);
+
+  const usingOldWallThickness = depthGrowthMmPerYear({
+    'Depth Growth (%WT/yr)': '2.500',
+    'Wall WT OLD (mm)': 8,
+    'Wall WT NEW (mm)': '-',
+  });
+  assert.ok(Math.abs(usingOldWallThickness! - 0.2) < 1e-12);
+
+  assert.equal(depthGrowthMmPerYear({
+    'Depth Growth (%WT/yr)': 2.5,
+    'Wall WT NEW (mm)': '-',
+  }), null);
 });
 
 test('sorting preserves a pre-assigned __origIdx so each row keeps pointing at its source row', () => {

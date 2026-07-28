@@ -137,17 +137,25 @@ async function listReviewedSessions(pool, orgId) {
                 s.params_json,
                 s.completed_at,
                 p.name AS stored_pipeline_name,
-                COUNT(c.id) FILTER (WHERE c.selected) AS selected_count,
-                COUNT(c.id) AS reviewed_count,
-                MAX(c.reviewed_at) AS reviewed_at,
-                MIN(c.result_signature) AS min_signature,
-                MAX(c.result_signature) AS max_signature
+                COALESCE(review.selected_count, 0) AS selected_count,
+                COALESCE(review.reviewed_count, 0) AS reviewed_count,
+                review.reviewed_at,
+                review.min_signature,
+                review.max_signature
          FROM alignment_sessions s
          LEFT JOIN pipelines p ON p.id = s.pipeline_id
-         LEFT JOIN ffs_candidates c ON c.session_id = s.id
+         LEFT JOIN (
+             SELECT c.session_id,
+                    COUNT(c.id) FILTER (WHERE c.selected) AS selected_count,
+                    COUNT(c.id) AS reviewed_count,
+                    MAX(c.reviewed_at) AS reviewed_at,
+                    MIN(c.result_signature) AS min_signature,
+                    MAX(c.result_signature) AS max_signature
+             FROM ffs_candidates c
+             GROUP BY c.session_id
+         ) review ON review.session_id = s.id
          WHERE COALESCE(s.organization_id, p.organization_id) = $1
            AND s.status = 'completed'
-         GROUP BY s.id, s.status, s.params_json, s.completed_at, p.name
          ORDER BY s.completed_at DESC NULLS LAST, s.id DESC`,
         [orgId],
     );

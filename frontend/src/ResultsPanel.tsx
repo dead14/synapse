@@ -1,17 +1,23 @@
 import { useState, useMemo, useEffect, useRef, lazy, Suspense } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, FiX, FiDownload, FiMap } from 'react-icons/fi';
+import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, FiX, FiDownload } from 'react-icons/fi';
 import { apiFetch, apiUrl } from './utils/api';
 import Modal from './components/common/Modal';
 import { useToast } from './components/common/ToastProvider';
 import { createExcelExportRows } from './utils/alignmentExport';
 import {
   alignmentDisplayValue,
+  depthGrowthMmPerYear,
   isAlignmentDisplayMetadata,
   MASTER_AXIS_COLUMN,
   sortAlignmentRowsByMasterAxis,
 } from './utils/alignmentDisplay';
 import ShareSnapshotButton from './components/sharing/ShareSnapshotButton';
+import { sectionNameForComparisonRow } from './wizard/matchingSections';
+import { includedInterventionRows, isExcludedRow } from './utils/interventions';
+import ExclusionControls from './components/comparison/ExclusionControls';
+
+const RAW_DEPTH_GROWTH_COLUMN = 'Depth Growth (%WT/yr)';
+const DEPTH_GROWTH_COLUMN = 'Depth Growth (mm/yr)';
 
 // Lazy load chart.js - heavy library, only load when Chart tab is selected
 const LazyScatterChart = lazy(() =>
@@ -57,6 +63,9 @@ interface ResultsPanelProps {
   selectedRowIdx?: number | null;
   onSelectRowIdx?: (idx: number | null) => void;
   onUpdateMatch?: (sourceIdx: number, targetIdx: number) => void;
+  onExcludeSingle?: (rowIdx: number) => Promise<void> | void;
+  onExcludeRange?: (startRowIdx: number, endRowIdx: number) => Promise<void> | void;
+  onRestoreExclusion?: (rowIdx: number) => Promise<void> | void;
   audit?: unknown;
 }
 
@@ -284,7 +293,18 @@ const ReassignDialog = ({ sourceRow, candidates, onPick, onCancel }: {
   );
 };
 
-export default function ResultsPanel({ data: rawData, loading, readOnly = false, onOpenAnalytics, selectedRowIdx, onSelectRowIdx, onUpdateMatch }: ResultsPanelProps) {
+export default function ResultsPanel({
+  data: rawData,
+  loading,
+  readOnly = false,
+  onOpenAnalytics,
+  selectedRowIdx,
+  onSelectRowIdx,
+  onUpdateMatch,
+  onExcludeSingle,
+  onExcludeRange,
+  onRestoreExclusion,
+}: ResultsPanelProps) {
   const data = useMemo(() => {
     let flattened: any[] = [];
     if (Array.isArray(rawData)) {
@@ -314,7 +334,6 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
     return sortAlignmentRowsByMasterAxis(flattened);
   }, [rawData]);
 
-  const navigate = useNavigate();
   const toast = useToast();
   const shareSessionId = useMemo(() => (
     new URLSearchParams(window.location.search).get('sessionId')
@@ -353,7 +372,8 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
   // Same rows a drop can land on and pass the parent's validation: an OLD
   // feature that has no NEW pair yet.
   const reassignCandidates = useMemo(() => data
-    .filter((row: any) => (hasRowValue(row, 'Source Key OLD') || hasRowValue(row, 'Identif. OLD'))
+    .filter((row: any) => !isExcludedRow(row)
+      && (hasRowValue(row, 'Source Key OLD') || hasRowValue(row, 'Identif. OLD'))
       && !hasRowValue(row, 'Source Key NEW') && !hasRowValue(row, 'Identif. NEW'))
     .sort((a: any, b: any) => (parseFloat(a['Log Dist OLD (m)']) || 0) - (parseFloat(b['Log Dist OLD (m)']) || 0)), [data]);
 
@@ -367,7 +387,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
 
   const tabs = readOnly
     ? ['Results', 'ILI Run 1', 'ILI Run 2']
-    : ['Results', 'ILI Run 1', 'ILI Run 2', 'Interventions'];
+    : ['Results', 'ILI Run 1', 'ILI Run 2', 'Interventions', 'Excluded'];
   
   // Dynamic columns state
   const [showColumnFilter, setShowColumnFilter] = useState(false);
@@ -404,12 +424,12 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
     if (data && data.length > 0) {
       const keys = Object.keys(data[0]).filter(k =>
         k !== 'Match/Unmatch'
-        && k !== '__resultGroup'
-        && k !== '__origIdx'
+        && k !== RAW_DEPTH_GROWTH_COLUMN
+        && !k.startsWith('__')
         && !isAlignmentDisplayMetadata(k)
       );
       // Add computed columns at the end
-      keys.push(MASTER_AXIS_COLUMN, 'Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning');
+      keys.push(MASTER_AXIS_COLUMN, DEPTH_GROWTH_COLUMN, 'Length Growth (mm/yr)', 'Physics Warning');
       return ['Section', ...keys];
     }
     return ['Section'];
@@ -457,7 +477,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
         'Length OLD (mm)', 'Length NEW (mm)',
         'Width OLD (mm)', 'Width NEW (mm)',
         "O'Clock OLD", "O'Clock NEW",
-        'Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning'
+        DEPTH_GROWTH_COLUMN, 'Length Growth (mm/yr)', 'Physics Warning'
       ];
       // Only include columns that actually exist in allColumns to be safe
       setVisibleColumns(defaultCols.filter(col => allColumns.includes(col)));
@@ -506,7 +526,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
       'Length OLD (mm)', 'Length NEW (mm)',
       'Width OLD (mm)', 'Width NEW (mm)',
       "O'Clock OLD", "O'Clock NEW",
-      'Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning'
+      DEPTH_GROWTH_COLUMN, 'Length Growth (mm/yr)', 'Physics Warning'
     ];
     setVisibleColumns(defaultCols.filter(col => allColumns.includes(col)));
     setColWidths({});
@@ -539,9 +559,13 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
       const yearSpan = Number.isFinite(oldYear) && Number.isFinite(newYear) && newYear > oldYear
         ? newYear - oldYear
         : null;
-      const depthGrowth = row['Depth Growth (%WT/yr)'] ?? (
+      const depthGrowthPct = row[RAW_DEPTH_GROWTH_COLUMN] ?? (
         yearSpan && !isNaN(d1) && !isNaN(d2) ? ((d2 - d1) / yearSpan).toFixed(3) : '-'
       );
+      const depthGrowth = depthGrowthMmPerYear({
+        ...row,
+        [RAW_DEPTH_GROWTH_COLUMN]: depthGrowthPct,
+      });
       
       const l1 = parseFloat(row['Length OLD (mm)']);
       const l2 = parseFloat(row['Length NEW (mm)']);
@@ -549,25 +573,11 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
         yearSpan && !isNaN(l1) && !isNaN(l2) ? ((l2 - l1) / yearSpan).toFixed(3) : '-'
       );
 
-      // NEW is the current/reference run for corrosion-growth analysis.
-      const dist = parseFloat(row['Log Dist NEW (m)']);
-      let sectionName = '-';
-      if (!isNaN(dist) && sections && sections.length > 0) {
-         const matchingSec = sections.find(s => {
-            const start = Number(s.newStartM ?? s.startM);
-            const end = Number(s.newEndM ?? s.endM);
-            const min = Math.min(start, end);
-            const max = Math.max(start, end);
-            return dist >= min && dist <= max;
-         });
-         if (matchingSec) {
-            sectionName = matchingSec.name;
-         }
-      }
+      const sectionName = sectionNameForComparisonRow(row, sections);
 
       return {
         ...row,
-        'Depth Growth (%WT/yr)': depthGrowth,
+        [DEPTH_GROWTH_COLUMN]: depthGrowth ?? '-',
         'Length Growth (mm/yr)': lengthGrowth,
         'Section': sectionName,
       };
@@ -577,6 +587,11 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
   // 2. Filter data for view
   const filteredData = useMemo(() => {
     return processedData.filter((row: any) => {
+      if (activeTab === 'Excluded') {
+        if (!isExcludedRow(row)) return false;
+      } else if (isExcludedRow(row)) {
+        return false;
+      }
       const run1 = row['Identif. OLD'];
       const run2 = row['Identif. NEW'];
       const dist1 = row['Log Dist OLD (m)'];
@@ -643,7 +658,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
       
       return true;
     });
-  }, [processedData, radioFilter, unmatchedOld, unmatchedNew, distanceStart, distanceEnd, searchQuery, filterConfig]);
+  }, [processedData, activeTab, radioFilter, unmatchedOld, unmatchedNew, distanceStart, distanceEnd, searchQuery, filterConfig]);
 
   const sortedData = useMemo(() => {
     if (!sortConfig) return filteredData;
@@ -720,10 +735,11 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
   }, [selectedRowIdx, sortedData]);
 
   const exportToExcel = async () => {
-    if (sortedData.length === 0) return;
+    const includedRows = includedInterventionRows(sortedData);
+    if (includedRows.length === 0) return;
     setIsExporting(true);
     try {
-      const exportRows = createExcelExportRows(sortedData);
+      const exportRows = createExcelExportRows(includedRows);
       const response = await fetch(apiUrl('/api/alignment/export-excel'), {
         method: 'POST',
         headers: {
@@ -755,6 +771,15 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
     }
   };
 
+  const excludedCount = useMemo(
+    () => data.filter((row: any) => isExcludedRow(row)).length,
+    [data],
+  );
+  const selectedRow = useMemo(
+    () => data.find((row: any) => row.__origIdx === selectedRowIdx) ?? null,
+    [data, selectedRowIdx],
+  );
+
   const panelContent = (
     <div className={`results-panel ${isFullScreen ? "h-full w-full flex flex-col overflow-hidden" : "flex flex-col h-full overflow-hidden"}`}>
 
@@ -772,11 +797,21 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
               }`}
               style={activeTab === tab ? { color: 'var(--syn-info, #155eef)', background: 'var(--syn-surface-raised, #fff)' } : {}}
             >
-              {tab}
+              {tab === 'Excluded' ? `Excluded (${excludedCount})` : tab}
             </button>
           ))}
         </div>
         <div className="flex items-center gap-2 relative">
+          {!readOnly && (
+            <ExclusionControls
+              activeTab={activeTab}
+              selectedRow={selectedRow}
+              selectedRowIdx={selectedRowIdx ?? null}
+              onExcludeSingle={onExcludeSingle}
+              onExcludeRange={onExcludeRange}
+              onRestoreExclusion={onRestoreExclusion}
+            />
+          )}
           {activeTab === 'Results' && (
             <div ref={columnMenuRef}>
               <button
@@ -824,18 +859,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
           )}
           {!readOnly && (
             <>
-              <button
-                onClick={() => {
-                  const urlParams = new URLSearchParams(window.location.search);
-                  const sessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
-                  navigate(`/ili-sectioning?sessionId=${sessionId}`);
-                }}
-                className="syn-btn syn-btn--sm syn-btn--ink"
-              >
-                <FiMap size={14} />
-                Sectional
-              </button>
-              <button onClick={exportToExcel} disabled={isExporting} className="syn-btn syn-btn--sm syn-btn--lime">
+              <button onClick={exportToExcel} disabled={isExporting || activeTab === 'Excluded'} className="syn-btn syn-btn--sm syn-btn--lime">
                 <FiDownload size={14} />
                 {isExporting ? 'Exporting...' : 'Excel'}
               </button>
@@ -843,7 +867,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                 kind="ILI_ALIGNMENT"
                 title={`Final ILI alignment${shareSessionId ? ` · Session ${shareSessionId}` : ''}`}
                 sourceRef={shareSessionId ? `alignment-session:${shareSessionId}` : undefined}
-                rows={data}
+                rows={includedInterventionRows(data)}
                 referenceOnly
                 summary={summaryCounts ? [
                   { label: 'GW locked', value: summaryCounts.gwLocked },
@@ -896,7 +920,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
         />
       )}
 
-      {(activeTab === 'Results' || activeTab === 'ILI Run 1' || activeTab === 'ILI Run 2' || activeTab === 'Interventions') && (
+      {(activeTab === 'Results' || activeTab === 'ILI Run 1' || activeTab === 'ILI Run 2' || activeTab === 'Interventions' || activeTab === 'Excluded') && (
         <div className="flex flex-col h-full overflow-hidden text-sm relative">
           {/* Summary Dashboard */}
           {summaryCounts && (
@@ -994,7 +1018,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
               className="flex-1 overflow-auto"
               onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
             >
-              {(activeTab === 'Results' || activeTab === 'Interventions') && (
+              {(activeTab === 'Results' || activeTab === 'Interventions' || activeTab === 'Excluded') && (
                 <table className="results-table w-max text-left border-collapse text-[11px] leading-tight table-fixed break-words min-w-full">
                   <thead className="sticky top-0 z-10">
                     <tr>
@@ -1017,7 +1041,9 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                           style={{ width: colWidths[col] || 150 }}
                           title={col === MASTER_AXIS_COLUMN
                             ? 'Canonical TIE-in coordinate used to align and order OLD and NEW rows.'
-                            : undefined}
+                            : col === DEPTH_GROWTH_COLUMN
+                              ? 'Converted from %WT/year using NEW wall thickness (OLD when NEW is unavailable).'
+                              : undefined}
                           aria-sort={sortConfig?.key === col ? (sortConfig.direction === 'asc' ? 'ascending' : 'descending') : undefined}
                           className={`px-2 py-2 font-bold whitespace-nowrap relative group select-none ${draggedColumn === col ? 'opacity-50' : ''}`}
                         >
@@ -1088,6 +1114,8 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                           let rowClass = 'results-row';
                           if (isSelected) {
                             rowClass += ' results-row--selected';
+                          } else if (isExcludedRow(row)) {
+                            rowClass += ' opacity-60';
                           } else if (isMatch) {
                             if (featType.includes('valve')) rowClass += ' results-row--match-valve';
                             else if (featType.includes('weld')) rowClass += ' results-row--match-weld';
@@ -1129,7 +1157,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                                 }
                                 const isNewDataCol = col.includes('NEW');
                                 // Only format computed columns; leave raw data values untouched
-                                if ((col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)') && val !== '-' && val != null && !isNaN(parseFloat(String(val)))) {
+                                if ((col === DEPTH_GROWTH_COLUMN || col === 'Length Growth (mm/yr)') && val !== '-' && val != null && !isNaN(parseFloat(String(val)))) {
                                   val = parseFloat(String(val)).toFixed(3);
                                 }
                                 if (col === MASTER_AXIS_COLUMN && val !== '-' && val != null && !isNaN(Number(val))) {
@@ -1142,8 +1170,8 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                                 return (
                                   <td 
                                     key={j} 
-                                    className={`px-2 whitespace-nowrap overflow-hidden text-ellipsis ${col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)' ? 'font-bold' : ''} ${activeTab === 'Interventions' && isNewDataCol ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                                    style={col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)' ? { color: 'var(--syn-info, #155eef)' } : undefined}
+                                    className={`px-2 whitespace-nowrap overflow-hidden text-ellipsis ${col === DEPTH_GROWTH_COLUMN || col === 'Length Growth (mm/yr)' ? 'font-bold' : ''} ${activeTab === 'Interventions' && isNewDataCol ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                                    style={col === DEPTH_GROWTH_COLUMN || col === 'Length Growth (mm/yr)' ? { color: 'var(--syn-info, #155eef)' } : undefined}
                                     draggable={activeTab === 'Interventions' && isNewDataCol && val !== '-' && val !== null && val !== undefined}
                                     onDragStart={(e) => {
                                       if (activeTab === 'Interventions' && isNewDataCol) {

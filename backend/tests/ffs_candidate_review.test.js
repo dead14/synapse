@@ -175,6 +175,16 @@ test('candidate queries stay scoped to the owning organization', async () => {
     assert.match(pool.calls[1].text, /FILTER \(WHERE c\.selected\)/i);
 });
 
+test('eligible-session review counts are pre-aggregated without grouping the JSON config', async () => {
+    const pool = recordingPool([{ rows: [], rowCount: 0 }]);
+
+    await listReviewedSessions(pool, 22);
+
+    const sql = pool.calls[0].text;
+    assert.match(sql, /SELECT\s+c\.session_id[\s\S]*GROUP BY c\.session_id/i);
+    assert.doesNotMatch(sql, /GROUP BY[\s\S]*s\.params_json/i);
+});
+
 test('result source keys come from the latest completed alignment job', async () => {
     const pool = recordingPool([{
         rows: [{ source_key: 'NEW-1' }, { source_key: 'NEW-2' }],
