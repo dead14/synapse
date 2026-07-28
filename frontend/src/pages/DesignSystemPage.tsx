@@ -20,6 +20,14 @@ import {
 } from '../components/ds';
 import SectionRangeBrush from '../sectioning/SectionRangeBrush';
 import type { LockedGwPair } from '../wizard/matchingSections';
+import ClockRose from '../components/corrosion/ClockRose';
+import DepthHistogram from '../components/corrosion/DepthHistogram';
+import DepthLengthEnvelope from '../components/corrosion/DepthLengthEnvelope';
+import KpDensity from '../components/corrosion/KpDensity';
+import RemainingLife from '../components/corrosion/RemainingLife';
+import ReviewQueue from '../components/corrosion/ReviewQueue';
+import SegmentSeverity from '../components/corrosion/SegmentSeverity';
+import type { CorrosionFeature } from '../lib/corrosion/analysis';
 
 /**
  * Living reference for the design system — dev-only, mounted at /ds-preview.
@@ -38,6 +46,46 @@ const MOCK_GWS: LockedGwPair[] = Array.from({ length: 61 }, (_, index) => ({
 
 const VARIANTS = ['primary', 'secondary', 'soft', 'ghost', 'danger', 'danger-solid'] as const;
 const SIZES = ['xs', 'sm', 'md', 'lg'] as const;
+
+const SECTIONS = ['Buried S-17', 'River crossing RC-04', 'Road crossing CR-09', 'Aerial AE-02', 'Transition TR-01'];
+
+/**
+ * Synthetic corrosion population, shaped like a real run: mostly shallow with a
+ * long tail, internal loss clustered along the invert, and a density hotspot.
+ */
+const MOCK_FEATURES: CorrosionFeature[] = Array.from({ length: 420 }, (_, index) => {
+  const rand = (seed: number) => ((Math.sin(index * 12.9898 + seed) * 43758.5453) % 1 + 1) % 1;
+  const internal = rand(1) < 0.62;
+  // Internal loss sits low in the bore; external gathers on the crown.
+  const hour = internal ? 4 + rand(2) * 4 : (10 + rand(3) * 4) % 12;
+  const depth = Math.min(92, 6 + rand(4) ** 2.4 * 80);
+  const clustered = rand(5) < 0.35;
+  const distance = clustered ? 4200 + rand(6) * 900 : rand(7) * 12400;
+  const growth = rand(8) < 0.18 ? -0.4 + rand(9) * 0.4 : rand(10) ** 2 * 2.4;
+
+  return {
+    sourceKey: `k-${index}`,
+    featureId: `ML-25-${String(1000 + index).padStart(6, '0')}`,
+    section: SECTIONS[Math.floor(rand(11) * SECTIONS.length)],
+    featureType: 'Metal Loss',
+    distanceM: distance,
+    clock: `${Math.floor(hour) === 0 ? 12 : Math.floor(hour)}:${String(Math.floor((hour % 1) * 60)).padStart(2, '0')}`,
+    surface: internal ? 'Internal' : 'External',
+    depthPct: depth,
+    lengthMm: 12 + rand(12) * 180,
+    widthMm: 8 + rand(13) * 60,
+    wallMm: 9.5,
+    depthGrowthPctWtPerYear: growth,
+    lengthGrowthMmPerYear: null,
+    erf: 0.4 + (depth / 100) * 0.9,
+    psafeBar: null,
+    matchStatus: rand(14) < 0.25 ? 'Unmatched' : 'Matched',
+    physicsWarning: '-',
+    growthClass: growth >= 0.5 ? 'active' : growth > 0 ? 'possibly-active' : 'stable',
+    ffsReady: rand(15) > 0.08,
+    blockers: rand(15) > 0.08 ? [] : ['No reported width'],
+  };
+});
 
 export default function DesignSystemPage() {
   const [range, setRange] = useState<{ startIndex: number; endIndex: number } | null>({ startIndex: 12, endIndex: 28 });
@@ -200,6 +248,48 @@ export default function DesignSystemPage() {
             </table>
           </div>
         </PanelBody>
+      </Panel>
+
+      <Panel>
+        <PanelHeader plain eyebrow="Corrosion" title="Wall loss distribution" subtitle="Severity-banded, with the 80 %WT B31G domain limit." />
+        <PanelBody><DepthHistogram features={MOCK_FEATURES} /></PanelBody>
+      </Panel>
+
+      <div className="ds-grid-2">
+        <Panel>
+          <PanelHeader plain eyebrow="Corrosion" title="Orientation by clock position" />
+          <PanelBody><ClockRose features={MOCK_FEATURES} /></PanelBody>
+        </Panel>
+        <Panel>
+          <PanelHeader plain eyebrow="Corrosion" title="Depth against length" />
+          <PanelBody>
+            <DepthLengthEnvelope
+              features={MOCK_FEATURES}
+              geometry={{ outerDiameterMm: 273, smysMpa: 359, designFactor: 0.72, operatingPressureMpa: 8.3 }}
+            />
+          </PanelBody>
+        </Panel>
+      </div>
+
+      <Panel>
+        <PanelHeader plain eyebrow="Corrosion" title="Density along the line" />
+        <PanelBody><KpDensity features={MOCK_FEATURES} /></PanelBody>
+      </Panel>
+
+      <div className="ds-grid-2">
+        <Panel>
+          <PanelHeader plain eyebrow="Corrosion" title="Severity by section" />
+          <PanelBody><SegmentSeverity features={MOCK_FEATURES} /></PanelBody>
+        </Panel>
+        <Panel>
+          <PanelHeader plain eyebrow="Corrosion" title="Remaining life" />
+          <PanelBody><RemainingLife features={MOCK_FEATURES} limit={8} /></PanelBody>
+        </Panel>
+      </div>
+
+      <Panel>
+        <PanelHeader plain eyebrow="Corrosion" title="Ranked review queue" />
+        <PanelBody><ReviewQueue features={MOCK_FEATURES} pageSize={8} /></PanelBody>
       </Panel>
 
       <Panel>
