@@ -12,6 +12,7 @@ const ORIGINAL_DISTANCE_COLUMN: Record<string, string> = {
 const RUN_PAIR_SOURCE_KEYS = ['pair_index', 'pair_key', 'pair_label', 'pair_old_year', 'pair_new_year'] as const;
 
 export const RUN_PAIR_COLUMN = 'Run Pair';
+export const MASTER_AXIS_COLUMN = 'Master Axis (m)';
 
 const DISPLAY_METADATA_COLUMNS = new Set([
   ...Object.values(ORIGINAL_DISTANCE_COLUMN),
@@ -44,6 +45,9 @@ function hasDistance(value: unknown): boolean {
 }
 
 export function alignmentDisplayValue<T extends Record<string, unknown>>(row: T, column: string): T[string] {
+  if (column === MASTER_AXIS_COLUMN) {
+    return (alignmentMasterAxisDistance(row) ?? '-') as T[string];
+  }
   const originalColumn = ORIGINAL_DISTANCE_COLUMN[column];
   const originalDistance = originalColumn ? row[originalColumn] : undefined;
   return (hasDistance(originalDistance) ? originalDistance : row[column]) as T[string];
@@ -53,26 +57,29 @@ export function isAlignmentDisplayMetadata(column: string): boolean {
   return DISPLAY_METADATA_COLUMNS.has(column);
 }
 
-function displayedDistance<T extends Record<string, unknown>>(row: T, column: string): number | null {
-  const distance = Number(alignmentDisplayValue(row, column));
-  return Number.isFinite(distance) ? distance : null;
+function mappedDistance(value: unknown): number | null {
+  return hasDistance(value) ? Number(value) : null;
 }
 
-export function sortAlignmentRowsByDisplayedLogDistance<T extends Record<string, unknown>>(rows: readonly T[]): T[] {
+/**
+ * Canonical spatial coordinate used by the aligned viewer. NEW is already on
+ * the master odometer; an OLD-only row carries its TIE-in projection in the
+ * mapped Log Dist OLD field while its vendor-reported LD remains display-only.
+ */
+export function alignmentMasterAxisDistance<T extends Record<string, unknown>>(row: T): number | null {
+  return mappedDistance(row['Log Dist NEW (m)']) ?? mappedDistance(row['Log Dist OLD (m)']);
+}
+
+export function sortAlignmentRowsByMasterAxis<T extends Record<string, unknown>>(rows: readonly T[]): T[] {
   return rows
     .map((row, index) => ({
       row,
       index,
-      oldDistance: displayedDistance(row, 'Log Dist OLD (m)'),
-      newDistance: displayedDistance(row, 'Log Dist NEW (m)'),
+      masterDistance: alignmentMasterAxisDistance(row),
     }))
     .sort((left, right) => {
-      const leftHasNew = left.newDistance !== null;
-      const rightHasNew = right.newDistance !== null;
-      if (leftHasNew !== rightHasNew) return leftHasNew ? -1 : 1;
-
-      const leftDistance = left.newDistance ?? left.oldDistance ?? Number.POSITIVE_INFINITY;
-      const rightDistance = right.newDistance ?? right.oldDistance ?? Number.POSITIVE_INFINITY;
+      const leftDistance = left.masterDistance ?? Number.POSITIVE_INFINITY;
+      const rightDistance = right.masterDistance ?? Number.POSITIVE_INFINITY;
       return leftDistance - rightDistance || left.index - right.index;
     })
     .map(({ row }) => row);

@@ -8,7 +8,8 @@ import { createExcelExportRows } from './utils/alignmentExport';
 import {
   alignmentDisplayValue,
   isAlignmentDisplayMetadata,
-  sortAlignmentRowsByDisplayedLogDistance,
+  MASTER_AXIS_COLUMN,
+  sortAlignmentRowsByMasterAxis,
 } from './utils/alignmentDisplay';
 import ShareSnapshotButton from './components/sharing/ShareSnapshotButton';
 
@@ -307,9 +308,10 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
     // highlighting, and onUpdateMatch all report it, and the parent
     // (IliComparisonPage) maps it straight back onto the rows it passed in.
     flattened.forEach((row, idx) => { row.__origIdx = idx; });
-    // NEW is the spatial master. Keep the default order consistent with the
-    // source NEW log distance rendered in the table; OLD-only rows follow it.
-    return sortAlignmentRowsByDisplayedLogDistance(flattened);
+    // Use the same canonical master axis as the aligned viewer. Reported OLD
+    // and NEW LDs remain visible, but unmatched rows from both runs interleave
+    // at their physical TIE-in positions instead of forming separate blocks.
+    return sortAlignmentRowsByMasterAxis(flattened);
   }, [rawData]);
 
   const navigate = useNavigate();
@@ -407,7 +409,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
         && !isAlignmentDisplayMetadata(k)
       );
       // Add computed columns at the end
-      keys.push('Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning');
+      keys.push(MASTER_AXIS_COLUMN, 'Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning');
       return ['Section', ...keys];
     }
     return ['Section'];
@@ -449,6 +451,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
         'Section',
         'Identif. OLD', 'Identif. NEW',
         'Log Dist OLD (m)', 'Log Dist NEW (m)',
+        MASTER_AXIS_COLUMN,
         'Feature Type OLD', 'Feature Type NEW',
         'Depth OLD (%WT)', 'Depth NEW (%WT)',
         'Length OLD (mm)', 'Length NEW (mm)',
@@ -497,6 +500,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
       'Section',
       'Identif. OLD', 'Identif. NEW',
       'Log Dist OLD (m)', 'Log Dist NEW (m)',
+      MASTER_AXIS_COLUMN,
       'Feature Type OLD', 'Feature Type NEW',
       'Depth OLD (%WT)', 'Depth NEW (%WT)',
       'Length OLD (mm)', 'Length NEW (mm)',
@@ -1009,6 +1013,9 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                             handleColumnDrop(col);
                           }}
                           style={{ width: colWidths[col] || 150 }}
+                          title={col === MASTER_AXIS_COLUMN
+                            ? 'Canonical TIE-in coordinate used to align and order OLD and NEW rows.'
+                            : undefined}
                           aria-sort={sortConfig?.key === col ? (sortConfig.direction === 'asc' ? 'ascending' : 'descending') : undefined}
                           className={`px-2 py-2 font-bold whitespace-nowrap relative group select-none ${draggedColumn === col ? 'opacity-50' : ''}`}
                         >
@@ -1122,6 +1129,9 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                                 // Only format computed columns; leave raw data values untouched
                                 if ((col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)') && val !== '-' && val != null && !isNaN(parseFloat(String(val)))) {
                                   val = parseFloat(String(val)).toFixed(3);
+                                }
+                                if (col === MASTER_AXIS_COLUMN && val !== '-' && val != null && !isNaN(Number(val))) {
+                                  val = Number(val).toFixed(3);
                                 }
                                 // Convert O'Clock Excel time serial fractions to HH:MM
                                 if (col.includes("O'Clock")) {
