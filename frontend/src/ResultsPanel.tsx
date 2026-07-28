@@ -814,10 +814,12 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
               )}
             </div>
           )}
+          {/* The matching charts moved to Corrosion Analysis, where the rest of
+              the analysis lives — this table is for reading rows, not plotting. */}
           {!readOnly && onOpenAnalytics && (
-            <button onClick={onOpenAnalytics} className="syn-btn syn-btn--sm syn-btn--ink">
+            <button onClick={onOpenAnalytics} className="ds-btn ds-btn--secondary ds-btn--sm">
               <FiActivity size={14} />
-              Analytics
+              Corrosion analysis
             </button>
           )}
           {!readOnly && (

@@ -862,6 +862,315 @@
 }
 
 /* ===========================================================================
+ * Chart tokens
+ *
+ * Series and status colours are the validated data-viz palette, not the UI
+ * brand ramp — they were checked with the palette validator against this app's
+ * own light (#ffffff) and dark (#161b26) chart surfaces for the lightness band,
+ * chroma floor, CVD separation, normal-vision floor, and contrast.
+ * Identity is never carried by hue alone: every chart ships a legend, and the
+ * status colours always appear with a written label.
+ * ======================================================================== */
+
+:root {
+  /* Categorical — slot order is the CVD-safety mechanism, never cycled. */
+  --viz-series-1: #2a78d6;  /* OLD run / internal surface */
+  --viz-series-2: #eb6834;  /* NEW run / external surface */
+  --viz-series-3: #1baf7a;  /* third series only; needs a visible label on light */
+
+  /* Status — reserved, never reused as a series colour. */
+  --viz-low: #0ca30c;
+  --viz-medium: #fab219;
+  --viz-high: #ec835a;
+  --viz-critical: #d03b3b;
+
+  /* Sequential (magnitude): one hue, light → dark. */
+  --viz-seq-100: #cde2fb;
+  --viz-seq-300: #6da7ec;
+  --viz-seq-450: #2a78d6;
+  --viz-seq-600: #184f95;
+
+  /* Diverging (polarity) — warm/cool poles, neutral grey midpoint. */
+  --viz-neg: #2a78d6;
+  --viz-mid: #f0efec;
+  --viz-pos: #d03b3b;
+
+  /* Chrome */
+  --viz-grid: #e4e7ec;
+  --viz-axis: #d0d5dd;
+  --viz-ink: #101828;
+  --viz-ink-soft: #475467;
+  --viz-muted: #667085;
+  --viz-surface: #ffffff;
+}
+
+.dark {
+  --viz-series-1: #3987e5;
+  --viz-series-2: #d95926;
+  --viz-series-3: #199e70;
+
+  --viz-seq-100: #10306a;
+  --viz-seq-300: #1c5cab;
+  --viz-seq-450: #3987e5;
+  --viz-seq-600: #86b6ef;
+
+  --viz-neg: #3987e5;
+  --viz-mid: #383835;
+  --viz-pos: #e66767;
+
+  --viz-grid: #283244;
+  --viz-axis: #3a465c;
+  --viz-ink: #f2f4f7;
+  --viz-ink-soft: #d0d5dd;
+  --viz-muted: #98a2b3;
+  --viz-surface: #161b26;
+}
+
+/* Legend — always present for two or more series */
+.viz-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.875rem;
+}
+
+.viz-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--viz-ink-soft);
+  font-size: var(--ds-t-xs);
+  line-height: 1;
+}
+
+.viz-legend__swatch {
+  width: 0.625rem;
+  height: 0.625rem;
+  flex: 0 0 auto;
+  border-radius: 0.1875rem;
+  background: var(--swatch, var(--viz-series-1));
+}
+
+.viz-legend__swatch--hollow { background: transparent; border: 2px solid var(--swatch); }
+.viz-legend__swatch--round { border-radius: 50%; }
+
+/* Figure caption — the sentence the chart is there to support */
+.viz-note {
+  margin: 0;
+  color: var(--viz-muted);
+  font-size: var(--ds-t-xs);
+  line-height: 1.45;
+}
+
+.viz-note strong { color: var(--viz-ink); font-weight: 650; }
+
+.viz-plot { width: 100%; overflow: visible; }
+.viz-plot text { font-family: var(--ds-font); }
+.viz-tick { fill: var(--viz-muted); font-size: 10px; }
+.viz-axis-title { fill: var(--viz-muted); font-size: 10px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; }
+.viz-grid-line { stroke: var(--viz-grid); stroke-width: 1; }
+.viz-axis-line { stroke: var(--viz-axis); stroke-width: 1; }
+.viz-threshold { stroke: var(--viz-critical); stroke-width: 1.5; }
+.viz-threshold-label { fill: var(--viz-critical); font-size: 10px; font-weight: 700; }
+
+/* Hover target — bigger than the mark, per the interaction rules */
+.viz-hit { fill: transparent; cursor: pointer; }
+.viz-hit:hover + .viz-mark, .viz-bar:hover { filter: brightness(1.08); }
+
+.viz-tooltip {
+  position: absolute;
+  z-index: 40;
+  min-width: 8rem;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r-sm);
+  background: var(--ds-surface);
+  padding: 0.5rem 0.625rem;
+  box-shadow: var(--ds-shadow-pop);
+  pointer-events: none;
+}
+
+.viz-tooltip__title {
+  color: var(--viz-ink);
+  font-family: var(--ds-font-data);
+  font-size: var(--ds-t-xs);
+  font-weight: 700;
+}
+
+.viz-tooltip__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--viz-ink-soft);
+  font-size: var(--ds-t-xs);
+}
+
+.viz-tooltip__row b { font-family: var(--ds-font-data); font-weight: 700; }
+
+/* Chart frame inside a DS panel */
+.viz-frame { position: relative; display: grid; gap: 0.625rem; }
+
+/* Severity chip — status colour always paired with its written label */
+.viz-sev {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  color: var(--viz-ink-soft);
+  font-size: var(--ds-t-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.viz-sev::before {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--tone);
+  content: '';
+}
+
+.viz-sev--low { --tone: var(--viz-low); }
+.viz-sev--medium { --tone: var(--viz-medium); }
+.viz-sev--high { --tone: var(--viz-high); }
+.viz-sev--critical { --tone: var(--viz-critical); }
+
+/* Matching charts (moved out of the comparison table into Corrosion Analysis) */
+.adv-charts { display: grid; gap: 0.875rem; padding: var(--ds-pad-panel); }
+
+.adv-charts__plot {
+  display: flex;
+  min-height: 24rem;
+  flex-direction: column;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r-sm);
+  background: var(--viz-surface);
+  padding: 0.875rem;
+}
+
+/* One filter row above the plot, scoping every chart in the card. */
+.adv-charts__filters {
+  display: grid;
+  gap: 0.875rem;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r-sm);
+  background: var(--ds-surface-sunken);
+  padding: 0.875rem;
+}
+
+.adv-charts__group { display: grid; gap: 0.375rem; min-width: 0; margin: 0; border: 0; padding: 0; }
+.adv-charts__group legend { padding: 0; margin-bottom: 0.125rem; }
+
+.adv-charts__opt {
+  display: flex;
+  align-items: center;
+  gap: 0.4375rem;
+  color: var(--ds-ink-soft);
+  font-size: var(--ds-t-xs);
+  cursor: pointer;
+}
+
+.adv-charts__opt input { width: 0.875rem; height: 0.875rem; flex: 0 0 auto; accent-color: var(--ds-primary); }
+
+.adv-charts__num {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: var(--ds-ink-soft);
+  font-size: var(--ds-t-xs);
+}
+
+.adv-charts__num input { width: 4.5rem; }
+
+/* Section severity — proportional stacked rows */
+.seg-bars { display: grid; gap: 0.4375rem; }
+
+.seg-bars__row {
+  display: grid;
+  align-items: center;
+  gap: 0.625rem;
+  grid-template-columns: minmax(5rem, 8rem) minmax(0, 1fr) 3rem;
+}
+
+.seg-bars__label {
+  overflow: hidden;
+  color: var(--viz-ink-soft);
+  font-size: var(--ds-t-xs);
+  font-weight: 600;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seg-bars__track {
+  display: flex;
+  /* A 2px surface gap separates segments — never a border on the mark. */
+  gap: 2px;
+  height: 1.125rem;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.seg-bars__seg { min-width: 2px; cursor: pointer; transition: filter var(--ds-dur) var(--ds-ease); }
+.seg-bars__seg:first-child { border-radius: 4px 0 0 4px; }
+.seg-bars__seg:last-child { border-radius: 0 4px 4px 0; }
+.seg-bars__seg:hover { filter: brightness(1.1); }
+
+.seg-bars__total {
+  color: var(--viz-ink);
+  font-family: var(--ds-font-data);
+  font-size: var(--ds-t-xs);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+/* Remaining-life rows */
+.life-rows { display: grid; gap: 0.375rem; }
+
+.life-rows__row {
+  display: grid;
+  align-items: center;
+  gap: 0.625rem;
+  grid-template-columns: minmax(4rem, 7rem) 5.5rem minmax(0, 1fr) 3.5rem 5rem;
+}
+
+.life-rows__id {
+  overflow: hidden;
+  color: var(--viz-ink);
+  font-family: var(--ds-font-data);
+  font-size: var(--ds-t-xs);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.life-rows__kp,
+.life-rows__years {
+  color: var(--viz-ink-soft);
+  font-family: var(--ds-font-data);
+  font-size: var(--ds-t-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.life-rows__years { font-weight: 700; text-align: right; }
+
+.life-rows__track {
+  height: 0.625rem;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--ds-surface-inset);
+}
+
+.life-rows__bar { display: block; height: 100%; border-radius: 4px; cursor: pointer; }
+
+@media (max-width: 48rem) {
+  .life-rows__row { grid-template-columns: minmax(0, 1fr) 3.5rem; row-gap: 0.25rem; }
+  .life-rows__kp, .life-rows__track { grid-column: 1 / -1; }
+  .seg-bars__row { grid-template-columns: minmax(4rem, 6rem) minmax(0, 1fr) 2.5rem; }
+}
+
+/* ===========================================================================
  * GW matching settings (step 3)
  * ======================================================================== */
 

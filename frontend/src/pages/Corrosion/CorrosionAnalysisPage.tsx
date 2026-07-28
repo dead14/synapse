@@ -1,77 +1,85 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  FiActivity,
   FiAlertTriangle,
   FiArrowLeft,
+  FiBarChart2,
   FiCheckCircle,
-  FiFilter,
-  FiSave,
+  FiCompass,
+  FiInfo,
+  FiLayers,
   FiTrendingUp,
 } from 'react-icons/fi';
+
 import PageMeta from '../../components/common/PageMeta';
-import SynButton from '../../components/ui/SynButton';
 import { useToast } from '../../components/common/ToastProvider';
 import ShareSnapshotButton from '../../components/sharing/ShareSnapshotButton';
-import { fetchAlignmentResult } from '../../utils/alignment';
 import {
-  DEFAULT_SUGGESTION_RULE,
+  Badge,
+  Button,
+  Callout,
+  Field,
+  Input,
+  Panel,
+  PanelBody,
+  PanelHeader,
+  Segmented,
+  Stat,
+  StatGrid,
+} from '../../components/ds';
+import ClockRose from '../../components/corrosion/ClockRose';
+import DepthHistogram from '../../components/corrosion/DepthHistogram';
+import DepthLengthEnvelope, { type PipeGeometry } from '../../components/corrosion/DepthLengthEnvelope';
+import KpDensity from '../../components/corrosion/KpDensity';
+import RemainingLife from '../../components/corrosion/RemainingLife';
+import ReviewQueue from '../../components/corrosion/ReviewQueue';
+import SegmentSeverity from '../../components/corrosion/SegmentSeverity';
+import { SEVERITY_ORDER_VARS, SEVERITY_LABEL } from '../../components/corrosion/vizPrimitives';
+import { fetchAlignmentResult, type ComparisonRow } from '../../utils/alignment';
+import {
   analyseComparison,
-  buildReviewPayload,
   isMetalLoss,
-  suggestSelection,
-  summariseCorrosion,
   type CorrosionFeature,
 } from '../../lib/corrosion/analysis';
 import {
+  corrosionVitals,
+  hasSections,
+  populationChange,
+  surfaceSplit,
+} from '../../lib/corrosion/analytics';
+import {
   fetchFfsCandidates,
   saveFfsCandidates,
-  selectedKeysOf,
   type FfsCandidateReview,
 } from '../../lib/corrosion/reviewClient';
 
-type FeatureFilter = 'assessable' | 'metal-loss' | 'all';
+const MatchingCharts = lazy(() => import('../../components/charts/AdvancedCharts'));
 
-const FILTERS: { id: FeatureFilter; label: string }[] = [
-  { id: 'assessable', label: 'FFS-assessable' },
-  { id: 'metal-loss', label: 'Metal loss' },
-  { id: 'all', label: 'All NEW-run features' },
+type TabId = 'overview' | 'distribution' | 'growth' | 'segments' | 'queue';
+
+const TABS: Array<{ id: TabId; label: string; icon: ReactNode }> = [
+  { id: 'overview', label: 'Overview', icon: <FiBarChart2 aria-hidden="true" /> },
+  { id: 'distribution', label: 'Distribution', icon: <FiCompass aria-hidden="true" /> },
+  { id: 'growth', label: 'Growth & life', icon: <FiTrendingUp aria-hidden="true" /> },
+  { id: 'segments', label: 'Segments', icon: <FiLayers aria-hidden="true" /> },
+  { id: 'queue', label: 'Review queue', icon: <FiActivity aria-hidden="true" /> },
 ];
 
-const PAGE_STEP = 250;
-
-const GROWTH_LABEL: Record<CorrosionFeature['growthClass'], string> = {
-  active: 'Active',
-  'possibly-active': 'Possibly active',
-  stable: 'Stable',
-  unknown: 'Unknown',
-};
-
-const GROWTH_TONE: Record<CorrosionFeature['growthClass'], string> = {
-  active: 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300',
-  'possibly-active': 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300',
-  stable: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300',
-  unknown: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400',
-};
-
-function fixed(value: number | null, digits = 2): string {
-  return value === null ? '–' : value.toFixed(digits);
-}
-
-function SummaryChip({ label, value, tone }: { label: string; value: number; tone?: string }) {
-  return (
-    <div className={`rounded-lg border px-3 py-2 ${tone || 'border-slate-200 dark:border-slate-700'}`}>
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="text-lg font-bold text-slate-800 dark:text-slate-100">{value.toLocaleString()}</p>
-    </div>
-  );
+function numberOrNull(value: string): number | null {
+  const parsed = Number(value.trim().replace(',', '.'));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 /**
- * Corrosion Analysis — the gate between a finished alignment and FFS.
+ * Corrosion Analysis — where the condition of the line is read, and the gate
+ * into fitness-for-service.
  *
- * The engineer reviews the corrosion condition of every NEW-run feature and
- * releases the ones worth a B31G assessment. Nothing is pre-selected: a feature
- * reaches FFS only because someone decided it should.
+ * The page used to be a checkbox list: an engineer ticked features one at a
+ * time with nothing on screen to base the decision on. Now the analysis comes
+ * first — depth population, orientation, density, growth, section profile — and
+ * the handoff to FFS is a single validation at the end.
  */
 export default function CorrosionAnalysisPage() {
   const { sessionId = '' } = useParams();
@@ -80,16 +88,20 @@ export default function CorrosionAnalysisPage() {
 
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(0);
-  const [progressMessage, setProgressMessage] = useState('Loading the alignment result...');
+  const [progressMessage, setProgressMessage] = useState('Loading the alignment result…');
   const [error, setError] = useState('');
   const [features, setFeatures] = useState<CorrosionFeature[]>([]);
+  const [comparison, setComparison] = useState<ComparisonRow[]>([]);
   const [review, setReview] = useState<FfsCandidateReview | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [reasons, setReasons] = useState<Record<string, string>>({});
-  const [filter, setFilter] = useState<FeatureFilter>('assessable');
-  const [visibleCount, setVisibleCount] = useState(PAGE_STEP);
+  const [tab, setTab] = useState<TabId>('overview');
   const [saving, setSaving] = useState(false);
-  const [dirty, setDirty] = useState(false);
+
+  // Pipe geometry is not carried in the alignment result, so the acceptance
+  // envelope stays off until the engineer supplies it rather than assuming a
+  // diameter and drawing a curve that belongs to a different pipe.
+  const [odMm, setOdMm] = useState('');
+  const [smys, setSmys] = useState('359');
+  const [maop, setMaop] = useState('');
 
   useEffect(() => {
     if (!sessionId) return;
@@ -109,17 +121,9 @@ export default function CorrosionAnalysisPage() {
           fetchFfsCandidates(sessionId, controller.signal),
         ]);
         if (cancelled) return;
-
+        setComparison(result.comparison);
         setFeatures(analyseComparison(result.comparison));
         setReview(saved);
-        // A stale review is loaded but not treated as decided: the engineer
-        // sees the earlier decisions and has to confirm them against the new
-        // result before anything reaches FFS.
-        setSelected(saved.stale ? new Set() : selectedKeysOf(saved));
-        setReasons(Object.fromEntries(
-          saved.items.filter((item) => item.reason).map((item) => [item.sourceKey, item.reason as string]),
-        ));
-        setDirty(false);
       } catch (caught) {
         if (cancelled || (caught instanceof DOMException && caught.name === 'AbortError')) return;
         setError(caught instanceof Error ? caught.message : 'The alignment result could not be loaded.');
@@ -135,348 +139,355 @@ export default function CorrosionAnalysisPage() {
     };
   }, [sessionId]);
 
-  const summary = useMemo(() => summariseCorrosion(features), [features]);
+  const metalLoss = useMemo(() => features.filter(isMetalLoss), [features]);
+  const vitals = useMemo(() => corrosionVitals(features), [features]);
+  const split = useMemo(() => surfaceSplit(metalLoss), [metalLoss]);
+  const change = useMemo(() => populationChange(metalLoss), [metalLoss]);
+  const sectioned = useMemo(() => hasSections(features), [features]);
 
-  const visible = useMemo(() => {
-    if (filter === 'all') return features;
-    if (filter === 'metal-loss') return features.filter(isMetalLoss);
-    return features.filter((feature) => feature.ffsReady && isMetalLoss(feature));
-  }, [features, filter]);
+  const geometry = useMemo<PipeGeometry | null>(() => {
+    const od = numberOrNull(odMm);
+    const smysMpa = numberOrNull(smys);
+    const maopMpa = numberOrNull(maop);
+    if (od === null || smysMpa === null || maopMpa === null) return null;
+    return { outerDiameterMm: od, smysMpa, designFactor: 0.72, operatingPressureMpa: maopMpa };
+  }, [maop, odMm, smys]);
 
-  useEffect(() => setVisibleCount(PAGE_STEP), [filter]);
+  const releasedCount = review?.items.filter((item) => item.selected).length ?? 0;
+  const validated = releasedCount > 0 && !review?.stale;
 
-  const toggle = useCallback((sourceKey: string, ffsReady: boolean) => {
-    if (!ffsReady) return;
-    setSelected((current) => {
-      const next = new Set(current);
-      if (next.has(sourceKey)) next.delete(sourceKey);
-      else next.add(sourceKey);
-      return next;
-    });
-    setDirty(true);
-  }, []);
-
-  const applySuggestion = useCallback(() => {
-    const suggested = suggestSelection(features, DEFAULT_SUGGESTION_RULE);
-    setSelected((current) => new Set([...current, ...suggested]));
-    setDirty(true);
-    toast.showToast(`${suggested.size.toLocaleString()} feature(s) proposed. Review them before saving.`, 'info');
-  }, [features, toast]);
-
-  const clearSelection = useCallback(() => {
-    setSelected(new Set());
-    setDirty(true);
-  }, []);
-
-  const save = useCallback(async () => {
+  /**
+   * One action releases the whole metal-loss population. Features with
+   * incomplete dimensions are included by decision — the count is shown next to
+   * the button so the engineer knows what the B31G engine will reject.
+   */
+  const validateForFfs = useCallback(async () => {
     if (!review) return;
     setSaving(true);
     try {
-      const items = buildReviewPayload(features, selected, reasons);
+      const items = metalLoss.map((feature) => ({
+        sourceKey: feature.sourceKey,
+        featureId: feature.featureId,
+        selected: true,
+        reason: feature.ffsReady ? null : feature.blockers.join('; '),
+      }));
       const saved = await saveFfsCandidates(sessionId, { signature: review.signature, items });
       setReview(saved);
-      setSelected(selectedKeysOf(saved));
-      setDirty(false);
-      toast.success(`${saved.selectedCount.toLocaleString()} feature(s) released to FFS.`);
+      toast.success(`${saved.selectedCount.toLocaleString()} feature(s) validated for FFS.`);
     } catch (caught) {
-      toast.error(caught instanceof Error ? caught.message : 'The review could not be saved.');
+      toast.error(caught instanceof Error ? caught.message : 'The validation could not be saved.');
     } finally {
       setSaving(false);
     }
-  }, [features, reasons, review, selected, sessionId, toast]);
+  }, [metalLoss, review, sessionId, toast]);
 
-  const selectedCount = selected.size;
-  const savedCount = review?.items.filter((item) => item.selected).length ?? 0;
-  const shareRows = useMemo(() => features.map((feature) => ({
-    ...feature,
-    selectedForFfs: selected.has(feature.sourceKey),
-    selectionReason: reasons[feature.sourceKey] || null,
-  })), [features, reasons, selected]);
+  const shareRows = useMemo(() => metalLoss, [metalLoss]);
 
   if (!sessionId) {
     return (
-      <div className="syn-page syn-ui-kit">
-        <p className="text-sm text-red-600">No alignment session was specified.</p>
+      <div className="syn-page">
+        <Callout tone="danger" title="No session">No alignment session was specified.</Callout>
       </div>
     );
   }
 
   return (
-    <div className="syn-page syn-ui-kit">
-      <PageMeta
-        title="Corrosion Analysis"
-        description="Review alignment corrosion results and release features to FFS"
-      />
+    <div className="syn-page">
+      <PageMeta title="Corrosion Analysis" description="Analyse the corrosion condition of an aligned run pair" />
 
-      <div className="syn-page__header flex flex-wrap items-start justify-between gap-4">
+      <header className="syn-page__header">
         <div>
           <p className="syn-eyebrow">Final alignment phase</p>
-          <h1 className="syn-page__title">Corrosion Analysis</h1>
+          <h1 className="syn-page__title">Corrosion analysis</h1>
           <p className="syn-page__subtitle">
-            Review the corrosion condition of the latest run and select the features that go forward to
-            fitness-for-service. Nothing reaches FFS unless it is selected here.
+            Read the condition of the line from the aligned run pair, then validate the population
+            for fitness-for-service.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="ds-btn-group">
           <ShareSnapshotButton
             kind="CORROSION"
-            title={`Corrosion Analysis · Session ${sessionId}`}
+            title={`Corrosion analysis · Session ${sessionId}`}
             sourceRef={`alignment-session:${sessionId}`}
             rows={shareRows}
             summary={[
-              { label: 'Metal loss', value: summary.metalLoss },
-              { label: 'Assessable', value: summary.ffsReady },
-              { label: 'Active growth', value: summary.activeGrowth },
-              { label: 'Released to FFS', value: savedCount },
+              { label: 'Metal loss', value: vitals.metalLoss },
+              { label: 'Assessable', value: vitals.assessable },
+              { label: 'Active growth', value: vitals.activeGrowth },
+              { label: 'Validated for FFS', value: releasedCount },
             ]}
-            notes={[
-              'Frozen Corrosion Analysis review. Only the saved release state is shareable.',
-            ]}
-            disabled={loading || Boolean(error) || dirty}
+            notes={['Frozen corrosion analysis. Only the saved validation state is shareable.']}
+            disabled={loading || Boolean(error)}
             label="Share analysis"
           />
-          <SynButton type="button" variant="outline" size="sm" onClick={() => navigate('/ili-comparison')}>
-            <span className="inline-flex items-center gap-2"><FiArrowLeft /> Alignment results</span>
-          </SynButton>
-          <SynButton
-            type="button"
-            variant="lime"
-            size="sm"
-            onClick={() => void save()}
-            disabled={saving || loading || !review?.reviewable}
-          >
-            <span className="inline-flex items-center gap-2">
-              <FiSave /> {saving ? 'Saving...' : `Save review (${selectedCount})`}
-            </span>
-          </SynButton>
+          <Button variant="secondary" startIcon={<FiArrowLeft aria-hidden="true" />} onClick={() => navigate('/ili-comparison')}>
+            Alignment results
+          </Button>
         </div>
-      </div>
+      </header>
 
       {loading && (
-        <div className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-700 dark:bg-slate-800">
-          <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{progressMessage}</p>
-          <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
-            <div className="h-full rounded-full bg-indigo-500 transition-all" style={{ width: `${progress}%` }} />
-          </div>
-        </div>
+        <Panel>
+          <PanelBody className="ds-stack ds-stack--sm">
+            <p className="ds-panel__subtitle">{progressMessage}</p>
+            <div className="ds-exec__track" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
+              <i style={{ width: `${progress}%` }} />
+            </div>
+          </PanelBody>
+        </Panel>
       )}
 
       {error && (
-        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <Callout tone="danger" role="alert" icon={<FiAlertTriangle aria-hidden="true" />} title="Could not load the result">
           {error}
-        </div>
+        </Callout>
       )}
 
       {!loading && review && !review.reviewable && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <p className="font-semibold">This session cannot be released to FFS.</p>
-          <p className="mt-1">{review.reason}</p>
-        </div>
+        <Callout tone="warning" icon={<FiAlertTriangle aria-hidden="true" />} title="This session cannot be released to FFS">
+          {review.reason}
+        </Callout>
       )}
 
       {!loading && review?.stale && (
-        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <FiAlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
-          <div>
-            <p className="font-semibold">The alignment was re-run after the last review.</p>
-            <p className="mt-1">
-              The previous selection no longer describes this result and has been cleared. Review the
-              features again and save to restore the FFS handoff.
-            </p>
-          </div>
-        </div>
+        <Callout tone="warning" icon={<FiAlertTriangle aria-hidden="true" />} title="The alignment was re-run after the last validation">
+          The previous validation no longer describes this result. Review the analysis again and
+          re-validate to restore the FFS handoff.
+        </Callout>
       )}
 
       {!loading && !error && (
-        <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
-            <SummaryChip label="NEW features" value={summary.total} />
-            <SummaryChip label="Metal loss" value={summary.metalLoss} />
-            <SummaryChip label="Assessable" value={summary.ffsReady} />
-            <SummaryChip
-              label="Active growth"
-              value={summary.activeGrowth}
-              tone="border-red-200 dark:border-red-900"
-            />
-            <SummaryChip label="Growth unknown" value={summary.unknownGrowth} />
-            <SummaryChip
-              label="Selected"
-              value={selectedCount}
-              tone="border-indigo-200 dark:border-indigo-900"
-            />
-          </div>
+        <div className="ds-stack ds-stack--lg">
+          {/* Vitals band — the four numbers that frame everything below */}
+          <StatGrid>
+            <Stat lead label="Metal loss" value={vitals.metalLoss.toLocaleString()} hint={`${vitals.assessable.toLocaleString()} with complete dimensions`} />
+            <Stat label="Max depth" value={vitals.maxDepthPct === null ? '—' : `${vitals.maxDepthPct.toFixed(1)}%`} hint="Of wall thickness" tone={vitals.maxDepthPct !== null && vitals.maxDepthPct >= 60 ? 'danger' : 'neutral'} />
+            <Stat label="Max ERF" value={vitals.maxErf === null ? '—' : vitals.maxErf.toFixed(3)} hint={vitals.maxErf !== null && vitals.maxErf >= 1 ? 'At or above 1' : 'Below 1'} tone={vitals.maxErf !== null && vitals.maxErf >= 1 ? 'danger' : 'success'} />
+            <Stat label="Active growth" value={vitals.activeGrowth.toLocaleString()} hint="Measurably corroding" tone={vitals.activeGrowth > 0 ? 'warning' : 'neutral'} />
+            <Stat label="Soonest limit" value={vitals.worstRemainingLife === null ? '—' : vitals.worstRemainingLife < 1 ? '< 1 yr' : `${vitals.worstRemainingLife.toFixed(1)} yr`} hint="To 80 %WT" tone={vitals.worstRemainingLife !== null && vitals.worstRemainingLife <= 5 ? 'danger' : 'neutral'} />
+            <Stat label="New this run" value={change.newlyReported.toLocaleString()} hint="Not in the previous run" />
+          </StatGrid>
 
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <FiFilter className="h-4 w-4 text-slate-400" />
-              <div className="flex rounded-lg border border-slate-200 p-1 dark:border-slate-700">
-                {FILTERS.map((option) => (
-                  <button
-                    key={option.id}
-                    type="button"
-                    onClick={() => setFilter(option.id)}
-                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
-                      filter === option.id
-                        ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
-                        : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+          <Segmented<TabId>
+            ariaLabel="Analysis view"
+            value={tab}
+            onChange={setTab}
+            options={TABS.map((entry) => ({ value: entry.id, label: entry.label, icon: entry.icon }))}
+          />
 
-            <div className="flex items-center gap-2">
-              <SynButton type="button" variant="outline" size="sm" onClick={applySuggestion}>
-                <span className="inline-flex items-center gap-2"><FiTrendingUp /> Propose by rule</span>
-              </SynButton>
-              <SynButton type="button" variant="ghost" size="sm" onClick={clearSelection}>
-                Clear selection
-              </SynButton>
-            </div>
-          </div>
+          {tab === 'overview' && (
+            <div className="ds-stack">
+              <div className="ds-grid-2">
+                <Panel>
+                  <PanelHeader plain eyebrow="Population" title="Wall loss distribution" subtitle="How deep the metal loss on this line actually is." />
+                  <PanelBody><DepthHistogram features={metalLoss} /></PanelBody>
+                </Panel>
 
-          <p className="mt-2 text-[11px] text-slate-500">
-            The rule proposes assessable metal loss with ERF ≥ {DEFAULT_SUGGESTION_RULE.minErf}, depth ≥{' '}
-            {DEFAULT_SUGGESTION_RULE.minDepthPct} %WT, or active growth. It only ticks boxes — the saved
-            review is whatever you confirm.
-          </p>
-
-          <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
-            <table className="w-full min-w-[1100px] text-left text-sm">
-              <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500 dark:bg-slate-900/50">
-                <tr>
-                  <th className="px-3 py-3 w-12">FFS</th>
-                  <th className="px-3 py-3">Feature</th>
-                  <th className="px-3 py-3">Section</th>
-                  <th className="px-3 py-3 text-right">LD [m]</th>
-                  <th className="px-3 py-3">Clock</th>
-                  <th className="px-3 py-3 text-right">Depth [%WT]</th>
-                  <th className="px-3 py-3 text-right">Length [mm]</th>
-                  <th className="px-3 py-3 text-right">WT [mm]</th>
-                  <th className="px-3 py-3 text-right">Depth growth [%WT/y]</th>
-                  <th className="px-3 py-3">Growth</th>
-                  <th className="px-3 py-3 text-right">ERF</th>
-                  <th className="px-3 py-3">Match</th>
-                  <th className="px-3 py-3">Note</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {visible.slice(0, visibleCount).map((feature) => {
-                  const isSelected = selected.has(feature.sourceKey);
-                  return (
-                    <tr
-                      key={feature.sourceKey}
-                      className={isSelected ? 'bg-indigo-50/60 dark:bg-indigo-900/10' : undefined}
-                    >
-                      <td className="px-3 py-2">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          disabled={!feature.ffsReady || !review?.reviewable}
-                          onChange={() => toggle(feature.sourceKey, feature.ffsReady)}
-                          aria-label={`Release ${feature.featureId} to FFS`}
-                          title={feature.ffsReady ? undefined : feature.blockers.join('; ')}
-                          className="h-4 w-4 accent-indigo-600 disabled:opacity-40"
+                <Panel>
+                  <PanelHeader plain eyebrow="Severity mix" title="Where the population sits" subtitle="Banded on whichever of depth or ERF binds first." />
+                  <PanelBody className="ds-stack ds-stack--sm">
+                    <div className="seg-bars">
+                      <div className="seg-bars__row">
+                        <span className="seg-bars__label">All metal loss</span>
+                        <div className="seg-bars__track">
+                          {SEVERITY_ORDER_VARS.map(([severity, color]) => {
+                            const count = vitals.severity[severity];
+                            if (count === 0) return null;
+                            return (
+                              <span
+                                key={severity}
+                                className="seg-bars__seg"
+                                style={{ width: `${(count / Math.max(1, vitals.metalLoss)) * 100}%`, background: color }}
+                                title={`${SEVERITY_LABEL[severity]}: ${count.toLocaleString()}`}
+                              />
+                            );
+                          })}
+                        </div>
+                        <span className="seg-bars__total">{vitals.metalLoss.toLocaleString()}</span>
+                      </div>
+                    </div>
+                    <StatGrid>
+                      {SEVERITY_ORDER_VARS.map(([severity]) => (
+                        <Stat
+                          key={severity}
+                          compact
+                          label={SEVERITY_LABEL[severity]}
+                          value={vitals.severity[severity].toLocaleString()}
+                          hint={`${((vitals.severity[severity] / Math.max(1, vitals.metalLoss)) * 100).toFixed(1)}%`}
+                          tone={severity === 'critical' ? 'danger' : severity === 'high' ? 'warning' : 'neutral'}
                         />
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className="font-medium text-slate-800 dark:text-slate-100">{feature.featureId}</span>
-                        <span className="block text-[11px] text-slate-500">{feature.featureType}</span>
-                      </td>
-                      <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{feature.section}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{fixed(feature.distanceM, 3)}</td>
-                      <td className="px-3 py-2">{feature.clock}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{fixed(feature.depthPct, 1)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{fixed(feature.lengthMm, 1)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{fixed(feature.wallMm, 2)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {fixed(feature.depthGrowthPctWtPerYear, 3)}
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${GROWTH_TONE[feature.growthClass]}`}>
-                          {GROWTH_LABEL[feature.growthClass]}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">{fixed(feature.erf, 3)}</td>
-                      <td className="px-3 py-2 text-[11px] text-slate-500">{feature.matchStatus}</td>
-                      <td className="px-3 py-2">
-                        {feature.ffsReady ? (
-                          <input
-                            type="text"
-                            value={reasons[feature.sourceKey] || ''}
-                            onChange={(event) => {
-                              const value = event.target.value;
-                              setReasons((current) => ({ ...current, [feature.sourceKey]: value }));
-                              setDirty(true);
-                            }}
-                            placeholder="Reason (optional)"
-                            className="w-44 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"
-                          />
-                        ) : (
-                          <span className="text-[11px] text-amber-600" title={feature.blockers.join('; ')}>
-                            {feature.blockers[0]}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-                {visible.length === 0 && (
-                  <tr>
-                    <td colSpan={13} className="px-3 py-8 text-center text-sm text-slate-500">
-                      No feature matches this filter.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                      ))}
+                    </StatGrid>
+                    <StatGrid>
+                      <Stat compact label="Internal" value={split.internal.toLocaleString()} hint="Inside surface" />
+                      <Stat compact label="External" value={split.external.toLocaleString()} hint="Outside surface" />
+                      <Stat compact label="Surface unknown" value={split.unknown.toLocaleString()} hint="Not reported" />
+                    </StatGrid>
+                  </PanelBody>
+                </Panel>
+              </div>
 
-          {visible.length > visibleCount && (
-            <div className="mt-3 text-center">
-              <SynButton
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setVisibleCount((count) => count + PAGE_STEP)}
-              >
-                Show {Math.min(PAGE_STEP, visible.length - visibleCount).toLocaleString()} more of{' '}
-                {visible.length.toLocaleString()}
-              </SynButton>
+              <Panel>
+                <PanelHeader plain eyebrow="Location" title="Corrosion density along the line" subtitle="Where the anomalies concentrate, and the worst contiguous stretch." />
+                <PanelBody><KpDensity features={metalLoss} /></PanelBody>
+              </Panel>
             </div>
           )}
 
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
-            <p className="text-xs text-slate-500">
-              {dirty
-                ? 'Unsaved changes — FFS still uses the last saved review.'
-                : `${savedCount.toLocaleString()} feature(s) currently released to FFS.`}
-            </p>
-            <div className="flex items-center gap-2">
-              <SynButton
-                type="button"
-                variant="lime"
-                size="sm"
-                onClick={() => void save()}
-                disabled={saving || !review?.reviewable}
-              >
-                <span className="inline-flex items-center gap-2"><FiSave /> Save review</span>
-              </SynButton>
-              <SynButton
-                type="button"
-                variant="solid"
-                size="sm"
-                onClick={() => navigate(`/ffs?sessionId=${encodeURIComponent(sessionId)}`)}
-                disabled={dirty || savedCount === 0}
-                title={dirty ? 'Save the review first.' : undefined}
-              >
-                <span className="inline-flex items-center gap-2"><FiCheckCircle /> Continue to FFS</span>
-              </SynButton>
+          {tab === 'distribution' && (
+            <div className="ds-stack">
+              <div className="ds-grid-2">
+                <Panel>
+                  <PanelHeader plain eyebrow="Mechanism" title="Orientation by clock position" subtitle="Which corrosion mechanism is running on this line." />
+                  <PanelBody><ClockRose features={metalLoss} /></PanelBody>
+                </Panel>
+
+                <Panel>
+                  <PanelHeader
+                    plain
+                    eyebrow="Acceptability"
+                    title="Depth against length"
+                    subtitle="Depth alone does not decide acceptability — length carries the rest."
+                  />
+                  <PanelBody className="ds-stack ds-stack--sm">
+                    <div className="ds-row" style={{ flexWrap: 'nowrap', alignItems: 'flex-end', gap: '0.5rem' }}>
+                      <Field label="OD [mm]">{({ id }) => <Input id={id} small data inputMode="decimal" placeholder="e.g. 273" value={odMm} onChange={(event) => setOdMm(event.target.value)} />}</Field>
+                      <Field label="SMYS [MPa]">{({ id }) => <Input id={id} small data inputMode="decimal" value={smys} onChange={(event) => setSmys(event.target.value)} />}</Field>
+                      <Field label="MAOP [MPa]">{({ id }) => <Input id={id} small data inputMode="decimal" placeholder="e.g. 8.3" value={maop} onChange={(event) => setMaop(event.target.value)} />}</Field>
+                    </div>
+                    <DepthLengthEnvelope features={metalLoss} geometry={geometry} />
+                  </PanelBody>
+                </Panel>
+              </div>
+
+              {/* The four matching charts that used to sit behind an "Analytics"
+                  button on the comparison table live here, where the analysis is. */}
+              <Panel>
+                <PanelHeader
+                  plain
+                  eyebrow="Run pair"
+                  title="Defect &amp; corrosion-rate matching"
+                  subtitle="Matched and unmatched populations across both runs."
+                />
+                <PanelBody flush>
+                  <Suspense fallback={<p className="viz-note" style={{ padding: '1rem' }}>Loading matching charts…</p>}>
+                    <MatchingCharts data={comparison} variant="embedded" />
+                  </Suspense>
+                </PanelBody>
+              </Panel>
             </div>
-          </div>
-        </>
+          )}
+
+          {tab === 'growth' && (
+            <div className="ds-stack">
+              <StatGrid>
+                <Stat lead label="Matched" value={change.matched.toLocaleString()} hint="Present in both runs" />
+                <Stat label="Growing" value={change.growing.toLocaleString()} hint="Depth increased" tone={change.growing > 0 ? 'warning' : 'neutral'} />
+                <Stat label="Dormant" value={change.dormant.toLocaleString()} hint="No measurable growth" tone="success" />
+                <Stat label="New this run" value={change.newlyReported.toLocaleString()} hint="Not in the previous run" />
+              </StatGrid>
+
+              <Panel>
+                <PanelHeader
+                  plain
+                  eyebrow="Projection"
+                  title="Remaining life"
+                  subtitle="Growing features ranked by how soon they reach the wall-loss limit."
+                />
+                <PanelBody><RemainingLife features={metalLoss} /></PanelBody>
+              </Panel>
+
+              <Callout tone="info" icon={<FiInfo aria-hidden="true" />} title="How to read these numbers">
+                Growth here is the difference between two reported depths divided by the interval —
+                it carries both runs&apos; tool tolerance. A negative rate does not mean the wall grew
+                back; it means the two vendors sized the same defect differently. Treat the
+                projection as a screening order, not a date.
+              </Callout>
+            </div>
+          )}
+
+          {tab === 'segments' && (
+            sectioned ? (
+              <div className="ds-stack">
+                <Panel>
+                  <PanelHeader plain eyebrow="Segment profile" title="Severity by section" subtitle="Feature count and severity mix across the sections defined during alignment." />
+                  <PanelBody><SegmentSeverity features={metalLoss} /></PanelBody>
+                </Panel>
+                <Panel>
+                  <PanelHeader plain eyebrow="Location" title="Density within the sectioned line" subtitle="Hotspots read against the same axis the sections were drawn on." />
+                  <PanelBody><KpDensity features={metalLoss} windowM={250} /></PanelBody>
+                </Panel>
+              </div>
+            ) : (
+              <Panel>
+                <PanelBody>
+                  <Callout tone="info" icon={<FiLayers aria-hidden="true" />} title="No sections were defined for this alignment">
+                    Segment analysis compares corrosion between named stretches of the line — river
+                    crossings against buried pipe, aerial against transitions. It only becomes
+                    meaningful once the sectioning stage has been filled in, so this view stays
+                    empty rather than showing one undifferentiated bucket. Everything on the other
+                    tabs works without sections.
+                  </Callout>
+                </PanelBody>
+              </Panel>
+            )
+          )}
+
+          {tab === 'queue' && (
+            <Panel>
+              <PanelHeader plain eyebrow="Engineering review" title="Ranked review queue" subtitle="Worst-first, with the reason each feature is where it is." />
+              <PanelBody><ReviewQueue features={metalLoss} /></PanelBody>
+            </Panel>
+          )}
+
+          {/* The FFS gate — one validation for the whole population */}
+          <Panel>
+            <PanelHeader
+              eyebrow="Handoff"
+              title="Validate for fitness-for-service"
+              subtitle="One decision for the run, taken after the analysis above — not per anomaly."
+              icon={<FiCheckCircle aria-hidden="true" />}
+              actions={validated ? <Badge tone="success">Validated</Badge> : <Badge tone="neutral">Not yet validated</Badge>}
+            />
+            <PanelBody className="ds-stack ds-stack--sm">
+              <StatGrid>
+                <Stat lead compact label="Will be released" value={vitals.metalLoss.toLocaleString()} hint="All metal loss on the NEW run" />
+                <Stat compact label="Complete dimensions" value={vitals.assessable.toLocaleString()} hint="B31G can assess these" tone="success" />
+                <Stat compact label="Incomplete" value={vitals.incomplete.toLocaleString()} hint="Will be rejected by the engine" tone={vitals.incomplete > 0 ? 'warning' : 'neutral'} />
+                <Stat compact label="Currently validated" value={releasedCount.toLocaleString()} hint={review?.stale ? 'Stale — re-validate' : 'Saved'} />
+              </StatGrid>
+
+              {vitals.incomplete > 0 && (
+                <Callout tone="warning" icon={<FiAlertTriangle aria-hidden="true" />} title={`${vitals.incomplete.toLocaleString()} feature(s) are missing dimensions B31G needs`}>
+                  They are released with the rest, and the FFS engine will reject them with the
+                  reason recorded here. Fix the source data if they matter.
+                </Callout>
+              )}
+
+              <div className="ds-actionbar" style={{ marginTop: 0 }}>
+                <span />
+                <div className="ds-actionbar__end">
+                  <Button
+                    startIcon={<FiCheckCircle aria-hidden="true" />}
+                    onClick={() => void validateForFfs()}
+                    disabled={saving || !review?.reviewable || vitals.metalLoss === 0}
+                  >
+                    {saving ? 'Validating…' : `Validate ${vitals.metalLoss.toLocaleString()} features for FFS`}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    endIcon={<FiCheckCircle aria-hidden="true" />}
+                    onClick={() => navigate(`/ffs?sessionId=${encodeURIComponent(sessionId)}`)}
+                    disabled={!validated}
+                    title={validated ? undefined : 'Validate the population first.'}
+                  >
+                    Open FFS
+                  </Button>
+                </div>
+              </div>
+            </PanelBody>
+          </Panel>
+        </div>
       )}
     </div>
   );

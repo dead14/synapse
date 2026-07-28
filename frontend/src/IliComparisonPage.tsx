@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, lazy, Suspense } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import ResultsPanel from './ResultsPanel';
 import {
   fetchAlignmentResult,
@@ -12,7 +12,6 @@ import { apiFetch } from './utils/api';
 import { applyInterventions, type InterventionEvent } from './utils/interventions';
 
 const DefectVisualizer = lazy(() => import('./DefectVisualizer'));
-const AdvancedCharts = lazy(() => import('./components/charts/AdvancedCharts'));
 
 const LoadingSpinner = ({ label }: { label: string }) => (
   <div className="flex flex-col items-center justify-center gap-3 py-12 text-gray-400">
@@ -58,8 +57,8 @@ export default function IliComparisonPage({
   const [jobProgress, setJobProgress] = useState(0);
   const [jobMessage, setJobMessage] = useState('Sending data to the queue...');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [showAdvancedCharts, setShowAdvancedCharts] = useState(false);
   const [selectedRowIdx, setSelectedRowIdx] = useState<number | null>(null);
+  const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState('');
   const [audit, setAudit] = useState<ConservationAudit | undefined>();
@@ -287,7 +286,7 @@ export default function IliComparisonPage({
                 data={visibleData}
                 loading={loading}
                 readOnly={readOnly}
-                onOpenAnalytics={readOnly ? undefined : () => setShowAdvancedCharts(true)}
+                onOpenAnalytics={readOnly || !sessionId ? undefined : () => navigate(`/alignment/${encodeURIComponent(sessionId)}/corrosion`)}
                 selectedRowIdx={selectedRowIdx}
                 onSelectRowIdx={setSelectedRowIdx}
                 onUpdateMatch={readOnly ? undefined : handleUpdateMatch}
@@ -298,11 +297,6 @@ export default function IliComparisonPage({
         )}
       </div>
 
-      {!readOnly && showAdvancedCharts && (
-        <Suspense fallback={<LoadingSpinner label="Loading Advanced Analytics..." />}>
-          <AdvancedCharts data={visibleData} onClose={() => setShowAdvancedCharts(false)} />
-        </Suspense>
-      )}
     </div>
   );
 }
