@@ -11,6 +11,8 @@ const {
     markOwnedSessionFailed,
     deleteOwnedSession,
     createAlignmentJob,
+    findOwnedAlignmentExport,
+    iterateOwnedAlignmentExportRows,
     listOwnedAlignmentResultPage,
 } = require('../src/modules/alignment/alignmentRepository');
 
@@ -155,4 +157,54 @@ test('alignment result page is tenant scoped and keyset paginated inside stored 
     assert.match(pool.calls[0].text, /organization_id = \$2/i);
     assert.match(pool.calls[0].text, /jsonb_array_elements/i);
     assert.deepEqual(pool.calls[0].values, [8, 22, 1, 3]);
+});
+
+test('alignment export descriptor returns the tenant-owned completed row count', async () => {
+    const pool = recordingPool({
+        rows: [{ job_id: 'job-1', row_count: 500_000 }],
+        rowCount: 1,
+    });
+
+    const descriptor = await findOwnedAlignmentExport(pool, 8, 22);
+
+    assert.deepEqual(descriptor, { jobId: 'job-1', rowCount: 500_000 });
+    assert.match(pool.calls[0].text, /organization_id = \$2/i);
+    assert.match(pool.calls[0].text, /jsonb_array_length/i);
+    assert.deepEqual(pool.calls[0].values, [8, 22]);
+});
+
+test('alignment export rows use one tenant-scoped cursor and bounded fetches', async () => {
+    const calls = [];
+    const batches = [
+        { rows: [{ row: { id: 1 } }, { row: { id: 2 } }], rowCount: 2 },
+        { rows: [{ row: { id: 3 } }], rowCount: 1 },
+        { rows: [], rowCount: 0 },
+    ];
+    let released = false;
+    const client = {
+        async query(text, values) {
+            calls.push({ text, values });
+            if (/^FETCH/i.test(text.trim())) return batches.shift();
+            return { rows: [], rowCount: 0 };
+        },
+        release() {
+            released = true;
+        },
+    };
+    const pool = { connect: async () => client };
+
+    const rows = [];
+    for await (const row of iterateOwnedAlignmentExportRows(pool, 'job-1', 22, { batchSize: 2 })) {
+        rows.push(row);
+    }
+
+    assert.deepEqual(rows, [{ id: 1 }, { id: 2 }, { id: 3 }]);
+    assert.equal(calls.filter((call) => /^FETCH/i.test(call.text.trim())).length, 3);
+    assert.match(calls.find((call) => /DECLARE/i.test(call.text)).text, /jsonb_array_elements/i);
+    assert.deepEqual(
+        calls.find((call) => /set_config/i.test(call.text)).values,
+        ['job-1', '22'],
+    );
+    assert.ok(calls.some((call) => /^COMMIT/i.test(call.text.trim())));
+    assert.equal(released, true);
 });

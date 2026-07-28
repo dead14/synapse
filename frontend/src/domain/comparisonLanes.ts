@@ -13,7 +13,7 @@
  *
  * - `rawM`   — the log distance printed in that year's own tally
  *              (`Original Log Dist …`). This is the number the vendor reported
- *              and it is what the lane shows by default. It is never derived.
+ *              and remains available as the reported-LD view. It is never derived.
  * - `alignedM` — the same feature projected onto the newest run's odometer, so
  *              lanes stack comparably. For the last pair this is the engine's
  *              own mapped value (`Log Dist …`), used verbatim. For older runs
@@ -98,6 +98,16 @@ export interface ComparisonLaneModel {
   pairCount: number;
   /** Runs that carry no usable alignment onto the master odometer. */
   unalignedRuns: string[];
+}
+
+/**
+ * Comparisons open on the shared master axis so matched features line up.
+ * Reported LD remains the safe fallback when any run lacks alignment evidence.
+ */
+export function defaultComparisonAxis(lanes: readonly ComparisonLane[]): AxisMode {
+  return lanes.length > 1 && lanes.every((lane) => lane.alignedAvailable)
+    ? 'aligned'
+    : 'raw';
 }
 
 const MISSING = new Set(['', '-', 'nan', 'null', 'undefined']);

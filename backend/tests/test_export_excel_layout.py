@@ -14,6 +14,69 @@ import export_excel
 
 
 class ExportExcelLayoutTests(unittest.TestCase):
+    def test_ndjson_export_streams_rows_into_both_data_sheets(self):
+        engine = Path(__file__).parents[1] / "src" / "python_engines" / "export_excel.py"
+        metadata = {
+            "pipelineData": {"pipelineName": "North Line"},
+            "headers": ["Log Dist NEW (m)", "Match/Unmatch", "physics_warnings"],
+            "rowCount": 2,
+        }
+        rows = [
+            {
+                "Log Dist NEW (m)": 10.5,
+                "Match/Unmatch": "Matched",
+                "physics_warnings": [{"code": "REVIEW"}],
+            },
+            {
+                "Log Dist NEW (m)": 11.5,
+                "Match/Unmatch": "Only NEW",
+                "physics_warnings": [],
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            metadata_path = Path(directory) / "metadata.json"
+            rows_path = Path(directory) / "rows.ndjson"
+            output_path = Path(directory) / "report.xlsx"
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            rows_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(engine),
+                    "--ndjson",
+                    str(metadata_path),
+                    str(rows_path),
+                    str(output_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn("PROGRESS 2", completed.stdout)
+            workbook = openpyxl.load_workbook(output_path, data_only=False)
+
+            self.assertEqual(workbook["Runcomp Report"]["A3"].value, 11.5)
+            self.assertEqual(
+                workbook["Runcomp Report"]["C2"].value,
+                '[{"code":"REVIEW"}]',
+            )
+            self.assertEqual(workbook["Runcomp Comparison"]["X4"].value, "Only NEW")
+            self.assertEqual(
+                workbook["Runcomp Comparison"]["X4"].fill.fgColor.rgb,
+                "FFFCE4D6",
+            )
+            self.assertEqual(
+                sorted(
+                    str(cells)
+                    for cells in workbook["Runcomp Comparison"].merged_cells.ranges
+                ),
+                ["A1:O1", "P1:Y1", "Z1:AN1"],
+            )
+
     def test_export_builds_pipeline_report_and_primary_comparison_sheets(self):
         engine = Path(__file__).parents[1] / "src" / "python_engines" / "export_excel.py"
         payload = {

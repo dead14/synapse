@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FiChevronLeft, FiChevronRight, FiCrosshair, FiMaximize2, FiZoomIn, FiZoomOut } from 'react-icons/fi';
 import {
+  defaultComparisonAxis,
   featureAxisValue,
   laneFeaturesInWindow,
   laneReadoutAt,
@@ -100,7 +101,7 @@ export default function LaneTimeline({
   const containerRef = useRef<HTMLDivElement>(null);
   const laneStackRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(960);
-  const [axis, setAxis] = useState<AxisMode>('raw');
+  const [axis, setAxis] = useState<AxisMode>(() => defaultComparisonAxis(lanes));
   const [colorMode, setColorMode] = useState<ColorMode>('status');
   const [filter, setFilter] = useState<FeatureFilter>('all');
   const [showLinks, setShowLinks] = useState(true);

@@ -393,7 +393,12 @@ export default function IliComparisonPage({
             {visibleData.length > 0 && (
               <div className="shrink-0">
                 <Suspense fallback={<LoadingSpinner label="Loading comparison chart..." />}>
-                  <DefectVisualizer data={visibleData} selectedRowIdx={selectedRowIdx} onSelectRowIdx={setSelectedRowIdx} />
+                  <DefectVisualizer
+                    key={`${requestedSessionId}:${pairFilter ?? 'all'}`}
+                    data={visibleData}
+                    selectedRowIdx={selectedRowIdx}
+                    onSelectRowIdx={setSelectedRowIdx}
+                  />
                 </Suspense>
               </div>
             )}

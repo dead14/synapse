@@ -61,3 +61,22 @@ test('keeps comparison optional so one report payload can feed both data sheets'
     assert.equal(payload.comparison, null);
     assert.equal(payload.report.length, 1);
 });
+
+test('accepts a constant-size session export request without client rows', () => {
+    const payload = normalizeAlignmentExportPayload({
+        sessionId: 42,
+        pipelineData: { pipelineName: 'North Line' },
+    }, { maxRows: 500_000 });
+
+    assert.deepEqual(payload, {
+        sessionId: 42,
+        pipelineData: { pipelineName: 'North Line', inspectionRuns: [] },
+    });
+});
+
+test('rejects invalid session export identifiers', () => {
+    assert.throws(
+        () => normalizeAlignmentExportPayload({ sessionId: 'not-an-id' }, { maxRows: 500_000 }),
+        /sessionId must be a positive integer/,
+    );
+});

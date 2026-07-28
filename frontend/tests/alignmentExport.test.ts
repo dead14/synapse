@@ -3,9 +3,11 @@ import test from 'node:test';
 
 import {
   createAlignmentExportPayload,
+  createAlignmentSessionExportPayload,
   createExcelExportRows,
   createPipelineExportData,
   createRuncompReportRows,
+  waitForAlignmentExport,
 } from '../src/utils/alignmentExport.ts';
 
 test('creates compact Excel export rows using the report fields and aliases', () => {
@@ -98,6 +100,52 @@ test('sends one report row set and lets the server reuse it for comparison', () 
     report: [{ 'Match/Unmatch': 'Matched' }],
   });
   assert.equal(Object.hasOwn(payload, 'comparison'), false);
+});
+
+test('session export payload stays constant-size regardless of result row count', () => {
+  const payload = createAlignmentSessionExportPayload(
+    '42',
+    { pipelineName: 'North Line' },
+  );
+
+  assert.deepEqual(payload, {
+    sessionId: 42,
+    pipelineData: { pipelineName: 'North Line' },
+  });
+  assert.ok(JSON.stringify(payload).length < 200);
+});
+
+test('waits for a background export without holding the original request open', async () => {
+  const states = [
+    { exportId: 'job-1', state: 'processing' as const, error: null, code: null },
+    { exportId: 'job-1', state: 'ready' as const, error: null, code: null },
+  ];
+  let delays = 0;
+
+  const job = await waitForAlignmentExport(
+    async () => states.shift()!,
+    async () => { delays += 1; },
+    5,
+  );
+
+  assert.equal(job.state, 'ready');
+  assert.equal(delays, 1);
+});
+
+test('background export polling reports the server failure immediately', async () => {
+  await assert.rejects(
+    waitForAlignmentExport(
+      async () => ({
+        exportId: 'job-1',
+        state: 'failed' as const,
+        error: 'Excel export timed out',
+        code: 'EXPORT_TIMEOUT',
+      }),
+      async () => {},
+      5,
+    ),
+    /Excel export timed out/,
+  );
 });
 
 test('pipeline export keeps uploaded metadata and derives inspection runs for legacy sessions', () => {
