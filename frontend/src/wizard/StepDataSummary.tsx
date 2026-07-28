@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { FiAlertTriangle, FiArrowLeft, FiArrowRight, FiCheckCircle, FiDatabase, FiLayers } from 'react-icons/fi';
 
 import { buildDataReview } from '../domain/alignmentReview';
+import { Badge, Button, Callout } from '../components/ds';
 
 interface StepDataSummaryProps {
   onNext: (data?: any) => void;
@@ -143,14 +144,14 @@ export default function StepDataSummary({ onNext, onBack, config }: StepDataSumm
             ))}
           </div>
           {hasMultipleRuns && (
-            <section className="rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">
-              <strong>Pairwise chain alignment</strong> — {runPairs.length} sequential pairs will be aligned:
-              {' '}{runPairs.map((p: any, i: number) => (
-                <span key={i} className="inline-block rounded bg-brand-100 px-2 py-0.5 text-xs font-semibold mx-0.5">
-                  {p.oldRun?.year || '?'} → {p.newRun?.year || '?'}
-                </span>
-              ))}
-            </section>
+            <Callout tone="info" icon={<FiLayers aria-hidden="true" />} title="Pairwise chain alignment">
+              <span className="ds-row" style={{ gap: '0.3rem' }}>
+                {runPairs.length} sequential pairs will be aligned:
+                {runPairs.map((p: any, i: number) => (
+                  <Badge key={i} tone="primary">{p.oldRun?.year || '?'} → {p.newRun?.year || '?'}</Badge>
+                ))}
+              </span>
+            </Callout>
           )}
 
           <section className={`alignment-review-readiness ${hasQualityWarning ? 'is-warning' : 'is-ready'}`} aria-label="Evidence readiness">
@@ -168,7 +169,19 @@ export default function StepDataSummary({ onNext, onBack, config }: StepDataSumm
         </>
       )}
 
-      <footer className="alignment-review-actions"><button type="button" className="syn-action syn-action--outline" onClick={onBack}><FiArrowLeft aria-hidden="true" />Back to inspection data</button><button type="button" className="syn-action syn-action--ink" onClick={continueReview} disabled={!hasRunPair || !acknowledged} aria-describedby={!hasRunPair || !acknowledged ? 'data-review-action-help' : undefined}>Continue to GW matching<FiArrowRight aria-hidden="true" /></button></footer>
+      <footer className="alignment-review-actions">
+        <Button variant="ghost" startIcon={<FiArrowLeft aria-hidden="true" />} onClick={onBack}>
+          Back to inspection data
+        </Button>
+        <Button
+          endIcon={<FiArrowRight aria-hidden="true" />}
+          onClick={continueReview}
+          disabled={!hasRunPair || !acknowledged}
+          aria-describedby={!hasRunPair || !acknowledged ? 'data-review-action-help' : undefined}
+        >
+          Continue to GW matching
+        </Button>
+      </footer>
       {(!hasRunPair || !acknowledged) && <p id="data-review-action-help" className="alignment-review-action-help">{hasRunPair ? 'Confirm the acknowledgement to continue.' : 'Import both runs to continue.'}</p>}
     </section>
   );

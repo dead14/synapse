@@ -1,6 +1,17 @@
 import { useMemo, useState } from 'react';
-import { FiSliders, FiChevronRight, FiChevronLeft, FiAward } from 'react-icons/fi';
+import { FiSliders, FiChevronRight, FiChevronLeft, FiAward, FiInfo } from 'react-icons/fi';
 import { primaryRunPair, resolveRunPairs } from '../domain/runPairs';
+
+import {
+  ActionBar,
+  Button,
+  Callout,
+  Panel,
+  PanelBody,
+  PanelHeader,
+  SliderField,
+  Switch,
+} from '../components/ds';
 
 interface StepAnomalyTolerancesProps {
   onNext: (config: any) => void;
@@ -102,176 +113,166 @@ export default function StepAnomalyTolerances({ onNext, onBack, config }: StepAn
   };
 
   return (
-    <div className="alignment-surface bg-white rounded-2xl p-6 sm:p-8 shadow-sm border border-gray-100 animate-fade-in">
-      <div className="flex items-center gap-3 mb-6">
-        <div className="p-3 bg-brand-50 text-brand-600 rounded-xl">
-          <FiSliders size={24} />
-        </div>
-        <div>
-          <h2 className="text-xl font-bold text-gray-800">Anomaly Matching Tolerances</h2>
-          <p className="text-sm text-gray-500">Configure parameters for the Hungarian Anomaly matcher.</p>
-        </div>
-      </div>
+    <Panel className="animate-fade-in">
+      <PanelHeader
+        icon={<FiSliders aria-hidden="true" />}
+        eyebrow="Matcher tuning"
+        title="Anomaly matching tolerances"
+        subtitle="Configure parameters for the Hungarian anomaly matcher."
+        actions={
+          <Button variant="secondary" startIcon={<FiAward aria-hidden="true" />} onClick={applyRecommended}>
+            Use recommended
+          </Button>
+        }
+      />
 
-      {/* A 14-year interval and a 2-year interval rarely deserve the same
-          tolerances, but demanding a separate set-up per pair by default would
-          be busywork on a chain of five runs. */}
-      {hasMultiplePairs && (
-        <div className="mb-6 rounded-xl border border-brand-200 bg-brand-50/60 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="text-sm font-bold text-gray-800">Per-run-pair tolerances</h3>
-              <p className="mt-0.5 text-xs text-gray-600">
-                {perPairEnabled
+      <PanelBody className="ds-stack ds-stack--lg">
+        <Callout
+          tone="info"
+          icon={<FiAward aria-hidden="true" />}
+          title="Industry standard recommendations"
+        >
+          Applying these defaults yields the highest confidence for standard MFL tool comparisons.
+        </Callout>
+
+        {/* A 14-year interval and a 2-year interval rarely deserve the same
+            tolerances, but demanding a separate set-up per pair by default would
+            be busywork on a chain of five runs. */}
+        {hasMultiplePairs && (
+          <Panel quiet>
+            <PanelHeader
+              plain
+              eyebrow="Run pairs"
+              title="Per-run-pair tolerances"
+              subtitle={
+                perPairEnabled
                   ? 'Each pair uses its own tolerances. Select a pair below to configure it.'
-                  : `One tolerance set applies to all ${pairs.length} pairs. Enable this when the year spans differ widely.`}
-              </p>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={perPairEnabled}
-              aria-label="Configure separate tolerances for each run pair"
-              onClick={() => setPerPairEnabled((value) => !value)}
-              className={`relative h-6 w-12 shrink-0 rounded-full shadow-inner transition-colors ${perPairEnabled ? 'bg-brand-500' : 'bg-gray-300'}`}
-            >
-              <span className={`absolute left-1 top-1 h-4 w-4 rounded-full bg-white shadow-md transition-transform ${perPairEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
-            </button>
-          </div>
-
-          {perPairEnabled && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {pairs.map((pair) => (
-                <button
-                  key={pair.key}
-                  type="button"
-                  aria-pressed={pair.key === activePair?.key}
-                  onClick={() => setActivePairKey(pair.key)}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                    pair.key === activePair?.key
-                      ? 'bg-brand-600 text-white shadow-sm'
-                      : 'border border-brand-200 bg-white text-brand-700 hover:bg-brand-100'
-                  }`}
-                >
-                  {pair.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-5 mb-8 flex justify-between items-center">
-        <div className="flex gap-3 items-center">
-          <FiAward className="text-blue-600 text-2xl" />
-          <div>
-            <h3 className="font-semibold text-blue-900 text-sm">Industry Standard Recommendations</h3>
-            <p className="text-xs text-blue-700 mt-1">Applying these defaults yields the highest confidence for standard MFL tool comparisons.</p>
-          </div>
-        </div>
-        <button 
-          onClick={applyRecommended}
-          className="px-4 py-2 bg-white text-blue-700 text-sm font-semibold rounded-lg border border-blue-200 shadow-sm hover:bg-blue-50 transition-colors"
-        >
-          Use Recommended
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-        
-        {/* Clock Tolerance */}
-        <div className="border border-gray-200 rounded-xl p-5 hover:border-blue-300 transition-colors bg-gray-50/50">
-          <div className="flex justify-between items-start mb-4">
-            <label className="text-sm font-bold text-gray-700">Clock Tolerance (deg)</label>
-            <span className="bg-white px-2 py-1 rounded text-blue-600 font-mono text-sm shadow-sm border border-gray-100">{clockTol}°</span>
-          </div>
-          <input 
-            type="range" min="5" max="45" step="1" 
-            value={clockTol} onChange={(e) => setClockTol(parseInt(e.target.value))}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
-          />
-          <p className="text-xs text-gray-500">Circular hard gate: candidates are rejected when the O&apos;Clock difference exceeds this value. Empty clock values are not rejected automatically.</p>
-        </div>
-
-        {/* US GW Tolerance */}
-        <div className="border border-gray-200 rounded-xl p-5 hover:border-blue-300 transition-colors bg-gray-50/50">
-          <div className="flex justify-between items-start mb-4">
-            <label className="text-sm font-bold text-gray-700">US GW Distance Tol (± m)</label>
-            <span className={`bg-white px-2 py-1 rounded font-mono text-sm shadow-sm border border-gray-100 ${useUsGwDistance ? 'text-blue-600' : 'text-gray-400'}`}>{usGwTol}m</span>
-          </div>
-          <div className="flex items-center gap-2 mb-3">
-            <input
-              id="use-us-gw-distance"
-              type="checkbox"
-              checked={useUsGwDistance}
-              onChange={(event) => setUseUsGwDistance(event.target.checked)}
-              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              aria-describedby="use-us-gw-distance-help"
+                  : `One tolerance set applies to all ${pairs.length} pairs. Enable this when the year spans differ widely.`
+              }
+              actions={
+                <Switch
+                  checked={perPairEnabled}
+                  onChange={setPerPairEnabled}
+                  label="Configure separate tolerances for each run pair"
+                />
+              }
             />
-            <label htmlFor="use-us-gw-distance" className="text-xs font-semibold text-gray-700 cursor-pointer">
-              Use Dist. U/S GW for matching
-            </label>
-          </div>
-          <input 
-            type="range" min="0.05" max="2.0" step="0.05" 
-            value={usGwTol} onChange={(e) => setUsGwTol(parseFloat(e.target.value))}
-            disabled={!useUsGwDistance}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2 disabled:cursor-not-allowed disabled:opacity-50"
-          />
-          <p id="use-us-gw-distance-help" className="text-xs text-gray-500">
-            {useUsGwDistance
-              ? 'Only enable this when Dist. U/S GW values are available and trustworthy.'
-              : 'Off: Dist. U/S GW values are ignored; the U/S and D/S position limits still apply.'}
-          </p>
+            {perPairEnabled && (
+              <PanelBody tight>
+                <div className="ds-row">
+                  {pairs.map((pair) => (
+                    <Button
+                      key={pair.key}
+                      size="sm"
+                      variant={pair.key === activePair?.key ? 'primary' : 'secondary'}
+                      aria-pressed={pair.key === activePair?.key}
+                      onClick={() => setActivePairKey(pair.key)}
+                    >
+                      {pair.label}
+                    </Button>
+                  ))}
+                </div>
+              </PanelBody>
+            )}
+          </Panel>
+        )}
+
+        <div className="ds-grid-2">
+          <Panel quiet>
+            <PanelBody>
+              <SliderField
+                label="Clock tolerance"
+                value={clockTol}
+                display={`${clockTol}°`}
+                min={5}
+                max={45}
+                step={1}
+                onChange={setClockTol}
+                hint="Circular hard gate: candidates are rejected when the O'Clock difference exceeds this value. Empty clock values are not rejected automatically."
+              />
+            </PanelBody>
+          </Panel>
+
+          <Panel quiet>
+            <PanelBody>
+              <SliderField
+                label="US GW distance tolerance"
+                value={usGwTol}
+                display={`± ${usGwTol} m`}
+                min={0.05}
+                max={2.0}
+                step={0.05}
+                disabled={!useUsGwDistance}
+                onChange={setUsGwTol}
+                hint={
+                  useUsGwDistance
+                    ? 'Only enable this when Dist. U/S GW values are available and trustworthy.'
+                    : 'Off: Dist. U/S GW values are ignored; the U/S and D/S position limits still apply.'
+                }
+              >
+                <label className="ds-row" style={{ gap: '0.4rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={useUsGwDistance}
+                    onChange={(event) => setUseUsGwDistance(event.target.checked)}
+                  />
+                  <span style={{ fontSize: 'var(--ds-t-xs)', color: 'var(--ds-ink-soft)', fontWeight: 600 }}>
+                    Use Dist. U/S GW for matching
+                  </span>
+                </label>
+              </SliderField>
+            </PanelBody>
+          </Panel>
+
+          <Panel quiet>
+            <PanelBody>
+              <SliderField
+                label="DS GW distance tolerance"
+                value={dsGwTol}
+                display={`± ${dsGwTol} m`}
+                min={0.05}
+                max={2.0}
+                step={0.05}
+                onChange={setDsGwTol}
+                hint="Applied downstream of each girth-weld anchor."
+              />
+            </PanelBody>
+          </Panel>
+
+          <Panel quiet>
+            <PanelBody>
+              <SliderField
+                label="Length tolerance"
+                value={lengthTol}
+                display={`± ${lengthTol} mm`}
+                min={5}
+                max={200}
+                step={5}
+                onChange={setLengthTol}
+                hint="Hard gate: candidates are rejected when the length difference exceeds this value."
+              />
+            </PanelBody>
+          </Panel>
         </div>
 
-        {/* DS GW Tolerance */}
-        <div className="border border-gray-200 rounded-xl p-5 hover:border-blue-300 transition-colors bg-gray-50/50">
-          <div className="flex justify-between items-start mb-4">
-            <label className="text-sm font-bold text-gray-700">DS GW Distance Tol (± m)</label>
-            <span className="bg-white px-2 py-1 rounded text-blue-600 font-mono text-sm shadow-sm border border-gray-100">{dsGwTol}m</span>
-          </div>
-          <input 
-            type="range" min="0.05" max="2.0" step="0.05" 
-            value={dsGwTol} onChange={(e) => setDsGwTol(parseFloat(e.target.value))}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
-          />
-        </div>
+        <Callout tone="warning" icon={<FiInfo aria-hidden="true" />}>
+          Depth is not used to select pairs. After Hungarian matching completes, NEW depths smaller
+          than OLD are flagged as a physics validation for review.
+        </Callout>
 
-        {/* Length Tolerance */}
-        <div className="border border-gray-200 rounded-xl p-5 hover:border-blue-300 transition-colors bg-gray-50/50">
-          <div className="flex justify-between items-start mb-4">
-            <label className="text-sm font-bold text-gray-700">Length Tolerance (± mm)</label>
-            <span className="bg-white px-2 py-1 rounded text-blue-600 font-mono text-sm shadow-sm border border-gray-100">{lengthTol}mm</span>
-          </div>
-          <input 
-            type="range" min="5" max="200" step="5" 
-            value={lengthTol} onChange={(e) => setLengthTol(parseInt(e.target.value))}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 mb-2"
-          />
-          <p className="text-xs text-gray-500">Hard gate: candidates are rejected when the length difference exceeds this value.</p>
-        </div>
-
-      </div>
-
-      <p className="mb-8 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-        Depth is not used to select pairs. After Hungarian matching completes, NEW depths smaller than OLD are flagged as a physics validation for review.
-      </p>
-
-      <div className="flex justify-between border-t border-gray-100 pt-6">
-        <button 
-          onClick={onBack}
-          className="px-6 py-3 rounded-xl font-medium text-gray-600 hover:bg-gray-50 transition-colors flex items-center gap-2"
-        >
-          <FiChevronLeft /> Simulator Settings
-        </button>
-        <button 
-          onClick={handleNext}
-          className="bg-gray-900 hover:bg-gray-800 text-white px-8 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-theme-md"
-        >
-          Execute Hungarian Matcher <FiChevronRight />
-        </button>
-      </div>
-    </div>
+        <ActionBar
+          back={
+            <Button variant="ghost" startIcon={<FiChevronLeft aria-hidden="true" />} onClick={onBack}>
+              Simulator settings
+            </Button>
+          }
+          next={
+            <Button endIcon={<FiChevronRight aria-hidden="true" />} onClick={handleNext}>
+              Execute Hungarian matcher
+            </Button>
+          }
+        />
+      </PanelBody>
+    </Panel>
   );
 }
