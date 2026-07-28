@@ -10,6 +10,7 @@ import {
   isAlignmentDisplayMetadata,
   sortAlignmentRowsByDisplayedLogDistance,
 } from './utils/alignmentDisplay';
+import ShareSnapshotButton from './components/sharing/ShareSnapshotButton';
 
 // Lazy load chart.js - heavy library, only load when Chart tab is selected
 const LazyScatterChart = lazy(() =>
@@ -312,6 +313,11 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
 
   const navigate = useNavigate();
   const toast = useToast();
+  const shareSessionId = useMemo(() => (
+    new URLSearchParams(window.location.search).get('sessionId')
+    || localStorage.getItem('synapse_last_session_id')
+    || ''
+  ), []);
   const [isExporting, setIsExporting] = useState(false);
   const [activeTab, setActiveTab] = useState('Results');
   const [radioFilter, setRadioFilter] = useState('All');
@@ -821,6 +827,22 @@ export default function ResultsPanel({ data: rawData, loading, onOpenAnalytics, 
             <FiDownload size={14} />
             {isExporting ? 'Exporting...' : 'Excel'}
           </button>
+          <ShareSnapshotButton
+            kind="ILI_ALIGNMENT"
+            title={`Final ILI alignment${shareSessionId ? ` · Session ${shareSessionId}` : ''}`}
+            sourceRef={shareSessionId ? `alignment-session:${shareSessionId}` : undefined}
+            rows={data}
+            summary={summaryCounts ? [
+              { label: 'GW locked', value: summaryCounts.gwLocked },
+              { label: 'Anomaly matched', value: summaryCounts.anomalyMatched },
+              { label: 'Only OLD', value: summaryCounts.anomalyOnlyOld },
+              { label: 'Only NEW', value: summaryCounts.anomalyOnlyNew },
+            ] : undefined}
+            notes={[
+              'Final ILI comparison snapshot. Open any row to inspect the shared evidence; editing is disabled.',
+            ]}
+            label="Share result"
+          />
           <button
             onClick={() => setIsFullScreen(!isFullScreen)}
             className="syn-icon-button"

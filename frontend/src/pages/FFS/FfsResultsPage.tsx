@@ -19,6 +19,7 @@ import FfsNarrativePanel from '../../components/ffs/FfsNarrativePanel';
 import FfsResultsTable from '../../components/ffs/FfsResultsTable';
 import FfsStatisticsPanel from '../../components/ffs/FfsStatisticsPanel';
 import FfsSummaryCards from '../../components/ffs/FfsSummaryCards';
+import ShareSnapshotButton from '../../components/sharing/ShareSnapshotButton';
 import { Callout, NumberField, Panel } from '../../components/ffs/FfsPrimitives';
 import { exportResultsWorkbook } from '../../lib/ffs/exports';
 import type { AlignmentImportProvenance } from '../../lib/ffs/alignmentImport';
@@ -120,6 +121,33 @@ export default function FfsResultsPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <ShareSnapshotButton
+            kind="FFS"
+            title={`${config.lineName} · FFS results`}
+            sourceRef={state.alignmentImport?.sessionId
+              ? `alignment-session:${state.alignmentImport.sessionId}`
+              : undefined}
+            rows={screened}
+            summary={[
+              {
+                label: 'Pass',
+                value: screened.filter((item) => item.conservative.severity === 'pass').length,
+              },
+              {
+                label: 'Review',
+                value: screened.filter((item) => item.conservative.severity === 'review').length,
+              },
+              {
+                label: 'Fail',
+                value: screened.filter((item) => item.conservative.severity === 'fail').length,
+              },
+            ]}
+            notes={[
+              `${methodLabel}; flow stress basis ${saLabel}.`,
+              'FFS values remain subject to qualified engineering review and validation of inputs.',
+            ]}
+            label="Share FFS"
+          />
           <SynButton variant="outline" size="sm" onClick={() => navigate('/ffs')}>
             <span className="inline-flex items-center gap-2">
               <FiArrowLeft /> New assessment
