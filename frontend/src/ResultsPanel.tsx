@@ -13,6 +13,7 @@ import {
   sortAlignmentRowsByMasterAxis,
 } from './utils/alignmentDisplay';
 import ShareSnapshotButton from './components/sharing/ShareSnapshotButton';
+import { sectionNameForComparisonRow } from './wizard/matchingSections';
 
 const RAW_DEPTH_GROWTH_COLUMN = 'Depth Growth (%WT/yr)';
 const DEPTH_GROWTH_COLUMN = 'Depth Growth (mm/yr)';
@@ -558,21 +559,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
         yearSpan && !isNaN(l1) && !isNaN(l2) ? ((l2 - l1) / yearSpan).toFixed(3) : '-'
       );
 
-      // NEW is the current/reference run for corrosion-growth analysis.
-      const dist = parseFloat(row['Log Dist NEW (m)']);
-      let sectionName = '-';
-      if (!isNaN(dist) && sections && sections.length > 0) {
-         const matchingSec = sections.find(s => {
-            const start = Number(s.newStartM ?? s.startM);
-            const end = Number(s.newEndM ?? s.endM);
-            const min = Math.min(start, end);
-            const max = Math.max(start, end);
-            return dist >= min && dist <= max;
-         });
-         if (matchingSec) {
-            sectionName = matchingSec.name;
-         }
-      }
+      const sectionName = sectionNameForComparisonRow(row, sections);
 
       return {
         ...row,

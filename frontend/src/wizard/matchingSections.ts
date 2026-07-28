@@ -133,6 +133,45 @@ export function deleteMatchingSection(sections: MatchingSection[], sectionId: st
   return sections.filter((section) => section.id !== sectionId);
 }
 
+function finiteDistance(value: unknown): number | null {
+  if (value === null || value === undefined || value === '' || value === '-') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function containsDistance(section: MatchingSection, side: 'OLD' | 'NEW', distance: number): boolean {
+  const start = finiteDistance(side === 'NEW' ? section.newStartM ?? section.startM : section.oldStartM);
+  const end = finiteDistance(side === 'NEW' ? section.newEndM ?? section.endM : section.oldEndM);
+  return start !== null && end !== null
+    && distance >= Math.min(start, end)
+    && distance <= Math.max(start, end);
+}
+
+/** Resolve a comparison row against the physical range for whichever run side exists. */
+export function sectionNameForComparisonRow(
+  row: Record<string, unknown>,
+  sections: MatchingSection[],
+): string {
+  for (const key of ['Section', 'Section NEW', 'Section OLD']) {
+    const name = row[key];
+    if (typeof name === 'string' && name.trim() && name !== '-') return name;
+  }
+
+  const newDistance = finiteDistance(row['Log Dist NEW (m)']);
+  if (newDistance !== null) {
+    const section = sections.find((candidate) => containsDistance(candidate, 'NEW', newDistance));
+    if (section) return section.name;
+  }
+
+  const oldDistance = finiteDistance(row['Log Dist OLD (m)']);
+  if (oldDistance !== null) {
+    const section = sections.find((candidate) => containsDistance(candidate, 'OLD', oldDistance));
+    if (section) return section.name;
+  }
+
+  return '-';
+}
+
 export function resolveSectionDistances(
   section: MatchingSection,
   lockedGws: LockedGwPair[],

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   deleteMatchingSection,
   saveSectionRange,
+  sectionNameForComparisonRow,
   type LockedGwPair,
   type MatchingSection,
 } from '../src/wizard/matchingSections.ts';
@@ -46,4 +47,36 @@ test('deleteMatchingSection removes only the selected section', () => {
   ];
 
   assert.deepEqual(deleteMatchingSection(sections, 'first').map((section) => section.id), ['second']);
+});
+
+test('assigns unmatched OLD and NEW features to the section whose side-specific range they cross', () => {
+  const sections: MatchingSection[] = [{
+    id: 'hl279',
+    name: 'HL279',
+    policy: 'MATCH',
+    startGwKey: 'A',
+    endGwKey: 'B',
+    oldStartM: 85.78,
+    oldEndM: 88.83,
+    newStartM: 85.467,
+    newEndM: 88.536,
+  }];
+
+  assert.equal(sectionNameForComparisonRow({
+    'Log Dist OLD (m)': 86.42,
+    'Log Dist NEW (m)': '-',
+    'Feature Type OLD': 'bend',
+  }, sections), 'HL279');
+
+  assert.equal(sectionNameForComparisonRow({
+    'Log Dist OLD (m)': '-',
+    'Log Dist NEW (m)': 86.398,
+    'Feature Type NEW': 'offtake tee',
+  }, sections), 'HL279');
+
+  assert.equal(sectionNameForComparisonRow({
+    'Log Dist OLD (m)': 90,
+    'Log Dist NEW (m)': '-',
+    'Feature Type OLD': 'marker',
+  }, sections), '-');
 });
