@@ -88,6 +88,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    clearLegacyAuthStorage();
+    if (window.location.pathname.startsWith('/share/')) {
+      setUser(null);
+      setIsLoading(false);
+      return;
+    }
+
     const controller = new AbortController();
     let isCurrent = true;
     const timeoutId = window.setTimeout(() => controller.abort(), AUTH_BOOT_TIMEOUT_MS);
@@ -100,7 +107,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     window.addEventListener("synapse:auth-expired", handleAuthExpired);
 
-    clearLegacyAuthStorage();
     setIsLoading(true);
 
     void apiFetch<unknown>("/api/auth/me", { signal: controller.signal })
