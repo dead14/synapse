@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import { FiChevronLeft, FiChevronRight, FiEye, FiLock, FiSearch, FiX } from 'react-icons/fi';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { FiChevronLeft, FiChevronRight, FiEye, FiHexagon, FiLock, FiSearch, FiX } from 'react-icons/fi';
 import { useLocation, useParams } from 'react-router-dom';
 
 import Modal from '../../components/common/Modal.tsx';
 import PageMeta from '../../components/common/PageMeta.tsx';
+import ResultsPanel from '../../ResultsPanel.tsx';
 import {
   fetchPublicShare,
   tokenFromLocationHash,
@@ -11,6 +12,7 @@ import {
 } from '../../lib/sharing/publicShareClient.ts';
 import type { PublicShareValue } from '../../lib/sharing/publicShareSnapshot.ts';
 
+const DefectVisualizer = lazy(() => import('../../DefectVisualizer.tsx'));
 const PAGE_SIZE = 100;
 const KIND_LABELS: Record<PublicShareView['kind'], string> = {
   GW_ALIGNMENT: 'GW Alignment',
@@ -67,6 +69,87 @@ function SharedLoading() {
         <p className="sr-only" role="status">Loading shared result</p>
       </section>
     </main>
+  );
+}
+
+function PublicPreviewHeader({ title }: { title: string }) {
+  return (
+    <header className="engine-header">
+      <div className="engine-header__bar">
+        <div className="engine-header__primary">
+          <div className="engine-brand" aria-label="Synapse shared preview">
+            <span className="engine-brand__mark">
+              <FiHexagon aria-hidden="true" />
+              <span>S</span>
+            </span>
+            <span className="engine-brand__copy">
+              <strong>Synapse</strong>
+              <small>Integrity OS</small>
+            </span>
+          </div>
+        </div>
+        <div className="engine-header__context" aria-label="Current workspace">
+          <span>workspace</span>
+          <strong className="max-w-72 truncate" title={title}>Shared preview</strong>
+          <span className="engine-status"><i /> read only</span>
+        </div>
+        <div className="engine-header__actions">
+          <span className="syn-btn syn-btn--sm syn-btn--outline" aria-label="Read only preview, no login required">
+            <FiEye aria-hidden="true" />
+            Preview / no login
+          </span>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function PublicIliAlignmentPreview({ share }: { share: PublicShareView }) {
+  const [selectedRowIdx, setSelectedRowIdx] = useState<number | null>(null);
+  const rows = useMemo(
+    () => share.snapshot.rows.map((row, index) => ({ ...row, __origIdx: index })),
+    [share.snapshot.rows],
+  );
+
+  return (
+    <div className="syn-app engine-app">
+      <PageMeta
+        title={`${share.title} - Shared Synapse preview`}
+        description="Read-only ILI alignment preview shared from Synapse"
+      />
+      <a href="#main-content" className="syn-action syn-action--signal syn-skip-link">
+        Skip to shared preview
+      </a>
+      <div className="min-w-0 flex-1">
+        <PublicPreviewHeader title={share.title} />
+        <main id="main-content" tabIndex={-1} className="engine-main">
+          <div className="results-workspace py-4 overflow-x-hidden w-full">
+            <div className="app-page-shell flex flex-col gap-3">
+              <div className="mt-1 flex flex-col gap-2">
+                <div className="shrink-0">
+                  <Suspense fallback={<div className="syn-panel py-12 text-center text-sm">Loading comparison viewer...</div>}>
+                    <DefectVisualizer
+                      data={rows}
+                      selectedRowIdx={selectedRowIdx}
+                      onSelectRowIdx={setSelectedRowIdx}
+                    />
+                  </Suspense>
+                </div>
+                <div className="flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
+                  <ResultsPanel
+                    data={rows}
+                    loading={false}
+                    readOnly
+                    selectedRowIdx={selectedRowIdx}
+                    onSelectRowIdx={setSelectedRowIdx}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
   );
 }
 
@@ -131,6 +214,9 @@ export default function PublicSharePage() {
   if (isUnavailable || !share) return <SharedUnavailable />;
 
   const kindLabel = KIND_LABELS[share.kind];
+  if (share.kind === 'ILI_ALIGNMENT') {
+    return <PublicIliAlignmentPreview share={share} />;
+  }
 
   return (
     <main className="min-h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
