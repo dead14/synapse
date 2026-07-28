@@ -15,6 +15,15 @@ import { canonicalGwReviewSignature, pairResultForPersistence } from './gwPairRe
 import { pairGwResult, pairTieIn, primaryRunPair, resolveRunPairs } from '../domain/runPairs';
 import type { MatchingSection } from './matchingSections';
 import ShareSnapshotButton from '../components/sharing/ShareSnapshotButton';
+import {
+  ActionBar,
+  Button,
+  Panel,
+  PanelBody,
+  PanelHeader,
+  SliderField,
+  Switch,
+} from '../components/ds';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip);
 
@@ -669,45 +678,39 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
   return (
     <div className="gw-matching-workspace bg-transparent text-gray-800 font-sans flex flex-col gap-6 animate-fade-in">
       {hasMultiplePairs && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3">
-          <span className="text-xs font-bold uppercase tracking-wide text-brand-700">Run Pair</span>
-          <div className="flex flex-wrap gap-1">
-            {runPairs.map((pair) => {
-              const isActive = pair.key === activePair?.key;
-              const pending = unreviewedPairs.some((item) => item.key === pair.key);
-              return (
-                <button
-                  key={pair.key}
-                  onClick={() => switchPair(pair.key)}
-                  aria-pressed={isActive}
-                  title={pending ? 'This pair has no matching result yet' : 'Matching result saved'}
-                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                    isActive
-                      ? 'bg-brand-600 text-white shadow-sm'
-                      : 'bg-white text-brand-700 border border-brand-200 hover:bg-brand-100'
-                  }`}
-                >
-                  <span aria-hidden="true" className={pending ? 'text-amber-500' : 'text-emerald-500'}>●</span>
-                  {pair.label}
-                </button>
-              );
-            })}
-          </div>
-          <span className="ml-auto text-xs text-brand-600">
+        <div className="ds-toolbar" style={{ borderRadius: 'var(--ds-r-lg)', border: '1px solid var(--ds-line)' }}>
+          <span className="ds-toolbar__label">Run pair</span>
+          {runPairs.map((pair) => {
+            const isActive = pair.key === activePair?.key;
+            const pending = unreviewedPairs.some((item) => item.key === pair.key);
+            return (
+              <Button
+                key={pair.key}
+                size="sm"
+                variant={isActive ? 'primary' : 'secondary'}
+                onClick={() => switchPair(pair.key)}
+                aria-pressed={isActive}
+                title={pending ? 'This pair has no matching result yet' : 'Matching result saved'}
+                startIcon={
+                  <span aria-hidden="true" style={{ color: pending ? 'var(--ds-warning)' : 'var(--ds-success)' }}>●</span>
+                }
+              >
+                {pair.label}
+              </Button>
+            );
+          })}
+          <span className="ds-toolbar__spacer" />
+          <span className="ds-toolbar__hint">
             {runPairs.length - unreviewedPairs.length} / {runPairs.length} pairs matched
           </span>
         </div>
       )}
       {loadError && (
-        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 shadow-sm">
-          <span>{loadError}</span>
-          <button
-            type="button"
-            onClick={() => setRetryNonce((value) => value + 1)}
-            className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100"
-          >
+        <div role="alert" className="ds-callout ds-callout--warning">
+          <div className="ds-callout__body">{loadError}</div>
+          <Button size="sm" variant="secondary" onClick={() => setRetryNonce((value) => value + 1)}>
             Retry
-          </button>
+          </Button>
         </div>
       )}
       
@@ -745,7 +748,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
         <div className="flex flex-col gap-5">
           
           {/* Data Tables Container */}
-          <div className="gw-match-table bg-white rounded-xl shadow-theme-sm border border-gray-200 flex flex-col overflow-hidden" style={{ height: 'min(70vh, 720px)', minHeight: '520px' }}>
+          <div className="gw-match-table ds-panel" style={{ height: 'min(70vh, 720px)', minHeight: '520px' }}>
             
             {/* Tabs Header */}
             <div className="flex border-b border-gray-200 bg-gray-50">
@@ -774,7 +777,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                 <div className="absolute inset-0 flex flex-col bg-white">
                   <div className="p-2 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                     <span className="text-xs font-bold text-gray-600 pl-2">Anomalies Detected</span>
-                    <button className="text-gray-500 hover:text-gray-800 p-1.5 hover:bg-gray-200 rounded transition-colors"><FiDownload size={14} /></button>
+                    <button className="ds-btn ds-btn--ghost ds-btn--xs ds-btn--icon"><FiDownload size={14} /></button>
                   </div>
                   <div className="flex-1 overflow-auto custom-scrollbar">
                     <table className="w-full min-w-[760px] text-left text-xs leading-tight">
@@ -806,10 +809,10 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                       <input 
                         type="text" placeholder="Search GW..." 
                         value={searchQuery} onChange={(e) => {setSearchQuery(e.target.value); setCurrentPage(1);}}
-                        className="w-full pl-7 pr-2 py-1 text-xs border border-gray-200 rounded bg-white focus:outline-none focus:border-blue-500" 
+                        className="ds-input ds-input--sm" 
                       />
                     </div>
-                    <button className="text-gray-500 hover:text-gray-800 p-1.5 hover:bg-gray-200 rounded transition-colors"><FiDownload size={14} /></button>
+                    <button className="ds-btn ds-btn--ghost ds-btn--xs ds-btn--icon"><FiDownload size={14} /></button>
                   </div>
                   <div className="flex-1 overflow-auto custom-scrollbar">
                     <table className="w-full min-w-[920px] text-left text-xs leading-tight">
@@ -834,7 +837,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                               }`}
                             >
                               <td className="px-2 py-2 text-center">
-                                <button type="button" onClick={(event) => { event.stopPropagation(); setSelectedMatch(row); }} className="rounded border border-blue-200 bg-blue-50 px-1.5 py-1 text-[10px] font-bold text-blue-700 hover:bg-blue-100">Open</button>
+                                <button type="button" onClick={(event) => { event.stopPropagation(); setSelectedMatch(row); }} className="ds-btn ds-btn--soft ds-btn--xs">Open</button>
                               </td>
                               <td className="px-3 py-2 font-mono text-gray-700">{row.oldVal !== null ? row.oldVal : '-'}</td>
                               <td className="px-3 py-2 text-gray-500 truncate max-w-[260px]" title={row.oldDesc}>{row.oldDesc}</td>
@@ -848,9 +851,9 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                   {/* Pagination Mini */}
                   <div className="px-3 py-2 bg-gray-50 border-t border-gray-200 flex justify-between items-center text-[10px]">
                     <div className="flex gap-1">
-                      <button onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))} className="p-1 text-gray-500 hover:bg-gray-200 rounded"><FiChevronLeft/></button>
+                      <button onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))} className="ds-btn ds-btn--ghost ds-btn--xs ds-btn--icon"><FiChevronLeft/></button>
                       <span className="p-1 font-bold text-gray-700">{currentPage} / {totalPages}</span>
-                      <button onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))} className="p-1 text-gray-500 hover:bg-gray-200 rounded"><FiChevronRight/></button>
+                      <button onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))} className="ds-btn ds-btn--ghost ds-btn--xs ds-btn--icon"><FiChevronRight/></button>
                     </div>
                   </div>
                 </div>
@@ -861,7 +864,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                 <div className="absolute inset-0 flex flex-col bg-white">
                    <div className="p-2 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                     <span className="text-xs font-bold text-gray-600 pl-2">All Pipeline Features</span>
-                    <button onClick={handleDownloadExcel} className="text-blue-600 bg-blue-50 hover:bg-blue-100 flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold rounded transition-colors uppercase"><FiDownload /> Export</button>
+                    <button onClick={handleDownloadExcel} className="ds-btn ds-btn--soft ds-btn--xs"><FiDownload /> Export</button>
                   </div>
                   <div className="flex-1 overflow-auto custom-scrollbar">
                     <table className="w-full min-w-[980px] text-left text-xs leading-tight">
@@ -954,97 +957,99 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
         
         {/* LEFT: OTA Settings */}
         <div className="xl:col-span-2 flex">
-          <div className="gw-settings-panel bg-white rounded-2xl p-6 shadow-xl shadow-blue-900/5 border border-gray-200 flex flex-col justify-between w-full">
-             <div>
-               <h3 className="font-bold text-gray-800 text-lg mb-1">OTA Settings</h3>
-               <p className="text-xs text-gray-500 mb-6 leading-relaxed">Adjust slippage tolerance and toggle DTW correction to force alignment.</p>
-               
-               <div className="mt-6 space-y-4">
-                 <label className="flex items-center justify-between text-sm font-bold text-gray-700">
-                   <span>Slippage Tolerance {perSectionOtaEnabled ? '(Global Default)' : ''}</span>
-                   <span className="font-mono bg-white px-2 py-1 rounded shadow-sm border border-gray-200 text-blue-600">{ota}%</span>
-                 </label>
-                 <input type="range" min="0.1" max="10" step="0.1" value={ota} onChange={e => setOta(parseFloat(e.target.value))} className="w-full accent-blue-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer" />
-               </div>
+          <Panel className="gw-settings-panel w-full">
+            <PanelHeader
+              eyebrow="Matcher"
+              title="OTA settings"
+              subtitle="Adjust slippage tolerance and toggle DTW correction to force alignment."
+            />
+            <PanelBody className="ds-stack">
+              <SliderField
+                label={`Slippage tolerance${perSectionOtaEnabled ? ' (global default)' : ''}`}
+                value={ota}
+                display={`${ota}%`}
+                min={0.1}
+                max={10}
+                step={0.1}
+                onChange={setOta}
+              />
 
-               {sections.length > 0 && (
-                 <div className="mt-4 flex items-center justify-between bg-amber-50/50 px-4 py-3 rounded-xl border border-amber-200">
-                   <div>
-                     <span className="font-bold text-sm text-amber-900">Per-Section OTA</span>
-                     <p className="text-[10px] text-amber-700/80 font-medium mt-0.5">Override OTA threshold for individual pipeline sections</p>
-                   </div>
-                   <button onClick={() => setPerSectionOtaEnabled(!perSectionOtaEnabled)} className={`w-12 h-6 rounded-full transition-colors relative shadow-inner ${perSectionOtaEnabled ? 'bg-amber-500' : 'bg-gray-300'}`}>
-                     <div className={`w-4 h-4 bg-white rounded-full absolute left-1 top-1 transition-transform shadow-md ${perSectionOtaEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
-                   </button>
-                 </div>
-               )}
-
-               {perSectionOtaEnabled && sections.length > 0 && (
-                 <div className="mt-3 space-y-3 max-h-48 overflow-y-auto pr-1">
-                   {sections.map((s) => {
-                     const sOta = sectionOtaOverrides[s.id] ?? ota;
-                     return (
-                       <div key={s.id} className="bg-amber-50/30 border border-amber-100 rounded-lg px-4 py-3">
-                         <div className="flex items-center justify-between mb-2">
-                           <span className="text-xs font-bold text-gray-700 truncate max-w-[60%]">{s.name}</span>
-                           <div className="flex items-center gap-2">
-                             <span className="font-mono text-xs bg-white px-1.5 py-0.5 rounded border border-amber-200 text-amber-700">{sOta}%</span>
-                             {sectionOtaOverrides[s.id] != null && (
-                               <button
-                                 onClick={() => setSectionOtaOverrides((prev) => { const next = { ...prev }; delete next[s.id]; return next; })}
-                                 className="text-[10px] text-gray-400 hover:text-red-500"
-                                 title="Reset to global"
-                               >reset</button>
-                             )}
-                           </div>
-                         </div>
-                         <input
-                           type="range" min="0.1" max="10" step="0.1" value={sOta}
-                           onChange={(e) => setSectionOtaOverrides((prev) => ({ ...prev, [s.id]: parseFloat(e.target.value) }))}
-                           className="w-full accent-amber-500 h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                         />
-                       </div>
-                     );
-                   })}
-                 </div>
-               )}
-             </div>
-
-             <div className="flex items-center justify-between bg-blue-50/50 px-5 py-4 rounded-xl border border-blue-100 w-full mb-3">
-                <div>
-                  <span className="font-bold text-sm text-blue-900">Strict Distance & Spool Matching</span>
-                  <p className="text-[10px] text-blue-600/80 font-medium mt-0.5">Penalizes distance drift to prevent forced matches across Tie-ins</p>
+              {sections.length > 0 && (
+                <div className="gw-toggle-row">
+                  <div className="gw-toggle-row__copy">
+                    <strong>Per-section OTA</strong>
+                    <small>Override the OTA threshold for individual pipeline sections.</small>
+                  </div>
+                  <Switch
+                    checked={perSectionOtaEnabled}
+                    onChange={setPerSectionOtaEnabled}
+                    label="Enable per-section OTA overrides"
+                  />
                 </div>
-                <button onClick={() => setStrictPenalty(!strictPenalty)} className={`w-12 h-6 rounded-full transition-colors relative shadow-inner ${strictPenalty ? 'bg-blue-600' : 'bg-gray-300'}`}>
-                  <div className={`w-4 h-4 bg-white rounded-full absolute left-1 top-1 transition-transform shadow-md ${strictPenalty ? 'translate-x-6' : 'translate-x-0'}`} />
-                </button>
+              )}
+
+              {perSectionOtaEnabled && sections.length > 0 && (
+                <div className="gw-section-ota">
+                  {sections.map((s) => {
+                    const sOta = sectionOtaOverrides[s.id] ?? ota;
+                    return (
+                      <div key={s.id} className="gw-section-ota__item">
+                        <SliderField
+                          label={s.name}
+                          value={sOta}
+                          display={`${sOta}%`}
+                          min={0.1}
+                          max={10}
+                          step={0.1}
+                          onChange={(value) => setSectionOtaOverrides((prev) => ({ ...prev, [s.id]: value }))}
+                        >
+                          {sectionOtaOverrides[s.id] != null && (
+                            <Button
+                              size="xs"
+                              variant="ghost"
+                              title="Reset to global"
+                              onClick={() => setSectionOtaOverrides((prev) => { const next = { ...prev }; delete next[s.id]; return next; })}
+                            >
+                              Reset to global
+                            </Button>
+                          )}
+                        </SliderField>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="gw-toggle-row">
+                <div className="gw-toggle-row__copy">
+                  <strong>Strict distance &amp; spool matching</strong>
+                  <small>Penalizes distance drift to prevent forced matches across tie-ins.</small>
+                </div>
+                <Switch checked={strictPenalty} onChange={setStrictPenalty} label="Strict distance and spool matching" />
               </div>
 
-              <div className="flex items-center justify-between bg-blue-50/50 px-5 py-4 rounded-xl border border-blue-100 w-full mb-3">
-                <div>
-                  <span className="font-bold text-sm text-blue-900">Valve-to-Valve Anchoring</span>
-                  <p className="text-[10px] text-blue-600/80 font-medium mt-0.5">Locks alignment explicitly between matched valves</p>
+              <div className="gw-toggle-row">
+                <div className="gw-toggle-row__copy">
+                  <strong>Valve-to-valve anchoring</strong>
+                  <small>Locks alignment explicitly between matched valves.</small>
                 </div>
-                <button onClick={() => setUseValveAnchor(!useValveAnchor)} className={`w-12 h-6 rounded-full transition-colors relative shadow-inner ${useValveAnchor ? 'bg-blue-600' : 'bg-gray-300'}`}>
-                  <div className={`w-4 h-4 bg-white rounded-full absolute left-1 top-1 transition-transform shadow-md ${useValveAnchor ? 'translate-x-6' : 'translate-x-0'}`} />
-                </button>
+                <Switch checked={useValveAnchor} onChange={setUseValveAnchor} label="Valve-to-valve anchoring" />
               </div>
 
-             <div className="flex items-center justify-between bg-blue-50/50 px-5 py-4 rounded-xl border border-blue-100 w-full">
-               <div>
-                 <span className="font-bold text-sm text-blue-900">Apply DTW Correction</span>
-                 <p className="text-[10px] text-blue-600/80 font-medium mt-0.5">Corrects raw odometer using reference run</p>
-               </div>
-               <button onClick={() => setDtwOn(!dtwOn)} className={`w-12 h-6 rounded-full transition-colors relative shadow-inner ${dtwOn ? 'bg-blue-600' : 'bg-gray-300'}`}>
-                 <div className={`w-4 h-4 bg-white rounded-full absolute left-1 top-1 transition-transform shadow-md ${dtwOn ? 'translate-x-6' : 'translate-x-0'}`} />
-               </button>
-             </div>
-          </div>
+              <div className="gw-toggle-row">
+                <div className="gw-toggle-row__copy">
+                  <strong>Apply DTW correction</strong>
+                  <small>Corrects raw odometer using the reference run.</small>
+                </div>
+                <Switch checked={dtwOn} onChange={setDtwOn} label="Apply DTW correction" />
+              </div>
+            </PanelBody>
+          </Panel>
         </div>
 
         {/* RIGHT: GW Offset Chart */}
         <div className="xl:col-span-3 flex">
-      <div className="gw-trend-panel bg-white rounded-2xl p-6 shadow-xl shadow-blue-900/5 border border-gray-200 flex flex-col w-full">
+      <div className="gw-trend-panel ds-panel w-full" style={{ padding: '1.125rem' }}>
         <div className="flex justify-between items-start mb-4">
           <div>
             <h3 className="font-bold text-gray-800 text-lg">GW Offset Trends</h3>
@@ -1084,54 +1089,57 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
       </div>
 
       {/* Full-Width Odometer Slippage Section */}
-      <div className="gw-review-panel bg-white rounded-2xl p-6 shadow-xl shadow-blue-900/5 border border-gray-200">
-        <div className="flex items-center justify-between mb-4 border-b border-gray-100 pb-4">
-          <div>
-            <h3 className="text-lg font-bold text-gray-800">Joint Review Queue</h3>
-            <p className="text-xs font-medium text-gray-500 mt-1">Review high-deviation matched joints before accepting alignment.</p>
-          </div>
-        </div>
-        <OdometerDashboard matches={matchedOnly} ota={ota} setOta={setOta} dtwOn={dtwOn} setDtwOn={setDtwOn} />
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-3 mt-4">
-        <button
-          onClick={() => onBack({ sessionRevision })}
-          className="px-6 py-3 rounded-xl font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors flex items-center gap-2"
-        >
-          <FiChevronLeft /> Adjust Scenarios
-        </button>
-        {/* Sectioning and the final comparison consume the whole chain, so
-            advancing with a pair still unmatched would drop it from the results. */}
-        {unreviewedPairs.length > 0 && !isCalculating && (
-          <p role="status" className="flex-1 text-right text-sm text-amber-700">
-            Still to match: {unreviewedPairs.map((pair) => pair.label).join(', ')}.
-          </p>
-        )}
-        <ShareSnapshotButton
-          kind="GW_ALIGNMENT"
-          title={`GW alignment${activePair?.label ? ` · ${activePair.label}` : ''}`}
-          sourceRef={config?.sessionId ? `alignment-session:${config.sessionId}` : undefined}
-          rows={timelineMatches}
-          summary={[
-            { label: 'Matched', value: matchedOnly.length },
-            { label: 'Run pair', value: activePair?.label || 'Primary pair' },
-          ]}
-          notes={[
-            'Frozen after the GW matching review. Dispositions are decision-support evidence, not approval.',
-          ]}
-          disabled={isCalculating || Boolean(loadError) || timelineMatches.length === 0}
-          label="Share GW view"
+      <Panel className="gw-review-panel">
+        <PanelHeader
+          eyebrow="Evidence"
+          title="Joint review queue"
+          subtitle="Review high-deviation matched joints before accepting alignment."
         />
-        <button
-          type="button"
-          disabled={isCalculating || isSavingReview || Boolean(loadError) || matches.length === 0 || unreviewedPairs.length > 0}
-          onClick={() => { void saveReviewAndContinue(); }}
-          className="bg-white hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 text-black px-8 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-lg shadow-white/10"
-        >
-          {isSavingReview ? 'Saving review…' : 'Save review & Next'} <FiChevronRight />
-        </button>
-      </div>
+        <PanelBody>
+          <OdometerDashboard matches={matchedOnly} ota={ota} setOta={setOta} dtwOn={dtwOn} setDtwOn={setDtwOn} />
+        </PanelBody>
+      </Panel>
+
+      <ActionBar
+        back={
+          <Button variant="ghost" startIcon={<FiChevronLeft aria-hidden="true" />} onClick={() => onBack({ sessionRevision })}>
+            Adjust scenarios
+          </Button>
+        }
+        center={
+          <ShareSnapshotButton
+            kind="GW_ALIGNMENT"
+            title={`GW alignment${activePair?.label ? ` · ${activePair.label}` : ''}`}
+            sourceRef={config?.sessionId ? `alignment-session:${config.sessionId}` : undefined}
+            rows={timelineMatches}
+            summary={[
+              { label: 'Matched', value: matchedOnly.length },
+              { label: 'Run pair', value: activePair?.label || 'Primary pair' },
+            ]}
+            notes={[
+              'Frozen after the GW matching review. Dispositions are decision-support evidence, not approval.',
+            ]}
+            disabled={isCalculating || Boolean(loadError) || timelineMatches.length === 0}
+            label="Share GW view"
+          />
+        }
+        next={
+          <Button
+            disabled={isCalculating || isSavingReview || Boolean(loadError) || matches.length === 0 || unreviewedPairs.length > 0}
+            endIcon={<FiChevronRight aria-hidden="true" />}
+            onClick={() => { void saveReviewAndContinue(); }}
+          >
+            {isSavingReview ? 'Saving review…' : 'Save review & next'}
+          </Button>
+        }
+        /* Sectioning and the final comparison consume the whole chain, so
+           advancing with a pair still unmatched would drop it from the results. */
+        help={
+          unreviewedPairs.length > 0 && !isCalculating
+            ? `Still to match: ${unreviewedPairs.map((pair) => pair.label).join(', ')}.`
+            : undefined
+        }
+      />
       {/* 3D Viewer Modal */}
       {show3DViewer && selectedGWs.length === 2 && (
         <Modal
@@ -1145,7 +1153,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                 <h3 id="gw-3d-modal-title" className="text-gray-900 font-bold flex items-center gap-2"><FiBox className="text-brand-500" /> Interactive Spool Analysis</h3>
                 <p className="text-gray-500 text-xs">Viewing segment from {selectedGWs[0].toFixed(2)}m to {selectedGWs[1].toFixed(2)}m</p>
               </div>
-              <button onClick={() => setShow3DViewer(false)} aria-label="Close interactive spool analysis" className="text-gray-500 hover:text-gray-900 bg-gray-100 hover:bg-gray-700 p-2 rounded-full transition-colors">
+              <button onClick={() => setShow3DViewer(false)} aria-label="Close interactive spool analysis" className="ds-btn ds-btn--secondary ds-btn--sm ds-btn--icon">
                 <FiX size={20} />
               </button>
             </div>

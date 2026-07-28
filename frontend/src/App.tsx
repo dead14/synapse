@@ -16,6 +16,7 @@ const IliSectioningPage = lazy(() => import('./sectioning/IliSectioningPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const RegisterPage = lazy(() => import('./pages/RegisterPage'));
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
+const DesignSystemPage = lazy(() => import('./pages/DesignSystemPage'));
 const MasterAdminPage = lazy(() => import('./pages/MasterAdmin/MasterAdminPage'));
 const CorrosionAnalysisPage = lazy(() => import('./pages/Corrosion/CorrosionAnalysisPage'));
 const FfsSetupPage = lazy(() => import('./pages/FFS/FfsSetupPage'));
@@ -103,6 +104,9 @@ export default function App() {
         <Route path="/signup" element={<RegisterPage />} />
         <Route path="/reset-password" element={<ForgotPasswordPage />} />
         <Route path="/share/:id" element={<PublicSharePage />} />
+        {/* Living design-system reference. Dev builds only — it is a style guide,
+            not a product surface, and carries no session data. */}
+        {import.meta.env.DEV && <Route path="/ds-preview" element={<DesignSystemPage />} />}
 
         <Route element={<RequireAuth />}>
           <Route element={<AppLayout />}>
