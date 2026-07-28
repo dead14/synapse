@@ -61,3 +61,44 @@ export function createExcelExportRows(data: ExportRow[]): ExportRow[] {
     return exportRow;
   });
 }
+
+/** Preserve the complete engine report while dropping browser-only state. */
+export function createRuncompReportRows(data: ExportRow[]): ExportRow[] {
+  return data.map((sourceRow) => Object.fromEntries(
+    Object.entries(sourceRow)
+      .filter(([key]) => !key.startsWith('__'))
+      .map(([key, value]) => [
+        key,
+        value !== null && typeof value === 'object' ? JSON.stringify(value) : value,
+      ]),
+  ));
+}
+
+export function createPipelineExportData(config: any): ExportRow & { inspectionRuns: ExportRow[] } {
+  const configured = config?.pipelineData && typeof config.pipelineData === 'object'
+    ? config.pipelineData
+    : {};
+  const masterRun = config?.summaryData?.masterRun ?? config?.summaryData?.newRun;
+  const historicalRuns = Array.isArray(config?.summaryData?.historicalRuns)
+    ? config.summaryData.historicalRuns
+    : config?.summaryData?.oldRun ? [config.summaryData.oldRun] : [];
+  const runs = [
+    ...(masterRun ? [{ role: 'Master', run: masterRun }] : []),
+    ...historicalRuns.map((run: any) => ({ role: 'Historical', run })),
+  ];
+  return {
+    ...configured,
+    pipelineName: configured.pipelineName
+      ?? config?.summaryData?.sessionName
+      ?? config?.sessionName
+      ?? '',
+    inspectionRuns: runs.map(({ role, run }) => ({
+      role,
+      year: run?.year ?? '',
+      vendor: run?.vendor ?? '',
+      fileName: run?.name ?? '',
+      runId: run?.runId ?? '',
+      total: run?.total ?? '',
+    })),
+  };
+}

@@ -2,12 +2,11 @@ import React, { useState, useEffect } from 'react';
 import StepDataSummary from './wizard/StepDataSummary';
 import StepScenarioFilter from './wizard/StepScenarioFilter';
 import StepGwSimulator from './wizard/StepGwSimulator';
-import StepAnomalyTolerances from './wizard/StepAnomalyTolerances';
 import StepExecution from './wizard/StepExecution';
 import StepUploadILI from './wizard/StepUploadILI';
 import StepTieInConfig from './wizard/StepTieInConfig';
 import StepMatchingSections from './wizard/StepMatchingSections';
-import { FiAlertTriangle, FiX } from 'react-icons/fi';
+import { FiAlertTriangle, FiPlusCircle, FiX } from 'react-icons/fi';
 import { apiFetch, ApiError } from './utils/api';
 import ConfirmDialog from './components/common/ConfirmDialog';
 import { Button } from './components/ds';
@@ -21,8 +20,7 @@ const baseSteps = [
   { id: 'summary', name: 'Data review', desc: 'Check extraction' },
   { id: 'gw', name: 'GW matching', desc: 'Review alignment' },
   { id: 'sections', name: 'Sectioning', desc: 'Define reference' },
-  { id: 'scenario', name: 'Feature rules', desc: 'Set thresholds' },
-  { id: 'anomaly', name: 'Tolerances', desc: 'Tune matcher' },
+  { id: 'scenario', name: 'Rules & tolerances', desc: 'Tune matcher' },
   { id: 'exec', name: 'Execution', desc: 'Run & report' },
 ];
 
@@ -177,21 +175,24 @@ export default function AlignmentPage() {
                 <div className="flex flex-wrap items-center gap-3">
                   <p className="alignment-eyebrow">Alignment workspace</p>
                   <span className="alignment-run-label" title={runLabel}>{runLabel}</span>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => setShowResetConfirm(true)}
-                    title="Clear current progress and start a new alignment run"
-                  >
-                    Start new run
-                  </Button>
                 </div>
                 <h1 className="alignment-title">{currentStep?.name}</h1>
                 <p className="alignment-subtitle">{currentStep?.desc}. Verify the engineering evidence before continuing.</p>
               </div>
-              <div className="alignment-progress-value">
-                <span>Stage {step + 1} / {stepsList.length}</span>
-                <strong>{progress}%</strong>
+              <div className="alignment-progress-actions">
+                <Button
+                  className="alignment-new-run-cta"
+                  variant="secondary"
+                  startIcon={<FiPlusCircle aria-hidden="true" />}
+                  onClick={() => setShowResetConfirm(true)}
+                  title="Clear current progress and start a new alignment run"
+                >
+                  Start New Alignment Run
+                </Button>
+                <div className="alignment-progress-value">
+                  <span>Stage {step + 1} / {stepsList.length}</span>
+                  <strong>{progress}%</strong>
+                </div>
               </div>
             </div>
 
@@ -231,8 +232,6 @@ export default function AlignmentPage() {
           {stepsList[step]?.id === 'sections' && <StepMatchingSections onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 
           {stepsList[step]?.id === 'scenario' && <StepScenarioFilter onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
-
-          {stepsList[step]?.id === 'anomaly' && <StepAnomalyTolerances onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 
           {stepsList[step]?.id === 'exec' && <StepExecution onBack={handleBack} config={wizardConfig} />}
 

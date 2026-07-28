@@ -14,6 +14,45 @@ import export_excel
 
 
 class ExportExcelLayoutTests(unittest.TestCase):
+    def test_export_builds_pipeline_report_and_primary_comparison_sheets(self):
+        engine = Path(__file__).parents[1] / "src" / "python_engines" / "export_excel.py"
+        payload = {
+            "pipelineData": {
+                "pipelineName": "North Line",
+                "segmentRoute": "Station A - Station B",
+                "environment": "Onshore",
+                "inspectionRuns": [
+                    {"year": "2021", "vendor": "Vendor OLD", "fileName": "old.xlsx"},
+                    {"year": "2026", "vendor": "Vendor NEW", "fileName": "new.xlsx"},
+                ],
+            },
+            "report": [{
+                "Run Pair": "2021 -> 2026",
+                "Result Group": "ANOMALY",
+                "Depth NEW (%WT)": 20,
+            }],
+            "comparison": [{
+                "Log Dist NEW (m)": 10.5,
+                "Log Dist OLD (m)": 9.75,
+                "Match/Unmatch": "Matched",
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            input_path = Path(directory) / "data.json"
+            output_path = Path(directory) / "report.xlsx"
+            input_path.write_text(json.dumps(payload), encoding="utf-8")
+            subprocess.run([sys.executable, str(engine), str(input_path), str(output_path)], check=True)
+            workbook = openpyxl.load_workbook(output_path, data_only=False)
+
+            self.assertEqual(
+                workbook.sheetnames,
+                ["Data Pipeline", "Runcomp Report", "Runcomp Comparison"],
+            )
+            self.assertEqual(workbook["Data Pipeline"]["A1"].value, "PIPELINE DATA")
+            self.assertEqual(workbook["Data Pipeline"]["B3"].value, "North Line")
+            self.assertEqual(workbook["Runcomp Report"]["A2"].value, "2021 -> 2026")
+            self.assertEqual(workbook["Runcomp Comparison"]["X3"].value, "Matched")
+
     def test_export_uses_new_status_old_layout_and_escapes_formula_text(self):
         engine = Path(__file__).parents[1] / "src" / "python_engines" / "export_excel.py"
         data = [{

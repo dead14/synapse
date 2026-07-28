@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createExcelExportRows } from '../src/utils/alignmentExport.ts';
+import {
+  createExcelExportRows,
+  createPipelineExportData,
+  createRuncompReportRows,
+} from '../src/utils/alignmentExport.ts';
 
 test('creates compact Excel export rows using the report fields and aliases', () => {
   const source = {
@@ -50,4 +54,52 @@ test('creates compact Excel export rows using the report fields and aliases', ()
   assert.equal(Object.hasOwn(row, '__resultGroup'), false);
   assert.equal(Object.hasOwn(row, 'Internal only'), false);
   assert.equal(source['Dist to US GW NEW (m)'], 0);
+});
+
+test('creates a complete runcomp report while removing browser-only metadata', () => {
+  const [row] = createRuncompReportRows([{
+    'Run Pair': '2021 → 2026',
+    'Result Group': 'ANOMALY',
+    'Match/Unmatch': 'Matched',
+    'Depth NEW (%WT)': 23,
+    'Physics Warning': '',
+    __origIdx: 4,
+    __intervention: { excluded: false },
+  }]);
+
+  assert.deepEqual(row, {
+    'Run Pair': '2021 → 2026',
+    'Result Group': 'ANOMALY',
+    'Match/Unmatch': 'Matched',
+    'Depth NEW (%WT)': 23,
+    'Physics Warning': '',
+  });
+});
+
+test('serializes structured engine evidence into safe report cells', () => {
+  const [row] = createRuncompReportRows([{
+    physics_warnings: [{ code: 'DEPTH_DECREASE' }],
+    scalar: 4,
+  }]);
+
+  assert.equal(row.physics_warnings, '[{"code":"DEPTH_DECREASE"}]');
+  assert.equal(row.scalar, 4);
+});
+
+test('pipeline export keeps uploaded metadata and derives inspection runs for legacy sessions', () => {
+  const pipeline = createPipelineExportData({
+    pipelineData: { pipelineName: 'North Line', environment: 'Onshore' },
+    summaryData: {
+      masterRun: { runId: 2, year: '2026', vendor: 'NEW Vendor', name: 'new.xlsx', total: 20 },
+      historicalRuns: [
+        { runId: 1, year: '2021', vendor: 'OLD Vendor', name: 'old.xlsx', total: 18 },
+      ],
+    },
+  });
+
+  assert.equal(pipeline.pipelineName, 'North Line');
+  assert.deepEqual(pipeline.inspectionRuns, [
+    { role: 'Master', year: '2026', vendor: 'NEW Vendor', fileName: 'new.xlsx', runId: 2, total: 20 },
+    { role: 'Historical', year: '2021', vendor: 'OLD Vendor', fileName: 'old.xlsx', runId: 1, total: 18 },
+  ]);
 });

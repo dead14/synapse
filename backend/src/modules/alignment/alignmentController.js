@@ -69,6 +69,7 @@ const {
     runTieInRequest,
 } = require('./pythonWorkers');
 const { createExcelExport } = require('./exportService');
+const { normalizeAlignmentExportPayload } = require('./exportContract');
 
 // The DTW/tie-in worker lifecycle lives in pythonWorkers.js; the re-exports
 // keep the import path stable for consumers outside this module
@@ -1008,20 +1009,20 @@ exports.deletePipelineRun = async (req, res) => {
 };
 
 exports.exportExcel = async (req, res) => {
-    const { data } = req.body;
-    if (!data || !Array.isArray(data)) {
-        return res.status(400).json({ error: 'Invalid data payload' });
-    }
-    if (data.length > MAX_EXPORT_ROWS) {
-        return res.status(413).json({ error: `Export is limited to ${MAX_EXPORT_ROWS} rows` });
-    }
-    if (!data.every((row) => row && typeof row === 'object' && !Array.isArray(row))) {
-        return res.status(400).json({ error: 'Each export row must be an object' });
+    let payload;
+    try {
+        payload = normalizeAlignmentExportPayload(req.body, { maxRows: MAX_EXPORT_ROWS });
+    } catch (error) {
+        const tooLarge = String(error.message).includes('limited to');
+        return res.status(tooLarge ? 413 : 400).json({
+            error: error.message,
+            code: error.code || 'INVALID_EXPORT_PAYLOAD',
+        });
     }
 
     let excelExport;
     try {
-        excelExport = await createExcelExport(data);
+        excelExport = await createExcelExport(payload);
     } catch (err) {
         if (err.code === 'EXPORT_BUSY') {
             res.set('Retry-After', '10');

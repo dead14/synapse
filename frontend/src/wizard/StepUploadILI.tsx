@@ -120,6 +120,23 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingLabel, setProcessingLabel] = useState('');
   const [sessionName, setSessionName] = useState('');
+  const [pipelineData, setPipelineData] = useState({
+    segmentRoute: '',
+    environment: '',
+    lengthKm: '',
+    productMedium: '',
+    maopPsi: '',
+    outerDiameter: '',
+    nominalWtMm: '',
+    materialGrade: '',
+    seamType: '',
+    externalCoating: '',
+    installationYear: '',
+    locationClass: '',
+  });
+  const setPipelineField = (field: keyof typeof pipelineData, value: string) => {
+    setPipelineData((current) => ({ ...current, [field]: value }));
+  };
   // Aborts in-flight ingestion work (upload + status polling) on unmount and
   // suppresses state updates that would otherwise land after navigation.
   const unmountAbortRef = useRef<AbortController | null>(null);
@@ -256,7 +273,34 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
       }
 
       if (signal?.aborted) return;
-      onNext({ summaryData, algorithm, enablePartialRun });
+      const inspectionRuns = [
+        {
+          role: 'Master',
+          year: runPair.masterRun.year,
+          vendor: runPair.masterRun.vendor,
+          fileName: runPair.masterRun.name,
+          runId: runPair.masterRun.runId,
+          total: runPair.masterRun.total,
+        },
+        ...runPair.historicalRuns.map((run) => ({
+          role: 'Historical',
+          year: run.year,
+          vendor: run.vendor,
+          fileName: run.name,
+          runId: run.runId,
+          total: run.total,
+        })),
+      ];
+      onNext({
+        summaryData,
+        algorithm,
+        enablePartialRun,
+        pipelineData: {
+          pipelineName,
+          ...pipelineData,
+          inspectionRuns,
+        },
+      });
     } catch (err) {
       // Unmounted mid-flight: the abort is intentional, keep quiet.
       if (signal?.aborted) return;
@@ -315,6 +359,24 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         </div>
       </section>
 
+      {isProcessing && (
+        <section className="alignment-import-progress" role="status" aria-live="polite">
+          <div className="alignment-import-progress__orb" aria-hidden="true"><i /><i /></div>
+          <div className="alignment-import-progress__copy">
+            <span>Building canonical inspection registry</span>
+            <strong>{processingLabel || 'Reading uploaded ILI rows…'}</strong>
+            <small>Validating columns, normalizing feature types, and preserving source-row identity.</small>
+          </div>
+          <div className="alignment-import-progress__rail" aria-hidden="true"><i /></div>
+          <div className="alignment-import-progress__facts">
+            <span>Schema mapping</span>
+            <span>Run chronology</span>
+            <span>GW inventory</span>
+            <span>Source evidence</span>
+          </div>
+        </section>
+      )}
+
       <div className="flex flex-col-reverse gap-4">
         {/* Left Column (Now Bottom): Asset & Specs */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -339,34 +401,36 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                 </div>
                 <div>
                   <label className="ds-field__label">Segment Route</label>
-                  <input type="text" className="ds-input" placeholder="e.g. Station A - Station B" />
+                  <input type="text" value={pipelineData.segmentRoute} onChange={(event) => setPipelineField('segmentRoute', event.target.value)} className="ds-input" placeholder="e.g. Station A - Station B" />
                 </div>
                 <div>
                   <label className="ds-field__label">Environment</label>
-                  <select className="ds-select" >
-                    <option>Onshore</option>
-                    <option>Offshore</option>
-                    <option>Subsea</option>
-                    <option>Swamp</option>
+                  <select className="ds-select" value={pipelineData.environment} onChange={(event) => setPipelineField('environment', event.target.value)}>
+                    <option value="">Not provided</option>
+                    <option value="Onshore">Onshore</option>
+                    <option value="Offshore">Offshore</option>
+                    <option value="Subsea">Subsea</option>
+                    <option value="Swamp">Swamp</option>
                   </select>
                 </div>
                 <div>
                   <label className="ds-field__label">Length (km)</label>
-                  <input type="number" className="ds-input" placeholder="150" />
+                  <input type="number" value={pipelineData.lengthKm} onChange={(event) => setPipelineField('lengthKm', event.target.value)} className="ds-input" placeholder="150" />
                 </div>
                 <div>
                   <label className="ds-field__label">Product Medium</label>
-                  <select className="ds-select" >
-                    <option>Natural Gas (Dry)</option>
-                    <option>Natural Gas (Wet)</option>
-                    <option>Crude Oil</option>
-                    <option>Refined Product</option>
-                    <option>Water</option>
+                  <select className="ds-select" value={pipelineData.productMedium} onChange={(event) => setPipelineField('productMedium', event.target.value)}>
+                    <option value="">Not provided</option>
+                    <option value="Natural Gas (Dry)">Natural Gas (Dry)</option>
+                    <option value="Natural Gas (Wet)">Natural Gas (Wet)</option>
+                    <option value="Crude Oil">Crude Oil</option>
+                    <option value="Refined Product">Refined Product</option>
+                    <option value="Water">Water</option>
                   </select>
                 </div>
                 <div>
                   <label className="ds-field__label">MAOP (psi)</label>
-                  <input type="number" className="ds-input" placeholder="e.g. 1200" />
+                  <input type="number" value={pipelineData.maopPsi} onChange={(event) => setPipelineField('maopPsi', event.target.value)} className="ds-input" placeholder="e.g. 1200" />
                 </div>
               </div>
             )}
@@ -388,54 +452,59 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
               <div className="alignment-config-panel__body grid grid-cols-1 sm:grid-cols-2">
                 <div>
                   <label className="ds-field__label">Outer Diameter (OD)</label>
-                  <select className="ds-select" >
-                    <option>10 inch</option>
-                    <option>12 inch</option>
-                    <option>24 inch</option>
-                    <option>36 inch</option>
+                  <select className="ds-select" value={pipelineData.outerDiameter} onChange={(event) => setPipelineField('outerDiameter', event.target.value)}>
+                    <option value="">Not provided</option>
+                    <option value="10 inch">10 inch</option>
+                    <option value="12 inch">12 inch</option>
+                    <option value="24 inch">24 inch</option>
+                    <option value="36 inch">36 inch</option>
                   </select>
                 </div>
                 <div>
                   <label className="ds-field__label">Nominal WT (mm)</label>
-                  <input type="number" step="0.01" className="ds-input" placeholder="e.g. 12.7" />
+                  <input type="number" step="0.01" value={pipelineData.nominalWtMm} onChange={(event) => setPipelineField('nominalWtMm', event.target.value)} className="ds-input" placeholder="e.g. 12.7" />
                 </div>
                 <div>
                   <label className="ds-field__label">Material Grade</label>
-                  <select className="ds-select" >
-                    <option>API 5L X42</option>
-                    <option>API 5L X52</option>
-                    <option>API 5L X60</option>
-                    <option>API 5L X65</option>
-                    <option>API 5L X70</option>
+                  <select className="ds-select" value={pipelineData.materialGrade} onChange={(event) => setPipelineField('materialGrade', event.target.value)}>
+                    <option value="">Not provided</option>
+                    <option value="API 5L X42">API 5L X42</option>
+                    <option value="API 5L X52">API 5L X52</option>
+                    <option value="API 5L X60">API 5L X60</option>
+                    <option value="API 5L X65">API 5L X65</option>
+                    <option value="API 5L X70">API 5L X70</option>
                   </select>
                 </div>
                 <div>
                   <label className="ds-field__label">Seam Type</label>
-                  <select className="ds-select" >
-                    <option>SMLS (Seamless)</option>
-                    <option>ERW</option>
-                    <option>DSAW</option>
-                    <option>SAWH</option>
+                  <select className="ds-select" value={pipelineData.seamType} onChange={(event) => setPipelineField('seamType', event.target.value)}>
+                    <option value="">Not provided</option>
+                    <option value="SMLS (Seamless)">SMLS (Seamless)</option>
+                    <option value="ERW">ERW</option>
+                    <option value="DSAW">DSAW</option>
+                    <option value="SAWH">SAWH</option>
                   </select>
                 </div>
                 <div>
                   <label className="ds-field__label">External Coating</label>
-                  <select className="ds-select" >
-                    <option>3LPE</option>
-                    <option>FBE</option>
-                    <option>Coal Tar Enamel (CTE)</option>
-                    <option>Bare</option>
+                  <select className="ds-select" value={pipelineData.externalCoating} onChange={(event) => setPipelineField('externalCoating', event.target.value)}>
+                    <option value="">Not provided</option>
+                    <option value="3LPE">3LPE</option>
+                    <option value="FBE">FBE</option>
+                    <option value="Coal Tar Enamel (CTE)">Coal Tar Enamel (CTE)</option>
+                    <option value="Bare">Bare</option>
                   </select>
                 </div>
                 <div>
                   <label className="ds-field__label">Inst. Year / Loc Class</label>
                   <div className="flex gap-2">
-                    <input type="text" className="ds-input" placeholder="Year" />
-                    <select className="ds-select" >
-                      <option>Class 1</option>
-                      <option>Class 2</option>
-                      <option>Class 3</option>
-                      <option>Class 4</option>
+                    <input type="text" value={pipelineData.installationYear} onChange={(event) => setPipelineField('installationYear', event.target.value)} className="ds-input" placeholder="Year" />
+                    <select className="ds-select" value={pipelineData.locationClass} onChange={(event) => setPipelineField('locationClass', event.target.value)}>
+                      <option value="">Not provided</option>
+                      <option value="Class 1">Class 1</option>
+                      <option value="Class 2">Class 2</option>
+                      <option value="Class 3">Class 3</option>
+                      <option value="Class 4">Class 4</option>
                     </select>
                   </div>
                 </div>

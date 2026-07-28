@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  alignmentResultColumns,
   alignmentDisplayValue,
   depthGrowthMmPerYear,
   isAlignmentDisplayMetadata,
   sortAlignmentRowsByMasterAxis,
+  summarizeConservationAudit,
 } from '../src/utils/alignmentDisplay.ts';
 import { createExcelExportRows } from '../src/utils/alignmentExport.ts';
 
@@ -112,6 +114,53 @@ test('interleaves unmatched OLD and NEW rows on the canonical master axis', () =
     sortAlignmentRowsByMasterAxis(rows).map((row) => row.id),
     ['HU_CPA_2026-33844', 'HU_CPA_2024-28062', 'HU_CPA_2026-33845'],
   );
+});
+
+test('result columns are the union of every engine row, including status and later anomaly fields', () => {
+  const columns = alignmentResultColumns([
+    {
+      'Result Group': 'GW',
+      'Feature Type NEW': 'girth weld',
+      'Match/Unmatch': 'Matched',
+      __origIdx: 0,
+    },
+    {
+      'Result Group': 'ANOMALY',
+      'Depth NEW (%WT)': 32,
+      'Physics Warning': 'Review',
+      'Original Log Dist NEW (m)': 12,
+    },
+  ]);
+
+  assert.deepEqual(columns, [
+    'Result Group',
+    'Feature Type NEW',
+    'Match/Unmatch',
+    'Depth NEW (%WT)',
+    'Physics Warning',
+  ]);
+});
+
+test('multi-pair conservation evidence is aggregated without hiding a failing pair', () => {
+  const summary = summarizeConservationAudit({
+    pairs: [
+      {
+        isConserved: true,
+        old: { inputCount: 10, outputReferences: 10 },
+        new: { inputCount: 11, outputReferences: 11 },
+      },
+      {
+        isConserved: false,
+        old: { inputCount: 8, outputReferences: 7 },
+        new: { inputCount: 9, outputReferences: 9 },
+      },
+    ],
+  });
+
+  assert.equal(summary.state, 'warning');
+  assert.equal(summary.pairCount, 2);
+  assert.deepEqual(summary.old, { inputCount: 18, outputReferences: 17 });
+  assert.deepEqual(summary.new, { inputCount: 20, outputReferences: 20 });
 });
 
 test('converts depth growth from percent wall thickness per year to millimetres per year', () => {

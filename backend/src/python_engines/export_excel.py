@@ -273,6 +273,171 @@ def build_data_row(worksheet, row, plan):
     return cells
 
 
+PIPELINE_FIELDS = [
+    ("Pipeline Name", "pipelineName"),
+    ("Segment Route", "segmentRoute"),
+    ("Environment", "environment"),
+    ("Length (km)", "lengthKm"),
+    ("Product Medium", "productMedium"),
+    ("MAOP (psi)", "maopPsi"),
+    ("Outer Diameter", "outerDiameter"),
+    ("Nominal WT (mm)", "nominalWtMm"),
+    ("Material Grade", "materialGrade"),
+    ("Seam Type", "seamType"),
+    ("External Coating", "externalCoating"),
+    ("Installation Year", "installationYear"),
+    ("Location Class", "locationClass"),
+]
+
+
+def append_header_row(worksheet, headers, fill=DARK_BLUE_FILL):
+    worksheet.append([
+        styled_cell(
+            worksheet,
+            header,
+            fill=fill,
+            font=WHITE_BOLD_FONT,
+            alignment=CENTER_ALIGNMENT,
+        )
+        for header in headers
+    ])
+
+
+def build_pipeline_sheet(workbook, pipeline_data):
+    worksheet = workbook.create_sheet("Data Pipeline")
+    worksheet.sheet_view.showGridLines = False
+    worksheet.freeze_panes = "A3"
+    worksheet.column_dimensions["A"].width = 28
+    worksheet.column_dimensions["B"].width = 42
+    worksheet.merged_cells.add("A1:B1")
+    worksheet.append([
+        styled_cell(
+            worksheet,
+            "PIPELINE DATA",
+            fill=DARK_BLUE_FILL,
+            font=TITLE_FONT,
+            alignment=CENTER_ALIGNMENT,
+        ),
+        None,
+    ])
+    append_header_row(worksheet, ["Field", "Value"], BLUE_FILL)
+    for label, key in PIPELINE_FIELDS:
+        worksheet.append([
+            styled_cell(worksheet, label, fill=NEW_FILL, font=MATCHED_FONT, border=THIN_BORDER),
+            styled_cell(
+                worksheet,
+                safe_cell_value(pipeline_data.get(key)),
+                fill=OLD_FILL,
+                border=THIN_BORDER,
+            ),
+        ])
+
+    worksheet.append([])
+    worksheet.append([
+        styled_cell(
+            worksheet,
+            "INSPECTION RUNS",
+            fill=GOLD_FILL,
+            font=TITLE_FONT,
+            alignment=CENTER_ALIGNMENT,
+        ),
+    ])
+    run_headers = ["Role", "Survey Year", "Vendor", "File Name", "Run ID", "Records"]
+    append_header_row(worksheet, run_headers, GOLD_FILL)
+    for run in pipeline_data.get("inspectionRuns", []) or []:
+        worksheet.append([
+            styled_cell(worksheet, safe_cell_value(run.get(key)), border=THIN_BORDER)
+            for key in ("role", "year", "vendor", "fileName", "runId", "total")
+        ])
+    for column, width in enumerate((18, 14, 24, 38, 14, 14), 1):
+        worksheet.column_dimensions[get_column_letter(column)].width = width
+    return worksheet
+
+
+def report_headers(rows):
+    headers = []
+    seen = set()
+    for row in rows:
+        for key in row:
+            if str(key).startswith("__") or key in seen:
+                continue
+            seen.add(key)
+            headers.append(key)
+    return headers
+
+
+def build_report_sheet(workbook, rows):
+    worksheet = workbook.create_sheet("Runcomp Report")
+    worksheet.sheet_view.showGridLines = False
+    headers = report_headers(rows)
+    if not headers:
+        headers = ["Status"]
+        rows = [{"Status": "No runcomp report data"}]
+    worksheet.freeze_panes = "A2"
+    worksheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{max(1, len(rows) + 1)}"
+    append_header_row(worksheet, headers)
+    for row in rows:
+        worksheet.append([
+            styled_cell(
+                worksheet,
+                safe_cell_value(row.get(header)),
+                fill=NEW_FILL,
+                alignment=RIGHT_ALIGNMENT if isinstance(row.get(header), (int, float)) else LEFT_ALIGNMENT,
+                border=THIN_BORDER,
+            )
+            for header in headers
+        ])
+    for index, header in enumerate(headers, 1):
+        worksheet.column_dimensions[get_column_letter(index)].width = min(34, max(12, len(str(header)) + 2))
+    return worksheet
+
+
+def build_comparison_sheet(workbook, data, title):
+    worksheet = workbook.create_sheet(title)
+    worksheet.sheet_view.showGridLines = False
+    worksheet.freeze_panes = "P3"
+    worksheet.row_dimensions[1].height = 24
+    worksheet.row_dimensions[2].height = 42
+    set_column_widths(worksheet)
+    worksheet.auto_filter.ref = f"A2:AN{max(2, len(data) + 2)}"
+    for span in ("A1:O1", "P1:Y1", "Z1:AN1"):
+        worksheet.merged_cells.add(span)
+
+    headers = NEW_HEADERS + CENTER_HEADERS + OLD_HEADERS
+    banner = [None] * len(headers)
+    for column, value in (
+        (1, "<  NEW DATA — ALIGNMENT RESULT"),
+        (FIRST_CENTER_COLUMN, "COMPARISON (NEW − OLD)"),
+        (FIRST_OLD_COLUMN, "OLD DATA — ALIGNMENT RESULT  >"),
+    ):
+        banner[column - 1] = styled_cell(
+            worksheet,
+            value,
+            fill=GOLD_FILL if column == FIRST_CENTER_COLUMN else DARK_BLUE_FILL,
+            font=TITLE_FONT,
+            alignment=CENTER_ALIGNMENT,
+        )
+    worksheet.append(banner)
+    worksheet.append([
+        styled_cell(
+            worksheet,
+            header,
+            fill=(
+                BLUE_FILL
+                if column < FIRST_CENTER_COLUMN or column >= FIRST_OLD_COLUMN
+                else GOLD_FILL
+            ),
+            font=WHITE_BOLD_FONT,
+            alignment=CENTER_ALIGNMENT,
+        )
+        for column, header in enumerate(headers, 1)
+    ])
+    plan = column_style_plan(len(headers))
+    for row in data:
+        worksheet.append(build_data_row(worksheet, row, plan))
+    return worksheet
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage: python export_excel.py <input_json_path> <output_xlsx_path>")
@@ -280,6 +445,24 @@ def main():
 
     with open(sys.argv[1], "r", encoding="utf-8") as input_file:
         data = json.load(input_file)
+
+    if isinstance(data, dict):
+        comparison = data.get("comparison", [])
+        report = data.get("report", comparison)
+        pipeline_data = data.get("pipelineData", {})
+        workbook = openpyxl.Workbook(write_only=True)
+        build_pipeline_sheet(
+            workbook,
+            pipeline_data if isinstance(pipeline_data, dict) else {},
+        )
+        build_report_sheet(workbook, report if isinstance(report, list) else [])
+        build_comparison_sheet(
+            workbook,
+            comparison if isinstance(comparison, list) else [],
+            "Runcomp Comparison",
+        )
+        workbook.save(sys.argv[2])
+        return
 
     # Write-only mode streams each row to disk and drops it, so peak memory no
     # longer scales with row count: a 100k-row comparison is four million cells
