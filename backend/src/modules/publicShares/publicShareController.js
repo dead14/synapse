@@ -22,7 +22,7 @@ function publicUnavailable(res) {
     ));
 }
 
-function metadata(row) {
+function metadata(row, currentTime) {
     return {
         id: row.public_id,
         kind: row.kind,
@@ -31,7 +31,7 @@ function metadata(row) {
         createdAt: row.created_at,
         expiresAt: row.expires_at,
         revokedAt: row.revoked_at || null,
-        isActive: !row.revoked_at && new Date(row.expires_at).getTime() > Date.now(),
+        isActive: !row.revoked_at && new Date(row.expires_at).getTime() > currentTime,
     };
 }
 
@@ -89,7 +89,7 @@ function createPublicShareController({
                 });
                 return res.status(201).json({
                     share: {
-                        ...metadata(row),
+                        ...metadata(row, createdAt.getTime()),
                         accessToken: credential.accessToken,
                     },
                 });
