@@ -44,6 +44,27 @@ function hasDistance(value: unknown): boolean {
   return Number.isFinite(Number(value));
 }
 
+function finiteNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && (value.trim() === '' || value.trim() === '-')) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * Converts the engine's depth-growth rate from % wall-thickness/year to mm/year.
+ * The NEW wall thickness is the current reference; OLD is retained as a
+ * fallback for rows where NEW thickness is unavailable.
+ */
+export function depthGrowthMmPerYear<T extends Record<string, unknown>>(row: T): number | null {
+  const growthPctPerYear = finiteNumber(row['Depth Growth (%WT/yr)']);
+  const newWallThickness = finiteNumber(row['Wall WT NEW (mm)']);
+  const oldWallThickness = finiteNumber(row['Wall WT OLD (mm)']);
+  const wallThickness = newWallThickness ?? oldWallThickness;
+  if (growthPctPerYear === null || wallThickness === null || wallThickness <= 0) return null;
+  return (growthPctPerYear / 100) * wallThickness;
+}
+
 export function alignmentDisplayValue<T extends Record<string, unknown>>(row: T, column: string): T[string] {
   if (column === MASTER_AXIS_COLUMN) {
     return (alignmentMasterAxisDistance(row) ?? '-') as T[string];

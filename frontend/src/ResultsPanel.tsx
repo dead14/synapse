@@ -7,11 +7,15 @@ import { useToast } from './components/common/ToastProvider';
 import { createExcelExportRows } from './utils/alignmentExport';
 import {
   alignmentDisplayValue,
+  depthGrowthMmPerYear,
   isAlignmentDisplayMetadata,
   MASTER_AXIS_COLUMN,
   sortAlignmentRowsByMasterAxis,
 } from './utils/alignmentDisplay';
 import ShareSnapshotButton from './components/sharing/ShareSnapshotButton';
+
+const RAW_DEPTH_GROWTH_COLUMN = 'Depth Growth (%WT/yr)';
+const DEPTH_GROWTH_COLUMN = 'Depth Growth (mm/yr)';
 
 // Lazy load chart.js - heavy library, only load when Chart tab is selected
 const LazyScatterChart = lazy(() =>
@@ -404,12 +408,13 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
     if (data && data.length > 0) {
       const keys = Object.keys(data[0]).filter(k =>
         k !== 'Match/Unmatch'
+        && k !== RAW_DEPTH_GROWTH_COLUMN
         && k !== '__resultGroup'
         && k !== '__origIdx'
         && !isAlignmentDisplayMetadata(k)
       );
       // Add computed columns at the end
-      keys.push(MASTER_AXIS_COLUMN, 'Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning');
+      keys.push(MASTER_AXIS_COLUMN, DEPTH_GROWTH_COLUMN, 'Length Growth (mm/yr)', 'Physics Warning');
       return ['Section', ...keys];
     }
     return ['Section'];
@@ -457,7 +462,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
         'Length OLD (mm)', 'Length NEW (mm)',
         'Width OLD (mm)', 'Width NEW (mm)',
         "O'Clock OLD", "O'Clock NEW",
-        'Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning'
+        DEPTH_GROWTH_COLUMN, 'Length Growth (mm/yr)', 'Physics Warning'
       ];
       // Only include columns that actually exist in allColumns to be safe
       setVisibleColumns(defaultCols.filter(col => allColumns.includes(col)));
@@ -506,7 +511,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
       'Length OLD (mm)', 'Length NEW (mm)',
       'Width OLD (mm)', 'Width NEW (mm)',
       "O'Clock OLD", "O'Clock NEW",
-      'Depth Growth (%WT/yr)', 'Length Growth (mm/yr)', 'Physics Warning'
+      DEPTH_GROWTH_COLUMN, 'Length Growth (mm/yr)', 'Physics Warning'
     ];
     setVisibleColumns(defaultCols.filter(col => allColumns.includes(col)));
     setColWidths({});
@@ -539,9 +544,13 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
       const yearSpan = Number.isFinite(oldYear) && Number.isFinite(newYear) && newYear > oldYear
         ? newYear - oldYear
         : null;
-      const depthGrowth = row['Depth Growth (%WT/yr)'] ?? (
+      const depthGrowthPct = row[RAW_DEPTH_GROWTH_COLUMN] ?? (
         yearSpan && !isNaN(d1) && !isNaN(d2) ? ((d2 - d1) / yearSpan).toFixed(3) : '-'
       );
+      const depthGrowth = depthGrowthMmPerYear({
+        ...row,
+        [RAW_DEPTH_GROWTH_COLUMN]: depthGrowthPct,
+      });
       
       const l1 = parseFloat(row['Length OLD (mm)']);
       const l2 = parseFloat(row['Length NEW (mm)']);
@@ -567,7 +576,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
 
       return {
         ...row,
-        'Depth Growth (%WT/yr)': depthGrowth,
+        [DEPTH_GROWTH_COLUMN]: depthGrowth ?? '-',
         'Length Growth (mm/yr)': lengthGrowth,
         'Section': sectionName,
       };
@@ -1015,7 +1024,9 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                           style={{ width: colWidths[col] || 150 }}
                           title={col === MASTER_AXIS_COLUMN
                             ? 'Canonical TIE-in coordinate used to align and order OLD and NEW rows.'
-                            : undefined}
+                            : col === DEPTH_GROWTH_COLUMN
+                              ? 'Converted from %WT/year using NEW wall thickness (OLD when NEW is unavailable).'
+                              : undefined}
                           aria-sort={sortConfig?.key === col ? (sortConfig.direction === 'asc' ? 'ascending' : 'descending') : undefined}
                           className={`px-2 py-2 font-bold whitespace-nowrap relative group select-none ${draggedColumn === col ? 'opacity-50' : ''}`}
                         >
@@ -1127,7 +1138,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                                 }
                                 const isNewDataCol = col.includes('NEW');
                                 // Only format computed columns; leave raw data values untouched
-                                if ((col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)') && val !== '-' && val != null && !isNaN(parseFloat(String(val)))) {
+                                if ((col === DEPTH_GROWTH_COLUMN || col === 'Length Growth (mm/yr)') && val !== '-' && val != null && !isNaN(parseFloat(String(val)))) {
                                   val = parseFloat(String(val)).toFixed(3);
                                 }
                                 if (col === MASTER_AXIS_COLUMN && val !== '-' && val != null && !isNaN(Number(val))) {
@@ -1140,8 +1151,8 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                                 return (
                                   <td 
                                     key={j} 
-                                    className={`px-2 whitespace-nowrap overflow-hidden text-ellipsis ${col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)' ? 'font-bold' : ''} ${activeTab === 'Interventions' && isNewDataCol ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                                    style={col === 'Depth Growth (%WT/yr)' || col === 'Length Growth (mm/yr)' ? { color: 'var(--syn-info, #155eef)' } : undefined}
+                                    className={`px-2 whitespace-nowrap overflow-hidden text-ellipsis ${col === DEPTH_GROWTH_COLUMN || col === 'Length Growth (mm/yr)' ? 'font-bold' : ''} ${activeTab === 'Interventions' && isNewDataCol ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                                    style={col === DEPTH_GROWTH_COLUMN || col === 'Length Growth (mm/yr)' ? { color: 'var(--syn-info, #155eef)' } : undefined}
                                     draggable={activeTab === 'Interventions' && isNewDataCol && val !== '-' && val !== null && val !== undefined}
                                     onDragStart={(e) => {
                                       if (activeTab === 'Interventions' && isNewDataCol) {
