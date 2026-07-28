@@ -838,6 +838,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                 title={`Final ILI alignment${shareSessionId ? ` · Session ${shareSessionId}` : ''}`}
                 sourceRef={shareSessionId ? `alignment-session:${shareSessionId}` : undefined}
                 rows={data}
+                referenceOnly
                 summary={summaryCounts ? [
                   { label: 'GW locked', value: summaryCounts.gwLocked },
                   { label: 'Anomaly matched', value: summaryCounts.anomalyMatched },
@@ -845,7 +846,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                   { label: 'Only NEW', value: summaryCounts.anomalyOnlyNew },
                 ] : undefined}
                 notes={[
-                  'Final ILI comparison snapshot. Open any row to inspect the shared evidence; editing is disabled.',
+                  'Final ILI comparison view. Open any row to inspect the shared evidence; editing is disabled.',
                 ]}
                 label="Share result"
               />

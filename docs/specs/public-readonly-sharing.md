@@ -4,9 +4,9 @@ Status: accepted for implementation (28 Jul 2026)
 
 ## Objective
 
-Let an authenticated Synapse engineer publish a frozen, read-only snapshot of
-the current engineering workspace and send it to a recipient who does not have
-a Synapse account. The initial shareable result kinds are:
+Let an authenticated Synapse engineer publish read-only access to the current
+engineering workspace and send it to a recipient who does not have a Synapse
+account. The initial shareable result kinds are:
 
 - GW Alignment
 - Sectioning
@@ -14,9 +14,10 @@ a Synapse account. The initial shareable result kinds are:
 - Corrosion Analysis
 - FFS
 
-The recipient can search the shared table and open row details, but cannot
-change the source record, save a review, run an analysis, or call an edit API.
-The link owner can revoke access. Links expire after 30 days by default.
+The recipient uses the existing result viewer: they can scroll, pan, zoom,
+filter, select anomalies, and open row details, but cannot change the source
+record, save a review, run an analysis, or call an edit API. The link owner can
+revoke access. Links expire after 30 days by default.
 
 This is a collaboration surface, not an approval record. Every public view must
 state that the snapshot is decision support and still requires qualified
@@ -26,16 +27,17 @@ engineering review.
 
 | Topic | Decision |
 | --- | --- |
-| Shared state | An immutable snapshot of what the owner saw when they clicked Share |
+| Shared state | ILI shares grant read-only access to the persisted alignment session; other result kinds currently use immutable snapshots |
 | Authentication | No login for the recipient; possession of the full link grants read-only access |
 | Link format | `/share/:publicId#:secret`; the secret remains in the URI fragment |
 | Secret storage | 32 cryptographically random bytes; store only its SHA-256 digest |
 | Lifetime | Owner chooses 7, 30, or 90 days; 30 days is the default |
 | Revocation | Owner can revoke an active link; revoked/expired/invalid links return the same unavailable response |
 | Who can share | `engineer`, `admin`, and organization-scoped `super_admin`; `viewer` and `user` cannot publish |
-| Public actions | One bounded `GET`; no anonymous create, update, export, or delete endpoint |
-| Payload | Versioned normalized snapshot: summary values, columns, rows, and notes |
-| Size | At most 5 MiB of serialized JSON and 10,000 rows |
+| Public actions | Bounded `GET` requests only; no anonymous create, update, export, or delete endpoint |
+| ILI payload | A small share grant plus cursor-paginated reads from the persisted alignment result |
+| Snapshot payload | Versioned normalized summary, columns, rows, and notes for result kinds not yet backed by a canonical public viewer |
+| Size | ILI has no total-row cap; each response is bounded to 20,000 rows. Snapshot-backed shares remain limited to 5 MiB and 10,000 rows |
 
 ## Threat model
 
@@ -44,7 +46,7 @@ engineering review.
 - Authenticated browser to the share-creation API: untrusted request payload
   crosses into tenant-owned persistence.
 - Anonymous browser to the public read API: a bearer secret crosses into the
-  server and grants access to one snapshot only.
+  server and grants access to one share only.
 - Public snapshot payload to the DOM: stored data is untrusted display content.
 - Assets at risk: tenant engineering data, the source analysis, user identity,
   and availability of the anonymous endpoint.
@@ -57,7 +59,8 @@ engineering review.
 | Database leak reveals live links | Persist only a SHA-256 digest of the secret |
 | Secret leaks through HTTP request/access logs | Put the secret after `#`; fragments are not sent in HTTP requests |
 | Brute-force public IDs/secrets | Per-IP public endpoint rate limit plus generic 404 response |
-| Share a huge payload to exhaust storage | 5 MiB serialized limit and 10,000-row cap |
+| Share a huge ILI result to exhaust storage | Store only the session reference and page canonical rows in bounded responses |
+| Share a huge snapshot payload to exhaust storage | 5 MiB serialized limit and 10,000-row cap |
 | Viewer calls an edit route | Public route exposes `GET` only; the viewer UI contains no editor components |
 | Cross-tenant revoke/list | Every owner operation is scoped by `organization_id` |
 | Viewer role publishes externally | Explicit share-publisher role middleware |
@@ -95,8 +98,8 @@ Authenticated publisher only.
     "version": 1,
     "summary": [{ "label": "Matched", "value": 842 }],
     "columns": [{ "key": "sourceKey", "label": "Source key" }],
-    "rows": [{ "sourceKey": "NEW:123" }],
-    "notes": ["Final alignment snapshot"]
+    "rows": [],
+    "notes": ["Canonical ILI viewer; rows are read from the referenced session"]
   }
 }
 ```
@@ -129,9 +132,18 @@ when the share is already revoked and `404` when the ID is not owned.
 
 ### `GET /api/public-shares/:id`
 
-Anonymous and rate-limited. Requires `X-Share-Token`. Returns the immutable
-snapshot only when the ID, digest, expiry, and revocation state all pass.
-Otherwise returns the same `404 SHARE_UNAVAILABLE` envelope.
+Anonymous and rate-limited. Requires `X-Share-Token`. Returns share metadata
+only when the ID, digest, expiry, and revocation state all pass. Otherwise
+returns the same `404 SHARE_UNAVAILABLE` envelope.
+
+### `GET /api/public-shares/:id/results/page`
+
+Anonymous and rate-limited. Requires `X-Share-Token` for an ILI share. Reads a
+cursor-paginated page from the referenced persisted alignment session. The
+session identifier comes from the validated share record, never from a public
+query parameter, and the repository query is scoped to the share owner's
+organization. The client may request successive pages until `nextCursor` is
+empty, so the shared result has no total-row cap.
 
 The response adds `Cache-Control: private, no-store` and
 `Referrer-Policy: no-referrer`.
@@ -183,23 +195,24 @@ async function findPublicShare(pool, publicId) {
 ## Testing strategy
 
 - Contract unit tests: kind, title, expiry, snapshot shape, row count, and byte
-  limits.
+  limits for snapshot-backed shares.
 - Controller tests: role gate, secret hashing/one-time return, generic public
   failure, expiry/revocation, tenant-scoped revocation, and no-store headers.
 - Repository tests: parameterized tenant filters are exercised with fakes.
-- Frontend unit tests: each supported workspace normalizes into a valid public
-  snapshot without carrying edit callbacks or browser-only objects.
+- Frontend unit tests: snapshot-backed workspaces normalize safely; ILI loads
+  canonical result pages and reuses the existing comparison viewer in read-only
+  mode.
 - Production build, lint, and a manual anonymous browser pass.
 
 ## Boundaries
 
-- Always: freeze a snapshot, hash the secret, tenant-scope owner operations,
+- Always: hash the secret, tenant-scope owner and canonical result reads,
   rate-limit anonymous reads, encode rendered content, and show the
   decision-support disclaimer.
 - Ask first: making links permanent, enabling anonymous downloads, changing
   which roles may publish, or sharing live data that changes after publication.
-- Never: store plaintext link secrets, reuse an authenticated edit component in
-  the public route, expose source tenant/user IDs, or log the secret.
+- Never: store plaintext link secrets, expose mutation callbacks or authenticated
+  edit APIs to a public viewer, expose source tenant/user IDs, or log the secret.
 
 ## Success criteria
 

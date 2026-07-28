@@ -25,9 +25,37 @@ export interface PublicShareView {
   id: string;
   kind: PublicShareKind;
   title: string;
+  sourceRef: string | null;
   createdAt: string;
   expiresAt: string;
   snapshot: PublicShareSnapshot;
+}
+
+export async function fetchPublicShareResultPage(
+  id: string,
+  accessToken: string,
+  options: { limit?: number; cursor?: string | null } = {},
+  signal?: AbortSignal,
+): Promise<{ items: Array<Record<string, unknown>>; nextCursor: string | null }> {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) params.set('limit', String(options.limit));
+  if (options.cursor) params.set('cursor', options.cursor);
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const response = await apiFetch<{ items?: unknown; nextCursor?: unknown }>(
+    `/api/public-shares/${encodeURIComponent(id)}/results/page${suffix}`,
+    {
+      headers: { 'X-Share-Token': accessToken },
+      signal,
+    },
+  );
+  return {
+    items: Array.isArray(response.items)
+      ? response.items.filter((item): item is Record<string, unknown> => (
+        typeof item === 'object' && item !== null && !Array.isArray(item)
+      ))
+      : [],
+    nextCursor: typeof response.nextCursor === 'string' ? response.nextCursor : null,
+  };
 }
 
 export async function createPublicShare(input: {

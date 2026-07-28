@@ -2,6 +2,8 @@ const defaultPool = require('../../config/db');
 const { writeAuditLog: defaultWriteAuditLog } = require('../audit/auditLog');
 const { parseCreateShare, parseShareFilters } = require('./publicShareContract');
 const defaultRepository = require('./publicShareRepository');
+const { listOwnedAlignmentResultPage } = require('../alignment/alignmentRepository');
+const { parseAlignmentResultPageQuery } = require('../alignment/alignmentResultPaging');
 const {
     canPublishShare,
     createShareCredential,
@@ -20,6 +22,12 @@ function publicUnavailable(res) {
         'SHARE_UNAVAILABLE',
         'This shared result is unavailable.',
     ));
+}
+
+function alignmentSessionId(sourceRef) {
+    const match = String(sourceRef || '').match(/^alignment-session:(\d+)$/);
+    const sessionId = match ? Number(match[1]) : 0;
+    return Number.isSafeInteger(sessionId) && sessionId > 0 ? sessionId : null;
 }
 
 function metadata(row, currentTime) {
@@ -44,9 +52,22 @@ function createPublicShareController({
         revokeOwned: defaultRepository.revokeOwnedShare,
     },
     credentialFactory = createShareCredential,
+    readAlignmentPage = listOwnedAlignmentResultPage,
     now = () => new Date(),
     writeAuditLog = defaultWriteAuditLog,
 } = {}) {
+    async function resolvePublicShare(req) {
+        const publicId = req.params.id || '';
+        const accessToken = req.headers['x-share-token'];
+        if (!PUBLIC_ID_PATTERN.test(publicId) || typeof accessToken !== 'string') return null;
+        const row = await repository.findPublic(pool, publicId);
+        const unavailable = !row
+            || row.revoked_at
+            || new Date(row.expires_at).getTime() <= now().getTime()
+            || !verifyShareToken(accessToken, row.token_hash);
+        return unavailable ? null : row;
+    }
+
     return {
         async create(req, res) {
             if (!canPublishShare(req.user)) {
@@ -180,18 +201,9 @@ function createPublicShareController({
         },
 
         async getPublic(req, res) {
-            const publicId = req.params.id || '';
-            const accessToken = req.headers['x-share-token'];
-            if (!PUBLIC_ID_PATTERN.test(publicId) || typeof accessToken !== 'string') {
-                return publicUnavailable(res);
-            }
             try {
-                const row = await repository.findPublic(pool, publicId);
-                const unavailable = !row
-                    || row.revoked_at
-                    || new Date(row.expires_at).getTime() <= now().getTime()
-                    || !verifyShareToken(accessToken, row.token_hash);
-                if (unavailable) return publicUnavailable(res);
+                const row = await resolvePublicShare(req);
+                if (!row) return publicUnavailable(res);
 
                 res.setHeader('Cache-Control', 'private, no-store');
                 res.setHeader('Referrer-Policy', 'no-referrer');
@@ -200,6 +212,7 @@ function createPublicShareController({
                         id: row.public_id,
                         kind: row.kind,
                         title: row.title,
+                        sourceRef: row.source_ref || null,
                         createdAt: row.created_at,
                         expiresAt: row.expires_at,
                         snapshot: row.snapshot_json,
@@ -207,6 +220,42 @@ function createPublicShareController({
                 });
             } catch (error) {
                 console.error('Get public share error:', error.message);
+                return publicUnavailable(res);
+            }
+        },
+
+        async getPublicAlignmentResultsPage(req, res) {
+            try {
+                const row = await resolvePublicShare(req);
+                const sessionId = row?.kind === 'ILI_ALIGNMENT'
+                    ? alignmentSessionId(row.source_ref)
+                    : null;
+                if (!row || !sessionId) return publicUnavailable(res);
+
+                let pageQuery;
+                try {
+                    pageQuery = parseAlignmentResultPageQuery(req.query);
+                } catch (error) {
+                    return res.status(400).json(errorEnvelope(
+                        'INVALID_PUBLIC_SHARE_PAGE',
+                        error.message,
+                    ));
+                }
+
+                const page = await readAlignmentPage(
+                    pool,
+                    sessionId,
+                    row.organization_id,
+                    pageQuery,
+                );
+                res.setHeader('Cache-Control', 'private, no-store');
+                res.setHeader('Referrer-Policy', 'no-referrer');
+                return res.json({
+                    items: page.rows,
+                    nextCursor: page.nextCursor === null ? null : String(page.nextCursor),
+                });
+            } catch (error) {
+                console.error('Get public alignment result page error:', error.message);
                 return publicUnavailable(res);
             }
         },

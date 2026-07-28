@@ -1,7 +1,12 @@
 import { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import { Link } from 'react-router-dom';
 import ResultsPanel from './ResultsPanel';
-import { fetchAlignmentResult, type ComparisonRow, type ConservationAudit } from './utils/alignment';
+import {
+  fetchAlignmentResult,
+  fetchSharedAlignmentResult,
+  type ComparisonRow,
+  type ConservationAudit,
+} from './utils/alignment';
 import { RUN_PAIR_COLUMN, runPairLabels, withRunPairColumn } from './utils/alignmentDisplay';
 import { apiFetch } from './utils/api';
 import { applyInterventions, type InterventionEvent } from './utils/interventions';
@@ -32,7 +37,22 @@ const JobProgressBar = ({ progress, message }: { progress: number; message: stri
   </div>
 );
 
-export default function IliComparisonPage() {
+interface IliComparisonPageProps {
+  readOnly?: boolean;
+  shareAccess?: {
+    id: string;
+    accessToken: string;
+    sessionId: string;
+  };
+}
+
+export default function IliComparisonPage({
+  readOnly = false,
+  shareAccess,
+}: IliComparisonPageProps = {}) {
+  const sharedId = shareAccess?.id;
+  const sharedToken = shareAccess?.accessToken;
+  const sharedSessionId = shareAccess?.sessionId;
   const [data, setData] = useState<ComparisonRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [jobProgress, setJobProgress] = useState(0);
@@ -64,22 +84,37 @@ export default function IliComparisonPage() {
     const loadData = async () => {
       try {
         const params = new URLSearchParams(window.location.search);
-        const sessionId = params.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
+        const sessionId = sharedSessionId
+          || params.get('sessionId')
+          || localStorage.getItem('synapse_last_session_id')
+          || '';
         if (!sessionId) throw new Error('Session ID not found. Select a pipeline first.');
         setSessionId(sessionId);
 
         setIsProcessing(true);
         setJobProgress(5);
         setJobMessage('Checking alignment status...');
-        const [alignment, session] = await Promise.all([
-          fetchAlignmentResult(sessionId, (progress, message) => {
-            setJobProgress(progress);
-            setJobMessage(message);
-          }, controller.signal),
-          apiFetch<{ config?: { interventions?: InterventionEvent[] } }>(
+        const progress = (value: number, message: string) => {
+          setJobProgress(value);
+          setJobMessage(message);
+        };
+        const alignmentPromise = sharedId && sharedToken
+          ? fetchSharedAlignmentResult(
+            sharedId,
+            sharedToken,
+            progress,
+            controller.signal,
+          )
+          : fetchAlignmentResult(sessionId, progress, controller.signal);
+        const sessionPromise = readOnly
+          ? Promise.resolve({ config: { interventions: [] as InterventionEvent[] } })
+          : apiFetch<{ config?: { interventions?: InterventionEvent[] } }>(
             `/api/wizard/session/${encodeURIComponent(sessionId)}`,
             { signal: controller.signal },
-          ),
+          );
+        const [alignment, session] = await Promise.all([
+          alignmentPromise,
+          sessionPromise,
         ]);
         setAudit(alignment.audit);
         setData(withRunPairColumn(
@@ -99,9 +134,10 @@ export default function IliComparisonPage() {
 
     void loadData();
     return () => controller.abort();
-  }, []);
+  }, [readOnly, sharedId, sharedSessionId, sharedToken]);
 
   const handleUpdateMatch = async (visibleSourceIdx: number, visibleTargetIdx: number, evidenceScore = 0) => {
+    if (readOnly) return;
     // ResultsPanel reports indexes into the rows it was given, which are the
     // filtered ones; every mutation below addresses the full `data` array.
     const sourceIdx = toSourceIndex(visibleSourceIdx);
@@ -180,7 +216,7 @@ export default function IliComparisonPage() {
         ) : (
           <div className="mt-1 flex flex-col gap-2">
             {/* Handoff to the corrosion review — the only route into FFS. */}
-            {sessionId && (
+            {!readOnly && sessionId && (
               <div
                 className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
                 style={{ borderRadius: 'var(--syn-radius-control)', border: '1px solid var(--syn-line)', background: 'var(--syn-surface)' }}
@@ -250,10 +286,11 @@ export default function IliComparisonPage() {
               <ResultsPanel
                 data={visibleData}
                 loading={loading}
-                onOpenAnalytics={() => setShowAdvancedCharts(true)}
+                readOnly={readOnly}
+                onOpenAnalytics={readOnly ? undefined : () => setShowAdvancedCharts(true)}
                 selectedRowIdx={selectedRowIdx}
                 onSelectRowIdx={setSelectedRowIdx}
-                onUpdateMatch={handleUpdateMatch}
+                onUpdateMatch={readOnly ? undefined : handleUpdateMatch}
                 audit={audit}
               />
             </div>
@@ -261,7 +298,7 @@ export default function IliComparisonPage() {
         )}
       </div>
 
-      {showAdvancedCharts && (
+      {!readOnly && showAdvancedCharts && (
         <Suspense fallback={<LoadingSpinner label="Loading Advanced Analytics..." />}>
           <AdvancedCharts data={visibleData} onClose={() => setShowAdvancedCharts(false)} />
         </Suspense>

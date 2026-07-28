@@ -1,10 +1,10 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FiChevronLeft, FiChevronRight, FiEye, FiHexagon, FiLock, FiSearch, FiX } from 'react-icons/fi';
 import { useLocation, useParams } from 'react-router-dom';
 
 import Modal from '../../components/common/Modal.tsx';
 import PageMeta from '../../components/common/PageMeta.tsx';
-import ResultsPanel from '../../ResultsPanel.tsx';
+import IliComparisonPage from '../../IliComparisonPage.tsx';
 import {
   fetchPublicShare,
   tokenFromLocationHash,
@@ -12,7 +12,6 @@ import {
 } from '../../lib/sharing/publicShareClient.ts';
 import type { PublicShareValue } from '../../lib/sharing/publicShareSnapshot.ts';
 
-const DefectVisualizer = lazy(() => import('../../DefectVisualizer.tsx'));
 const PAGE_SIZE = 100;
 const KIND_LABELS: Record<PublicShareView['kind'], string> = {
   GW_ALIGNMENT: 'GW Alignment',
@@ -104,12 +103,15 @@ function PublicPreviewHeader({ title }: { title: string }) {
   );
 }
 
-function PublicIliAlignmentPreview({ share }: { share: PublicShareView }) {
-  const [selectedRowIdx, setSelectedRowIdx] = useState<number | null>(null);
-  const rows = useMemo(
-    () => share.snapshot.rows.map((row, index) => ({ ...row, __origIdx: index })),
-    [share.snapshot.rows],
-  );
+function PublicIliAlignmentPreview({
+  share,
+  accessToken,
+}: {
+  share: PublicShareView;
+  accessToken: string;
+}) {
+  const sessionMatch = share.sourceRef?.match(/^alignment-session:(\d+)$/);
+  if (!sessionMatch) return <SharedUnavailable />;
 
   return (
     <div className="syn-app engine-app">
@@ -123,30 +125,14 @@ function PublicIliAlignmentPreview({ share }: { share: PublicShareView }) {
       <div className="min-w-0 flex-1">
         <PublicPreviewHeader title={share.title} />
         <main id="main-content" tabIndex={-1} className="engine-main">
-          <div className="results-workspace py-4 overflow-x-hidden w-full">
-            <div className="app-page-shell flex flex-col gap-3">
-              <div className="mt-1 flex flex-col gap-2">
-                <div className="shrink-0">
-                  <Suspense fallback={<div className="syn-panel py-12 text-center text-sm">Loading comparison viewer...</div>}>
-                    <DefectVisualizer
-                      data={rows}
-                      selectedRowIdx={selectedRowIdx}
-                      onSelectRowIdx={setSelectedRowIdx}
-                    />
-                  </Suspense>
-                </div>
-                <div className="flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
-                  <ResultsPanel
-                    data={rows}
-                    loading={false}
-                    readOnly
-                    selectedRowIdx={selectedRowIdx}
-                    onSelectRowIdx={setSelectedRowIdx}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
+          <IliComparisonPage
+            readOnly
+            shareAccess={{
+              id: share.id,
+              accessToken,
+              sessionId: sessionMatch[1],
+            }}
+          />
         </main>
       </div>
     </div>
@@ -215,7 +201,12 @@ export default function PublicSharePage() {
 
   const kindLabel = KIND_LABELS[share.kind];
   if (share.kind === 'ILI_ALIGNMENT') {
-    return <PublicIliAlignmentPreview share={share} />;
+    return (
+      <PublicIliAlignmentPreview
+        share={share}
+        accessToken={tokenFromLocationHash(location.hash)}
+      />
+    );
   }
 
   return (

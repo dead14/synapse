@@ -24,6 +24,7 @@ interface ShareSnapshotButtonProps {
   title: string;
   sourceRef?: string;
   rows: object[];
+  referenceOnly?: boolean;
   summary?: PublicShareSummaryItem[];
   notes?: string[];
   disabled?: boolean;
@@ -49,6 +50,7 @@ export default function ShareSnapshotButton({
   title,
   sourceRef,
   rows,
+  referenceOnly = false,
   summary,
   notes,
   disabled = false,
@@ -80,7 +82,11 @@ export default function ShareSnapshotButton({
     setCopied(false);
     setIsCreating(true);
     try {
-      const snapshot = buildPublicShareSnapshot(kind, rows, { summary, notes });
+      const snapshot = buildPublicShareSnapshot(
+        kind,
+        referenceOnly ? [] : rows,
+        { summary, notes },
+      );
       const share = await createPublicShare({
         kind,
         title,
@@ -157,7 +163,7 @@ export default function ShareSnapshotButton({
             <div>
               <p className="syn-eyebrow">External read-only access</p>
               <h2 id={titleId} className="mt-1 text-lg font-bold text-slate-900 dark:text-white">
-                Share this snapshot
+                {referenceOnly ? 'Share this view' : 'Share this snapshot'}
               </h2>
             </div>
             <button
@@ -172,7 +178,7 @@ export default function ShareSnapshotButton({
 
           <div className="space-y-4 px-5 py-5">
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-relaxed text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-200">
-              Anyone with the complete link can view this frozen result without logging in.
+              Anyone with the complete link can view this {referenceOnly ? 'read-only result' : 'frozen result'} without logging in.
               They cannot edit the source analysis. Do not share it beyond the intended audience.
             </div>
 
@@ -214,7 +220,7 @@ export default function ShareSnapshotButton({
                 </p>
                 {created.isRevoked && (
                   <p role="status" className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 dark:bg-rose-950/30 dark:text-rose-300">
-                    This link has been revoked and no longer opens the snapshot.
+                    This link has been revoked and no longer opens the shared result.
                   </p>
                 )}
               </div>
