@@ -15,6 +15,7 @@ import {
   includedInterventionRows,
   type InterventionEvent,
 } from './utils/interventions';
+import { createPipelineExportData } from './utils/alignmentExport';
 
 const DefectVisualizer = lazy(() => import('./DefectVisualizer'));
 
@@ -25,21 +26,52 @@ const LoadingSpinner = ({ label }: { label: string }) => (
   </div>
 );
 
-const JobProgressBar = ({ progress, message }: { progress: number; message: string }) => (
-  <div className="flex flex-col items-center justify-center gap-4 py-16 px-8">
-    <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center mb-2">
-      <svg className="w-8 h-8 text-blue-500 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-      </svg>
+const RESULT_STAGES = [
+  { threshold: 5, label: 'Verify session' },
+  { threshold: 25, label: 'Read source rows' },
+  { threshold: 80, label: 'Match & validate' },
+  { threshold: 100, label: 'Assemble report' },
+];
+
+const JobProgressBar = ({ progress, message }: { progress: number; message: string }) => {
+  const safeProgress = Math.max(0, Math.min(100, progress));
+  return (
+    <div className="result-processing" aria-live="polite">
+      <div className="result-processing__signal" aria-hidden="true">
+        <i /><i /><i />
+        <span>{safeProgress}%</span>
+      </div>
+      <div className="result-processing__copy">
+        <p className="syn-kicker">Alignment evidence pipeline</p>
+        <h2>{message}</h2>
+        <p>Rows are loaded in bounded pages and source-key conservation is checked before release.</p>
+      </div>
+      <div
+        className="result-processing__track"
+        role="progressbar"
+        aria-valuenow={safeProgress}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="Alignment result loading progress"
+      >
+        <i style={{ width: `${safeProgress}%` }} />
+      </div>
+      <ol className="result-processing__stages">
+        {RESULT_STAGES.map((stage, index) => {
+          const previous = RESULT_STAGES[index - 1]?.threshold ?? 0;
+          const isDone = safeProgress >= stage.threshold;
+          const isActive = !isDone && safeProgress >= previous;
+          return (
+            <li key={stage.label} className={isDone ? 'is-done' : isActive ? 'is-active' : ''}>
+              <span>{isDone ? '✓' : index + 1}</span>
+              {stage.label}
+            </li>
+          );
+        })}
+      </ol>
     </div>
-    <p className="text-gray-700 font-semibold text-base">{message}</p>
-    <div className="w-full max-w-md bg-gray-200 rounded-full h-3 overflow-hidden">
-      <div className="h-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
-    </div>
-    <span className="text-blue-600 font-bold text-lg">{progress}%</span>
-    <p className="text-gray-400 text-xs">Status updates automatically from the server. The results page opens when ready.</p>
-  </div>
-);
+  );
+};
 
 interface IliComparisonPageProps {
   readOnly?: boolean;
@@ -68,6 +100,7 @@ export default function IliComparisonPage({
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState('');
   const [audit, setAudit] = useState<ConservationAudit | undefined>();
+  const [pipelineExportData, setPipelineExportData] = useState<Record<string, unknown>>({});
   const [pairFilter, setPairFilter] = useState<string | null>(null);
   const data = useMemo(
     () => applyInterventions(baseData, interventions),
@@ -120,7 +153,7 @@ export default function IliComparisonPage({
           : fetchAlignmentResult(sessionId, progress, controller.signal);
         const sessionPromise = readOnly
           ? Promise.resolve({ config: { interventions: [] as InterventionEvent[] } })
-          : apiFetch<{ config?: { interventions?: InterventionEvent[] } }>(
+          : apiFetch<{ config?: Record<string, unknown> & { interventions?: InterventionEvent[] } }>(
             `/api/wizard/session/${encodeURIComponent(sessionId)}`,
             { signal: controller.signal },
           );
@@ -131,6 +164,7 @@ export default function IliComparisonPage({
         setAudit(alignment.audit);
         setBaseData(withRunPairColumn(alignment.comparison));
         setInterventions(session.config?.interventions || []);
+        setPipelineExportData(createPipelineExportData(session.config || {}));
       } catch (caughtError) {
         if ((caughtError as Error).name !== 'AbortError') {
           setError(caughtError instanceof Error ? caughtError.message : 'Failed to load ILI results.');
@@ -372,6 +406,8 @@ export default function IliComparisonPage({
                 onExcludeRange={readOnly ? undefined : handleExcludeRange}
                 onRestoreExclusion={readOnly ? undefined : handleRestoreExclusion}
                 audit={audit}
+                exportData={includedData}
+                pipelineData={pipelineExportData}
               />
             </div>
           </div>

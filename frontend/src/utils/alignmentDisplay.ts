@@ -78,6 +78,55 @@ export function isAlignmentDisplayMetadata(column: string): boolean {
   return DISPLAY_METADATA_COLUMNS.has(column);
 }
 
+/**
+ * Build the table schema from the complete result set. Engine buckets do not
+ * all carry the same fields (GW rows are commonly first and anomaly dimensions
+ * arrive later), so inspecting only row zero silently hides real result data.
+ */
+export function alignmentResultColumns<T extends Record<string, unknown>>(rows: readonly T[]): string[] {
+  const columns: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    for (const column of Object.keys(row)) {
+      if (column.startsWith('__') || isAlignmentDisplayMetadata(column) || seen.has(column)) continue;
+      seen.add(column);
+      columns.push(column);
+    }
+  }
+  return columns;
+}
+
+type AuditSide = { inputCount?: number; outputReferences?: number };
+type AuditItem = { isConserved?: boolean; old?: AuditSide; new?: AuditSide };
+
+export function summarizeConservationAudit(
+  audit?: AuditItem & { pairs?: AuditItem[] },
+): {
+  state: 'verified' | 'warning' | 'unknown';
+  pairCount: number;
+  old: { inputCount: number; outputReferences: number };
+  new: { inputCount: number; outputReferences: number };
+} {
+  const items = Array.isArray(audit?.pairs) && audit.pairs.length > 0
+    ? audit.pairs
+    : audit ? [audit] : [];
+  const totalSide = (side: 'old' | 'new') => items.reduce(
+    (total, item) => ({
+      inputCount: total.inputCount + Number(item?.[side]?.inputCount || 0),
+      outputReferences: total.outputReferences + Number(item?.[side]?.outputReferences || 0),
+    }),
+    { inputCount: 0, outputReferences: 0 },
+  );
+  return {
+    state: items.length === 0
+      ? 'unknown'
+      : items.every((item) => item?.isConserved === true) ? 'verified' : 'warning',
+    pairCount: items.length,
+    old: totalSide('old'),
+    new: totalSide('new'),
+  };
+}
+
 function mappedDistance(value: unknown): number | null {
   return hasDistance(value) ? Number(value) : null;
 }

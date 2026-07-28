@@ -3,13 +3,14 @@ import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, Fi
 import { apiFetch, apiUrl } from './utils/api';
 import Modal from './components/common/Modal';
 import { useToast } from './components/common/ToastProvider';
-import { createExcelExportRows } from './utils/alignmentExport';
+import { createExcelExportRows, createRuncompReportRows } from './utils/alignmentExport';
 import {
+  alignmentResultColumns,
   alignmentDisplayValue,
   depthGrowthMmPerYear,
-  isAlignmentDisplayMetadata,
   MASTER_AXIS_COLUMN,
   sortAlignmentRowsByMasterAxis,
+  summarizeConservationAudit,
 } from './utils/alignmentDisplay';
 import ShareSnapshotButton from './components/sharing/ShareSnapshotButton';
 import { sectionNameForComparisonRow } from './wizard/matchingSections';
@@ -66,7 +67,18 @@ interface ResultsPanelProps {
   onExcludeSingle?: (rowIdx: number) => Promise<void> | void;
   onExcludeRange?: (startRowIdx: number, endRowIdx: number) => Promise<void> | void;
   onRestoreExclusion?: (rowIdx: number) => Promise<void> | void;
-  audit?: unknown;
+  audit?: {
+    isConserved?: boolean;
+    old?: { inputCount?: number; outputReferences?: number };
+    new?: { inputCount?: number; outputReferences?: number };
+    pairs?: Array<{
+      isConserved?: boolean;
+      old?: { inputCount?: number; outputReferences?: number };
+      new?: { inputCount?: number; outputReferences?: number };
+    }>;
+  };
+  exportData?: any[];
+  pipelineData?: Record<string, unknown>;
 }
 
 /** Parse a clock value to hours (0..12) regardless of format ("HH:MM" or Excel serial fraction). */
@@ -304,6 +316,9 @@ export default function ResultsPanel({
   onExcludeSingle,
   onExcludeRange,
   onRestoreExclusion,
+  audit,
+  exportData,
+  pipelineData,
 }: ResultsPanelProps) {
   const data = useMemo(() => {
     let flattened: any[] = [];
@@ -320,7 +335,9 @@ export default function ResultsPanel({
           ...(rawData.anomaly_only_old || []).map((row: any) => ({ ...row, __resultGroup: 'ANOMALY' })),
           ...(rawData.anomaly_only_new || []).map((row: any) => ({ ...row, __resultGroup: 'ANOMALY' })),
           ...(rawData.bypassed_old || []).map((row: any) => ({ ...row, __resultGroup: 'BYPASSED' })),
-          ...(rawData.bypassed_new || []).map((row: any) => ({ ...row, __resultGroup: 'BYPASSED' }))
+          ...(rawData.bypassed_new || []).map((row: any) => ({ ...row, __resultGroup: 'BYPASSED' })),
+          ...(rawData.filtered_old || []).map((row: any) => ({ ...row, __resultGroup: 'FILTERED' })),
+          ...(rawData.filtered_new || []).map((row: any) => ({ ...row, __resultGroup: 'FILTERED' })),
        ];
     }
     // Tag every row with its index in the incoming (unsorted) array BEFORE any
@@ -359,6 +376,8 @@ export default function ResultsPanel({
         anomalyOnlyNew: rawData.anomaly_only_new?.length || 0,
         bypassedOld: rawData.bypassed_old?.length || 0,
         bypassedNew: rawData.bypassed_new?.length || 0,
+        filteredOld: rawData.filtered_old?.length || 0,
+        filteredNew: rawData.filtered_new?.length || 0,
       };
     }
     return null;
@@ -384,6 +403,8 @@ export default function ResultsPanel({
 
   // Full screen state
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const auditSummary = useMemo(() => summarizeConservationAudit(audit), [audit]);
+  const resultRowCount = Array.isArray(exportData) ? exportData.length : data.length;
 
   const tabs = readOnly
     ? ['Results', 'ILI Run 1', 'ILI Run 2']
@@ -421,19 +442,17 @@ export default function ResultsPanel({
 
   // Extract all columns
   const allColumns = useMemo(() => {
-    if (data && data.length > 0) {
-      const keys = Object.keys(data[0]).filter(k =>
-        k !== 'Match/Unmatch'
-        && k !== RAW_DEPTH_GROWTH_COLUMN
-        && !k.startsWith('__')
-        && !isAlignmentDisplayMetadata(k)
-      );
+    const schemaRows = Array.isArray(exportData) && exportData.length > 0 ? exportData : data;
+    if (schemaRows.length > 0) {
+      const keys = alignmentResultColumns(schemaRows).filter(k => k !== RAW_DEPTH_GROWTH_COLUMN);
       // Add computed columns at the end
-      keys.push(MASTER_AXIS_COLUMN, DEPTH_GROWTH_COLUMN, 'Length Growth (mm/yr)', 'Physics Warning');
-      return ['Section', ...keys];
+      for (const computed of [MASTER_AXIS_COLUMN, DEPTH_GROWTH_COLUMN, 'Length Growth (mm/yr)', 'Physics Warning']) {
+        if (!keys.includes(computed)) keys.push(computed);
+      }
+      return ['Section', ...keys.filter((key) => key !== 'Section')];
     }
     return ['Section'];
-  }, [data]);
+  }, [data, exportData]);
 
   // The column that hosts the keyboard "Reassign..." affordance: the first
   // visible NEW-side column in the Interventions tab.
@@ -735,18 +754,25 @@ export default function ResultsPanel({
   }, [selectedRowIdx, sortedData]);
 
   const exportToExcel = async () => {
-    const includedRows = includedInterventionRows(sortedData);
+    const includedRows = includedInterventionRows(
+      Array.isArray(exportData) ? exportData : data,
+    );
     if (includedRows.length === 0) return;
     setIsExporting(true);
     try {
       const exportRows = createExcelExportRows(includedRows);
+      const reportRows = createRuncompReportRows(includedRows);
       const response = await fetch(apiUrl('/api/alignment/export-excel'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         credentials: 'include',
-        body: JSON.stringify({ data: exportRows })
+        body: JSON.stringify({
+          pipelineData: pipelineData || {},
+          report: reportRows,
+          comparison: exportRows,
+        })
       });
       
       if (!response.ok) {
@@ -861,7 +887,7 @@ export default function ResultsPanel({
             <>
               <button onClick={exportToExcel} disabled={isExporting || activeTab === 'Excluded'} className="syn-btn syn-btn--sm syn-btn--lime">
                 <FiDownload size={14} />
-                {isExporting ? 'Exporting...' : 'Excel'}
+                {isExporting ? 'Exporting...' : 'Excel · 3 sheets'}
               </button>
               <ShareSnapshotButton
                 kind="ILI_ALIGNMENT"
@@ -891,6 +917,25 @@ export default function ResultsPanel({
             {isFullScreen ? <FiMinimize size={15} /> : <FiMaximize size={15} />}
           </button>
         </div>
+      </div>
+
+      <div
+        role="status"
+        className={`results-evidence${auditSummary.state === 'warning' ? ' is-warning' : auditSummary.state === 'verified' ? ' is-verified' : ''}`}
+      >
+        <span className="results-evidence__status">
+          {auditSummary.state === 'warning' ? 'Result integrity warning' : auditSummary.state === 'verified' ? 'Engine result verified' : 'Engine result loaded'}
+        </span>
+        <span>{resultRowCount.toLocaleString()} result rows</span>
+        <span>{allColumns.length.toLocaleString()} visible fields available</span>
+        {auditSummary.state !== 'unknown' && (
+          <span>
+            Source references OLD {auditSummary.old.outputReferences.toLocaleString()}/{auditSummary.old.inputCount.toLocaleString()}
+            {' · '}
+            NEW {auditSummary.new.outputReferences.toLocaleString()}/{auditSummary.new.inputCount.toLocaleString()}
+            {auditSummary.pairCount > 1 ? ` · ${auditSummary.pairCount} run pairs` : ''}
+          </span>
+        )}
       </div>
 
       {!readOnly && modalState.isOpen && (

@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { FiAlertTriangle, FiCheckCircle, FiFileText, FiRefreshCw, FiChevronLeft } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
 import { getSocket } from '../utils/socket';
 import { apiFetch, ApiError } from '../utils/api';
+import { executionContextLines, executionResultLines } from './executionReport';
 
 import { Button, Callout, Panel, PanelBody, PanelHeader } from '../components/ds';
 
@@ -22,6 +23,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
   const jobIdRef = useRef<string | null>(null);
   const completedRef = useRef(false);
   const configuredAlgorithm = config.algorithm || config.summaryData?.algorithm || 'dtw_hungarian';
+  const contextLines = useMemo(() => executionContextLines(config), [config]);
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -30,7 +32,10 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
 
     if (config.sessionStatus === 'completed'
       && !['dtw_hungarian_onedirection', 'manual', 'phylogenetic'].includes(configuredAlgorithm)) {
-      setTerminalLines(['The previous alignment session already completed.', '✅ All done! Results are ready.']);
+      setTerminalLines([
+        ...contextLines,
+        'DONE The previous alignment session already completed. Results are ready.',
+      ]);
       setProgress(100);
       setShowValidation(true);
       return () => { startedRef.current = false; };
@@ -40,14 +45,20 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let requestController: AbortController | null = null;
     let requestTimeout: ReturnType<typeof setTimeout> | null = null;
-    setTerminalLines(["Connecting to Alignment Server..."]);
+    setTerminalLines([
+      ...contextLines,
+      'QUEUE Connecting to the alignment worker...',
+    ]);
     setFailure(null);
     setProgress(0);
 
-    const finish = () => {
+    const finish = (result?: Record<string, any>) => {
       if (!mounted || completedRef.current) return;
       completedRef.current = true;
-      setTerminalLines(prev => [...prev, '✅ All done! Results are ready.']);
+      if (result) {
+        setTerminalLines((previous) => [...previous, ...executionResultLines(result)]);
+      }
+      setTerminalLines(prev => [...prev, 'DONE Alignment complete. Results are ready for engineering review.']);
       setProgress(100);
       setShowValidation(true);
     };
@@ -63,12 +74,17 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
     const pollJob = (jobId: string) => {
       pollTimer = setInterval(async () => {
         try {
-          const job = await apiFetch<{ progress?: number; state?: string; failedReason?: string }>(`/api/job/${encodeURIComponent(jobId)}/result`);
+          const job = await apiFetch<{
+            progress?: number;
+            state?: string;
+            failedReason?: string;
+            result?: Record<string, any>;
+          }>(`/api/job/${encodeURIComponent(jobId)}/result`);
           if (!mounted || jobIdRef.current !== jobId) return;
           if (typeof job.progress === 'number') setProgress(job.progress);
           if (job.state === 'completed') {
             if (pollTimer) clearInterval(pollTimer);
-            finish();
+            finish(job.result);
           } else if (job.state === 'failed') {
             fail(`Worker failed: ${job.failedReason || 'Unknown error'}`);
           }
@@ -107,7 +123,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
         if (data.jobId) {
           if (mounted) {
             jobIdRef.current = data.jobId;
-            setTerminalLines(prev => [...prev, `Job queued successfully. Job ID: ${data.jobId}`]);
+            setTerminalLines(prev => [...prev, `QUEUE Job accepted · ID ${data.jobId}`]);
             setProgress(1);
             pollJob(data.jobId);
           }
@@ -142,7 +158,8 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
     
     const handleProgress = (data: any) => {
       if (!jobIdRef.current || data.jobId !== jobIdRef.current) return;
-      setTerminalLines(prev => [...prev, data.message]);
+      const message = `WORK ${data.message}`;
+      setTerminalLines((previous) => previous.at(-1) === message ? previous : [...previous, message]);
       setProgress(data.progress);
       if (data.progress === 100) setShowValidation(true);
     };
@@ -150,7 +167,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
     const handleComplete = (data: any) => {
       if (!jobIdRef.current || data.jobId !== jobIdRef.current) return;
       if (pollTimer) clearInterval(pollTimer);
-      finish();
+      finish(data.result);
     };
 
     const handleError = (data: any) => {
@@ -178,7 +195,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
       socket.off('alignment_complete', handleComplete);
       socket.off('alignment_error', handleError);
     };
-  }, [config.algorithm, config.sessionId, config.sessionStatus, config.summaryData?.algorithm, configuredAlgorithm, retryToken]);
+  }, [config.algorithm, config.sessionId, config.sessionStatus, config.summaryData?.algorithm, configuredAlgorithm, contextLines, retryToken]);
 
   return (
     <div className="ds-stack ds-stack--lg animate-fade-in">
@@ -191,9 +208,9 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
         <div className="ds-exec__log" role="log" aria-live="polite">
           {terminalLines.map((line, i) => {
             let tone = 'is-ok';
-            if (line.includes('ERROR') || line.includes('anomali depth berkurang') || line.includes('clock-shift')) tone = 'is-warn';
-            if (line.includes('SELESAI')) tone = 'is-done';
-            if (line.startsWith('──')) tone = 'is-rule';
+            if (line.includes('ERROR') || line.includes('REVIEW')) tone = 'is-warn';
+            if (line.startsWith('DONE') || line.includes('AUDIT PASS')) tone = 'is-done';
+            if (line.startsWith('RUN') || line.startsWith('RESULT')) tone = 'is-rule';
 
             return (
               <div key={i} className={`ds-exec__line ${tone}`}>

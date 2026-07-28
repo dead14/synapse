@@ -1252,11 +1252,9 @@ class HungarianAnomalyAlignmentEngine:
         # The Node worker invokes this script with a session id only, so the
         # persisted (or per-pair overridden) configuration is authoritative.
         params_json = self._session_params()
-        self.hidden_features = [
-            name for name, is_hidden in params_json.get("hiddenFeatures", {}).items()
-            if is_hidden
-        ]
-        # We will map distThresh to us_gw_distance_tolerance if provided in ToleranceConfig
+        # Matcher gates come from the persisted combined rules/tolerances step.
+        # Legacy top-level distThresh is intentionally ignored because it was
+        # never part of the engine contract.
         tol_config = params_json.get("ToleranceConfig", {})
         
         # Override tolerances if config provides them

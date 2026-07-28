@@ -36,9 +36,10 @@ export interface ConservationSideAudit {
 }
 
 export interface ConservationAudit {
-  old: ConservationSideAudit;
-  new: ConservationSideAudit;
-  isConserved: boolean;
+  old?: ConservationSideAudit;
+  new?: ConservationSideAudit;
+  isConserved?: boolean;
+  pairs?: ConservationAudit[];
 }
 
 export interface AlignmentFetchResult {

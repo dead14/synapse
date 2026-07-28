@@ -1338,3 +1338,166 @@ body:has(.alignment-workspace--gw) {
 @media (max-width: 64rem) { .sectioning-light-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }.sectioning-light-composer__fields { grid-template-columns: minmax(11rem, 1fr) minmax(8rem, .6fr) minmax(7rem, .5fr); }.sectioning-light-composer__save { grid-column: 1 / -1; } }
 @media (max-width: 40rem) { .sectioning-light-header { flex-direction: column; }.sectioning-light-actions { justify-content: flex-start; }.sectioning-light-stats { grid-template-columns: 1fr; }.sectioning-light-toolbar__hint { flex-basis: 100%; text-align: left; }.sectioning-light-overview { grid-template-columns: 1fr; }.sectioning-light-viewer { height: 22rem; }.sectioning-light-composer__fields { grid-template-columns: 1fr; }.sectioning-light-composer__save { grid-column: auto; }.sectioning-light-section-table table, .sectioning-light-section-table tbody, .sectioning-light-section-table tr, .sectioning-light-section-table th, .sectioning-light-section-table td { display: block; min-width: 0; }.sectioning-light-section-table thead { display: none; }.sectioning-light-section-table tbody tr { border-bottom: 1px solid var(--sectioning-line); padding: .6rem .75rem; }.sectioning-light-section-table tbody tr:last-child { border-bottom: 0; }.sectioning-light-section-table tbody th, .sectioning-light-section-table tbody td { display: flex; align-items: center; justify-content: space-between; gap: .75rem; border: 0; padding: .3rem 0; text-align: right; }.sectioning-light-section-table tbody th::before, .sectioning-light-section-table tbody td::before { content: attr(data-label); color: var(--sectioning-muted); font: 800 .58rem var(--font-gw-data); letter-spacing: .06em; text-align: left; text-transform: uppercase; }.sectioning-light-section-table__actions { justify-content: flex-end; } }
 @media (max-width: 40rem) { .sectioning-light-position-card { grid-template-columns: 1fr auto; }.sectioning-light-position-card dl { grid-column: 1 / -1; } }
+
+.alignment-progress-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.alignment-new-run-cta {
+  min-height: 3rem;
+  padding-inline: 1.2rem;
+  border-color: color-mix(in srgb, var(--syn-accent-strong) 34%, var(--syn-line));
+  background: color-mix(in srgb, var(--syn-accent-strong) 8%, var(--syn-surface));
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--syn-accent-strong) 12%, transparent);
+  font-weight: 750;
+}
+
+.matching-rule-evidence {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.matching-rule-evidence article {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  min-height: 6.25rem;
+  padding: 0.9rem;
+  border: 1px solid var(--syn-line);
+  border-radius: var(--syn-radius-control);
+  background: var(--syn-surface);
+}
+
+.matching-rule-evidence article > svg {
+  flex: 0 0 auto;
+  margin-top: 0.1rem;
+  color: var(--syn-success);
+}
+
+.matching-rule-evidence strong,
+.matching-rule-evidence span {
+  display: block;
+}
+
+.matching-rule-evidence span {
+  margin-top: 0.28rem;
+  color: var(--syn-muted);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.matching-rule-checkbox {
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
+.matching-rule-checkbox span {
+  color: var(--syn-muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+@media (max-width: 56rem) {
+  .matching-rule-evidence {
+    grid-template-columns: 1fr;
+  }
+
+  .alignment-progress-actions {
+    justify-content: flex-start;
+  }
+}
+
+.alignment-import-progress {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.8rem 1rem;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--syn-accent-strong) 30%, var(--syn-line));
+  border-radius: var(--syn-radius-panel);
+  background: linear-gradient(135deg, var(--syn-surface), var(--syn-accent-soft));
+  padding: 1rem 1.15rem;
+  box-shadow: var(--syn-shadow);
+}
+
+.alignment-import-progress__orb {
+  position: relative;
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  place-items: center;
+}
+
+.alignment-import-progress__orb::after {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: var(--syn-accent-strong);
+  box-shadow: 0 0 16px var(--syn-accent-strong);
+  content: '';
+}
+
+.alignment-import-progress__orb i {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--syn-accent-strong);
+  border-radius: 50%;
+  animation: import-orbit 1.8s ease-out infinite;
+}
+
+.alignment-import-progress__orb i:last-child { animation-delay: 0.9s; }
+.alignment-import-progress__copy span,
+.alignment-import-progress__copy strong,
+.alignment-import-progress__copy small { display: block; }
+.alignment-import-progress__copy span {
+  color: var(--syn-accent-strong);
+  font: 800 0.58rem var(--syn-font-data);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.alignment-import-progress__copy strong { margin-top: 0.18rem; color: var(--syn-ink); font-size: 0.82rem; }
+.alignment-import-progress__copy small { margin-top: 0.18rem; color: var(--syn-muted); font-size: 0.66rem; }
+
+.alignment-import-progress__rail {
+  grid-column: 1 / -1;
+  height: 0.35rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--syn-line) 70%, transparent);
+}
+.alignment-import-progress__rail i {
+  display: block;
+  width: 38%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--syn-accent-strong), transparent);
+  animation: import-rail 1.7s ease-in-out infinite;
+}
+
+.alignment-import-progress__facts {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.45rem 1rem;
+  color: var(--syn-muted);
+  font: 700 0.57rem var(--syn-font-data);
+}
+
+@keyframes import-orbit {
+  from { transform: scale(0.45); opacity: 0.9; }
+  to { transform: scale(1.1); opacity: 0; }
+}
+@keyframes import-rail {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(310%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .alignment-import-progress__orb i,
+  .alignment-import-progress__rail i { animation: none; }
+}
