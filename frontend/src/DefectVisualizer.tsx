@@ -265,7 +265,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
   // The 3D spool still draws both runs on one pipe body, so it keeps reading the
   // engine's master-axis distances rather than the per-run reported ones.
   const parsedData = useMemo(() => data.map((item, idx) => {
-    if (!item) return null;
+    if (!item || item.__excluded === true) return null;
     const r1Dist = parseFloat(item['Log Dist OLD (m)']);
     const r2Dist = parseFloat(item['Log Dist NEW (m)']);
     return {
@@ -302,6 +302,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
     lane: ComparisonLane,
     pointer: { clientX: number; clientY: number },
   ) => {
+    onSelectRowIdx?.(feature.rowIndex);
     setInspected({ feature, lane });
     setHoveredDefect(null);
     setTooltipPos({ x: pointer.clientX, y: pointer.clientY });
@@ -467,7 +468,7 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
             Run comparison
           </h3>
           <span className="text-xs" style={{ color: 'var(--syn-muted, #727a6d)' }}>
-            {lanes.length} inspection {lanes.length === 1 ? 'run' : 'runs'} · {data.length.toLocaleString()} comparison rows
+            {lanes.length} inspection {lanes.length === 1 ? 'run' : 'runs'} · {data.filter((row) => row?.__excluded !== true).length.toLocaleString()} comparison rows
           </span>
           {!isCollapsed && (
             <span className="text-xs" style={{ color: 'var(--syn-muted, #727a6d)' }}>

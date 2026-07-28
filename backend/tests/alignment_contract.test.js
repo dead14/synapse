@@ -415,7 +415,7 @@ test('preserveCanonicalGwEvidence keeps server-owned pair locks across wizard sa
     });
 });
 
-test('normalizeInterventionEvent accepts only auditable NEW-to-OLD reassignments', () => {
+test('normalizeInterventionEvent accepts auditable reassignments and result exclusions', () => {
     const event = normalizeInterventionEvent({
         id: 'move-1',
         type: 'REASSIGN_NEW',
@@ -429,8 +429,59 @@ test('normalizeInterventionEvent accepts only auditable NEW-to-OLD reassignments
     assert.equal(event.evidenceScore, 73.5);
     assert.match(event.createdAt, /^\d{4}-/);
 
+    const single = normalizeInterventionEvent({
+        id: 'exclude-1',
+        type: 'EXCLUDE_FEATURE',
+        side: 'old',
+        pairIndex: 1,
+        sourceKey: 'OLD:12',
+    });
+    assert.equal(single.id, 'exclude-1');
+    assert.equal(single.type, 'EXCLUDE_FEATURE');
+    assert.equal(single.side, 'OLD');
+    assert.equal(single.pairIndex, 1);
+    assert.equal(single.sourceKey, 'OLD:12');
+    assert.match(single.createdAt, /^\d{4}-/);
+
+    const range = normalizeInterventionEvent({
+        id: 'range-1',
+        type: 'EXCLUDE_RANGE',
+        side: 'NEW',
+        pairIndex: 2,
+        startSourceKey: 'NEW:A',
+        endSourceKey: 'NEW:X',
+    });
+    assert.equal(range.startSourceKey, 'NEW:A');
+    assert.equal(range.endSourceKey, 'NEW:X');
+    assert.equal(range.pairIndex, 2);
+
+    const restore = normalizeInterventionEvent({
+        id: 'restore-1',
+        type: 'RESTORE_EXCLUSION',
+        exclusionId: 'range-1',
+    });
+    assert.equal(restore.exclusionId, 'range-1');
+
     assert.throws(
         () => normalizeInterventionEvent({ type: 'REASSIGN_NEW', sourceNewKey: '', targetOldKey: 'OLD:8', evidenceScore: 50 }),
+        (error) => error.code === 'INVALID_INTERVENTION',
+    );
+    assert.throws(
+        () => normalizeInterventionEvent({ type: 'EXCLUDE_FEATURE', side: 'BOTH', sourceKey: 'OLD:8' }),
+        (error) => error.code === 'INVALID_INTERVENTION',
+    );
+    assert.throws(
+        () => normalizeInterventionEvent({
+            type: 'EXCLUDE_RANGE',
+            side: 'OLD',
+            pairIndex: -1,
+            startSourceKey: 'OLD:A',
+            endSourceKey: 'OLD:X',
+        }),
+        (error) => error.code === 'INVALID_INTERVENTION',
+    );
+    assert.throws(
+        () => normalizeInterventionEvent({ type: 'RESTORE_EXCLUSION', exclusionId: '' }),
         (error) => error.code === 'INVALID_INTERVENTION',
     );
 });

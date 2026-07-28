@@ -13,6 +13,12 @@ import SynButton from '../../components/ui/SynButton';
 import { useToast } from '../../components/common/ToastProvider';
 import ShareSnapshotButton from '../../components/sharing/ShareSnapshotButton';
 import { fetchAlignmentResult } from '../../utils/alignment';
+import { apiFetch } from '../../utils/api';
+import {
+  applyInterventions,
+  includedInterventionRows,
+  type InterventionEvent,
+} from '../../utils/interventions';
 import {
   DEFAULT_SUGGESTION_RULE,
   analyseComparison,
@@ -100,17 +106,24 @@ export default function CorrosionAnalysisPage() {
       setLoading(true);
       setError('');
       try {
-        const [result, saved] = await Promise.all([
+        const [result, saved, session] = await Promise.all([
           fetchAlignmentResult(sessionId, (pct, message) => {
             if (cancelled) return;
             setProgress(pct);
             setProgressMessage(message);
           }, controller.signal),
           fetchFfsCandidates(sessionId, controller.signal),
+          apiFetch<{ config?: { interventions?: InterventionEvent[] } }>(
+            `/api/wizard/session/${encodeURIComponent(sessionId)}`,
+            { signal: controller.signal },
+          ),
         ]);
         if (cancelled) return;
 
-        setFeatures(analyseComparison(result.comparison));
+        const includedRows = includedInterventionRows(
+          applyInterventions(result.comparison, session.config?.interventions || []),
+        );
+        setFeatures(analyseComparison(includedRows));
         setReview(saved);
         // A stale review is loaded but not treated as decided: the engineer
         // sees the earlier decisions and has to confirm them against the new

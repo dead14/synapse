@@ -9,6 +9,12 @@ import { DEFAULT_SCREENING_CONFIG, type FfsConfig, type FfsScreeningConfig } fro
 import SynButton from '../../components/ui/SynButton';
 import { NumberField } from '../../components/ffs/FfsPrimitives';
 import { fetchAlignmentResult, type ComparisonRow } from '../../utils/alignment';
+import { apiFetch } from '../../utils/api';
+import {
+  applyInterventions,
+  includedInterventionRows,
+  type InterventionEvent,
+} from '../../utils/interventions';
 import { getAlignmentImportReadiness, mapAlignmentRowsToFfs } from '../../lib/ffs/alignmentImport';
 import {
   fetchFfsCandidates,
@@ -114,12 +120,15 @@ export default function FfsSetupPage() {
     setSelectedKeys(new Set());
     setReasons({});
     try {
-      const [result, review] = await Promise.all([
+      const [result, review, sessionConfig] = await Promise.all([
         fetchAlignmentResult(sessionId, (pct, message) => {
           setProgress(pct);
           setAlignmentMessage(message);
         }),
         fetchFfsCandidates(sessionId),
+        apiFetch<{ config?: { interventions?: InterventionEvent[] } }>(
+          `/api/wizard/session/${encodeURIComponent(sessionId)}`,
+        ),
       ]);
       if (review.stale) {
         throw new Error('The alignment was re-run after the Corrosion Analysis review. Review it again before assessing.');
@@ -128,13 +137,16 @@ export default function FfsSetupPage() {
       if (keys.size === 0) {
         throw new Error('The Corrosion Analysis review for this session released no feature to FFS.');
       }
-      setAlignmentRows(result.comparison);
+      const includedRows = includedInterventionRows(
+        applyInterventions(result.comparison, sessionConfig.config?.interventions || []),
+      );
+      setAlignmentRows(includedRows);
       setSelectedKeys(keys);
       setReasons(Object.fromEntries(
         review.items.filter((item) => item.reason).map((item) => [item.sourceKey, item.reason as string]),
       ));
       setAlignmentMessage(
-        `${keys.size.toLocaleString()} released feature(s) out of ${result.comparison.length.toLocaleString()} comparison rows.`,
+        `${keys.size.toLocaleString()} released feature(s) out of ${includedRows.length.toLocaleString()} included comparison rows.`,
       );
       const session = sessions.find((item) => item.id === sessionId);
       if (!lineName && session) setLineName(session.pipelineName);

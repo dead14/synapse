@@ -529,11 +529,61 @@ function normalizeInterventionEvent(event) {
         throw validationError('INVALID_INTERVENTION', 'Intervention event must be an object');
     }
     const type = String(event.type || '').toUpperCase();
-    const sourceNewKey = String(event.sourceNewKey || '').trim();
-    const targetOldKey = String(event.targetOldKey || '').trim();
+    const normalized = {
+        id: String(event.id || '').trim().slice(0, 120) || `intervention-${Date.now()}`,
+        type,
+        createdAt: new Date().toISOString(),
+    };
+    const boundedKey = (value, label, maxLength = 500) => {
+        const key = String(value || '').trim();
+        if (!key || key.length > maxLength) {
+            throw validationError('INVALID_INTERVENTION', `${label} must be a bounded identifier`);
+        }
+        return key;
+    };
+    const side = () => {
+        const value = String(event.side || '').toUpperCase();
+        if (value !== 'OLD' && value !== 'NEW') {
+            throw validationError('INVALID_INTERVENTION', 'Exclusion side must be OLD or NEW');
+        }
+        return value;
+    };
+    const pairIndex = () => {
+        const value = Number(event.pairIndex);
+        if (!Number.isSafeInteger(value) || value < 0 || value > 1_000) {
+            throw validationError('INVALID_INTERVENTION', 'Pair index must be a bounded non-negative integer');
+        }
+        return value;
+    };
+
+    if (type === 'EXCLUDE_FEATURE') {
+        return {
+            ...normalized,
+            side: side(),
+            pairIndex: pairIndex(),
+            sourceKey: boundedKey(event.sourceKey, 'Source key'),
+        };
+    }
+    if (type === 'EXCLUDE_RANGE') {
+        return {
+            ...normalized,
+            side: side(),
+            pairIndex: pairIndex(),
+            startSourceKey: boundedKey(event.startSourceKey, 'Range start source key'),
+            endSourceKey: boundedKey(event.endSourceKey, 'Range end source key'),
+        };
+    }
+    if (type === 'RESTORE_EXCLUSION') {
+        return {
+            ...normalized,
+            exclusionId: boundedKey(event.exclusionId, 'Exclusion ID', 120),
+        };
+    }
     if (type !== 'REASSIGN_NEW') {
         throw validationError('INVALID_INTERVENTION', 'Unsupported intervention type');
     }
+    const sourceNewKey = String(event.sourceNewKey || '').trim();
+    const targetOldKey = String(event.targetOldKey || '').trim();
     if (!sourceNewKey || !targetOldKey || sourceNewKey.length > 500 || targetOldKey.length > 500) {
         throw validationError('INVALID_INTERVENTION', 'Intervention requires bounded source and target keys');
     }
@@ -542,12 +592,10 @@ function normalizeInterventionEvent(event) {
         throw validationError('INVALID_INTERVENTION', 'Evidence score must be between 0 and 100');
     }
     return {
-        id: String(event.id || '').trim().slice(0, 120) || `intervention-${Date.now()}`,
-        type,
+        ...normalized,
         sourceNewKey,
         targetOldKey,
         evidenceScore,
-        createdAt: new Date().toISOString(),
     };
 }
 

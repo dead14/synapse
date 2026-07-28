@@ -14,6 +14,8 @@ import {
 } from './utils/alignmentDisplay';
 import ShareSnapshotButton from './components/sharing/ShareSnapshotButton';
 import { sectionNameForComparisonRow } from './wizard/matchingSections';
+import { includedInterventionRows, isExcludedRow } from './utils/interventions';
+import ExclusionControls from './components/comparison/ExclusionControls';
 
 const RAW_DEPTH_GROWTH_COLUMN = 'Depth Growth (%WT/yr)';
 const DEPTH_GROWTH_COLUMN = 'Depth Growth (mm/yr)';
@@ -62,6 +64,9 @@ interface ResultsPanelProps {
   selectedRowIdx?: number | null;
   onSelectRowIdx?: (idx: number | null) => void;
   onUpdateMatch?: (sourceIdx: number, targetIdx: number) => void;
+  onExcludeSingle?: (rowIdx: number) => Promise<void> | void;
+  onExcludeRange?: (startRowIdx: number, endRowIdx: number) => Promise<void> | void;
+  onRestoreExclusion?: (rowIdx: number) => Promise<void> | void;
   audit?: unknown;
 }
 
@@ -289,7 +294,18 @@ const ReassignDialog = ({ sourceRow, candidates, onPick, onCancel }: {
   );
 };
 
-export default function ResultsPanel({ data: rawData, loading, readOnly = false, onOpenAnalytics, selectedRowIdx, onSelectRowIdx, onUpdateMatch }: ResultsPanelProps) {
+export default function ResultsPanel({
+  data: rawData,
+  loading,
+  readOnly = false,
+  onOpenAnalytics,
+  selectedRowIdx,
+  onSelectRowIdx,
+  onUpdateMatch,
+  onExcludeSingle,
+  onExcludeRange,
+  onRestoreExclusion,
+}: ResultsPanelProps) {
   const data = useMemo(() => {
     let flattened: any[] = [];
     if (Array.isArray(rawData)) {
@@ -358,7 +374,8 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
   // Same rows a drop can land on and pass the parent's validation: an OLD
   // feature that has no NEW pair yet.
   const reassignCandidates = useMemo(() => data
-    .filter((row: any) => (hasRowValue(row, 'Source Key OLD') || hasRowValue(row, 'Identif. OLD'))
+    .filter((row: any) => !isExcludedRow(row)
+      && (hasRowValue(row, 'Source Key OLD') || hasRowValue(row, 'Identif. OLD'))
       && !hasRowValue(row, 'Source Key NEW') && !hasRowValue(row, 'Identif. NEW'))
     .sort((a: any, b: any) => (parseFloat(a['Log Dist OLD (m)']) || 0) - (parseFloat(b['Log Dist OLD (m)']) || 0)), [data]);
 
@@ -372,7 +389,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
 
   const tabs = readOnly
     ? ['Results', 'ILI Run 1', 'ILI Run 2']
-    : ['Results', 'ILI Run 1', 'ILI Run 2', 'Interventions'];
+    : ['Results', 'ILI Run 1', 'ILI Run 2', 'Interventions', 'Excluded'];
   
   // Dynamic columns state
   const [showColumnFilter, setShowColumnFilter] = useState(false);
@@ -410,8 +427,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
       const keys = Object.keys(data[0]).filter(k =>
         k !== 'Match/Unmatch'
         && k !== RAW_DEPTH_GROWTH_COLUMN
-        && k !== '__resultGroup'
-        && k !== '__origIdx'
+        && !k.startsWith('__')
         && !isAlignmentDisplayMetadata(k)
       );
       // Add computed columns at the end
@@ -573,6 +589,11 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
   // 2. Filter data for view
   const filteredData = useMemo(() => {
     return processedData.filter((row: any) => {
+      if (activeTab === 'Excluded') {
+        if (!isExcludedRow(row)) return false;
+      } else if (isExcludedRow(row)) {
+        return false;
+      }
       const run1 = row['Identif. OLD'];
       const run2 = row['Identif. NEW'];
       const dist1 = row['Log Dist OLD (m)'];
@@ -639,7 +660,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
       
       return true;
     });
-  }, [processedData, radioFilter, unmatchedOld, unmatchedNew, distanceStart, distanceEnd, searchQuery, filterConfig]);
+  }, [processedData, activeTab, radioFilter, unmatchedOld, unmatchedNew, distanceStart, distanceEnd, searchQuery, filterConfig]);
 
   const sortedData = useMemo(() => {
     if (!sortConfig) return filteredData;
@@ -716,10 +737,11 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
   }, [selectedRowIdx, sortedData]);
 
   const exportToExcel = async () => {
-    if (sortedData.length === 0) return;
+    const includedRows = includedInterventionRows(sortedData);
+    if (includedRows.length === 0) return;
     setIsExporting(true);
     try {
-      const exportRows = createExcelExportRows(sortedData);
+      const exportRows = createExcelExportRows(includedRows);
       const response = await fetch(apiUrl('/api/alignment/export-excel'), {
         method: 'POST',
         headers: {
@@ -751,6 +773,15 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
     }
   };
 
+  const excludedCount = useMemo(
+    () => data.filter((row: any) => isExcludedRow(row)).length,
+    [data],
+  );
+  const selectedRow = useMemo(
+    () => data.find((row: any) => row.__origIdx === selectedRowIdx) ?? null,
+    [data, selectedRowIdx],
+  );
+
   const panelContent = (
     <div className={`results-panel ${isFullScreen ? "h-full w-full flex flex-col overflow-hidden" : "flex flex-col h-full overflow-hidden"}`}>
 
@@ -768,11 +799,21 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
               }`}
               style={activeTab === tab ? { color: 'var(--syn-info, #155eef)', background: 'var(--syn-surface-raised, #fff)' } : {}}
             >
-              {tab}
+              {tab === 'Excluded' ? `Excluded (${excludedCount})` : tab}
             </button>
           ))}
         </div>
         <div className="flex items-center gap-2 relative">
+          {!readOnly && (
+            <ExclusionControls
+              activeTab={activeTab}
+              selectedRow={selectedRow}
+              selectedRowIdx={selectedRowIdx ?? null}
+              onExcludeSingle={onExcludeSingle}
+              onExcludeRange={onExcludeRange}
+              onRestoreExclusion={onRestoreExclusion}
+            />
+          )}
           {activeTab === 'Results' && (
             <div ref={columnMenuRef}>
               <button
@@ -829,7 +870,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                 <FiMap size={14} />
                 Sectional
               </button>
-              <button onClick={exportToExcel} disabled={isExporting} className="syn-btn syn-btn--sm syn-btn--lime">
+              <button onClick={exportToExcel} disabled={isExporting || activeTab === 'Excluded'} className="syn-btn syn-btn--sm syn-btn--lime">
                 <FiDownload size={14} />
                 {isExporting ? 'Exporting...' : 'Excel'}
               </button>
@@ -837,7 +878,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                 kind="ILI_ALIGNMENT"
                 title={`Final ILI alignment${shareSessionId ? ` · Session ${shareSessionId}` : ''}`}
                 sourceRef={shareSessionId ? `alignment-session:${shareSessionId}` : undefined}
-                rows={data}
+                rows={includedInterventionRows(data)}
                 referenceOnly
                 summary={summaryCounts ? [
                   { label: 'GW locked', value: summaryCounts.gwLocked },
@@ -890,7 +931,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
         />
       )}
 
-      {(activeTab === 'Results' || activeTab === 'ILI Run 1' || activeTab === 'ILI Run 2' || activeTab === 'Interventions') && (
+      {(activeTab === 'Results' || activeTab === 'ILI Run 1' || activeTab === 'ILI Run 2' || activeTab === 'Interventions' || activeTab === 'Excluded') && (
         <div className="flex flex-col h-full overflow-hidden text-sm relative">
           {/* Summary Dashboard */}
           {summaryCounts && (
@@ -988,7 +1029,7 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
               className="flex-1 overflow-auto"
               onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
             >
-              {(activeTab === 'Results' || activeTab === 'Interventions') && (
+              {(activeTab === 'Results' || activeTab === 'Interventions' || activeTab === 'Excluded') && (
                 <table className="results-table w-max text-left border-collapse text-[11px] leading-tight table-fixed break-words min-w-full">
                   <thead className="sticky top-0 z-10">
                     <tr>
@@ -1084,6 +1125,8 @@ export default function ResultsPanel({ data: rawData, loading, readOnly = false,
                           let rowClass = 'results-row';
                           if (isSelected) {
                             rowClass += ' results-row--selected';
+                          } else if (isExcludedRow(row)) {
+                            rowClass += ' opacity-60';
                           } else if (isMatch) {
                             if (featType.includes('valve')) rowClass += ' results-row--match-valve';
                             else if (featType.includes('weld')) rowClass += ' results-row--match-weld';

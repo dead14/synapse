@@ -806,7 +806,10 @@ exports.saveIntervention = async (req, res) => {
     const parsedSessionId = parsePositiveId(req.body?.sessionId);
     if (!parsedSessionId) return res.status(400).json({ error: 'Session ID required' });
     try {
-        const event = normalizeInterventionEvent(req.body?.event);
+        const event = {
+            ...normalizeInterventionEvent(req.body?.event),
+            createdByUserId: Number(req.user.id),
+        };
         const session = await findOwnedSession(pool, parsedSessionId, req.user.orgId);
         if (!session) return res.status(404).json({ error: 'Session not found' });
         const existing = Array.isArray(session.params_json?.interventions)
