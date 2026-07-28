@@ -108,6 +108,7 @@ const directAssessmentRoutes = require('./modules/directAssessment/directAssessm
 const fieldMeasurementRoutes = require('./modules/fieldMeasurements/fieldMeasurementRoutes');
 const ingestionRoutes = require('./modules/ingestion/ingestionRoutes');
 const masterAdminRoutes = require('./modules/masterAdmin/masterAdminRoutes');
+const publicShareRoutes = require('./modules/publicShares/publicShareRoutes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
@@ -120,6 +121,7 @@ app.use('/api/integrity-cases', integrityRoutes);
 app.use('/api/compliance', complianceRoutes);
 app.use('/api/direct-assessments', directAssessmentRoutes);
 app.use('/api/field-measurements', fieldMeasurementRoutes);
+app.use('/api/public-shares', publicShareRoutes);
 app.use('/api', ffsRoutes); // for /api/download-template
 app.use('/api', alignmentRoutes); // for /api/upload-csv and /api/run
 

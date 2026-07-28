@@ -50,7 +50,7 @@ function createCorsOptions(env = process.env) {
         },
         credentials: true,
         methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Share-Token'],
         maxAge: 600,
     };
 }
