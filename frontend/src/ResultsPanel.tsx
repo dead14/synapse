@@ -416,7 +416,7 @@ export default function ResultsPanel({
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [containerHeight, setContainerHeight] = useState(800); // fallback until measured
-  const ROW_HEIGHT = 28; // px per row
+  const ROW_HEIGHT = 24; // px per row — keep in sync with .results-table td height in synapse-tokens.css
   const OVERSCAN = 10; // extra rows to render above/below viewport
 
   // Extract all columns
@@ -849,10 +849,12 @@ export default function ResultsPanel({
               )}
             </div>
           )}
+          {/* The matching charts moved to Corrosion Analysis, where the rest of
+              the analysis lives — this table is for reading rows, not plotting. */}
           {!readOnly && onOpenAnalytics && (
-            <button onClick={onOpenAnalytics} className="syn-btn syn-btn--sm syn-btn--ink">
+            <button onClick={onOpenAnalytics} className="ds-btn ds-btn--secondary ds-btn--sm">
               <FiActivity size={14} />
-              Analytics
+              Corrosion analysis
             </button>
           )}
           {!readOnly && (

@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { FiChevronLeft, FiChevronRight, FiMap, FiTarget } from 'react-icons/fi';
-import SectionComposer, { type SectionDraft } from '../sectioning/SectionComposer';
+import { FiAlertTriangle, FiChevronLeft, FiChevronRight, FiMap, FiTarget } from 'react-icons/fi';
+import { type SectionDraft } from '../sectioning/SectionComposer';
 import GwPositionCard from '../sectioning/GwPositionCard';
 import SectioningSchematic from '../sectioning/SectioningSchematic';
 import { bendAngleDeg } from '../sectioning/bendGeometry';
 import SectionMap from '../sectioning/SectionMap';
 import SectionTable from '../sectioning/SectionTable';
+import SectionWorkbench from '../sectioning/SectionWorkbench';
+import type { BrushMarker } from '../sectioning/SectionRangeBrush';
+import type { BoundaryEdge } from '../sectioning/SectionBoundaryInputs';
+import { lockedIndexOf } from '../sectioning/sectionBuilder';
+import { buildSectionBoundaries, sectionBoundaryForFeature } from '../sectioning/sectionBoundaries';
 import { buildMatchingSpatialFeatures } from '../sectioning/matchingSpatialFeatures';
-import {
-  buildSectionBoundaries,
-  sectionBoundaryForFeature,
-} from '../sectioning/sectionBoundaries';
 import { MAX_SCHEMATIC_ZOOM, canInspectGwPrecisely, clampSchematicZoom } from '../sectioning/viewOptions';
 import { coveragePercent } from '../sectioning/sectionRanges';
 import type { SectionDef, SpatialFeature } from '../sectioning/types';
@@ -26,6 +27,17 @@ import {
 import { fetchSectioningAnchors } from './sectioningEvidence';
 import { pairGwResult, primaryRunPair, resolveRunPairs, sectionsForPair } from '../domain/runPairs';
 import ShareSnapshotButton from '../components/sharing/ShareSnapshotButton';
+import {
+  ActionBar,
+  Button,
+  Callout,
+  Panel,
+  PanelBody,
+  PanelHeader,
+  Segmented,
+  Stat,
+  StatGrid,
+} from '../components/ds';
 
 interface Props {
   config: any;
@@ -113,7 +125,11 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
     const otherPairs = allSections.filter((section) => !sections.some((mine) => mine.id === section.id));
     setAllSections([...otherPairs, ...next]);
   };
-  const [selectedGws, setSelectedGws] = useState<SpatialFeature[]>([]);
+  // Boundaries are held as indexes into `lockedGws` rather than as picked canvas
+  // features, so a drag, a typed KP, a weld row, and a marker click can all feed
+  // the same state.
+  const [startIndex, setStartIndex] = useState<number | null>(null);
+  const [endIndex, setEndIndex] = useState<number | null>(null);
   const [includeUnmatchedGws, setIncludeUnmatchedGws] = useState(true);
   const [inspectedGw, setInspectedGw] = useState<SpatialFeature | null>(null);
   const [viewMode, setViewMode] = useState<'schematic' | 'map'>('schematic');
@@ -125,31 +141,60 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
     () => buildSectionBoundaries(features, lockedGws, true),
     [features, lockedGws],
   );
-  const selectedBoundaries = useMemo(
-    () => selectedGws
-      .map((gw) => sectionBoundaryForFeature(gw, lockedGws))
-      .filter((boundary): boundary is NonNullable<typeof boundary> => Boolean(boundary))
-      .sort((left, right) => left.newDistance - right.newDistance),
-    [lockedGws, selectedGws],
+  const selectableBoundaries = useMemo(
+    () => includeUnmatchedGws
+      ? allBoundaries
+      : allBoundaries.filter((boundary) => boundary.side === 'MATCHED'),
+    [allBoundaries, includeUnmatchedGws],
   );
   const validationError = validateSectionOrder(sections, allBoundaries);
 
-  const displaySections = useMemo<SectionDef[]>(() => sections.map((section) => {
-    const resolved = resolveSectionDistances(section, allBoundaries);
+  // The schematic still highlights whichever GWs the boundaries resolve to.
+  const selectedGws = useMemo(() => {
+    const keys = [startIndex, endIndex]
+      .filter((index): index is number => index !== null && index >= 0 && index < selectableBoundaries.length)
+      .map((index) => selectableBoundaries[index].key);
     const visibleGws = [
       ...features.gws,
       ...features.historicalLanes.flatMap((lane) => lane.gws),
     ];
-    const featureForKey = (key: string) => visibleGws.find(
-      (gw) => sectionBoundaryForFeature(gw, lockedGws)?.key === key,
-    );
-    const startFeature = featureForKey(section.startGwKey);
-    const endFeature = featureForKey(section.endGwKey);
+    return keys
+      .map((key) => visibleGws.find((gw) => sectionBoundaryForFeature(gw, lockedGws)?.key === key))
+      .filter((gw): gw is SpatialFeature => Boolean(gw));
+  }, [endIndex, features.gws, features.historicalLanes, lockedGws, selectableBoundaries, startIndex]);
+
+  const brushMarkers = useMemo<BrushMarker[]>(
+    () =>
+      features.allFeatures
+        .filter((feature) => {
+          const type = feature.type.toLowerCase();
+          return type.includes('bend') || type.includes('valve') || type.includes('tee');
+        })
+        .map((feature) => {
+          const type = feature.type.toLowerCase();
+          const kind: BrushMarker['kind'] = type.includes('valve') ? 'valve' : type.includes('tee') ? 'tee' : 'bend';
+          return { id: `${kind}-${feature.id}-${feature.dist}`, distM: feature.dist, kind, label: `${feature.type} · ${(feature.dist / 1000).toFixed(3)} km` };
+        }),
+    [features.allFeatures],
+  );
+
+  const masterFeatures = useMemo(
+    () => features.allFeatures.filter((feature) => feature.runRole === 'MASTER'),
+    [features.allFeatures],
+  );
+
+  const displaySections = useMemo<SectionDef[]>(() => sections.map((section) => {
+    const resolved = resolveSectionDistances(section, allBoundaries);
+    const startBoundary = section.startBoundary ?? allBoundaries.find((boundary) => boundary.key === section.startGwKey);
+    const endBoundary = section.endBoundary ?? allBoundaries.find((boundary) => boundary.key === section.endGwKey);
+    const visibleGws = [...features.gws, ...features.historicalLanes.flatMap((lane) => lane.gws)];
+    const startFeature = visibleGws.find((gw) => sectionBoundaryForFeature(gw, lockedGws)?.key === section.startGwKey);
+    const endFeature = visibleGws.find((gw) => sectionBoundaryForFeature(gw, lockedGws)?.key === section.endGwKey);
     return {
       id: section.id,
       name: section.name,
       type: section.sectionType || 'UNCLASSIFIED',
-      startGw: startFeature?.id || '', endGw: endFeature?.id || '',
+      startGw: startBoundary?.label || '', endGw: endBoundary?.label || '',
       startM: resolved.newStartM!, endM: resolved.newEndM!,
       length: resolved.newEndM! - resolved.newStartM!, notes: '',
       latStart: startFeature?.lat, lngStart: startFeature?.lng,
@@ -167,30 +212,59 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
     [features.allFeatures],
   );
 
+  /** Clicking a marker on the schematic fills the next empty boundary. */
   const handleGwClick = (gw: SpatialFeature) => {
     const boundary = sectionBoundaryForFeature(gw, lockedGws);
     if (!boundary || (!includeUnmatchedGws && boundary.side !== 'MATCHED')) return;
-    setSelectedGws((current) => {
-      if (current.some((selected) => sectionBoundaryForFeature(selected, lockedGws)?.key === boundary.key)) {
-        return current.filter((selected) => sectionBoundaryForFeature(selected, lockedGws)?.key !== boundary.key);
+    const index = lockedIndexOf(selectableBoundaries, boundary.key);
+    if (index < 0) return;
+    if (startIndex === null || (endIndex !== null && startIndex !== null)) {
+      setStartIndex(index);
+      setEndIndex(null);
+      return;
+    }
+    setBoundary('end', index);
+  };
+
+  /**
+   * Writes one edge and keeps the pair ordered — picking an end upstream of the
+   * current start swaps them instead of rejecting the input.
+   */
+  const setBoundary = (edge: BoundaryEdge, index: number) => {
+    if (edge === 'start') {
+      if (endIndex !== null && index > endIndex) {
+        setStartIndex(endIndex);
+        setEndIndex(index);
+        return;
       }
-      if (current.length >= 2) return [gw];
-      return [...current, gw].sort((left, right) => (
-        (sectionBoundaryForFeature(left, lockedGws)?.newDistance ?? left.dist)
-        - (sectionBoundaryForFeature(right, lockedGws)?.newDistance ?? right.dist)
-      ));
-    });
+      setStartIndex(index);
+      return;
+    }
+    if (startIndex !== null && index < startIndex) {
+      setStartIndex(index);
+      setEndIndex(startIndex);
+      return;
+    }
+    setEndIndex(index);
+  };
+
+  const selectRange = (nextStart: number, nextEnd: number) => {
+    setStartIndex(nextStart);
+    setEndIndex(nextEnd);
   };
 
   const closeComposer = () => {
-    setSelectedGws([]);
+    setStartIndex(null);
+    setEndIndex(null);
     setEditingSectionId(null);
     setDraft({ name: `Section ${sections.length + 1}`, sectionType: 'BUR', policy: 'MATCH' });
   };
 
   const applySelectedSection = () => {
-    if (selectedGws.length !== 2 || !draft.name.trim()) return;
-    if (selectedBoundaries.length !== 2) return;
+    if (startIndex === null || endIndex === null || endIndex <= startIndex || !draft.name.trim()) return;
+    const startBoundary = selectableBoundaries[startIndex];
+    const endBoundary = selectableBoundaries[endIndex];
+    if (!startBoundary || !endBoundary) return;
     const existing = editingSectionId ? sections.find((section) => section.id === editingSectionId) : undefined;
     const sectionId = editingSectionId ?? `section-${Date.now()}`;
     const nextSection: MatchingSection = {
@@ -199,29 +273,33 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
       name: draft.name.trim(),
       sectionType: draft.sectionType,
       policy: draft.policy,
-      startGwKey: selectedBoundaries[0].key,
-      endGwKey: selectedBoundaries[1].key,
-      startBoundary: selectedBoundaries[0].side === 'MATCHED' ? undefined : selectedBoundaries[0],
-      endBoundary: selectedBoundaries[1].side === 'MATCHED' ? undefined : selectedBoundaries[1],
+      startGwKey: startBoundary.key,
+      endGwKey: endBoundary.key,
+      startBoundary: startBoundary.side === 'MATCHED' ? undefined : startBoundary,
+      endBoundary: endBoundary.side === 'MATCHED' ? undefined : endBoundary,
     };
     setSections((current) => saveSectionRange(current, nextSection, allBoundaries));
-    setSelectedGws([]);
+    setStartIndex(null);
+    setEndIndex(null);
     setEditingSectionId(null);
     setDraft({ name: `Section ${sections.length + (editingSectionId ? 1 : 2)}`, sectionType: 'BUR', policy: 'MATCH' });
   };
 
   const editSection = (sectionId: string) => {
     const section = sections.find((item) => item.id === sectionId);
-    const visibleGws = [...features.gws, ...features.historicalLanes.flatMap((lane) => lane.gws)];
-    const start = section && visibleGws.find(
-      (gw) => sectionBoundaryForFeature(gw, lockedGws)?.key === section.startGwKey,
+    if (!section) return;
+    const hasUnmatchedBoundary = Boolean(
+      (section.startBoundary && section.startBoundary.side !== 'MATCHED')
+      || (section.endBoundary && section.endBoundary.side !== 'MATCHED'),
     );
-    const end = section && visibleGws.find(
-      (gw) => sectionBoundaryForFeature(gw, lockedGws)?.key === section.endGwKey,
-    );
-    if (!section || !start || !end) return;
+    if (hasUnmatchedBoundary && !includeUnmatchedGws) setIncludeUnmatchedGws(true);
+    const boundaries = hasUnmatchedBoundary ? allBoundaries : selectableBoundaries;
+    const start = lockedIndexOf(boundaries, section.startGwKey);
+    const end = lockedIndexOf(boundaries, section.endGwKey);
+    if (start < 0 || end < 0) return;
     setDraft({ name: section.name, sectionType: section.sectionType ?? 'UNCLASSIFIED', policy: section.policy });
-    setSelectedGws([start, end].sort((left, right) => left.dist - right.dist));
+    setStartIndex(Math.min(start, end));
+    setEndIndex(Math.max(start, end));
     setEditingSectionId(section.id);
   };
 
@@ -230,173 +308,251 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
     if (editingSectionId === sectionId) closeComposer();
   };
 
+  const applyPresets = (next: MatchingSection[]) => {
+    setSections(next);
+    closeComposer();
+  };
+
   return (
-    <div className="sectioning-light-shell">
-      <div className="sectioning-light-header">
-        <div>
-          <p className="sectioning-light-eyebrow">NEW IS THE SPATIAL MASTER</p>
-          <h2>GW View &amp; Sectioning</h2>
-          <p>Click any two allowed GWs. OLD-only and NEW-only boundaries stay visibly unpaired and use their measured side position.</p>
-        </div>
-        <div className="sectioning-light-actions">
-          <button type="button" onClick={() => setViewMode('schematic')} className={viewMode === 'schematic' ? 'is-active' : ''}><FiTarget /> GW View</button>
-          <button type="button" onClick={() => setViewMode('map')} className={viewMode === 'map' ? 'is-active' : ''}><FiMap /> Maps</button>
-        </div>
-      </div>
+    <div className="ds-stack">
+      <Panel>
+        <PanelHeader
+          icon={<FiTarget aria-hidden="true" />}
+          eyebrow="NEW is the spatial master"
+          title="GW view &amp; sectioning"
+          subtitle="OLD is only a comparison lane; red means a legacy GW is missing from the NEW master."
+          actions={
+            <Segmented<'schematic' | 'map'>
+              ariaLabel="Viewer mode"
+              value={viewMode}
+              onChange={setViewMode}
+              options={[
+                { value: 'schematic', label: 'GW view', icon: <FiTarget aria-hidden="true" /> },
+                { value: 'map', label: 'Maps', icon: <FiMap aria-hidden="true" /> },
+              ]}
+            />
+          }
+        />
 
-      {pairs.length > 1 && (
-        <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 bg-brand-50/60 px-5 py-3">
-          <span className="text-xs font-bold uppercase tracking-wide text-brand-700">Sections per run pair</span>
-          {pairs.map((pair) => {
-            const count = sectionsForPair(allSections, pair, primaryPair).length;
-            const isActive = pair.key === activePair?.key;
-            return (
-              <button
-                key={pair.key}
-                type="button"
-                aria-pressed={isActive}
-                onClick={() => { setActivePairKey(pair.key); setSelectedGws([]); setEditingSectionId(null); }}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                  isActive ? 'bg-brand-600 text-white shadow-sm' : 'border border-brand-200 bg-white text-brand-700 hover:bg-brand-100'
-                }`}
-              >
-                {pair.label} <span className={isActive ? 'opacity-80' : 'text-gray-400'}>({count})</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      <div className="sectioning-light-stats">
-        <span>NEW axis: <strong>{activePair?.newRun?.year || config?.summaryData?.masterRun?.year || '-'}</strong></span>
-        <span>Locked GW: <strong>{lockedGws.length}</strong></span>
-        <span>Bend inferred: <strong className="is-warning">{features.stats.bendCount}</strong></span>
-        <span>Missing in NEW: <strong className="is-danger">{features.stats.missingGwCount}</strong></span>
-        <span>Coverage: <strong className={validationError ? 'is-danger' : 'is-success'}>{validationError ? 'Needs attention' : sections.length ? `${coverage.toFixed(1)}%` : 'Optional · global'}</strong></span>
-      </div>
-
-      <div className="sectioning-light-layout">
-        <div className="sectioning-light-main">
-          <div className="sectioning-light-toolbar">
-            <span>View mode</span>
-            <button type="button" onClick={() => setViewMode('schematic')} className={viewMode === 'schematic' ? 'is-selected' : ''}><FiTarget /> Longitudinal</button>
-            <span className="sectioning-light-toolbar__hint" style={{flex: 1}}>{canInspectGwPrecisely(zoom) ? 'Click a GW marker to pick section boundaries' : 'Zoom to at least 600% to select GWs precisely'}</span>
-            <div className="flex items-center gap-2">
-              <label className="inline-flex cursor-pointer items-center gap-1.5 rounded border border-gray-200 bg-white px-2 py-1 text-[11px] font-bold text-gray-600">
-                <input
-                  type="checkbox"
-                  checked={includeUnmatchedGws}
-                  onChange={(event) => {
-                    setIncludeUnmatchedGws(event.target.checked);
-                    setSelectedGws([]);
-                  }}
-                  className="accent-blue-600"
-                />
-                Use unpaired GW
-              </label>
-              <div className="flex items-center overflow-hidden rounded border border-gray-200 bg-white" aria-label="Viewer height">
-                <button type="button" onClick={() => setViewerHeight((height) => Math.max(22, height - 6))} aria-label="Reduce viewer height">Height −</button>
-                <button type="button" onClick={() => setViewerHeight(34)} aria-label="Reset viewer height">Reset</button>
-                <button type="button" onClick={() => setViewerHeight((height) => Math.min(60, height + 6))} aria-label="Increase viewer height">Height +</button>
-              </div>
-              <button type="button" onClick={() => setZoom(1)} className="px-3 py-1 bg-white border border-gray-200 rounded text-xs text-gray-600 hover:bg-gray-50 font-bold">Fit</button>
-              <div className="flex items-center border border-gray-200 rounded overflow-hidden bg-white ml-2">
-              <button type="button" onClick={() => setZoom(clampSchematicZoom(zoom - 0.5))} className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-50">−</button>
-                <div className="w-px h-4 bg-gray-200"></div>
-                <button type="button" onClick={() => setZoom(1)} className={`px-2 py-1 text-xs ${zoom === 1 ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>100%</button>
-                <div className="w-px h-4 bg-gray-200"></div>
-              <button type="button" onClick={() => setZoom(clampSchematicZoom(zoom + 0.5))} className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-50">+</button>
-                <div className="w-px h-4 bg-gray-200"></div>
-              <button type="button" onClick={() => setZoom(MAX_SCHEMATIC_ZOOM)} className={`px-2 py-1 text-xs ${zoom === MAX_SCHEMATIC_ZOOM ? 'bg-gray-100 text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>{MAX_SCHEMATIC_ZOOM * 100}%</button>
-              </div>
-              <input type="range" min="0.5" max={MAX_SCHEMATIC_ZOOM} step="0.5" value={zoom} onChange={(e) => setZoom(clampSchematicZoom(Number(e.target.value)))} className="w-24 ml-2 accent-blue-600" />
+        <PanelBody className="ds-stack">
+          {pairs.length > 1 && (
+            <div className="ds-row">
+              <span className="ds-panel__eyebrow">Sections per run pair</span>
+              {pairs.map((pair) => {
+                const count = sectionsForPair(allSections, pair, primaryPair).length;
+                const isActive = pair.key === activePair?.key;
+                return (
+                  <Button
+                    key={pair.key}
+                    size="sm"
+                    variant={isActive ? 'primary' : 'secondary'}
+                    aria-pressed={isActive}
+                    onClick={() => { setActivePairKey(pair.key); closeComposer(); }}
+                  >
+                    {pair.label} ({count})
+                  </Button>
+                );
+              })}
             </div>
+          )}
+
+          <StatGrid>
+            <Stat
+              lead
+              label="NEW axis"
+              value={activePair?.newRun?.year || config?.summaryData?.masterRun?.year || '—'}
+              hint="Spatial master"
+              compact
+            />
+            <Stat label="Locked GW" value={lockedGws.length.toLocaleString()} hint="Usable boundaries" compact />
+            <Stat label="Bends inferred" value={features.stats.bendCount} tone="warning" compact />
+            <Stat label="Missing in NEW" value={features.stats.missingGwCount} tone="danger" compact />
+            <Stat
+              label="Coverage"
+              value={sections.length ? `${coverage.toFixed(1)}%` : 'Global'}
+              tone={validationError ? 'danger' : 'success'}
+              hint={validationError ? 'Needs attention' : sections.length ? `${sections.length} sections` : 'Sectioning is optional'}
+              compact
+            />
+          </StatGrid>
+        </PanelBody>
+      </Panel>
+
+      <SectionWorkbench
+        lockedGws={lockedGws}
+        boundaries={selectableBoundaries}
+        sections={sections}
+        markers={brushMarkers}
+        masterFeatures={masterFeatures}
+        sectionTypes={SECTION_TYPES}
+        startIndex={startIndex}
+        endIndex={endIndex}
+        onSetBoundary={setBoundary}
+        onSelectRange={selectRange}
+        onClear={closeComposer}
+        draft={draft}
+        onDraftChange={(patch) => setDraft((current) => ({ ...current, ...patch }))}
+        isEditing={editingSectionId !== null}
+        onSave={applySelectedSection}
+        onEditSection={editSection}
+        onApplyPresets={applyPresets}
+      />
+
+      {/* The detailed viewer stays available for evidence checks, but it is no
+          longer the only way to bound a section. */}
+      <Panel>
+        <div className="ds-toolbar">
+          <span className="ds-toolbar__label">Detailed viewer</span>
+          <span className="ds-toolbar__divider" />
+          <span className="ds-toolbar__hint">
+            {canInspectGwPrecisely(zoom)
+              ? 'Click a GW marker to fill the next empty boundary.'
+              : 'Zoom past 600% to click individual GWs — or use the rail above.'}
+          </span>
+          <label className="ds-toolbar__hint" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+            <input
+              type="checkbox"
+              checked={includeUnmatchedGws}
+              onChange={(event) => {
+                setIncludeUnmatchedGws(event.target.checked);
+                setStartIndex(null);
+                setEndIndex(null);
+                setEditingSectionId(null);
+              }}
+            />
+            Use unpaired GW
+          </label>
+          <span className="ds-toolbar__spacer" />
+          <Button size="sm" variant="secondary" onClick={() => setViewerHeight((height) => Math.max(22, height - 6))}>
+            Shorter
+          </Button>
+          <span className="ds-readout">{viewerHeight} rem</span>
+          <Button size="sm" variant="secondary" onClick={() => setViewerHeight((height) => Math.min(60, height + 6))}>
+            Taller
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => setZoom(1)}>Fit</Button>
+          <div className="ds-btn-group">
+            <Button size="sm" variant="secondary" iconOnly aria-label="Zoom out" onClick={() => setZoom(clampSchematicZoom(zoom - 0.5))}>−</Button>
+            <span className="ds-readout">{Math.round(zoom * 100)}%</span>
+            <Button size="sm" variant="secondary" iconOnly aria-label="Zoom in" onClick={() => setZoom(clampSchematicZoom(zoom + 0.5))}>+</Button>
           </div>
-          <div
-            className="sectioning-light-viewer"
-            style={{ height: `${viewerHeight}rem` }}
-            aria-label="Resizable GW sectioning viewer"
-          >
-            {viewMode === 'schematic' ? (
-              <SectioningSchematic
-                features={features}
-                sections={displaySections}
-                zoom={zoom}
-                onZoomChange={setZoom}
-                selectedGWs={selectedGws}
-                onGwClick={handleGwClick}
-                onInspectGw={setInspectedGw}
-                unmatchedSelectionEnabled={includeUnmatchedGws}
-                selectedRange={selectedBoundaries.length === 2
-                  ? { startM: selectedBoundaries[0].newDistance, endM: selectedBoundaries[1].newDistance }
-                  : null}
-              />
-            ) : Array.isArray(config?.pipelineRoute) && config.pipelineRoute.length >= 2 ? (
-              <SectionMap sections={displaySections} features={features} selectedGWs={selectedGws} onGwClick={handleGwClick} drawnRoute={config.pipelineRoute} />
-            ) : (
-              <div className="sectioning-light-empty"><FiMap size={30} /><strong>Route coordinates not set</strong><span>GW View still works; the map is optional.</span></div>
+          <Button size="sm" variant="secondary" onClick={() => setZoom(MAX_SCHEMATIC_ZOOM)}>
+            {MAX_SCHEMATIC_ZOOM * 100}%
+          </Button>
+          <input
+            type="range"
+            className="ds-range"
+            style={{ width: '7rem' }}
+            aria-label="Zoom level"
+            min="0.5"
+            max={MAX_SCHEMATIC_ZOOM}
+            step="0.5"
+            value={zoom}
+            onChange={(event) => setZoom(clampSchematicZoom(Number(event.target.value)))}
+          />
+        </div>
+
+        <div
+          className="sectioning-light-viewer"
+          style={{ height: `${viewerHeight}rem` }}
+          aria-label="Resizable GW sectioning viewer"
+        >
+          {viewMode === 'schematic' ? (
+            <SectioningSchematic
+              features={features}
+              sections={displaySections}
+              zoom={zoom}
+              onZoomChange={setZoom}
+              selectedGWs={selectedGws}
+              onGwClick={handleGwClick}
+              onInspectGw={setInspectedGw}
+              unmatchedSelectionEnabled={includeUnmatchedGws}
+              selectedRange={startIndex !== null && endIndex !== null
+                ? {
+                    startM: selectableBoundaries[startIndex]?.newDistance ?? 0,
+                    endM: selectableBoundaries[endIndex]?.newDistance ?? 0,
+                  }
+                : null}
+            />
+          ) : Array.isArray(config?.pipelineRoute) && config.pipelineRoute.length >= 2 ? (
+            <SectionMap sections={displaySections} features={features} selectedGWs={selectedGws} onGwClick={handleGwClick} drawnRoute={config.pipelineRoute} />
+          ) : (
+            <div className="sectioning-light-empty"><FiMap size={30} /><strong>Route coordinates not set</strong><span>GW View still works; the map is optional.</span></div>
+          )}
+        </div>
+
+        {inspectedGw && <GwPositionCard feature={inspectedGw} onDismiss={() => setInspectedGw(null)} />}
+
+        <PanelBody className="ds-stack ds-stack--sm">
+          <div className="ds-row" style={{ justifyContent: 'space-between' }}>
+            <span className="ds-panel__eyebrow">Bends ({bendFeatures.length})</span>
+            <span className="ds-toolbar__hint">Inferred physical features</span>
+          </div>
+          <div className="sec-bend-grid">
+            {isLoadingMasterEvidence && <span className="ds-toolbar__hint">Loading bend locations from master data…</span>}
+            {bendFeatures.map((bend, index) => (
+              <span key={bend.id} className="sec-bend">
+                <i aria-hidden="true">◆</i>
+                <strong>BEND {String(index + 1).padStart(2, '0')}</strong>
+                <small>{(bend.dist / 1000).toFixed(2)} km · {bendAngleDeg(bend).toFixed(0)}°</small>
+              </span>
+            ))}
+            {!isLoadingMasterEvidence && bendFeatures.length === 0 && (
+              <span className="ds-toolbar__hint">No bends detected from master data yet.</span>
             )}
           </div>
-          {inspectedGw && <GwPositionCard feature={inspectedGw} onDismiss={() => setInspectedGw(null)} />}
-          <div className="sectioning-light-bends">
-            <div className="sectioning-light-subhead"><strong>Bends ({bendFeatures.length})</strong><span>Inferred physical features</span></div>
-            <div className="sectioning-light-bend-grid">
-              {isLoadingMasterEvidence && <span className="sectioning-light-muted">Loading bend locations from master data…</span>}
-              {bendFeatures.map((bend, index) => <div key={bend.id}><span>◆</span><strong>BEND {String(index + 1).padStart(2, '0')}</strong><small>{(bend.dist / 1000).toFixed(2)} km / {bendAngleDeg(bend).toFixed(0)}°</small></div>)}
-              {!isLoadingMasterEvidence && bendFeatures.length === 0 && <span className="sectioning-light-muted">No bends detected from master data yet.</span>}
-            </div>
-          </div>
-          <div className="sectioning-light-overview">
-            <strong>Overview</strong>
-            <span>{(features.stats.totalLength / 1000).toFixed(1)} km · {coverage.toFixed(1)}% covered by sections</span>
-            <div><i style={{ width: `${Math.min(100, Math.max(1, coverage))}%` }} /></div>
-          </div>
-        </div>
-      </div>
-
-      {selectedGws.length === 2 && (
-        <SectionComposer
-          draft={draft}
-          selectedGws={selectedGws}
-          selectedBoundaries={selectedBoundaries}
-          sectionTypes={SECTION_TYPES}
-          isEditing={editingSectionId !== null}
-          onDraftChange={(patch) => setDraft((current) => ({ ...current, ...patch }))}
-          onSave={applySelectedSection}
-          onCancel={closeComposer}
-        />
-      )}
+        </PanelBody>
+      </Panel>
 
       <SectionTable sections={sections} boundaries={allBoundaries} sectionTypes={SECTION_TYPES} onEdit={editSection} onDelete={deleteSection} />
 
-      {validationError && <p role="alert" className="mx-5 mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{validationError}</p>}
-      <div className="sectioning-light-footer">
-        <button onClick={onBack} className="flex items-center gap-2 rounded-xl px-5 py-3 font-medium text-gray-600 hover:bg-gray-50"><FiChevronLeft /> GW Matching</button>
-        <ShareSnapshotButton
-          kind="SECTIONING"
-          title={`Sectioning${activePair?.label ? ` · ${activePair.label}` : ''}`}
-          sourceRef={config?.sessionId ? `alignment-session:${config.sessionId}` : undefined}
-          rows={displaySections}
-          summary={[
-            { label: 'Coverage', value: `${coverage.toFixed(1)}%` },
-            { label: 'Locked GW', value: lockedGws.length },
-            { label: 'Missing in NEW', value: features.stats.missingGwCount },
-          ]}
-          notes={[
-            'Sections are frozen against the NEW spatial master at the time this link was created.',
-          ]}
-          disabled={Boolean(validationError)}
-          label="Share sectioning"
-        />
-        <button disabled={Boolean(validationError)} onClick={() => onNext({
-          matchingSections: allSections.map((section) => {
-            const isActivePair = sections.some((mine) => mine.id === section.id);
-            // Only the pair on screen has its boundaries resolvable right now;
-            // other pairs keep the distances resolved when they were edited.
-            return isActivePair ? resolveSectionDistances(section, allBoundaries) : section;
-          }),
-        })} className="flex items-center gap-2 rounded-xl bg-gray-900 px-6 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">Save &amp; Continue <FiChevronRight /></button>
-      </div>
+      {validationError && (
+        <Callout tone="danger" role="alert" icon={<FiAlertTriangle aria-hidden="true" />} title="Section layout is not valid">
+          {validationError}
+        </Callout>
+      )}
+
+      <ActionBar
+        back={
+          <Button variant="ghost" startIcon={<FiChevronLeft aria-hidden="true" />} onClick={onBack}>
+            GW matching
+          </Button>
+        }
+        center={
+          <ShareSnapshotButton
+            kind="SECTIONING"
+            title={`Sectioning${activePair?.label ? ` · ${activePair.label}` : ''}`}
+            sourceRef={config?.sessionId ? `alignment-session:${config.sessionId}` : undefined}
+            rows={displaySections}
+            summary={[
+              { label: 'Coverage', value: `${coverage.toFixed(1)}%` },
+              { label: 'Locked GW', value: lockedGws.length },
+              { label: 'Missing in NEW', value: features.stats.missingGwCount },
+            ]}
+            notes={[
+              'Sections are frozen against the NEW spatial master at the time this link was created.',
+            ]}
+            disabled={Boolean(validationError)}
+            label="Share sectioning"
+          />
+        }
+        next={
+          <Button
+            disabled={Boolean(validationError)}
+            endIcon={<FiChevronRight aria-hidden="true" />}
+            onClick={() => onNext({
+              matchingSections: allSections.map((section) => {
+                const isActivePair = sections.some((mine) => mine.id === section.id);
+                // Only the pair on screen has its boundaries resolvable right now;
+                // other pairs keep the distances resolved when they were edited.
+                return isActivePair ? resolveSectionDistances(section, allBoundaries) : section;
+              }),
+            })}
+          >
+            Save &amp; continue
+          </Button>
+        }
+      />
     </div>
   );
 }

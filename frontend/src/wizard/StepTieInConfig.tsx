@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { FiArrowRight, FiArrowLeft, FiCheckCircle, FiTarget, FiActivity, FiPlus, FiTrash2 } from 'react-icons/fi';
 import { apiFetch } from '../utils/api';
 import { pairTieIn, primaryRunPair, resolveRunPairs } from '../domain/runPairs';
+import { Button } from '../components/ds';
 
 interface StepTieInConfigProps {
   onNext: (data: any) => void;
@@ -567,17 +568,14 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
         )}
       </div>
 
-      <div className="p-6 bg-gray-50 border-t border-gray-200 flex justify-between items-center gap-4">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-2 px-6 py-2.5 text-gray-600 hover:text-gray-900 font-medium transition-colors"
-        >
-          <FiArrowLeft /> Back
-        </button>
+      <div className="ds-panel__footer" style={{ flexWrap: 'wrap' }}>
+        <Button variant="ghost" startIcon={<FiArrowLeft aria-hidden="true" />} onClick={onBack}>
+          Back
+        </Button>
         {/* A disabled Confirm button with no explanation reads as a broken app,
             which is exactly how the old dead-end presented itself. */}
         {!loading && !canContinue && (
-          <p className="flex-1 text-right text-sm text-gray-500" role="status">
+          <p className="ds-toolbar__hint" style={{ flex: '1 1 12rem', textAlign: 'right', margin: 0 }} role="status">
             {!activeResolved && selection === null
               ? 'Select one of the options above to continue.'
               : !activeResolved && selection === 'manual' && manualOffset === ''
@@ -587,13 +585,13 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                   : 'The selected option does not have valid evidence yet.'}
           </p>
         )}
-        <button
+        <Button
           onClick={handleContinue}
           disabled={loading || !canContinue}
-          className="flex items-center gap-2 px-8 py-2.5 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          endIcon={<FiArrowRight aria-hidden="true" />}
         >
-          Confirm & Continue <FiArrowRight />
-        </button>
+          Confirm &amp; continue
+        </Button>
       </div>
     </div>
   );

@@ -7,8 +7,10 @@ import StepExecution from './wizard/StepExecution';
 import StepUploadILI from './wizard/StepUploadILI';
 import StepTieInConfig from './wizard/StepTieInConfig';
 import StepMatchingSections from './wizard/StepMatchingSections';
+import { FiAlertTriangle, FiX } from 'react-icons/fi';
 import { apiFetch, ApiError } from './utils/api';
 import ConfirmDialog from './components/common/ConfirmDialog';
+import { Button } from './components/ds';
 import './styles/alignment-review.css';
 
 const WIZARD_PROGRESS_STORAGE_KEY = 'synapse_alignment_wizard_progress';
@@ -153,20 +155,18 @@ export default function AlignmentPage() {
     <div className={`alignment-workspace${currentStep?.id === 'gw' ? ' alignment-workspace--gw' : ''}`}>
       <div className="alignment-shell flex flex-col gap-5">
         {saveError && (
-          <div
-            ref={saveErrorRef}
-            role="alert"
-            className="sticky top-2 z-30 mx-4 flex items-start justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm md:mx-6 xl:mx-8"
-          >
-            <span>{saveError}</span>
-            <button
-              type="button"
+          <div ref={saveErrorRef} role="alert" className="ds-callout ds-callout--danger sticky top-2 z-30">
+            <FiAlertTriangle aria-hidden="true" />
+            <div className="ds-callout__body">{saveError}</div>
+            <Button
+              variant="ghost"
+              size="xs"
+              iconOnly
               onClick={() => setSaveError(null)}
               aria-label="Dismiss error message"
-              className="shrink-0 font-bold text-red-400 hover:text-red-700"
             >
-              ×
-            </button>
+              <FiX aria-hidden="true" />
+            </Button>
           </div>
         )}
         
@@ -177,13 +177,14 @@ export default function AlignmentPage() {
                 <div className="flex flex-wrap items-center gap-3">
                   <p className="alignment-eyebrow">Alignment workspace</p>
                   <span className="alignment-run-label" title={runLabel}>{runLabel}</span>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="xs"
                     onClick={() => setShowResetConfirm(true)}
-                    className="alignment-reset"
                     title="Clear current progress and start a new alignment run"
                   >
-                    Start New Run
-                  </button>
+                    Start new run
+                  </Button>
                 </div>
                 <h1 className="alignment-title">{currentStep?.name}</h1>
                 <p className="alignment-subtitle">{currentStep?.desc}. Verify the engineering evidence before continuing.</p>

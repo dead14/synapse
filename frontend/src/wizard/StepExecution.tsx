@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { FiCheckCircle, FiFileText } from 'react-icons/fi';
+import { FiAlertTriangle, FiCheckCircle, FiFileText, FiRefreshCw, FiChevronLeft } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
 import { getSocket } from '../utils/socket';
 import { apiFetch, ApiError } from '../utils/api';
+
+import { Button, Callout, Panel, PanelBody, PanelHeader } from '../components/ds';
 
 interface StepExecutionProps {
   onBack: () => void;
@@ -179,105 +181,105 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
   }, [config.algorithm, config.sessionId, config.sessionStatus, config.summaryData?.algorithm, configuredAlgorithm, retryToken]);
 
   return (
-    <div className="alignment-surface bg-white rounded-2xl p-6 sm:p-8 shadow-sm border border-gray-100 animate-fade-in flex flex-col gap-8">
-      
+    <div className="ds-stack ds-stack--lg animate-fade-in">
       {/* Execution log */}
-      <div className="flex flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.06)]">
-        <div className="flex h-11 items-center border-b border-gray-200 bg-gray-50 px-4">
-          <div className="flex gap-2">
-            <div className="w-3 h-3 rounded-full bg-red-500/80"></div>
-            <div className="w-3 h-3 rounded-full bg-yellow-500/80"></div>
-            <div className="w-3 h-3 rounded-full bg-green-500/80"></div>
-          </div>
-          <div className="mx-auto text-xs font-mono text-gray-500">alignment-server-v8.1</div>
+      <Panel>
+        <div className="ds-exec__chrome">
+          <span className="ds-exec__dots" aria-hidden="true"><i /><i /><i /></span>
+          <span className="ds-exec__title">alignment-server-v8.1</span>
         </div>
-        <div className="relative min-h-[280px] max-h-[350px] overflow-y-auto bg-slate-50/70 p-6 font-mono text-[13px] leading-relaxed">
+        <div className="ds-exec__log" role="log" aria-live="polite">
           {terminalLines.map((line, i) => {
-            let textColor = 'text-green-700';
-            if (line.includes('ERROR') || line.includes('anomali depth berkurang') || line.includes('clock-shift')) textColor = 'text-orange-700';
-            if (line.includes('SELESAI')) textColor = 'text-brand-700 font-bold';
-            if (line.startsWith('──')) textColor = 'text-gray-400';
-            
+            let tone = 'is-ok';
+            if (line.includes('ERROR') || line.includes('anomali depth berkurang') || line.includes('clock-shift')) tone = 'is-warn';
+            if (line.includes('SELESAI')) tone = 'is-done';
+            if (line.startsWith('──')) tone = 'is-rule';
+
             return (
-              <div key={i} className={`${textColor} mb-1`} style={{ animationFillMode: 'forwards' }}>
-                <span className="mr-2 text-gray-400">$</span>{line}
+              <div key={i} className={`ds-exec__line ${tone}`}>
+                <span aria-hidden="true">$</span>{line}
               </div>
             );
           })}
           {progress < 100 && (
-            <div className="mt-2 animate-pulse text-gray-400">
-              <span className="mr-2 text-gray-400">$</span>_
+            <div className="ds-exec__line is-rule ds-exec__caret">
+              <span aria-hidden="true">$</span>_
             </div>
           )}
         </div>
-        
-        {/* Integrated Progress Bar inside terminal block */}
-        <div className="px-6 pb-6 pt-2">
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-xs font-mono text-gray-500">Execution Progress</span>
-            <span className="text-xs font-mono font-bold text-brand-600">{progress}%</span>
+
+        <div className="ds-exec__progress">
+          <div className="ds-row" style={{ justifyContent: 'space-between' }}>
+            <span className="ds-panel__eyebrow">Execution progress</span>
+            <span className="ds-data" style={{ fontSize: 'var(--ds-t-xs)', fontWeight: 700, color: 'var(--ds-primary-ink)' }}>
+              {progress}%
+            </span>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
-            <div className="h-1.5 rounded-full bg-brand-500 transition-all duration-700 ease-out" style={{ width: `${progress}%` }} />
+          <div
+            className="ds-exec__track"
+            role="progressbar"
+            aria-valuenow={progress}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="Execution progress"
+          >
+            <i style={{ width: `${progress}%` }} />
           </div>
         </div>
-      </div>
-      
+      </Panel>
+
       {/* A failed job used to leave the operator on a dead terminal with no
           way back to the step that caused it. */}
       {failure && !showValidation && (
-        <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-5">
-          <h3 className="font-bold text-red-800">Alignment could not be started</h3>
-          <p className="mt-1 text-sm text-red-700">{failure}</p>
-          <div className="mt-4 flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={onBack}
-              className="rounded-xl border border-red-300 bg-white px-5 py-2.5 font-semibold text-red-700 transition-colors hover:bg-red-100"
-            >
-              Back to the previous step
-            </button>
-            <button
-              type="button"
-              onClick={() => setRetryToken((token) => token + 1)}
-              className="rounded-xl bg-red-600 px-5 py-2.5 font-semibold text-white transition-colors hover:bg-red-700"
-            >
-              Run it again
-            </button>
-          </div>
-        </div>
+        <Panel>
+          <PanelBody className="ds-stack">
+            <Callout tone="danger" role="alert" icon={<FiAlertTriangle aria-hidden="true" />} title="Alignment could not be started">
+              {failure}
+            </Callout>
+            <div className="ds-btn-group">
+              <Button variant="secondary" startIcon={<FiChevronLeft aria-hidden="true" />} onClick={onBack}>
+                Back to the previous step
+              </Button>
+              <Button
+                variant="danger-solid"
+                startIcon={<FiRefreshCw aria-hidden="true" />}
+                onClick={() => setRetryToken((token) => token + 1)}
+              >
+                Run it again
+              </Button>
+            </div>
+          </PanelBody>
+        </Panel>
       )}
 
-      {/* Physics Validation Results (Shows up when progress is 100%) */}
+      {/* Physics validation results, once the job reports 100% */}
       {showValidation && (
-        <div className="animate-fade-in-up">
-          <h3 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-600">
-              <FiCheckCircle size={18} />
+        <Panel className="animate-fade-in-up">
+          <PanelHeader
+            icon={<FiCheckCircle aria-hidden="true" />}
+            eyebrow="Stage complete"
+            title="Post-alignment validation results"
+            subtitle="GW locks, NEW-reference sections, and ordered anomaly matching have been processed."
+          />
+          <PanelBody className="ds-stack">
+            <Callout tone="success" icon={<FiCheckCircle aria-hidden="true" />} title="Alignment process completed successfully">
+              The dashboard only shows results from this job.
+            </Callout>
+            <div className="ds-actionbar" style={{ marginTop: 0 }}>
+              <span />
+              <div className="ds-actionbar__end">
+                <Button
+                  startIcon={<FiFileText aria-hidden="true" />}
+                  onClick={() => navigate(
+                    `/ili-comparison?sessionId=${config.sessionId || ''}${configuredAlgorithm === 'manual' ? '&mode=intervention' : ''}`,
+                  )}
+                >
+                  View full dashboard
+                </Button>
+              </div>
             </div>
-            Post-Alignment Validation Results
-          </h3>
-          
-          <div className="bg-white border border-green-100 rounded-2xl p-6 shadow-sm mb-8 text-center">
-            <h4 className="font-bold text-gray-800 mb-2">Alignment Process Completed Successfully</h4>
-            <p className="text-sm text-gray-600">
-              GW locks, NEW-reference sections, and ordered anomaly matching have
-              been processed. The dashboard only shows results from this job.
-            </p>
-          </div>
-          
-          <div className="flex gap-4 justify-end pt-4 border-t border-gray-100">
-            <button 
-                onClick={() => navigate(
-                  `/ili-comparison?sessionId=${config.sessionId || ''}${configuredAlgorithm === 'manual' ? '&mode=intervention' : ''}`,
-                )}
-                className="bg-brand-500 hover:bg-brand-600 text-white px-8 py-3 rounded-xl font-bold transition-all shadow-theme-md hover:shadow-theme-lg flex items-center gap-2"
-              >
-                <FiFileText size={18} />
-                View Full Dashboard
-            </button>
-          </div>
-        </div>
+          </PanelBody>
+        </Panel>
       )}
     </div>
   );

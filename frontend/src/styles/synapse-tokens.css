@@ -1,36 +1,41 @@
 /* Hallmark · genre: engineering control plane · tone: precise and operational
- * anchor: phosphor green · fingerprint: command bar + dense telemetry grid
+ * anchor: brand blue · fingerprint: command bar + dense telemetry grid
+ *
+ * These variables now mirror the design-system tokens in ds.css. Keeping the
+ * names lets the compatibility skin further down this file keep working, while
+ * every page that has not been reworked by hand inherits the same blue/slate
+ * palette as the DS components instead of the old phosphor-green scheme.
  */
 :root {
-  --syn-canvas: #eef1eb;
-  --syn-canvas-strong: #dfe5dc;
-  --syn-surface: #fbfcf9;
+  --syn-canvas: #f4f6fa;
+  --syn-canvas-strong: #eaeef6;
+  --syn-surface: #f9fafb;
   --syn-surface-raised: #ffffff;
-  --syn-ink: #151711;
-  --syn-ink-soft: #4f554b;
-  --syn-muted: #727a6d;
-  --syn-line: #d4d9d0;
-  --syn-line-strong: #b7beb2;
-  --syn-accent: #d9ee8a;
-  --syn-accent-soft: #eef5d2;
-  --syn-accent-strong: #8b9f3d;
-  --syn-lavender: #b39aff;
-  --syn-lavender-soft: #eee9ff;
-  --syn-disabled: #e8e8eb;
+  --syn-ink: #101828;
+  --syn-ink-soft: #344054;
+  --syn-muted: #667085;
+  --syn-line: #e4e7ec;
+  --syn-line-strong: #d0d5dd;
+  --syn-accent: #465fff;
+  --syn-accent-soft: #ecf3ff;
+  --syn-accent-strong: #2a31d8;
+  --syn-lavender: #7592ff;
+  --syn-lavender-soft: #f2f7ff;
+  --syn-disabled: #f2f4f7;
   --syn-danger: #b42318;
-  --syn-danger-soft: #fee9e6;
-  --syn-warning: #8a5200;
-  --syn-warning-soft: #fff2cc;
-  --syn-info: #155eef;
-  --syn-info-soft: #e8efff;
-  --syn-success: #087443;
-  --syn-success-soft: #e4f7ec;
-  --syn-radius-control: 0.75rem;
-  --syn-radius-panel: 1.25rem;
-  --syn-radius-feature: 1.75rem;
-  --syn-shadow: 0 18px 50px -42px rgb(18 24 14 / 55%);
-  --syn-font-sans: "Urbanist", "Segoe UI Variable", "Segoe UI", Helvetica, Arial, sans-serif;
-  --syn-font-data: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  --syn-danger-soft: #fef3f2;
+  --syn-warning: #b54708;
+  --syn-warning-soft: #fffaeb;
+  --syn-info: #465fff;
+  --syn-info-soft: #ecf3ff;
+  --syn-success: #027a48;
+  --syn-success-soft: #ecfdf3;
+  --syn-radius-control: 0.5rem;
+  --syn-radius-panel: 0.75rem;
+  --syn-radius-feature: 0.75rem;
+  --syn-shadow: 0 1px 3px rgb(16 24 40 / 8%), 0 1px 2px rgb(16 24 40 / 4%);
+  --syn-font-sans: Outfit, "Segoe UI Variable", "Segoe UI", Helvetica, Arial, sans-serif;
+  --syn-font-data: "Cascadia Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
 /* Engineer experience shell */
@@ -243,13 +248,20 @@
   background-color: var(--syn-accent-soft) !important;
 }
 
-.engine-main :where(.bg-blue-600, .bg-indigo-600, .bg-purple-600, .bg-orange-600) {
-  background-color: var(--syn-ink) !important;
+/* Primary actions are brand blue everywhere. The near-black mapping this rule
+ * used to apply is why the same CTA rendered blue on one step and black on the
+ * next once Tailwind's `bg-gray-900` buttons were mixed in. */
+.engine-main :where(.bg-blue-600, .bg-indigo-600, .bg-purple-600, .bg-orange-600, .bg-gray-900, .bg-slate-900, .bg-brand-500, .bg-brand-600) {
+  background-color: var(--syn-accent) !important;
   color: white !important;
 }
 
-.engine-main :where(.hover\:bg-blue-700:hover, .hover\:bg-indigo-700:hover, .hover\:bg-purple-700:hover, .hover\:bg-orange-700:hover) {
-  background-color: #2a2e24 !important;
+.engine-main :where(
+  .hover\:bg-blue-700:hover, .hover\:bg-indigo-700:hover, .hover\:bg-purple-700:hover,
+  .hover\:bg-orange-700:hover, .hover\:bg-gray-800:hover, .hover\:bg-slate-800:hover,
+  .hover\:bg-brand-600:hover
+) {
+  background-color: #3641f5 !important;
 }
 
 .engine-main :where(.border-indigo-100, .border-indigo-200, .border-blue-100, .border-brand-100, .border-brand-200) {
@@ -392,23 +404,23 @@
 }
 
 .results-tabs {
-  min-height: 3.75rem;
+  min-height: 2.4rem;
   align-items: stretch;
   background: var(--syn-surface) !important;
 }
 
 .results-tabs button:not(.results-tab) {
-  min-height: 2.15rem;
-  padding: 0.4rem 0.65rem !important;
-  font-size: 0.68rem !important;
+  min-height: 1.8rem;
+  padding: 0.3rem 0.55rem !important;
+  font-size: 0.66rem !important;
 }
 
 .results-tab {
-  min-height: 3.75rem;
+  min-height: 2.4rem;
   border-bottom-width: 2px !important;
-  padding-inline: 1rem !important;
+  padding-inline: 0.7rem !important;
   color: var(--syn-muted) !important;
-  font-size: 0.78rem !important;
+  font-size: 0.72rem !important;
   font-weight: 750 !important;
 }
 
@@ -464,20 +476,20 @@
 }
 
 .results-filters {
-  gap: 0.5rem !important;
+  gap: 0.35rem !important;
   background: var(--syn-surface) !important;
   border-color: var(--syn-line) !important;
-  padding: 0.6rem 0.75rem !important;
+  padding: 0.35rem 0.65rem !important;
 }
 
 .results-filters label {
-  min-height: 2rem;
-  gap: 0.4rem !important;
+  min-height: 1.65rem;
+  gap: 0.3rem !important;
   border: 1px solid transparent;
-  border-radius: 0.4rem;
-  padding: 0.35rem 0.55rem;
+  border-radius: 0.35rem;
+  padding: 0.2rem 0.45rem;
   color: var(--syn-ink-soft);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 700;
 }
 
@@ -492,24 +504,25 @@
 }
 
 .results-toolbar {
-  min-height: 3.5rem;
-  gap: 0.75rem;
+  min-height: 2.4rem;
+  gap: 0.5rem;
   border-color: var(--syn-line) !important;
-  padding: 0.65rem 0.75rem !important;
+  padding: 0.35rem 0.65rem !important;
 }
 
 .results-toolbar > div:first-child {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
   color: var(--syn-info);
 }
 
 .results-toolbar input[type='text'] {
-  width: min(20rem, 36vw);
-  min-height: 2.5rem;
-  border-radius: 0.5rem !important;
-  padding-left: 2.25rem !important;
+  width: min(14rem, 28vw);
+  min-height: 1.85rem;
+  border-radius: 0.4rem !important;
+  padding-left: 1.85rem !important;
+  font-size: 0.72rem !important;
 }
 
 .results-toolbar__reset {
@@ -547,26 +560,26 @@
 }
 
 .results-table th {
-  min-height: 3.5rem;
-  padding: 0.55rem 0.65rem !important;
+  min-height: 2.5rem;
+  padding: 0.3rem 0.5rem !important;
   color: var(--syn-muted) !important;
-  font-size: 0.6rem !important;
-  line-height: 1.25;
+  font-size: 0.58rem !important;
+  line-height: 1.2;
   white-space: normal !important;
   vertical-align: top;
 }
 
 .results-table th input {
-  min-height: 1.55rem !important;
+  min-height: 1.35rem !important;
   border-color: var(--syn-line) !important;
   background: var(--syn-surface-raised) !important;
-  padding: 0.25rem 0.4rem !important;
-  font: 0.56rem var(--syn-font-data) !important;
+  padding: 0.2rem 0.35rem !important;
+  font: 0.55rem var(--syn-font-data) !important;
 }
 
 .results-table td {
-  height: 1.9rem;
-  padding: 0.45rem 0.65rem !important;
+  height: 1.5rem;
+  padding: 0.25rem 0.5rem !important;
   border-color: var(--syn-line) !important;
   color: var(--syn-ink-soft);
   text-align: center !important;
@@ -824,30 +837,22 @@ body {
   letter-spacing: -0.025em;
 }
 
+/* Legacy button classes are kept so untouched call sites still render, but they
+ * now resolve to the same geometry and palette as `.ds-btn`. */
 .syn-action,
 .syn-btn {
   display: inline-flex;
-  min-height: 2.75rem;
+  min-height: 2.375rem;
   align-items: center;
   justify-content: center;
-  gap: 0.55rem;
+  gap: 0.4rem;
   border: 1px solid transparent;
   border-radius: var(--syn-radius-control);
-  padding: 0.65rem 1rem;
-  font-size: 0.8125rem;
-  font-weight: 700;
+  padding: 0 0.875rem;
+  font-size: 0.75rem;
+  font-weight: 600;
   line-height: 1;
-  transition: transform 140ms ease, background-color 140ms ease, border-color 140ms ease;
-}
-
-.syn-action:hover:not(:disabled),
-.syn-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-}
-
-.syn-action:active:not(:disabled),
-.syn-btn:active:not(:disabled) {
-  transform: translateY(0);
+  transition: background-color 130ms ease, border-color 130ms ease, color 130ms ease;
 }
 
 .syn-action:disabled,
@@ -860,22 +865,24 @@ body {
 }
 
 .syn-action--ink {
-  background: #151711;
+  border-color: var(--syn-accent);
+  background: var(--syn-accent);
   color: #ffffff;
 }
 
 .syn-action--ink:hover:not(:disabled) {
-  background: #2a2e24;
+  border-color: #3641f5;
+  background: #3641f5;
 }
 
 .syn-action--signal {
-  border-color: #b7ec27;
+  border-color: var(--syn-accent);
   background: var(--syn-accent);
-  color: #10120d;
+  color: #ffffff;
 }
 
 .syn-action--signal:hover:not(:disabled) {
-  background: #d7ff70;
+  background: #3641f5;
 }
 
 .syn-action--outline {
@@ -890,57 +897,47 @@ body {
 }
 
 .syn-btn--solid,
-.syn-btn--ink {
-  background: #171717;
+.syn-btn--ink,
+.syn-btn--lavender,
+.syn-btn--lime {
+  border-color: var(--syn-accent);
+  background: var(--syn-accent);
   color: #ffffff;
 }
 
 .syn-btn--solid:hover:not(:disabled),
-.syn-btn--ink:hover:not(:disabled) {
-  background: #303030;
-}
-
-.syn-btn--lavender {
-  background: var(--syn-lavender);
-  color: #17151f;
-}
-
-.syn-btn--lavender:hover:not(:disabled) {
-  background: #c2adff;
-}
-
-.syn-btn--lime {
-  border-color: #aabf60;
-  background: var(--syn-accent);
-  color: #171a12;
-}
-
+.syn-btn--ink:hover:not(:disabled),
+.syn-btn--lavender:hover:not(:disabled),
 .syn-btn--lime:hover:not(:disabled) {
-  background: #e5f5a9;
+  border-color: #3641f5;
+  background: #3641f5;
 }
 
 .syn-btn--outline {
-  border-color: #1b1b1d;
-  background: #ffffff;
-  color: #171717;
+  border-color: var(--syn-line-strong);
+  background: var(--syn-surface-raised);
+  color: var(--syn-ink-soft);
 }
 
 .syn-btn--outline:hover:not(:disabled) {
-  background: #f0eff4;
+  border-color: #c2d6ff;
+  background: var(--syn-lavender-soft);
+  color: var(--syn-accent-strong);
 }
 
 .syn-btn--ghost {
   border-color: transparent;
   background: transparent;
-  color: var(--syn-ink);
+  color: var(--syn-muted);
 }
 
 .syn-btn--ghost:hover:not(:disabled) {
-  background: var(--syn-lavender-soft);
+  background: var(--syn-disabled);
+  color: var(--syn-ink);
 }
 
-.syn-btn--sm { min-height: 2.15rem; padding: 0.5rem 0.75rem; font-size: 0.7rem; }
-.syn-btn--lg { min-height: 3.1rem; padding: 0.8rem 1.25rem; font-size: 0.88rem; }
+.syn-btn--sm { min-height: 2rem; padding: 0 0.6875rem; font-size: 0.6875rem; }
+.syn-btn--lg { min-height: 2.75rem; padding: 0 1.25rem; font-size: 0.8125rem; }
 
 .syn-card {
   border: 1px solid #dedde3;

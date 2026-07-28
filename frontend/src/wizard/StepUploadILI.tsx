@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettings, FiShield, FiPlus } from 'react-icons/fi';
+import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettings, FiShield, FiPlus, FiDownload, FiArrowRight } from 'react-icons/fi';
 import { apiFetch, apiUrl } from '../utils/api';
+import { Button, LinkButton } from '../components/ds';
 import { useToast } from '../components/common/ToastProvider';
 import { formatIngestionImportError } from '../domain/ingestionError';
 import {
@@ -293,27 +294,23 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
             <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Inspection intake</h1>
             <p className="mt-2 text-sm leading-6 text-slate-500 sm:text-base">Add the inspection runs that will be compared, then provide the pipeline context for a traceable alignment.</p>
           </div>
-          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
-          <a 
-            href={apiUrl('/api/download-template')}
-            target="_blank"
-            rel="noreferrer"
-            className="alignment-intake__action alignment-intake__action--secondary"
-          >
-            Download Excel Template
-          </a>
-          <button 
-            onClick={handleInitialize}
-            disabled={!allFilesUploaded || isProcessing}
-            className={`alignment-intake__action alignment-intake__action--primary group ${allFilesUploaded && !isProcessing ? '' : 'is-disabled'}`}
-          >
-            {isProcessing ? processingLabel || 'Importing data...' : 'Initialize Alignment'}
-            {allFilesUploaded && !isProcessing && (
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/20 transition-transform group-hover:translate-x-1">
-                →
-              </span>
-            )}
-          </button>
+          <div className="ds-btn-group">
+            <LinkButton
+              variant="secondary"
+              href={apiUrl('/api/download-template')}
+              target="_blank"
+              rel="noreferrer"
+              startIcon={<FiDownload aria-hidden="true" />}
+            >
+              Download Excel template
+            </LinkButton>
+            <Button
+              onClick={handleInitialize}
+              disabled={!allFilesUploaded || isProcessing}
+              endIcon={allFilesUploaded && !isProcessing ? <FiArrowRight aria-hidden="true" /> : undefined}
+            >
+              {isProcessing ? processingLabel || 'Importing data…' : 'Initialize alignment'}
+            </Button>
           </div>
         </div>
       </section>
@@ -337,16 +334,16 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
             {isExpanded('asset') && (
               <div className="alignment-config-panel__body grid grid-cols-1 sm:grid-cols-2">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Pipeline Name (Session Name)</label>
-                  <input type="text" value={sessionName} onChange={(e) => setSessionName(e.target.value)} className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none transition-all"   placeholder="e.g. SMR-SBY Gas Line" />
+                  <label className="ds-field__label">Pipeline Name (Session Name)</label>
+                  <input type="text" value={sessionName} onChange={(e) => setSessionName(e.target.value)} className="ds-input" placeholder="e.g. SMR-SBY Gas Line" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Segment Route</label>
-                  <input type="text" className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none transition-all"   placeholder="e.g. Station A - Station B" />
+                  <label className="ds-field__label">Segment Route</label>
+                  <input type="text" className="ds-input" placeholder="e.g. Station A - Station B" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Environment</label>
-                  <select className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white transition-all"  >
+                  <label className="ds-field__label">Environment</label>
+                  <select className="ds-select" >
                     <option>Onshore</option>
                     <option>Offshore</option>
                     <option>Subsea</option>
@@ -354,12 +351,12 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Length (km)</label>
-                  <input type="number" className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none transition-all"   placeholder="150" />
+                  <label className="ds-field__label">Length (km)</label>
+                  <input type="number" className="ds-input" placeholder="150" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Product Medium</label>
-                  <select className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white transition-all"  >
+                  <label className="ds-field__label">Product Medium</label>
+                  <select className="ds-select" >
                     <option>Natural Gas (Dry)</option>
                     <option>Natural Gas (Wet)</option>
                     <option>Crude Oil</option>
@@ -368,8 +365,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">MAOP (psi)</label>
-                  <input type="number" className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none transition-all"   placeholder="e.g. 1200" />
+                  <label className="ds-field__label">MAOP (psi)</label>
+                  <input type="number" className="ds-input" placeholder="e.g. 1200" />
                 </div>
               </div>
             )}
@@ -390,8 +387,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
             {isExpanded('specs') && (
               <div className="alignment-config-panel__body grid grid-cols-1 sm:grid-cols-2">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Outer Diameter (OD)</label>
-                  <select className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white transition-all"  >
+                  <label className="ds-field__label">Outer Diameter (OD)</label>
+                  <select className="ds-select" >
                     <option>10 inch</option>
                     <option>12 inch</option>
                     <option>24 inch</option>
@@ -399,12 +396,12 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Nominal WT (mm)</label>
-                  <input type="number" step="0.01" className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none transition-all"   placeholder="e.g. 12.7" />
+                  <label className="ds-field__label">Nominal WT (mm)</label>
+                  <input type="number" step="0.01" className="ds-input" placeholder="e.g. 12.7" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Material Grade</label>
-                  <select className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white transition-all"  >
+                  <label className="ds-field__label">Material Grade</label>
+                  <select className="ds-select" >
                     <option>API 5L X42</option>
                     <option>API 5L X52</option>
                     <option>API 5L X60</option>
@@ -413,8 +410,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Seam Type</label>
-                  <select className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white transition-all"  >
+                  <label className="ds-field__label">Seam Type</label>
+                  <select className="ds-select" >
                     <option>SMLS (Seamless)</option>
                     <option>ERW</option>
                     <option>DSAW</option>
@@ -422,8 +419,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">External Coating</label>
-                  <select className="w-full rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none bg-white transition-all"  >
+                  <label className="ds-field__label">External Coating</label>
+                  <select className="ds-select" >
                     <option>3LPE</option>
                     <option>FBE</option>
                     <option>Coal Tar Enamel (CTE)</option>
@@ -431,10 +428,10 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Inst. Year / Loc Class</label>
+                  <label className="ds-field__label">Inst. Year / Loc Class</label>
                   <div className="flex gap-2">
-                    <input type="text" className="w-1/2 rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 outline-none transition-all"   placeholder="Year" />
-                    <select className="w-1/2 rounded-full border border-gray-300 px-5 py-2.5 text-sm focus:border-brand-500 outline-none bg-white transition-all"  >
+                    <input type="text" className="ds-input" placeholder="Year" />
+                    <select className="ds-select" >
                       <option>Class 1</option>
                       <option>Class 2</option>
                       <option>Class 3</option>
@@ -460,18 +457,20 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                   </h3>
                 </div>
                 {datasets.length < 6 && (
-                  <button
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    startIcon={<FiPlus aria-hidden="true" />}
                     onClick={() => setDatasets([...datasets, { id: Date.now(), year: '', vendor: '', file: null }])}
-                    className="alignment-add-run"
                   >
-                    <FiPlus size={14} /> Add another ILI data
-                  </button>
+                    Add another ILI data
+                  </Button>
                 )}
               </div>
               <div className="flex items-center gap-3">
                 <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Strategy</label>
                 <select
-                  className="alignment-strategy-select"
+                  className="ds-select ds-select--sm"
                   value={algorithm}
                   onChange={(e) => setAlgorithm(e.target.value)}
                 >
@@ -568,7 +567,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                           onChange={(event) => setDatasets((current) => current.map((item, itemIndex) => (
                             itemIndex === index ? { ...item, year: event.target.value } : item
                           )))}
-                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-brand-500"
+                          className="ds-input" style={{ marginTop: '0.3rem' }}
                           placeholder="2026"
                         />
                       </label>
@@ -581,7 +580,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                           onChange={(event) => setDatasets((current) => current.map((item, itemIndex) => (
                             itemIndex === index ? { ...item, vendor: event.target.value } : item
                           )))}
-                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-brand-500"
+                          className="ds-input" style={{ marginTop: '0.3rem' }}
                           placeholder="e.g. ROSEN"
                         />
                       </label>
