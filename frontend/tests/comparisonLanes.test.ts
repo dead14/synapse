@@ -5,6 +5,7 @@ import {
   buildComparisonLanes,
   buildProjector,
   classifyFeatureKind,
+  defaultComparisonAxis,
   featureAxisValue,
   formatClockLabel,
   laneFeaturesInWindow,
@@ -76,6 +77,25 @@ test('a single pair produces two lanes, one per inspection run', () => {
   assert.deepEqual(model.lanes.map((lane) => lane.label), ['ILI 2018', 'ILI 2021']);
   assert.equal(model.lanes[1].isMaster, true);
   assert.deepEqual(model.unalignedRuns, []);
+});
+
+test('a fully aligned run comparison opens on the shared master axis', () => {
+  const model = buildComparisonLanes(twoRunRows);
+
+  assert.equal(defaultComparisonAxis(model.lanes), 'aligned');
+});
+
+test('a comparison without complete alignment evidence opens on reported LD', () => {
+  const rows: ComparisonRow[] = [
+    anomalyRow({
+      'Identif. OLD': 'A-OLD', 'Identif. NEW': '-',
+      'Original Log Dist OLD (m)': 10, 'Log Dist OLD (m)': '-',
+      'Original Log Dist NEW (m)': '-', 'Log Dist NEW (m)': '-',
+    }),
+  ];
+  const model = buildComparisonLanes(rows);
+
+  assert.equal(defaultComparisonAxis(model.lanes), 'raw');
 });
 
 test('each lane keeps its own reported log distance and never borrows the other run\'s', () => {
