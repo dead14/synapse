@@ -4,7 +4,7 @@ import test from 'node:test';
 import {
   alignmentDisplayValue,
   isAlignmentDisplayMetadata,
-  sortAlignmentRowsByDisplayedLogDistance,
+  sortAlignmentRowsByMasterAxis,
 } from '../src/utils/alignmentDisplay.ts';
 import { createExcelExportRows } from '../src/utils/alignmentExport.ts';
 
@@ -32,6 +32,22 @@ test('falls back to the mapped value when the original distance is unavailable',
   assert.equal(alignmentDisplayValue(row, 'Log Dist OLD (m)'), 3905.57);
 });
 
+test('exposes the canonical master-axis coordinate without replacing reported LD', () => {
+  const oldOnly = {
+    'Log Dist OLD (m)': 1931.918,
+    'Original Log Dist OLD (m)': 67.648,
+    'Log Dist NEW (m)': '-',
+  };
+  const newOnly = {
+    'Log Dist OLD (m)': '-',
+    'Log Dist NEW (m)': 1931.917,
+  };
+
+  assert.equal(alignmentDisplayValue(oldOnly, 'Master Axis (m)'), 1931.918);
+  assert.equal(alignmentDisplayValue(oldOnly, 'Log Dist OLD (m)'), 67.648);
+  assert.equal(alignmentDisplayValue(newOnly, 'Master Axis (m)'), 1931.917);
+});
+
 test('keeps original-distance metadata out of selectable result columns', () => {
   assert.equal(isAlignmentDisplayMetadata('Original Log Dist OLD (m)'), true);
   assert.equal(isAlignmentDisplayMetadata('Original Log Dist NEW (m)'), true);
@@ -51,7 +67,7 @@ test('keeps mapped distances in export because original distance is display-only
   assert.equal(Object.hasOwn(exportRow, 'Original Log Dist OLD (m)'), false);
 });
 
-test('sorts result rows by the displayed NEW master log distance', () => {
+test('sorts matched and NEW-only rows by the canonical master log distance', () => {
   const rows = [
     { 'Log Dist OLD (m)': '-', 'Log Dist NEW (m)': 1893.527 },
     { 'Log Dist OLD (m)': 1893.650, 'Original Log Dist OLD (m)': 29.241, 'Log Dist NEW (m)': 1893.903 },
@@ -63,7 +79,7 @@ test('sorts result rows by the displayed NEW master log distance', () => {
     { 'Log Dist OLD (m)': '-', 'Log Dist NEW (m)': 1893.932 },
   ];
 
-  const sorted = sortAlignmentRowsByDisplayedLogDistance(rows);
+  const sorted = sortAlignmentRowsByMasterAxis(rows);
 
   assert.deepEqual(
     sorted.map((row) => alignmentDisplayValue(row, 'Log Dist NEW (m)')),
@@ -71,17 +87,29 @@ test('sorts result rows by the displayed NEW master log distance', () => {
   );
 });
 
-test('places OLD-only rows after the ordered NEW master timeline', () => {
+test('interleaves unmatched OLD and NEW rows on the canonical master axis', () => {
   const rows = [
-    { id: 'old-2', 'Log Dist OLD (m)': 2, 'Log Dist NEW (m)': '-' },
-    { id: 'new-2', 'Log Dist OLD (m)': '-', 'Log Dist NEW (m)': 20 },
-    { id: 'old-1', 'Log Dist OLD (m)': 1, 'Log Dist NEW (m)': '-' },
-    { id: 'new-1', 'Log Dist OLD (m)': '-', 'Log Dist NEW (m)': 10 },
+    {
+      id: 'HU_CPA_2024-28062',
+      'Log Dist OLD (m)': 1931.918,
+      'Original Log Dist OLD (m)': 67.648,
+      'Log Dist NEW (m)': '-',
+    },
+    {
+      id: 'HU_CPA_2026-33845',
+      'Log Dist OLD (m)': '-',
+      'Log Dist NEW (m)': 1932.134,
+    },
+    {
+      id: 'HU_CPA_2026-33844',
+      'Log Dist OLD (m)': '-',
+      'Log Dist NEW (m)': 1931.917,
+    },
   ];
 
   assert.deepEqual(
-    sortAlignmentRowsByDisplayedLogDistance(rows).map((row) => row.id),
-    ['new-1', 'new-2', 'old-1', 'old-2'],
+    sortAlignmentRowsByMasterAxis(rows).map((row) => row.id),
+    ['HU_CPA_2026-33844', 'HU_CPA_2024-28062', 'HU_CPA_2026-33845'],
   );
 });
 
@@ -95,7 +123,7 @@ test('sorting preserves a pre-assigned __origIdx so each row keeps pointing at i
     { id: 'b', 'Log Dist NEW (m)': 20 },
   ].map((row, index) => ({ ...row, __origIdx: index }));
 
-  const sorted = sortAlignmentRowsByDisplayedLogDistance(rows);
+  const sorted = sortAlignmentRowsByMasterAxis(rows);
 
   assert.deepEqual(sorted.map((row) => row.id), ['a', 'b', 'c']);
   assert.deepEqual(sorted.map((row) => row.__origIdx), [1, 2, 0]);
@@ -112,7 +140,7 @@ test('sorting does not invent or renumber identity for equal-distance rows', () 
     { id: 'second', 'Log Dist NEW (m)': 5 },
   ].map((row, index) => ({ ...row, __origIdx: index }));
 
-  const sorted = sortAlignmentRowsByDisplayedLogDistance(rows);
+  const sorted = sortAlignmentRowsByMasterAxis(rows);
 
   // Ties keep input order (stable), and identities ride along untouched.
   assert.deepEqual(sorted.map((row) => row.id), ['first', 'second']);
