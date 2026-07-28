@@ -55,6 +55,16 @@ function validatePipelineData(value) {
  */
 function normalizeAlignmentExportPayload(body, { maxRows }) {
     if (!isRecord(body)) throw contractError('Export payload must be an object');
+    if (body.sessionId !== undefined) {
+        const sessionId = Number(body.sessionId);
+        if (!Number.isSafeInteger(sessionId) || sessionId <= 0) {
+            throw contractError('sessionId must be a positive integer');
+        }
+        return {
+            sessionId,
+            pipelineData: validatePipelineData(body.pipelineData),
+        };
+    }
     if (Array.isArray(body.data) && body.comparison === undefined) {
         return validateRows(body.data, 'data', maxRows);
     }

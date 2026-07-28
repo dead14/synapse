@@ -28,6 +28,7 @@ const runLimiter = strictRouteLimiter('run', 'RATE_LIMIT_RUN_MAX', 10);
 const alignDtwLimiter = strictRouteLimiter('align-dtw', 'RATE_LIMIT_ALIGN_DTW_MAX', 30);
 const tieInOffsetLimiter = strictRouteLimiter('estimate-tiein-offset', 'RATE_LIMIT_TIEIN_OFFSET_MAX', 30);
 const iliResultsLimiter = strictRouteLimiter('ili-results', 'RATE_LIMIT_ILI_RESULTS_MAX', 60);
+const exportExcelLimiter = strictRouteLimiter('export-excel', 'RATE_LIMIT_EXPORT_EXCEL_MAX', 10);
 
 const allowedExtensions = new Set(['.csv', '.xlsx']);
 const allowedMimeTypes = new Set([
@@ -70,7 +71,9 @@ router.delete('/pipeline-runs/:id', authMiddleware, alignmentController.deletePi
 router.get('/ili-results', authMiddleware, iliResultsLimiter, alignmentController.getIliResults);
 router.get('/results/:runId', authMiddleware, alignmentController.getAlignmentResults);
 router.get('/results/:runId/page', authMiddleware, alignmentController.getAlignmentResultsPage);
-router.post('/alignment/export-excel', authMiddleware, alignmentController.exportExcel);
+router.post('/alignment/export-excel', authMiddleware, exportExcelLimiter, alignmentController.exportExcel);
+router.get('/alignment/exports/:exportId', authMiddleware, alignmentController.getExcelExportJob);
+router.get('/alignment/exports/:exportId/download', authMiddleware, alignmentController.downloadExcelExport);
 router.get('/job/:jobId/result', authMiddleware, alignmentController.getJobResult);
 
 module.exports = router;

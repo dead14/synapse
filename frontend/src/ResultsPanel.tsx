@@ -3,7 +3,12 @@ import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, Fi
 import { apiFetch, apiUrl } from './utils/api';
 import Modal from './components/common/Modal';
 import { useToast } from './components/common/ToastProvider';
-import { createAlignmentExportPayload } from './utils/alignmentExport';
+import {
+  createAlignmentExportPayload,
+  createAlignmentSessionExportPayload,
+  waitForAlignmentExport,
+  type AlignmentExportJob,
+} from './utils/alignmentExport';
 import {
   alignmentResultColumns,
   alignmentDisplayValue,
@@ -355,6 +360,7 @@ export default function ResultsPanel({
 
   const toast = useToast();
   const [isExporting, setIsExporting] = useState(false);
+  const [exportStatus, setExportStatus] = useState('');
   const [activeTab, setActiveTab] = useState('Results');
   const [radioFilter, setRadioFilter] = useState('All');
   const [unmatchedOld, setUnmatchedOld] = useState(false);
@@ -749,22 +755,23 @@ export default function ResultsPanel({
   }, [selectedRowIdx, sortedData]);
 
   const exportToExcel = async () => {
-    const includedRows = includedInterventionRows(
-      Array.isArray(exportData) ? exportData : data,
-    );
-    if (includedRows.length === 0) return;
+    if (resultRowCount === 0) return;
     setIsExporting(true);
+    setExportStatus('Starting export');
     try {
+      const payload = sessionId
+        ? createAlignmentSessionExportPayload(sessionId, pipelineData || {})
+        : createAlignmentExportPayload(
+          includedInterventionRows(Array.isArray(exportData) ? exportData : data),
+          pipelineData || {},
+        );
       const response = await fetch(apiUrl('/api/alignment/export-excel'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         credentials: 'include',
-        body: JSON.stringify(createAlignmentExportPayload(
-          includedRows,
-          pipelineData || {},
-        )),
+        body: JSON.stringify(payload),
       });
       
       if (!response.ok) {
@@ -774,7 +781,35 @@ export default function ResultsPanel({
           : payload?.error?.message;
         throw new Error(message || `Failed to generate Excel file (${response.status})`);
       }
-      
+
+      if (response.status === 202) {
+        const queued = await response.json() as AlignmentExportJob;
+        if (!queued.exportId) throw new Error('Export job did not return an identifier.');
+        setExportStatus(queued.message || 'Preparing rows');
+        await waitForAlignmentExport(
+          async () => {
+            const status = await apiFetch<AlignmentExportJob>(
+              `/api/alignment/exports/${encodeURIComponent(queued.exportId)}`,
+            );
+            setExportStatus(status.message || 'Building workbook');
+            return status;
+          },
+          () => new Promise((resolve) => window.setTimeout(resolve, 2_000)),
+        );
+        // Let the browser download manager stream large workbooks directly to
+        // disk. Fetching a 500k-row file into a Blob would allocate another
+        // ~140 MB in the page before the download even starts.
+        const link = document.createElement('a');
+        link.href = apiUrl(
+          `/api/alignment/exports/${encodeURIComponent(queued.exportId)}/download`,
+        );
+        link.download = 'synapse_alignment_report.xlsx';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
+
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       
@@ -790,6 +825,7 @@ export default function ResultsPanel({
       toast.error(err instanceof Error ? err.message : 'Failed to export the Excel file.');
     } finally {
       setIsExporting(false);
+      setExportStatus('');
     }
   };
 
@@ -883,7 +919,7 @@ export default function ResultsPanel({
             <>
               <button onClick={exportToExcel} disabled={isExporting || activeTab === 'Excluded'} className="syn-btn syn-btn--sm syn-btn--lime">
                 <FiDownload size={14} />
-                {isExporting ? 'Exporting...' : 'Excel · 3 sheets'}
+                {isExporting ? (exportStatus || 'Exporting...') : 'Excel · 3 sheets'}
               </button>
               <ShareSnapshotButton
                 kind="ILI_ALIGNMENT"

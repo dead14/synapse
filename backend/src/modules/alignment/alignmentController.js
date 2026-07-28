@@ -13,6 +13,8 @@ const {
     createAlignmentJob,
     getLatestAlignmentJob,
     getOwnedAlignmentJob,
+    findOwnedAlignmentExport,
+    iterateOwnedAlignmentExportRows,
     listOwnedAlignmentResultPage,
     serializeAlignmentJob,
     updateAlignmentJob,
@@ -68,8 +70,18 @@ const {
     runDtwRequest,
     runTieInRequest,
 } = require('./pythonWorkers');
-const { createExcelExport } = require('./exportService');
+const { createExcelExport, createSessionExcelExport } = require('./exportService');
 const { normalizeAlignmentExportPayload } = require('./exportContract');
+const {
+    createExportInterventionCollector,
+    transformExportRow,
+} = require('./exportInterventions');
+const {
+    claimOwnedExportDownload,
+    finishExportDownload,
+    getOwnedExportJob,
+    startExportJob,
+} = require('./exportJobs');
 
 // The DTW/tie-in worker lifecycle lives in pythonWorkers.js; the re-exports
 // keep the import path stable for consumers outside this module
@@ -78,7 +90,7 @@ exports.startPythonWorkers = startPythonWorkers;
 exports.stopPythonWorkers = stopPythonWorkers;
 exports.getPythonWorkerStates = getPythonWorkerStates;
 
-const MAX_EXPORT_ROWS = Number(process.env.MAX_EXPORT_ROWS) || 100_000;
+const MAX_EXPORT_ROWS = Number(process.env.MAX_EXPORT_ROWS) || 500_000;
 const CONTROLLED_ALIGNMENT_ERROR_CODES = new Set([
     'INVALID_TIEIN_TRANSFORM',
     'PARTIAL_RUN_TIEIN_REQUIRED',
@@ -1008,7 +1020,7 @@ exports.deletePipelineRun = async (req, res) => {
     }
 };
 
-exports.exportExcel = async (req, res) => {
+exports.exportExcel = async (req, res, next) => {
     let payload;
     try {
         payload = normalizeAlignmentExportPayload(req.body, { maxRows: MAX_EXPORT_ROWS });
@@ -1022,7 +1034,106 @@ exports.exportExcel = async (req, res) => {
 
     let excelExport;
     try {
-        excelExport = await createExcelExport(payload);
+        if (payload.sessionId) {
+            const session = await findOwnedSession(pool, payload.sessionId, req.user.orgId);
+            if (!session) {
+                return res.status(404).json({
+                    error: 'Alignment session not found',
+                    code: 'ALIGNMENT_SESSION_NOT_FOUND',
+                });
+            }
+            const descriptor = await findOwnedAlignmentExport(
+                pool,
+                payload.sessionId,
+                req.user.orgId,
+            );
+            if (!descriptor) {
+                return res.status(404).json({
+                    error: 'Completed alignment result not found',
+                    code: 'ALIGNMENT_RESULT_NOT_FOUND',
+                });
+            }
+            if (descriptor.rowCount > MAX_EXPORT_ROWS) {
+                return res.status(413).json({
+                    error: `Export is limited to ${MAX_EXPORT_ROWS} rows per sheet`,
+                    code: 'EXPORT_TOO_LARGE',
+                });
+            }
+
+            const exportJob = startExportJob({
+                orgId: req.user.orgId,
+                userId: req.user.id,
+                rowCount: descriptor.rowCount,
+                run: async (reportProgress) => {
+                    const interventions = Array.isArray(session.params_json?.interventions)
+                        ? session.params_json.interventions
+                        : [];
+                    let interventionPlan = { overrides: new Map(), exclusions: [] };
+                    if (interventions.length > 0) {
+                        reportProgress(3, 'Applying saved interventions');
+                        const collector = createExportInterventionCollector(interventions);
+                        let ordinal = 0;
+                        for await (const row of iterateOwnedAlignmentExportRows(
+                            pool,
+                            descriptor.jobId,
+                            req.user.orgId,
+                        )) {
+                            ordinal += 1;
+                            collector.observe(row, ordinal);
+                        }
+                        interventionPlan = collector.finalize();
+                    }
+
+                    reportProgress(5, 'Reading alignment rows');
+                    const exportRows = async function* exportRows() {
+                        let ordinal = 0;
+                        for await (const row of iterateOwnedAlignmentExportRows(
+                            pool,
+                            descriptor.jobId,
+                            req.user.orgId,
+                        )) {
+                            ordinal += 1;
+                            const transformed = transformExportRow(
+                                row,
+                                ordinal,
+                                interventionPlan,
+                            );
+                            if (transformed) yield transformed;
+                        }
+                    };
+
+                    return createSessionExcelExport({
+                        rows: exportRows(),
+                        pipelineData: payload.pipelineData,
+                        maxRows: MAX_EXPORT_ROWS,
+                        onProgress: ({ stage, rowCount }) => {
+                            if (stage === 'spooling') {
+                                const ratio = descriptor.rowCount > 0
+                                    ? rowCount / descriptor.rowCount
+                                    : 1;
+                                reportProgress(
+                                    5 + ratio * 35,
+                                    `Reading ${rowCount.toLocaleString()} rows`,
+                                );
+                            } else if (stage === 'workbook') {
+                                const ratio = descriptor.rowCount > 0
+                                    ? rowCount / descriptor.rowCount
+                                    : 1;
+                                reportProgress(
+                                    45 + ratio * 50,
+                                    rowCount > 0
+                                        ? `Writing ${rowCount.toLocaleString()} rows`
+                                        : 'Building Excel workbook',
+                                );
+                            }
+                        },
+                    });
+                },
+            });
+            return res.status(202).json(exportJob);
+        } else {
+            excelExport = await createExcelExport(payload);
+        }
     } catch (err) {
         if (err.code === 'EXPORT_BUSY') {
             res.set('Retry-After', '10');
@@ -1031,6 +1142,9 @@ exports.exportExcel = async (req, res) => {
         if (err.code === 'EXPORT_TIMEOUT') {
             return res.status(504).json({ error: err.message, code: 'EXPORT_TIMEOUT' });
         }
+        if (err.code === 'EXPORT_TOO_LARGE') {
+            return res.status(413).json({ error: err.message, code: 'EXPORT_TOO_LARGE' });
+        }
         if (err.code === 'EXPORT_FAILED') {
             return res.status(500).json({ error: err.message, code: 'EXPORT_FAILED' });
         }
@@ -1038,9 +1152,44 @@ exports.exportExcel = async (req, res) => {
         return res.status(500).json({ error: 'Failed to export Excel' });
     }
 
-    // The concurrency slot stays held until the download finishes; release
-    // removes the temp workbook and frees the slot exactly once.
-    res.download(excelExport.filePath, 'synapse_alignment_report.xlsx', () => {
-        excelExport.release();
+    // Legacy exports still stream in the request; release removes the
+    // temporary workbook once Express finishes or aborts the transfer.
+    res.download(excelExport.filePath, 'synapse_alignment_report.xlsx', (error) => {
+        void excelExport.release();
+        if (error && !res.headersSent) next(error);
     });
+};
+
+exports.getExcelExportJob = (req, res) => {
+    const job = getOwnedExportJob(req.params.exportId, req.user.orgId, req.user.id);
+    if (!job) return res.status(404).json({ error: 'Export job not found' });
+    return res.json(job);
+};
+
+exports.downloadExcelExport = (req, res, next) => {
+    const job = getOwnedExportJob(req.params.exportId, req.user.orgId, req.user.id);
+    if (!job) return res.status(404).json({ error: 'Export job not found' });
+    if (job.state !== 'ready') {
+        return res.status(409).json({
+            error: job.error || 'Export is not ready',
+            code: job.code || 'EXPORT_NOT_READY',
+            state: job.state,
+        });
+    }
+    const output = claimOwnedExportDownload(
+        req.params.exportId,
+        req.user.orgId,
+        req.user.id,
+    );
+    if (!output) {
+        return res.status(409).json({ error: 'Export download is already in progress' });
+    }
+    return res.download(
+        output.filePath,
+        'synapse_alignment_report.xlsx',
+        (error) => {
+            void finishExportDownload(req.params.exportId);
+            if (error && !res.headersSent) next(error);
+        },
+    );
 };

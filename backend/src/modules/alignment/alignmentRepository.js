@@ -236,6 +236,89 @@ async function listOwnedAlignmentResultPage(pool, sessionId, orgId, { limit, aft
     };
 }
 
+async function findOwnedAlignmentExport(pool, sessionId, orgId) {
+    const result = await pool.query(
+        `SELECT j.job_id,
+                jsonb_array_length(COALESCE(j.result_json->'comparison', '[]'::jsonb)) AS row_count
+         FROM alignment_jobs j
+         WHERE j.session_id = $1
+           AND j.organization_id = $2
+           AND j.state = 'completed'
+         ORDER BY j.completed_at DESC NULLS LAST, j.created_at DESC
+         LIMIT 1`,
+        [sessionId, orgId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+        jobId: row.job_id,
+        rowCount: Number(row.row_count || 0),
+    };
+}
+
+async function* iterateOwnedAlignmentExportRows(
+    pool,
+    jobId,
+    orgId,
+    { batchSize = 2_000 } = {},
+) {
+    const fetchSize = Number.isSafeInteger(batchSize) && batchSize > 0
+        ? Math.min(batchSize, 10_000)
+        : 2_000;
+    const client = await pool.connect();
+    let transactionOpen = false;
+    let cursorOpen = false;
+    let completed = false;
+
+    try {
+        await client.query('BEGIN TRANSACTION READ ONLY');
+        transactionOpen = true;
+        // Bind ownership values once, then read them from transaction-local
+        // settings inside DECLARE (PostgreSQL does not bind FETCH/DECLARE
+        // parameters consistently across drivers).
+        await client.query(
+            `SELECT set_config('synapse.export_job_id', $1, true),
+                    set_config('synapse.export_org_id', $2, true)`,
+            [String(jobId), String(orgId)],
+        );
+        await client.query(
+            `DECLARE alignment_export_rows NO SCROLL CURSOR FOR
+             WITH completed AS (
+                 SELECT result_json
+                 FROM alignment_jobs
+                 WHERE job_id = current_setting('synapse.export_job_id')
+                   AND organization_id = current_setting('synapse.export_org_id')::bigint
+                   AND state = 'completed'
+                 LIMIT 1
+             )
+             SELECT item.value AS row
+             FROM completed c
+             CROSS JOIN LATERAL jsonb_array_elements(
+                 COALESCE(c.result_json->'comparison', '[]'::jsonb)
+             ) WITH ORDINALITY AS item(value, ordinality)
+             ORDER BY item.ordinality ASC`,
+        );
+        cursorOpen = true;
+
+        while (true) {
+            const batch = await client.query(
+                `FETCH FORWARD ${fetchSize} FROM alignment_export_rows`,
+            );
+            if (batch.rows.length === 0) break;
+            for (const item of batch.rows) yield item.row;
+        }
+        completed = true;
+    } finally {
+        if (cursorOpen) {
+            await client.query('CLOSE alignment_export_rows').catch(() => {});
+        }
+        if (transactionOpen) {
+            await client.query(completed ? 'COMMIT' : 'ROLLBACK').catch(() => {});
+        }
+        client.release();
+    }
+}
+
 async function updateAlignmentJob(pool, jobId, patch) {
     const values = [];
     const fields = [];
@@ -280,6 +363,8 @@ module.exports = {
     findLatestOwnedSession,
     getLatestAlignmentJob,
     getOwnedAlignmentJob,
+    findOwnedAlignmentExport,
+    iterateOwnedAlignmentExportRows,
     listOwnedAlignmentResultPage,
     listOwnedSessions,
     createOwnedSession,

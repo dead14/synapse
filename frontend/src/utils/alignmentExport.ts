@@ -84,6 +84,45 @@ export function createAlignmentExportPayload(
   };
 }
 
+export function createAlignmentSessionExportPayload(
+  sessionId: string | number,
+  pipelineData: Record<string, unknown> = {},
+) {
+  const parsedSessionId = Number(sessionId);
+  if (!Number.isSafeInteger(parsedSessionId) || parsedSessionId <= 0) {
+    throw new Error('A valid alignment session is required for export.');
+  }
+  return { sessionId: parsedSessionId, pipelineData };
+}
+
+export interface AlignmentExportJob {
+  exportId: string;
+  state: 'processing' | 'ready' | 'failed' | 'downloading';
+  rowCount?: number;
+  progress?: number;
+  message?: string;
+  error: string | null;
+  code: string | null;
+}
+
+export async function waitForAlignmentExport(
+  readStatus: () => Promise<AlignmentExportJob>,
+  delay: () => Promise<void>,
+  maxAttempts = 360,
+): Promise<AlignmentExportJob> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const job = await readStatus();
+    if (job.state === 'ready') return job;
+    if (job.state === 'failed') {
+      const error = new Error(job.error || 'Failed to generate Excel file.');
+      Object.assign(error, { code: job.code || 'EXPORT_FAILED' });
+      throw error;
+    }
+    if (attempt < maxAttempts - 1) await delay();
+  }
+  throw new Error('Excel export is still processing. Please try again shortly.');
+}
+
 export function createPipelineExportData(config: any): ExportRow & { inspectionRuns: ExportRow[] } {
   const configured = config?.pipelineData && typeof config.pipelineData === 'object'
     ? config.pipelineData

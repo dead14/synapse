@@ -2,6 +2,7 @@ import json
 import sys
 
 import openpyxl
+import xlsxwriter
 from openpyxl.cell import WriteOnlyCell
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -67,6 +68,18 @@ STATUS_STYLES = (
     ("only", ORANGE_FILL, ONLY_FONT),
 )
 
+XLSX_FILL_COLORS = {
+    "dark_blue": "#1F4E79",
+    "blue": "#2E74B5",
+    "gold": "#BF9000",
+    "new": "#F0F6FC",
+    "center": "#FFF8E7",
+    "old": "#F7F7F7",
+    "green": "#C6EFCE",
+    "orange": "#FCE4D6",
+    "yellow": "#FFF2CC",
+}
+
 
 def column_style_plan(column_count):
     """Resolve each column's fill, alignments and number format once.
@@ -114,6 +127,8 @@ def as_number(value):
 
 def safe_cell_value(value):
     """Prevent spreadsheet applications from evaluating untrusted text as a formula."""
+    if isinstance(value, (dict, list)):
+        value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
         return "'" + value
     return value
@@ -369,34 +384,43 @@ def report_headers(rows):
     return headers
 
 
-def build_report_sheet(workbook, rows):
+def initialize_report_sheet(workbook, headers, row_count):
     worksheet = workbook.create_sheet("Runcomp Report")
     worksheet.sheet_view.showGridLines = False
+    worksheet.freeze_panes = "A2"
+    worksheet.auto_filter.ref = (
+        f"A1:{get_column_letter(len(headers))}{max(1, row_count + 1)}"
+    )
+    append_header_row(worksheet, headers)
+    for index, header in enumerate(headers, 1):
+        worksheet.column_dimensions[get_column_letter(index)].width = min(
+            34, max(12, len(str(header)) + 2)
+        )
+    return worksheet
+
+
+def build_report_sheet(workbook, rows):
     headers = report_headers(rows)
     if not headers:
         headers = ["Status"]
         rows = [{"Status": "No runcomp report data"}]
-    worksheet.freeze_panes = "A2"
-    worksheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{max(1, len(rows) + 1)}"
-    append_header_row(worksheet, headers)
+    worksheet = initialize_report_sheet(workbook, headers, len(rows))
     for row in rows:
         # This is the complete audit data sheet, not the presentation sheet.
         # Plain write-only values avoid allocating and serialising a style
         # object for every cell in large result sets.
         worksheet.append([safe_cell_value(row.get(header)) for header in headers])
-    for index, header in enumerate(headers, 1):
-        worksheet.column_dimensions[get_column_letter(index)].width = min(34, max(12, len(str(header)) + 2))
     return worksheet
 
 
-def build_comparison_sheet(workbook, data, title):
+def initialize_comparison_sheet(workbook, title, row_count):
     worksheet = workbook.create_sheet(title)
     worksheet.sheet_view.showGridLines = False
     worksheet.freeze_panes = "P3"
     worksheet.row_dimensions[1].height = 24
     worksheet.row_dimensions[2].height = 42
     set_column_widths(worksheet)
-    worksheet.auto_filter.ref = f"A2:AN{max(2, len(data) + 2)}"
+    worksheet.auto_filter.ref = f"A2:AN{max(2, row_count + 2)}"
     for span in ("A1:O1", "P1:Y1", "Z1:AN1"):
         worksheet.merged_cells.add(span)
 
@@ -429,15 +453,289 @@ def build_comparison_sheet(workbook, data, title):
         )
         for column, header in enumerate(headers, 1)
     ])
+    return worksheet
+
+
+def build_comparison_sheet(workbook, data, title):
+    worksheet = initialize_comparison_sheet(workbook, title, len(data))
     for row in data:
         worksheet.append(build_data_row(worksheet, row))
     return worksheet
+
+
+def read_ndjson_rows(path):
+    with open(path, "r", encoding="utf-8") as rows_file:
+        for line in rows_file:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if isinstance(row, dict):
+                yield row
+
+
+def xlsxwriter_formats(workbook):
+    title = {
+        "font_name": "Calibri",
+        "font_size": 12,
+        "bold": True,
+        "font_color": "#FFFFFF",
+        "align": "center",
+        "valign": "vcenter",
+    }
+    header = {
+        "font_name": "Calibri",
+        "font_size": 11,
+        "bold": True,
+        "font_color": "#FFFFFF",
+        "align": "center",
+        "valign": "vcenter",
+        "text_wrap": True,
+    }
+    return {
+        "title_blue": workbook.add_format({**title, "bg_color": XLSX_FILL_COLORS["dark_blue"]}),
+        "title_gold": workbook.add_format({**title, "bg_color": XLSX_FILL_COLORS["gold"]}),
+        "header_blue": workbook.add_format({**header, "bg_color": XLSX_FILL_COLORS["blue"]}),
+        "header_gold": workbook.add_format({**header, "bg_color": XLSX_FILL_COLORS["gold"]}),
+        "pipeline_label": workbook.add_format({
+            "bg_color": XLSX_FILL_COLORS["new"],
+            "bold": True,
+            "font_color": "#006100",
+            "bottom": 1,
+            "bottom_color": "#D9E2F3",
+        }),
+        "pipeline_value": workbook.add_format({
+            "bg_color": XLSX_FILL_COLORS["old"],
+            "bottom": 1,
+            "bottom_color": "#D9E2F3",
+        }),
+        "run_value": workbook.add_format({
+            "bottom": 1,
+            "bottom_color": "#D9E2F3",
+        }),
+        "status_matched": workbook.add_format({
+            "bg_color": XLSX_FILL_COLORS["green"],
+            "bold": True,
+            "font_color": "#006100",
+            "align": "center",
+            "valign": "vcenter",
+            "bottom": 1,
+            "bottom_color": "#D9E2F3",
+        }),
+        "status_bypassed": workbook.add_format({
+            "bg_color": XLSX_FILL_COLORS["yellow"],
+            "bold": True,
+            "font_color": "#7F6000",
+            "align": "center",
+            "valign": "vcenter",
+            "bottom": 1,
+            "bottom_color": "#D9E2F3",
+        }),
+        "status_only": workbook.add_format({
+            "bg_color": XLSX_FILL_COLORS["orange"],
+            "bold": True,
+            "font_color": "#9C0006",
+            "align": "center",
+            "valign": "vcenter",
+            "bottom": 1,
+            "bottom_color": "#D9E2F3",
+        }),
+    }
+
+
+def xlsxwriter_column_formats(workbook):
+    formats = []
+    for column, (_fill, _alignment, number_format) in enumerate(
+        column_style_plan(40), 1
+    ):
+        if column < FIRST_CENTER_COLUMN:
+            fill_color = XLSX_FILL_COLORS["new"]
+        elif column < FIRST_OLD_COLUMN:
+            fill_color = XLSX_FILL_COLORS["center"]
+        else:
+            fill_color = XLSX_FILL_COLORS["old"]
+        properties = {
+            "bg_color": fill_color,
+            "valign": "vcenter",
+            "bottom": 1,
+            "bottom_color": "#D9E2F3",
+            "align": (
+                "center"
+                if FIRST_CENTER_COLUMN <= column < FIRST_OLD_COLUMN
+                else "left"
+            ),
+        }
+        if number_format is not None:
+            properties["num_format"] = number_format
+        formats.append(workbook.add_format(properties))
+    return formats
+
+
+def build_xlsxwriter_pipeline_sheet(workbook, pipeline_data, formats):
+    worksheet = workbook.add_worksheet("Data Pipeline")
+    worksheet.hide_gridlines(2)
+    worksheet.freeze_panes(2, 0)
+    worksheet.set_column("A:A", 28)
+    worksheet.set_column("B:B", 42)
+    worksheet.merge_range("A1:B1", "PIPELINE DATA", formats["title_blue"])
+    worksheet.write_row("A2", ["Field", "Value"], formats["header_blue"])
+    for row_index, (label, key) in enumerate(PIPELINE_FIELDS, 2):
+        worksheet.write(row_index, 0, label, formats["pipeline_label"])
+        worksheet.write(
+            row_index,
+            1,
+            safe_cell_value(pipeline_data.get(key)),
+            formats["pipeline_value"],
+        )
+
+    section_row = 2 + len(PIPELINE_FIELDS) + 1
+    worksheet.write(section_row, 0, "INSPECTION RUNS", formats["title_gold"])
+    run_headers = ["Role", "Survey Year", "Vendor", "File Name", "Run ID", "Records"]
+    worksheet.write_row(section_row + 1, 0, run_headers, formats["header_gold"])
+    for offset, run in enumerate(pipeline_data.get("inspectionRuns", []) or [], 1):
+        worksheet.write_row(
+            section_row + 1 + offset,
+            0,
+            [safe_cell_value(run.get(key)) for key in (
+                "role", "year", "vendor", "fileName", "runId", "total"
+            )],
+            formats["run_value"],
+        )
+    for index, width in enumerate((18, 14, 24, 38, 14, 14)):
+        worksheet.set_column(index, index, width)
+    return worksheet
+
+
+def initialize_xlsxwriter_report_sheet(workbook, headers, row_count, formats):
+    worksheet = workbook.add_worksheet("Runcomp Report")
+    worksheet.hide_gridlines(2)
+    worksheet.freeze_panes(1, 0)
+    worksheet.autofilter(0, 0, max(0, row_count), len(headers) - 1)
+    worksheet.write_row(0, 0, headers, formats["header_blue"])
+    for index, header in enumerate(headers):
+        worksheet.set_column(index, index, min(34, max(12, len(str(header)) + 2)))
+    return worksheet
+
+
+def initialize_xlsxwriter_comparison_sheet(workbook, row_count, formats):
+    worksheet = workbook.add_worksheet("Runcomp Comparison")
+    worksheet.hide_gridlines(2)
+    worksheet.freeze_panes(2, 15)
+    worksheet.set_row(0, 24)
+    worksheet.set_row(1, 42)
+    worksheet.autofilter(1, 0, max(1, row_count + 1), 39)
+    widths = [17, 20, 24, 14, 17, 17, 18, 15, 18, 18, 18, 18, 16, 16, 30,
+              16, 16, 14, 14, 16, 17, 17, 14, 20, 19,
+              17, 20, 24, 14, 17, 17, 18, 15, 18, 18, 18, 18, 16, 16, 30]
+    column_formats = xlsxwriter_column_formats(workbook)
+    for index, (width, column_format) in enumerate(zip(widths, column_formats)):
+        worksheet.set_column(index, index, width, column_format)
+
+    worksheet.merge_range(0, 0, 0, 14, "<  NEW DATA — ALIGNMENT RESULT", formats["title_blue"])
+    worksheet.merge_range(0, 15, 0, 24, "COMPARISON (NEW − OLD)", formats["title_gold"])
+    worksheet.merge_range(0, 25, 0, 39, "OLD DATA — ALIGNMENT RESULT  >", formats["title_blue"])
+    headers = NEW_HEADERS + CENTER_HEADERS + OLD_HEADERS
+    for column, header in enumerate(headers):
+        header_format = (
+            formats["header_gold"]
+            if FIRST_CENTER_COLUMN - 1 <= column < FIRST_OLD_COLUMN - 1
+            else formats["header_blue"]
+        )
+        worksheet.write(1, column, header, header_format)
+    return worksheet
+
+
+def xlsxwriter_status_format(value, formats):
+    status = str(value or "").lower()
+    if "matched" in status:
+        return formats["status_matched"]
+    if "bypassed" in status:
+        return formats["status_bypassed"]
+    if "only" in status:
+        return formats["status_only"]
+    return None
+
+
+def export_ndjson_with_xlsxwriter(metadata, rows_path, output_path):
+    workbook = xlsxwriter.Workbook(output_path, {
+        "constant_memory": True,
+        "strings_to_formulas": False,
+        "strings_to_urls": False,
+        "nan_inf_to_errors": True,
+    })
+    try:
+        formats = xlsxwriter_formats(workbook)
+        pipeline_data = metadata.get("pipelineData", {})
+        build_xlsxwriter_pipeline_sheet(
+            workbook,
+            pipeline_data if isinstance(pipeline_data, dict) else {},
+            formats,
+        )
+        headers = [
+            str(header)
+            for header in metadata.get("headers", [])
+            if str(header) and not str(header).startswith("__")
+        ] or ["Status"]
+        row_count = int(metadata.get("rowCount", 0) or 0)
+        report_sheet = initialize_xlsxwriter_report_sheet(
+            workbook, headers, row_count, formats
+        )
+        comparison_sheet = initialize_xlsxwriter_comparison_sheet(
+            workbook, row_count, formats
+        )
+
+        written = 0
+        for row in read_ndjson_rows(rows_path):
+            report_sheet.write_row(
+                written + 1,
+                0,
+                [safe_cell_value(row.get(header)) for header in headers],
+            )
+            new_values = side_values(row, "NEW")
+            old_values = side_values(row, "OLD")
+            values = new_values + comparison_values(row, new_values, old_values) + old_values
+            comparison_sheet.write_row(
+                written + 2,
+                0,
+                [safe_cell_value(value) for value in values],
+            )
+            status_format = xlsxwriter_status_format(
+                values[STATUS_COLUMN - 1], formats
+            )
+            if status_format is not None:
+                comparison_sheet.write(
+                    written + 2,
+                    STATUS_COLUMN - 1,
+                    safe_cell_value(values[STATUS_COLUMN - 1]),
+                    status_format,
+                )
+            written += 1
+            if written % 10_000 == 0:
+                print(f"PROGRESS {written}", flush=True)
+
+        if written == 0:
+            report_sheet.write(1, 0, "No runcomp report data")
+        elif written % 10_000 != 0:
+            print(f"PROGRESS {written}", flush=True)
+    finally:
+        workbook.close()
 
 
 def main():
     if len(sys.argv) < 3:
         print("Usage: python export_excel.py <input_json_path> <output_xlsx_path>")
         sys.exit(1)
+
+    if sys.argv[1] == "--ndjson":
+        if len(sys.argv) != 5:
+            print(
+                "Usage: python export_excel.py --ndjson "
+                "<metadata_json_path> <rows_ndjson_path> <output_xlsx_path>"
+            )
+            sys.exit(1)
+        with open(sys.argv[2], "r", encoding="utf-8") as metadata_file:
+            metadata = json.load(metadata_file)
+        export_ndjson_with_xlsxwriter(metadata, sys.argv[3], sys.argv[4])
+        return
 
     with open(sys.argv[1], "r", encoding="utf-8") as input_file:
         data = json.load(input_file)
