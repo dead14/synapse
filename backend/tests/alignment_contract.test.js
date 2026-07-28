@@ -275,7 +275,74 @@ test('validateMatchingSections accepts an optional partial section', () => {
             endGwKey: 'o3::n3::20.000000::22.000000',
             policy: 'MATCH',
         }],
+}));
+});
+
+test('validateMatchingSections accepts explicit side-qualified unmatched GW boundaries', () => {
+    const locked = [
+        { old_id: 'o1', new_id: 'n1', old_odometer: 0, new_odometer: 1 },
+        { old_id: 'o2', new_id: 'n2', old_odometer: 10, new_odometer: 12 },
+        { old_id: 'o3', new_id: 'n3', old_odometer: 20, new_odometer: 23 },
+    ];
+
+    assert.doesNotThrow(() => validateMatchingSections({
+        gwMatchesFinal: locked,
+        matchingSections: [{
+            id: 'tie-in',
+            name: 'Tie-in',
+            startGwKey: 'UNMATCHED::NEW::nx::6.000000',
+            endGwKey: 'UNMATCHED::OLD::ox::15.000000',
+            startBoundary: {
+                key: 'UNMATCHED::NEW::nx::6.000000',
+                side: 'NEW',
+                label: 'nx',
+                oldId: null,
+                newId: 'nx',
+                oldDistance: 4.545454545454545,
+                newDistance: 6,
+                sourceDistance: 6,
+            },
+            endBoundary: {
+                key: 'UNMATCHED::OLD::ox::15.000000',
+                side: 'OLD',
+                label: 'ox',
+                oldId: 'ox',
+                newId: null,
+                oldDistance: 15,
+                newDistance: 17.5,
+                sourceDistance: 15,
+            },
+            policy: 'MATCH',
+        }],
     }));
+});
+
+test('validateMatchingSections rejects a tampered unmatched boundary projection', () => {
+    const locked = [
+        { old_id: 'o1', new_id: 'n1', old_odometer: 0, new_odometer: 1 },
+        { old_id: 'o2', new_id: 'n2', old_odometer: 10, new_odometer: 12 },
+    ];
+    const boundary = {
+        key: 'UNMATCHED::NEW::nx::6.000000',
+        side: 'NEW',
+        label: 'nx',
+        oldId: null,
+        newId: 'nx',
+        oldDistance: 999,
+        newDistance: 6,
+        sourceDistance: 6,
+    };
+
+    assert.throws(() => validateMatchingSections({
+        gwMatchesFinal: locked,
+        matchingSections: [{
+            name: 'Tampered',
+            startGwKey: boundary.key,
+            endGwKey: 'o2::n2::10.000000::12.000000',
+            startBoundary: boundary,
+            policy: 'MATCH',
+        }],
+    }), (error) => error.code === 'INVALID_MATCHING_SECTIONS');
 });
 
 test('validateMatchingSections rejects overlaps and non-locked boundaries', () => {

@@ -332,6 +332,7 @@ class HungarianAnomalyAlignmentEngine:
             cls._gw_pair_key(pair): (index, pair)
             for index, pair in enumerate(locked_gw_pairs)
         }
+        locked_new_distances = [float(pair["new_odometer"]) for pair in locked_gw_pairs]
         compiled = []
         errors = []
         valid_policies = {"MATCH", "BYPASS", "REVIEW"}
@@ -344,19 +345,86 @@ class HungarianAnomalyAlignmentEngine:
                 errors.append("Locked GW pairs must increase strictly on both OLD and NEW")
                 break
 
+        def project_distance(distance: float, from_key: str, to_key: str):
+            if not locked_gw_pairs:
+                return None
+            if len(locked_gw_pairs) == 1:
+                pair = locked_gw_pairs[0]
+                return distance + (float(pair[to_key]) - float(pair[from_key]))
+            source = [float(pair[from_key]) for pair in locked_gw_pairs]
+            target = [float(pair[to_key]) for pair in locked_gw_pairs]
+            upper = bisect.bisect_left(source, distance)
+            if upper <= 0:
+                upper = 1
+            elif upper >= len(source):
+                upper = len(source) - 1
+            lower = upper - 1
+            span = source[upper] - source[lower]
+            if span == 0:
+                return None
+            return target[lower] + ((distance - source[lower]) / span) * (target[upper] - target[lower])
+
+        def resolve_boundary(section: dict, edge: str, label: str):
+            key = str(section.get(f"{edge}GwKey", ""))
+            locked_entry = locked_by_key.get(key)
+            if locked_entry:
+                _, pair = locked_entry
+                return float(pair["old_odometer"]), float(pair["new_odometer"])
+
+            boundary = section.get(f"{edge}Boundary")
+            if not isinstance(boundary, dict):
+                errors.append(f"{label}: {edge} boundary evidence is unavailable")
+                return None
+            side = str(boundary.get("side", "")).upper()
+            source_id = boundary.get("oldId") if side == "OLD" else boundary.get("newId")
+            opposite_id = boundary.get("newId") if side == "OLD" else boundary.get("oldId")
+            try:
+                old_distance = float(boundary.get("oldDistance"))
+                new_distance = float(boundary.get("newDistance"))
+                source_distance = float(boundary.get("sourceDistance"))
+            except (TypeError, ValueError):
+                errors.append(f"{label}: {edge} boundary distances are invalid")
+                return None
+            measured_distance = old_distance if side == "OLD" else new_distance
+            projected_distance = (
+                project_distance(old_distance, "old_odometer", "new_odometer")
+                if side == "OLD"
+                else project_distance(new_distance, "new_odometer", "old_odometer")
+            )
+            supplied_projection = new_distance if side == "OLD" else old_distance
+            expected_key = f"UNMATCHED::{side}::{source_id or ''}::{source_distance:.6f}"
+            if (
+                side not in {"OLD", "NEW"}
+                or not str(source_id or "").strip()
+                or opposite_id not in {None, ""}
+                or not all(math.isfinite(value) and value >= 0 for value in (
+                    old_distance, new_distance, source_distance
+                ))
+                or abs(source_distance - measured_distance) > 1e-6
+                or boundary.get("key") != key
+                or key != expected_key
+            ):
+                errors.append(f"{label}: {edge} boundary evidence is invalid")
+                return None
+            if projected_distance is None or abs(projected_distance - supplied_projection) > 1e-6:
+                errors.append(f"{label}: {edge} boundary projection does not match locked GW evidence")
+                return None
+            return old_distance, new_distance
+
         for section_index, section in enumerate(raw_sections):
             label = str(section.get("name") or section.get("id") or f"Section {section_index + 1}")
-            start_entry = locked_by_key.get(str(section.get("startGwKey", "")))
-            end_entry = locked_by_key.get(str(section.get("endGwKey", "")))
-            if not start_entry or not end_entry:
-                errors.append(f"{label}: section boundary must use locked GW pairs")
+            start_boundary = resolve_boundary(section, "start", label)
+            end_boundary = resolve_boundary(section, "end", label)
+            if not start_boundary or not end_boundary:
                 continue
 
-            start_index, start_pair = start_entry
-            end_index, end_pair = end_entry
-            if start_index >= end_index:
-                errors.append(f"{label}: end GW must be downstream of start GW on NEW")
+            old_start, new_start = start_boundary
+            old_end, new_end = end_boundary
+            if new_start >= new_end or old_start >= old_end:
+                errors.append(f"{label}: end GW must be downstream on OLD and NEW")
                 continue
+            start_index = bisect.bisect_right(locked_new_distances, new_start) - 1
+            end_index = bisect.bisect_left(locked_new_distances, new_end)
 
             policy = str(section.get("policy", "MATCH")).upper()
             if policy not in valid_policies:
@@ -384,15 +452,15 @@ class HungarianAnomalyAlignmentEngine:
                 "reference_run": "NEW",
                 "start_index": start_index,
                 "end_index": end_index,
-                "old_start": float(start_pair["old_odometer"]),
-                "old_end": float(end_pair["old_odometer"]),
-                "new_start": float(start_pair["new_odometer"]),
-                "new_end": float(end_pair["new_odometer"]),
+                "old_start": old_start,
+                "old_end": old_end,
+                "new_start": new_start,
+                "new_end": new_end,
             })
 
-        compiled.sort(key=lambda item: (item["start_index"], item["end_index"]))
+        compiled.sort(key=lambda item: (item["new_start"], item["new_end"]))
         for previous, current in zip(compiled, compiled[1:]):
-            if current["start_index"] < previous["end_index"]:
+            if current["new_start"] < previous["new_end"]:
                 errors.append(f"{current['name']}: section boundaries overlap {previous['name']}")
 
         return SectionCompilation(compiled, errors)

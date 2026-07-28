@@ -734,6 +734,74 @@ class OrderedAnomalyMatchingTests(unittest.TestCase):
 
         self.assertTrue(result.is_valid)
 
+    def test_section_compilation_keeps_explicit_unmatched_boundary_distances(self):
+        locked = [
+            {"old_id": "o1", "new_id": "n1", "old_odometer": 0.0, "new_odometer": 1.0},
+            {"old_id": "o2", "new_id": "n2", "old_odometer": 10.0, "new_odometer": 12.0},
+            {"old_id": "o3", "new_id": "n3", "old_odometer": 20.0, "new_odometer": 23.0},
+        ]
+        result = HungarianAnomalyAlignmentEngine.compile_sections([{
+            "id": "tie-in",
+            "name": "Tie-in",
+            "startGwKey": "UNMATCHED::NEW::nx::6.000000",
+            "endGwKey": "UNMATCHED::OLD::ox::15.000000",
+            "startBoundary": {
+                "key": "UNMATCHED::NEW::nx::6.000000",
+                "side": "NEW",
+                "oldId": None,
+                "newId": "nx",
+                "oldDistance": 4.545454545454545,
+                "newDistance": 6.0,
+                "sourceDistance": 6.0,
+            },
+            "endBoundary": {
+                "key": "UNMATCHED::OLD::ox::15.000000",
+                "side": "OLD",
+                "oldId": "ox",
+                "newId": None,
+                "oldDistance": 15.0,
+                "newDistance": 17.5,
+                "sourceDistance": 15.0,
+            },
+            "policy": "REVIEW",
+        }], locked)
+
+        self.assertTrue(result.is_valid)
+        self.assertEqual(
+            (
+                result.sections[0]["old_start"],
+                result.sections[0]["old_end"],
+                result.sections[0]["new_start"],
+                result.sections[0]["new_end"],
+            ),
+            (4.545454545454545, 15.0, 6.0, 17.5),
+        )
+
+    def test_section_compilation_rejects_tampered_unmatched_projection(self):
+        locked = [
+            {"old_id": "o1", "new_id": "n1", "old_odometer": 0.0, "new_odometer": 1.0},
+            {"old_id": "o2", "new_id": "n2", "old_odometer": 10.0, "new_odometer": 12.0},
+        ]
+        key = HungarianAnomalyAlignmentEngine._gw_pair_key
+        result = HungarianAnomalyAlignmentEngine.compile_sections([{
+            "name": "Tampered",
+            "startGwKey": "UNMATCHED::NEW::nx::6.000000",
+            "endGwKey": key(locked[1]),
+            "startBoundary": {
+                "key": "UNMATCHED::NEW::nx::6.000000",
+                "side": "NEW",
+                "oldId": None,
+                "newId": "nx",
+                "oldDistance": 999.0,
+                "newDistance": 6.0,
+                "sourceDistance": 6.0,
+            },
+            "policy": "MATCH",
+        }], locked)
+
+        self.assertFalse(result.is_valid)
+        self.assertIn("projection", " ".join(result.errors).lower())
+
     def test_section_compilation_rejects_crossing_locked_gw_pairs(self):
         locked = [
             {"old_id": "o1", "new_id": "n1", "old_odometer": 10.0, "new_odometer": 1.0},

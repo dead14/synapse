@@ -225,27 +225,76 @@ function validateSectionsForPair(sections, gwMatchesFinal) {
             );
         }
     }
-    const lockedIndexes = new Map(lockedPairs.map((pair, index) => [gwPairKey(pair), index]));
+    const lockedByKey = new Map(lockedPairs.map((pair) => [gwPairKey(pair), pair]));
+    const projectDistance = (distance, fromKey, toKey) => {
+        if (lockedPairs.length === 0) return null;
+        if (lockedPairs.length === 1) {
+            return distance + (Number(lockedPairs[0][toKey]) - Number(lockedPairs[0][fromKey]));
+        }
+        const from = lockedPairs.map((pair) => Number(pair[fromKey]));
+        const to = lockedPairs.map((pair) => Number(pair[toKey]));
+        let upper = from.findIndex((point) => point >= distance);
+        if (upper <= 0) upper = 1;
+        if (upper < 0) upper = from.length - 1;
+        const lower = upper - 1;
+        const span = from[upper] - from[lower];
+        if (!Number.isFinite(span) || span === 0) return null;
+        return to[lower] + ((distance - from[lower]) / span) * (to[upper] - to[lower]);
+    };
     const compiled = [];
     const validPolicies = new Set(['MATCH', 'BYPASS', 'REVIEW']);
+    const resolveBoundary = (section, edge, sectionIndex) => {
+        const key = String(section?.[`${edge}GwKey`] ?? '');
+        const locked = lockedByKey.get(key);
+        if (locked) {
+            return {
+                oldDistance: Number(locked.old_odometer),
+                newDistance: Number(locked.new_odometer),
+            };
+        }
+
+        const boundary = section?.[`${edge}Boundary`];
+        const side = String(boundary?.side ?? '').toUpperCase();
+        const oldDistance = Number(boundary?.oldDistance);
+        const newDistance = Number(boundary?.newDistance);
+        const sourceDistance = Number(boundary?.sourceDistance);
+        const sourceId = side === 'OLD' ? boundary?.oldId : boundary?.newId;
+        const oppositeId = side === 'OLD' ? boundary?.newId : boundary?.oldId;
+        const measuredDistance = side === 'OLD' ? oldDistance : newDistance;
+        const projectedDistance = side === 'OLD'
+            ? projectDistance(oldDistance, 'old_odometer', 'new_odometer')
+            : projectDistance(newDistance, 'new_odometer', 'old_odometer');
+        const suppliedProjection = side === 'OLD' ? newDistance : oldDistance;
+        const expectedKey = `UNMATCHED::${side}::${String(sourceId ?? '')}::${sourceDistance.toFixed(6)}`;
+        if (!isRecord(boundary)
+            || !['OLD', 'NEW'].includes(side)
+            || !String(sourceId ?? '').trim()
+            || (oppositeId !== null && oppositeId !== undefined && String(oppositeId).trim() !== '')
+            || ![oldDistance, newDistance, sourceDistance].every((value) => Number.isFinite(value) && value >= 0)
+            || Math.abs(sourceDistance - measuredDistance) > 1e-6
+            || projectedDistance === null
+            || Math.abs(projectedDistance - suppliedProjection) > 1e-6
+            || boundary.key !== key
+            || key !== expectedKey) {
+            throw validationError(
+                'INVALID_MATCHING_SECTIONS',
+                `Section ${sectionIndex + 1} has invalid ${edge} boundary evidence`,
+            );
+        }
+        return { oldDistance, newDistance };
+    };
 
     for (const [sectionIndex, section] of sections.entries()) {
-        const startIndex = lockedIndexes.get(String(section?.startGwKey ?? ''));
-        const endIndex = lockedIndexes.get(String(section?.endGwKey ?? ''));
         const policy = String(section?.policy ?? 'MATCH').toUpperCase();
         if (!String(section?.name ?? '').trim()) {
             throw validationError('INVALID_MATCHING_SECTIONS', `Section ${sectionIndex + 1} requires a name`);
         }
-        if (startIndex === undefined || endIndex === undefined) {
+        const start = resolveBoundary(section, 'start', sectionIndex);
+        const end = resolveBoundary(section, 'end', sectionIndex);
+        if (start.newDistance >= end.newDistance || start.oldDistance >= end.oldDistance) {
             throw validationError(
                 'INVALID_MATCHING_SECTIONS',
-                `Section ${sectionIndex + 1} must use locked GW boundaries`,
-            );
-        }
-        if (startIndex >= endIndex) {
-            throw validationError(
-                'INVALID_MATCHING_SECTIONS',
-                `Section ${sectionIndex + 1} must end downstream on NEW`,
+                `Section ${sectionIndex + 1} must end downstream on OLD and NEW`,
             );
         }
         if (!validPolicies.has(policy)) {
@@ -267,12 +316,12 @@ function validateSectionsForPair(sections, gwMatchesFinal) {
                 }
             }
         }
-        compiled.push({ startIndex, endIndex });
+        compiled.push({ startDistance: start.newDistance, endDistance: end.newDistance });
     }
 
-    compiled.sort((left, right) => left.startIndex - right.startIndex);
+    compiled.sort((left, right) => left.startDistance - right.startDistance);
     for (let index = 1; index < compiled.length; index += 1) {
-        if (compiled[index].startIndex < compiled[index - 1].endIndex) {
+        if (compiled[index].startDistance < compiled[index - 1].endDistance) {
             throw validationError('INVALID_MATCHING_SECTIONS', 'Matching sections cannot overlap');
         }
     }
