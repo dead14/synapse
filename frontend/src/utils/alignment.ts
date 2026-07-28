@@ -3,6 +3,7 @@ import {
   ALIGNMENT_RESULT_PAGE_SIZE,
   nextAlignmentProgress,
 } from './alignmentProgress';
+import { fetchPublicShareResultPage } from '../lib/sharing/publicShareClient';
 
 export {
   ALIGNMENT_RESULT_PAGE_SIZE,
@@ -187,4 +188,29 @@ export async function fetchAlignmentComparison(
   signal?: AbortSignal,
 ): Promise<ComparisonRow[]> {
   return (await fetchAlignmentResult(sessionId, onProgress, signal)).comparison;
+}
+
+export async function fetchSharedAlignmentResult(
+  shareId: string,
+  accessToken: string,
+  onProgress?: (progress: number, message: string) => void,
+  signal?: AbortSignal,
+): Promise<AlignmentFetchResult> {
+  const comparison: ComparisonRow[] = [];
+  let cursor: string | null = null;
+  do {
+    const page = await fetchPublicShareResultPage(
+      shareId,
+      accessToken,
+      { limit: ALIGNMENT_RESULT_PAGE_SIZE, cursor },
+      signal,
+    );
+    comparison.push(...page.items);
+    cursor = page.nextCursor;
+    onProgress?.(
+      cursor ? 95 : 100,
+      `${comparison.length.toLocaleString()} shared result rows loaded...`,
+    );
+  } while (cursor);
+  return { comparison };
 }

@@ -24,6 +24,7 @@ const publicReadLimiter = createRedisRateLimiter({
 });
 
 // This is the only anonymous result route. It is intentionally GET-only.
+router.get('/:id/results/page', publicReadLimiter, controller.getPublicAlignmentResultsPage);
 router.get('/:id', publicReadLimiter, controller.getPublic);
 
 router.use(authMiddleware, requireSharePublisher);

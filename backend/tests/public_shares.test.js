@@ -171,7 +171,7 @@ test('repository owner operations are tenant scoped and never select token plain
     assert.match(calls[1].text, /organization_id = \$1/i);
     assert.deepEqual(calls[1].values, [9, 'ILI_ALIGNMENT', 'session:42']);
     assert.match(calls[2].text, /organization_id = \$2/i);
-    assert.doesNotMatch(calls[3].text, /organization_id/i);
+    assert.match(calls[3].text, /organization_id/i);
     assert.doesNotMatch(calls[3].text, /created_by/i);
 });
 
@@ -277,6 +277,7 @@ test('public controller exposes only display fields and disables caching/referre
                 token_hash: hashShareToken(token),
                 kind: 'CORROSION',
                 title: 'Corrosion review',
+                source_ref: 'alignment-session:42',
                 snapshot_json: validSnapshot(),
                 created_at: new Date('2026-07-28T00:00:00.000Z'),
                 expires_at: new Date('2026-08-27T00:00:00.000Z'),
@@ -301,5 +302,50 @@ test('public controller exposes only display fields and disables caching/referre
     assert.equal(res.body.share.organizationId, undefined);
     assert.equal(res.body.share.createdBy, undefined);
     assert.equal(res.body.share.tokenHash, undefined);
+    assert.equal(res.body.share.sourceRef, 'alignment-session:42');
     assert.deepEqual(res.body.share.snapshot, validSnapshot());
+});
+
+test('ILI share reads the canonical paged result with the scoped organization', async () => {
+    const token = 'E'.repeat(43);
+    const readCalls = [];
+    const controller = createPublicShareController({
+        repository: {
+            findPublic: async () => ({
+                public_id: 'f349577d-4bbf-4a99-8a46-6ee88cd84ea8',
+                token_hash: hashShareToken(token),
+                organization_id: 9,
+                kind: 'ILI_ALIGNMENT',
+                source_ref: 'alignment-session:42',
+                created_at: new Date('2026-07-28T00:00:00.000Z'),
+                expires_at: new Date('2026-08-27T00:00:00.000Z'),
+                revoked_at: null,
+            }),
+        },
+        readAlignmentPage: async (...args) => {
+            readCalls.push(args);
+            return { rows: [{ 'Source Key NEW': 'new:1' }], nextCursor: 20_000 };
+        },
+        now: () => new Date('2026-07-28T00:00:00.000Z'),
+        pool: { name: 'pool' },
+    });
+    const res = fakeResponse();
+
+    await controller.getPublicAlignmentResultsPage({
+        params: { id: 'f349577d-4bbf-4a99-8a46-6ee88cd84ea8' },
+        headers: { 'x-share-token': token },
+        query: { limit: '20000', cursor: '0' },
+    }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body, {
+        items: [{ 'Source Key NEW': 'new:1' }],
+        nextCursor: '20000',
+    });
+    assert.deepEqual(readCalls, [[
+        { name: 'pool' },
+        42,
+        9,
+        { limit: 20_000, after: 0 },
+    ]]);
 });
