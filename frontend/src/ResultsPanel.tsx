@@ -1,6 +1,5 @@
 import { useState, useMemo, useEffect, useRef, lazy, Suspense } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, FiX, FiDownload, FiMap } from 'react-icons/fi';
+import { FiSearch, FiFileText, FiMaximize, FiMinimize, FiActivity, FiColumns, FiX, FiDownload } from 'react-icons/fi';
 import { apiFetch, apiUrl } from './utils/api';
 import Modal from './components/common/Modal';
 import { useToast } from './components/common/ToastProvider';
@@ -335,7 +334,6 @@ export default function ResultsPanel({
     return sortAlignmentRowsByMasterAxis(flattened);
   }, [rawData]);
 
-  const navigate = useNavigate();
   const toast = useToast();
   const shareSessionId = useMemo(() => (
     new URLSearchParams(window.location.search).get('sessionId')
@@ -859,17 +857,6 @@ export default function ResultsPanel({
           )}
           {!readOnly && (
             <>
-              <button
-                onClick={() => {
-                  const urlParams = new URLSearchParams(window.location.search);
-                  const sessionId = urlParams.get('sessionId') || localStorage.getItem('synapse_last_session_id') || '';
-                  navigate(`/ili-sectioning?sessionId=${sessionId}`);
-                }}
-                className="syn-btn syn-btn--sm syn-btn--ink"
-              >
-                <FiMap size={14} />
-                Sectional
-              </button>
               <button onClick={exportToExcel} disabled={isExporting || activeTab === 'Excluded'} className="syn-btn syn-btn--sm syn-btn--lime">
                 <FiDownload size={14} />
                 {isExporting ? 'Exporting...' : 'Excel'}

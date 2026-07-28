@@ -1272,7 +1272,14 @@ body:has(.alignment-workspace--gw) {
 .sectioning-light-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; border-bottom: 1px solid var(--sectioning-line); padding: .55rem .75rem; color: var(--sectioning-muted); font-size: .7rem; }
 .sectioning-light-toolbar__hint { flex: 1; min-width: 12rem; text-align: right; }
 .sectioning-light-toolbar button { min-height: 1.9rem; padding: .3rem .55rem; font-size: .65rem; }
-.sectioning-light-viewer { height: 25rem; background: var(--sectioning-panel); }
+.sectioning-light-viewer {
+  height: 34rem;
+  min-height: 22rem;
+  max-height: 60rem;
+  overflow: hidden;
+  resize: vertical;
+  background: var(--sectioning-panel);
+}
 .sectioning-light-viewer .sectioning-schematic { background: var(--sectioning-panel); }
 .sectioning-light-viewer .sectioning-schematic > div { scrollbar-color: #b7c4d7 #f4f7fb; }
 .sectioning-light-empty { display: grid; height: 100%; place-content: center; justify-items: center; gap: .5rem; color: var(--sectioning-muted); text-align: center; }.sectioning-light-empty strong { color: var(--sectioning-ink); }.sectioning-light-empty span { font-size: .75rem; }

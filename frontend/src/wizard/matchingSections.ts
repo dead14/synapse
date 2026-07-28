@@ -8,6 +8,18 @@ export interface LockedGwPair {
   newDistance: number;
 }
 
+export interface SectionBoundary {
+  key: string;
+  side: 'MATCHED' | 'OLD' | 'NEW';
+  label: string;
+  oldId: string | null;
+  newId: string | null;
+  oldDistance: number;
+  newDistance: number;
+  /** Measured distance on the side identified by `side`. */
+  sourceDistance: number;
+}
+
 export interface SectionTolerances {
   clock_tolerance: number;
   us_gw_distance_tolerance: number;
@@ -29,6 +41,9 @@ export interface MatchingSection {
   policy: SectionPolicy;
   startGwKey: string;
   endGwKey: string;
+  /** Additive boundary evidence for OLD-only or NEW-only GWs. */
+  startBoundary?: SectionBoundary;
+  endBoundary?: SectionBoundary;
   startM?: number;
   endM?: number;
   newStartM?: number;
@@ -60,26 +75,44 @@ export function normalizeLockedGws(pairs: any[]): LockedGwPair[] {
     .sort((left, right) => left.newDistance - right.newDistance);
 }
 
-export function validateSectionOrder(sections: MatchingSection[], lockedGws: LockedGwPair[]): string | null {
+type BoundaryLike = LockedGwPair | SectionBoundary;
+
+function unmatchedBoundary(boundary: BoundaryLike): SectionBoundary | undefined {
+  return 'side' in boundary && boundary.side !== 'MATCHED' ? boundary : undefined;
+}
+
+function boundaryFor(
+  section: MatchingSection,
+  edge: 'start' | 'end',
+  boundaries: BoundaryLike[],
+): BoundaryLike | undefined {
+  const explicit = edge === 'start' ? section.startBoundary : section.endBoundary;
+  if (explicit) return explicit;
+  const key = edge === 'start' ? section.startGwKey : section.endGwKey;
+  return boundaries.find((boundary) => boundary.key === key);
+}
+
+export function validateSectionOrder(sections: MatchingSection[], boundaries: BoundaryLike[]): string | null {
   // Sectioning is optional. Without sections the entire aligned range uses the
   // global MATCH policy and Hungarian still executes normally.
   if (sections.length === 0) return null;
-  const indexes = new Map(lockedGws.map((pair, index) => [pair.key, index]));
   const ranges: Array<{ name: string; start: number; end: number }> = [];
 
   for (const section of sections) {
     if (!section.name.trim()) return 'Section name must not be empty.';
-    const start = indexes.get(section.startGwKey);
-    const end = indexes.get(section.endGwKey);
-    if (start === undefined || end === undefined) return `${section.name}: boundaries must use locked GWs.`;
-    if (start >= end) return `${section.name}: End GW must come after Start GW on NEW.`;
+    const start = boundaryFor(section, 'start', boundaries);
+    const end = boundaryFor(section, 'end', boundaries);
+    if (!start || !end) return `${section.name}: boundary evidence is unavailable.`;
+    if (start.newDistance >= end.newDistance || start.oldDistance >= end.oldDistance) {
+      return `${section.name}: End GW must come after Start GW on OLD and NEW.`;
+    }
     if (section.tolerances) {
       const invalidTolerance = Object.entries(section.tolerances).find(
         ([, value]) => !Number.isFinite(value) || value < 0,
       );
       if (invalidTolerance) return `${section.name}: ${invalidTolerance[0]} must be a non-negative number.`;
     }
-    ranges.push({ name: section.name, start, end });
+    ranges.push({ name: section.name, start: start.newDistance, end: end.newDistance });
   }
 
   ranges.sort((left, right) => left.start - right.start);
@@ -94,9 +127,10 @@ export function validateSectionOrder(sections: MatchingSection[], lockedGws: Loc
 export function saveSectionRange(
   current: MatchingSection[],
   nextSection: MatchingSection,
-  lockedGws: LockedGwPair[],
+  boundaries: BoundaryLike[],
 ): MatchingSection[] {
-  const indexByKey = new Map(lockedGws.map((pair, index) => [pair.key, index]));
+  const ordered = [...boundaries].sort((left, right) => left.newDistance - right.newDistance);
+  const indexByKey = new Map(ordered.map((boundary, index) => [boundary.key, index]));
   const first = indexByKey.get(nextSection.startGwKey);
   const second = indexByKey.get(nextSection.endGwKey);
   if (first === undefined || second === undefined || first === second) return current;
@@ -114,17 +148,29 @@ export function saveSectionRange(
       continue;
     }
     if (sectionStart < start) {
-      result.push({ ...section, id: `${section.id}-left-${nextSection.id}`, endGwKey: lockedGws[start].key });
+      result.push({
+        ...section,
+        id: `${section.id}-left-${nextSection.id}`,
+        endGwKey: ordered[start].key,
+        endBoundary: unmatchedBoundary(ordered[start]),
+      });
     }
     if (sectionEnd > end) {
-      result.push({ ...section, id: `${section.id}-right-${nextSection.id}`, startGwKey: lockedGws[end].key });
+      result.push({
+        ...section,
+        id: `${section.id}-right-${nextSection.id}`,
+        startGwKey: ordered[end].key,
+        startBoundary: unmatchedBoundary(ordered[end]),
+      });
     }
   }
 
   result.push({
     ...nextSection,
-    startGwKey: lockedGws[start].key,
-    endGwKey: lockedGws[end].key,
+    startGwKey: ordered[start].key,
+    endGwKey: ordered[end].key,
+    startBoundary: unmatchedBoundary(ordered[start]),
+    endBoundary: unmatchedBoundary(ordered[end]),
   });
   return result.sort((left, right) => indexByKey.get(left.startGwKey)! - indexByKey.get(right.startGwKey)!);
 }
@@ -174,11 +220,11 @@ export function sectionNameForComparisonRow(
 
 export function resolveSectionDistances(
   section: MatchingSection,
-  lockedGws: LockedGwPair[],
+  boundaries: BoundaryLike[],
 ): MatchingSection {
-  const byKey = new Map(lockedGws.map((pair) => [pair.key, pair]));
-  const start = byKey.get(section.startGwKey)!;
-  const end = byKey.get(section.endGwKey)!;
+  const start = boundaryFor(section, 'start', boundaries);
+  const end = boundaryFor(section, 'end', boundaries);
+  if (!start || !end) return section;
   return {
     ...section,
     startM: start.newDistance,

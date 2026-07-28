@@ -16,6 +16,8 @@ interface SchematicProps {
   inspectedGw?: SpatialFeature | null;
   onInspectGw?: (gw: SpatialFeature | null) => void;
   selectionEnabled?: boolean;
+  unmatchedSelectionEnabled?: boolean;
+  selectedRange?: { startM: number; endM: number } | null;
 }
 
 interface Point { x: number; y: number }
@@ -94,6 +96,8 @@ export default function SectioningSchematic({
   inspectedGw,
   onInspectGw,
   selectionEnabled = true,
+  unmatchedSelectionEnabled = false,
+  selectedRange = null,
 }: SchematicProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const geometry = useMemo(() => buildRouteGeometry(features, zoom), [features, zoom]);
@@ -129,7 +133,7 @@ export default function SectioningSchematic({
   const activateGw = (gw: SpatialFeature) => {
     if (!canInspectGws) return;
     onInspectGw?.(gw);
-    if (selectionEnabled) onGwClick(gw);
+    if (selectionEnabled && (gw.status === 'MATCHED' || unmatchedSelectionEnabled)) onGwClick(gw);
   };
   const markerKeyDown = (gw: SpatialFeature) => (event: React.KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -189,13 +193,13 @@ export default function SectioningSchematic({
             })}
 
             {/* Distance Measurement Tool */}
-            {selectedGWs.length === 2 && (() => {
-              const middleDist = (selectedGWs[0].dist + selectedGWs[1].dist) / 2;
+            {selectedGWs.length === 2 && selectedRange && (() => {
+              const middleDist = (selectedRange.startM + selectedRange.endM) / 2;
               const middlePos = geometry.positionAt(middleDist);
-              const distanceDiff = Math.abs(selectedGWs[1].dist - selectedGWs[0].dist);
+              const distanceDiff = Math.abs(selectedRange.endM - selectedRange.startM);
               return (
                 <g>
-                  <path d={geometry.rangePath(selectedGWs[0].dist, selectedGWs[1].dist)} fill="none" stroke="#2563eb" strokeWidth="6" strokeOpacity="0.3" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d={geometry.rangePath(selectedRange.startM, selectedRange.endM)} fill="none" stroke="#2563eb" strokeWidth="6" strokeOpacity="0.3" strokeLinecap="round" strokeLinejoin="round" />
                   <rect x={middlePos.x - 40} y={middlePos.y - 32} width="80" height="22" rx="4" fill="#eff6ff" stroke="#3b82f6" strokeWidth="1.5" />
                   <text x={middlePos.x} y={middlePos.y - 17} textAnchor="middle" fontSize="11" fontWeight="bold" fill="#1d4ed8">{distanceDiff.toFixed(3)} m</text>
                 </g>
