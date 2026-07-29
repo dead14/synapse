@@ -10,7 +10,8 @@ interface Props {
   windowM?: number;
 }
 
-const PLOT = { width: 640, height: 190, left: 40, right: 12, top: 12, bottom: 30 };
+// A deliberately wide profile: it should read as a pipeline strip, not a tall chart.
+const PLOT = { width: 960, height: 200, left: 40, right: 12, top: 12, bottom: 30 };
 
 /**
  * Anomaly concentration along the line, with the worst contiguous stretch called
