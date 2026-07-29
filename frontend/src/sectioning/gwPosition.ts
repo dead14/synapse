@@ -9,19 +9,28 @@ export function formatLogDistance(distance: number | null | undefined) {
   return Number.isFinite(distance) ? `${Number(distance).toFixed(3)} m` : null;
 }
 
-export function getOriginalLd(rawData: Record<string, unknown> | undefined) {
+export function getOriginalLd(
+  rawData: Record<string, unknown> | undefined,
+  runRole?: SpatialFeature['runRole'],
+) {
   if (!rawData) return null;
   const source = rawData.raw && typeof rawData.raw === 'object' && !Array.isArray(rawData.raw)
     ? rawData.raw as Record<string, unknown>
     : null;
+  const sideSpecificKeys = runRole === 'HISTORICAL'
+    ? ['Original Log Dist OLD (m)', 'Original Log Dist NEW (m)']
+    : ['Original Log Dist NEW (m)', 'Original Log Dist OLD (m)'];
   const sourceKeys = [
     'Original LD',
     'original_ld',
+    ...sideSpecificKeys,
     'source_log_distance_m',
+    'sourceDist',
+    'sourceDistanceM',
+    'source_abs_distance_m',
     'raw_log_distance_m',
     'Log Distance',
     'Log Distance (m)',
-    'Log Dist NEW (m)',
     'log_distance_m',
     'log_distance',
     'Odometer',
@@ -63,7 +72,7 @@ export function getGwPositionDetails(feature: SpatialFeature) {
   return {
     primaryLabel: `Log distance ${isMaster ? 'NEW' : 'OLD'}`,
     primaryDistance: formatLogDistance(feature.dist)!,
-    primaryOriginalLd: getOriginalLd(feature.rawData),
+    primaryOriginalLd: getOriginalLd(feature.rawData, feature.runRole),
     pairedLabel: `Log distance ${isMaster ? 'OLD' : 'NEW'}`,
     pairedDistance: formatLogDistance(pairedDistance),
     pairedId: pairedId || null,

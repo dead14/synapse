@@ -25,8 +25,8 @@ import {
   saveSectionRange,
   validateSectionOrder,
 } from './matchingSections';
-import { fetchSectioningAnchors } from './sectioningEvidence';
-import { pairGwResult, primaryRunPair, resolveRunPairs, sectionsForPair } from '../domain/runPairs';
+import { fetchSectioningAnchors, prepareSectioningMasterRows } from './sectioningEvidence';
+import { pairGwResult, pairTieIn, primaryRunPair, resolveRunPairs, sectionsForPair } from '../domain/runPairs';
 import ShareSnapshotButton from '../components/sharing/ShareSnapshotButton';
 import {
   ActionBar,
@@ -70,16 +70,27 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
     () => Array.isArray(masterRun.rawFeatures) ? masterRun.rawFeatures : [],
     [masterRun.rawFeatures],
   );
-  const [persistedMasterRows, setPersistedMasterRows] = useState<any[]>([]);
+  const [persistedMasterEvidence, setPersistedMasterEvidence] = useState<{
+    runId: number | null;
+    rows: any[];
+  }>({ runId: null, rows: [] });
   const [isLoadingMasterEvidence, setIsLoadingMasterEvidence] = useState(false);
+  const activeGwResult = useMemo(
+    () => pairGwResult(config, activePair),
+    [activePair, config],
+  );
   const lockedGws = useMemo(
-    () => normalizeLockedGws(pairGwResult(config, activePair)?.gwMatchesFinal || []),
+    () => normalizeLockedGws(activeGwResult?.gwMatchesFinal || []),
+    [activeGwResult],
+  );
+  const activeTieIn = useMemo(
+    () => pairTieIn(config, activePair),
     [config, activePair],
   );
 
   useEffect(() => {
     if (!Number.isSafeInteger(masterRunId) || masterRunId < 1) {
-      setPersistedMasterRows([]);
+      setPersistedMasterEvidence({ runId: null, rows: [] });
       return;
     }
     const controller = new AbortController();
@@ -90,7 +101,9 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
       (path, signal) => apiFetch(path, { signal }),
     )
       .then((rows) => {
-        if (!controller.signal.aborted) setPersistedMasterRows(rows);
+        if (!controller.signal.aborted) {
+          setPersistedMasterEvidence({ runId: masterRunId, rows });
+        }
       })
       .catch((error) => {
         if ((error as Error).name !== 'AbortError') console.error('Failed to load master feature evidence for sectioning:', error);
@@ -101,16 +114,26 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
     return () => controller.abort();
   }, [masterRunId]);
 
+  const masterEvidenceRows = useMemo(
+    () => prepareSectioningMasterRows(
+      persistedMasterEvidence.runId === masterRunId
+        && persistedMasterEvidence.rows.length > 0
+        ? persistedMasterEvidence.rows
+        : rawMasterRows,
+      activeTieIn,
+    ),
+    [activeTieIn, masterRunId, persistedMasterEvidence, rawMasterRows],
+  );
   const features = useMemo(() => buildMatchingSpatialFeatures({
     masterRun,
     historicalRuns: Array.isArray(config?.summaryData?.historicalRuns)
       ? config.summaryData.historicalRuns
       : config?.summaryData?.oldRun ? [config.summaryData.oldRun] : [],
-    masterRows: persistedMasterRows.length > 0 ? persistedMasterRows : rawMasterRows,
+    masterRows: masterEvidenceRows,
     lockedGws,
-    gwOrphans: config?.gwOrphans,
+    gwOrphans: activeGwResult?.gwOrphans,
     route: Array.isArray(config?.pipelineRoute) ? config.pipelineRoute : [],
-  }), [config?.gwOrphans, config?.pipelineRoute, config?.summaryData?.historicalRuns, config?.summaryData?.oldRun, lockedGws, masterRun, persistedMasterRows, rawMasterRows]);
+  }), [activeGwResult?.gwOrphans, config?.pipelineRoute, config?.summaryData?.historicalRuns, config?.summaryData?.oldRun, lockedGws, masterEvidenceRows, masterRun]);
   // Every pair's sections live in one saved array, so this step edits the slice
   // belonging to the pair on screen and carries the rest through untouched.
   const [allSections, setAllSections] = useState<MatchingSection[]>(
@@ -138,6 +161,12 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
   const [viewerHeight, setViewerHeight] = useState(34);
   const [draft, setDraft] = useState<SectionDraft>({ name: 'Section 1', sectionType: 'BUR', policy: 'MATCH' });
   const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
+  useEffect(() => {
+    setInspectedGw(null);
+    setStartIndex(null);
+    setEndIndex(null);
+    setEditingSectionId(null);
+  }, [activePair?.key]);
   const allBoundaries = useMemo(
     () => buildSectionBoundaries(features, lockedGws, true),
     [features, lockedGws],
@@ -500,11 +529,11 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
                 type="button"
                 className="sec-bend"
                 onClick={() => setInspectedGw(bend)}
-                aria-label={`Inspect bend ${index + 1}, source LD ${getOriginalLd(bend.rawData) ?? 'unavailable'}`}
+                aria-label={`Inspect bend ${index + 1}, source LD ${getOriginalLd(bend.rawData, bend.runRole) ?? 'unavailable'}`}
               >
                 <i aria-hidden="true">◆</i>
                 <strong>BEND {String(index + 1).padStart(2, '0')}</strong>
-                <small>Source LD {getOriginalLd(bend.rawData) ?? 'unavailable'} · plot {(bend.dist / 1000).toFixed(2)} km · {bendAngleDeg(bend).toFixed(0)}°</small>
+                <small>Source LD {getOriginalLd(bend.rawData, bend.runRole) ?? 'unavailable'} · plot {(bend.dist / 1000).toFixed(2)} km · {bendAngleDeg(bend).toFixed(0)}°</small>
               </button>
             ))}
             {!isLoadingMasterEvidence && bendFeatures.length === 0 && (

@@ -77,6 +77,24 @@ test('a non-primary pair never inherits the primary pair top-level evidence', ()
   assert.deepEqual(pairGwResult(config, newer).gwMatchesFinal, [{ old_id: 'a' }]);
 });
 
+test('GW matches and orphans resolve from the same active pair evidence', () => {
+  const config = {
+    summaryData: threeRunSummary,
+    gwMatchesFinal: [{ old_id: 'primary-match' }],
+    gwOrphans: [{ old_id: 'primary-orphan' }],
+    pairGwResults: {
+      '10->20': {
+        gwMatchesFinal: [{ old_id: 'older-match' }],
+        gwOrphans: [{ old_id: 'older-orphan' }],
+      },
+    },
+  };
+  const [older, newer] = resolveRunPairs(threeRunSummary);
+
+  assert.deepEqual(pairGwResult(config, older), config.pairGwResults['10->20']);
+  assert.deepEqual(pairGwResult(config, newer).gwOrphans, [{ old_id: 'primary-orphan' }]);
+});
+
 test('unscoped sections belong to the primary pair only', () => {
   const [older, newer] = resolveRunPairs(threeRunSummary);
   const primary = primaryRunPair(threeRunSummary);

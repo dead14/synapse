@@ -197,6 +197,7 @@ function serializeInspectionAnchor(row = {}) {
         sourceFeatureId: typeof row.feature_id === 'string' ? row.feature_id : null,
         dist: distanceM,
         log_distance_m: distanceM,
+        source_log_distance_m: distanceM,
         type: featureType,
         originalType: featureType,
         feature_type: featureType,

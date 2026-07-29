@@ -90,8 +90,9 @@ test('buildMatchingSpatialFeatures plots an elbow at its aligned position while 
       feature_id: 'BEND-081',
       type: 'Other',
       feature_identification: 'Pipeline Elbow',
-      abs_distance_m: 650.75,
-      raw: { log_distance_m: 612.25 },
+      dist: 612.25,
+      alignedDist: 650.75,
+      sourceDist: 612.25,
     }],
   });
 
@@ -100,7 +101,28 @@ test('buildMatchingSpatialFeatures plots an elbow at its aligned position while 
   assert.equal(bend.dist, 650.75);
   assert.match(bend.type, /elbow/);
   assert.equal(features.stats.bendCount, 1);
-  assert.equal(bend.rawData.raw && typeof bend.rawData.raw === 'object'
-    ? (bend.rawData.raw as Record<string, unknown>).log_distance_m
-    : null, 612.25);
+  assert.equal(bend.rawData.sourceDist, 612.25);
+});
+
+test('buildMatchingSpatialFeatures keeps the persisted Bend / Elbow API shape visible', () => {
+  const features = buildMatchingSpatialFeatures({
+    masterRun: { year: '2026' },
+    masterRows: [{
+      id: '81',
+      sourceFeatureId: 'BEND-081',
+      type: 'Bend / Elbow',
+      feature_type: 'Bend / Elbow',
+      feature_identification: 'Bend Begin',
+      dist: 612.25,
+      log_distance_m: 612.25,
+      source_log_distance_m: 612.25,
+    }],
+  });
+
+  const bend = features.allFeatures.find((feature) => feature.type.includes('bend'));
+  assert.ok(bend);
+  assert.equal(bend.dist, 612.25);
+  assert.equal(features.stats.bendCount, 1);
+  assert.equal(bend.rawData.sourceFeatureId, 'BEND-081');
+  assert.equal(bend.rawData.source_log_distance_m, 612.25);
 });
