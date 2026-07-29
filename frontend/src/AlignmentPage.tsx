@@ -83,7 +83,6 @@ export default function AlignmentPage() {
 
   const stepsList = visibleSteps(wizardConfig);
   const currentStep = stepsList[step];
-  const progress = stepsList.length > 1 ? Math.round((step / (stepsList.length - 1)) * 100) : 100;
   const runLabel = wizardConfig.sessionName
     || wizardConfig.summaryData?.newRun?.name
     || wizardConfig.summaryData?.masterRun?.name
@@ -183,32 +182,30 @@ export default function AlignmentPage() {
                 <Button
                   className="alignment-new-run-cta"
                   variant="secondary"
+                  size="xs"
                   startIcon={<FiPlusCircle aria-hidden="true" />}
                   onClick={() => setShowResetConfirm(true)}
                   title="Clear current progress and start a new alignment run"
                 >
                   Start New Alignment Run
                 </Button>
-                <div className="alignment-progress-value">
-                  <span>Stage {step + 1} / {stepsList.length}</span>
-                  <strong>{progress}%</strong>
-                </div>
               </div>
             </div>
 
-            <div className="alignment-progress-track" aria-hidden="true">
-              <span style={{ width: `${progress}%` }} />
-            </div>
-            <ol className="alignment-stepper">
+            <ol className="alignment-stepper alignment-stepper--rail" aria-label="Alignment steps">
               {stepsList.map((s, index) => {
                 const isComplete = index < step;
                 const isCurrent = index === step;
                 return (
-                  <li key={s.id} aria-current={isCurrent ? 'step' : undefined} className={isCurrent ? 'is-current' : isComplete ? 'is-complete' : ''}>
+                  <li
+                    key={s.id}
+                    aria-current={isCurrent ? 'step' : undefined}
+                    className={isCurrent ? 'is-current' : isComplete ? 'is-complete' : ''}
+                    title={`${s.name}: ${s.desc}`}
+                  >
                     <span className="alignment-stepper-index">{isComplete ? '✓' : index + 1}</span>
                     <span className="alignment-stepper-copy">
                       <strong>{s.name}</strong>
-                      <small>{s.desc}</small>
                     </span>
                   </li>
                 );

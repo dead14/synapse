@@ -377,7 +377,7 @@ body:has(.alignment-workspace--gw) {
   border-bottom: var(--rule-gw-hairline) solid var(--color-gw-rule);
   border-radius: 0;
   background: var(--color-gw-canvas);
-  padding: var(--space-gw-lg) clamp(var(--space-gw-md), 3vw, var(--space-gw-xl));
+  padding: var(--space-gw-md) clamp(var(--space-gw-md), 3vw, var(--space-gw-xl));
   color: var(--color-gw-ink);
   box-shadow: none;
   backdrop-filter: none;
@@ -389,23 +389,12 @@ body:has(.alignment-workspace--gw) {
   color: var(--color-gw-muted);
 }
 
-.alignment-workspace--gw .alignment-title,
-.alignment-workspace--gw .alignment-progress-value strong {
+.alignment-workspace--gw .alignment-title {
   color: var(--color-gw-ink);
 }
 
-.alignment-workspace--gw .alignment-subtitle,
-.alignment-workspace--gw .alignment-progress-value,
-.alignment-workspace--gw .alignment-stepper-copy small {
+.alignment-workspace--gw .alignment-subtitle {
   color: var(--color-gw-neutral);
-}
-
-.alignment-workspace--gw .alignment-progress-track {
-  background: var(--color-gw-paper-raised);
-}
-
-.alignment-workspace--gw .alignment-progress-track span {
-  background: var(--color-gw-accent);
 }
 
 .alignment-workspace--gw .alignment-stepper li {
@@ -1343,17 +1332,18 @@ body:has(.alignment-workspace--gw) {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 1rem;
+  gap: 0.5rem;
   flex-wrap: wrap;
 }
 
 .alignment-new-run-cta {
-  min-height: 3rem;
-  padding-inline: 1.2rem;
+  min-height: var(--ds-h-xs);
+  padding-inline: 0.625rem;
   border-color: color-mix(in srgb, var(--syn-accent-strong) 34%, var(--syn-line));
   background: color-mix(in srgb, var(--syn-accent-strong) 8%, var(--syn-surface));
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--syn-accent-strong) 12%, transparent);
-  font-weight: 750;
+  box-shadow: none;
+  font-size: var(--ds-t-xs);
+  font-weight: 700;
 }
 
 .matching-rule-evidence {
