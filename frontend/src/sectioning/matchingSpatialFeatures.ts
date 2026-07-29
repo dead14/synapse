@@ -22,9 +22,16 @@ interface Input {
 }
 
 const finiteDistance = (row: Record<string, unknown>) => {
-  for (const value of [row.dist, row.log_distance_m, row.odometer, row.distance, row.val]) {
+  for (const value of [row.dist, row.abs_distance_m, row.log_distance_m, row.odometer, row.distance, row.val]) {
     const distance = Number(value);
     if (Number.isFinite(distance)) return distance;
+  }
+  if (row.raw && typeof row.raw === 'object') {
+    const raw = row.raw as Record<string, unknown>;
+    for (const value of [raw.dist, raw.log_distance_m, raw.odometer, raw.distance, raw.val]) {
+      const distance = Number(value);
+      if (Number.isFinite(distance)) return distance;
+    }
   }
   return null;
 };

@@ -275,13 +275,13 @@ export default function IliSectioningPage() {
 
     // First pass to find maxDist
     data.forEach(row => {
-      const dist = Number(row.dist ?? row['Log Dist NEW (m)']);
+      const dist = Number(row.dist ?? row.abs_distance_m ?? row.raw?.log_distance_m ?? row['Log Dist NEW (m)']);
       if (!isNaN(dist) && dist > maxDist) maxDist = dist;
     });
 
     data.forEach(row => {
       // The latest/NEW run is always the spatial master.
-      const dist = Number(row.dist ?? row['Log Dist NEW (m)']);
+      const dist = Number(row.dist ?? row.abs_distance_m ?? row.raw?.log_distance_m ?? row['Log Dist NEW (m)']);
       if (isNaN(dist)) return;
       
       const type = String(row.type ?? row.originalType ?? row['Feature Type NEW'] ?? '').toLowerCase();
