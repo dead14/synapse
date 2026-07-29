@@ -3,7 +3,7 @@ import type { SectionDef, SpatialFeatures, SpatialFeature } from './types';
 import { longitudinalAxisExtent } from './historicalLanes';
 import { canInspectGwPrecisely, clampSchematicZoom, shouldShowUnmatchedMarkerLabel } from './viewOptions';
 import { sectionColor } from './sectionColors';
-import { bendDefinition } from './bendGeometry';
+import { bendDefinition, isBendFeature } from './bendGeometry';
 import WeldTable from './WeldTable';
 import { getOriginalLd } from './gwPosition';
 
@@ -47,10 +47,7 @@ function buildRouteGeometry(features: SpatialFeatures, zoom: number): RouteGeome
   const paddingX = 90;
   const baselineY = 125;
   const bendFeatures = features.allFeatures
-    .filter((feature) => {
-      const t = feature.type.toLowerCase();
-      return t.includes('bend') || t.includes('elbow') || t.includes('jog');
-    })
+    .filter(isBendFeature)
     .sort((left, right) => left.dist - right.dist)
     .filter((feature, index, list) => index === 0 || Math.abs(feature.dist - list[index - 1].dist) > 0.001);
   const bends: BendGeometry[] = bendFeatures.map((feature) => {
@@ -144,6 +141,11 @@ export default function SectioningSchematic({
     event.preventDefault();
     activateGw(gw);
   };
+  const inspectFeatureKeyDown = (feature: SpatialFeature) => (event: React.KeyboardEvent<SVGGElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    onInspectGw?.(feature);
+  };
 
   return (
     <div className="sectioning-schematic flex h-full min-h-0 w-full flex-col bg-slate-50">
@@ -217,20 +219,33 @@ export default function SectioningSchematic({
 
             {/* Bends (Floating Boxes) */}
             {geometry.bends.map((bend, index) => (
-              <g key={`bend-${bend.feature.id}-${index}`}>
+              <g
+                key={`bend-${bend.feature.id}-${index}`}
+                role={onInspectGw ? 'button' : undefined}
+                tabIndex={onInspectGw ? 0 : undefined}
+                aria-label={onInspectGw
+                  ? `Bend ${index + 1}, source LD ${getOriginalLd(bend.feature.rawData) ?? 'unavailable'}, plot position ${bend.feature.dist.toFixed(3)} m`
+                  : undefined}
+                className={onInspectGw ? 'cursor-pointer' : ''}
+                onClick={() => onInspectGw?.(bend.feature)}
+                onKeyDown={onInspectGw ? inspectFeatureKeyDown(bend.feature) : undefined}
+              >
+                {inspectedGw
+                  && inspectedGw.id === bend.feature.id
+                  && inspectedGw.runRole === bend.feature.runRole
+                  && <rect x={bend.point.x - 46} y={bend.point.y - 74} width="92" height="40" rx="6" fill="none" stroke="#1d4ed8" strokeWidth="2" />}
                 <rect x={bend.point.x - 42} y={bend.point.y - 70} width="84" height="32" rx="4" fill="#fff7ed" stroke="#f59e0b" strokeWidth="1" />
                 <text x={bend.point.x} y={bend.point.y - 56} textAnchor="middle" fontSize="9" fontWeight="bold" fill="#b45309">BEND {String(index + 1).padStart(2, '0')}</text>
                 <text x={bend.point.x} y={bend.point.y - 45} textAnchor="middle" fontSize="9" fill="#b45309">{(bend.feature.dist / 1000).toFixed(2)} km / {bend.angleDeg.toFixed(0)}°</text>
                 <line x1={bend.point.x} y1={bend.point.y - 38} x2={bend.point.x} y2={bend.point.y - 12} stroke="#f59e0b" strokeWidth="1" />
                 <path d={`M ${bend.point.x} ${bend.point.y - 12} l 4 4 l -4 4 l -4 -4 z`} fill="#f59e0b" />
-                <title>{`Bend ${index + 1} · ${bend.feature.dist.toFixed(3)} m · ${bend.angleDeg.toFixed(0)}°${bend.inferred ? ' · inferred' : ''}`}</title>
+                <title>{`Bend ${index + 1} · source LD ${getOriginalLd(bend.feature.rawData) ?? 'unavailable'} · plot ${bend.feature.dist.toFixed(3)} m · ${bend.angleDeg.toFixed(0)}°${bend.inferred ? ' · inferred' : ''}`}</title>
               </g>
             ))}
 
             {/* Master Features (GWs, Valves, etc) */}
             {features.allFeatures.map((feature, index) => {
-              const t = feature.type.toLowerCase();
-              if (t.includes('bend') || t.includes('elbow') || t.includes('jog')) return null;
+              if (isBendFeature(feature)) return null;
               const position = geometry.positionAt(feature.dist);
               const isGw = /weld|girth|seam|gw/.test(feature.type.toLowerCase());
               const isValve = feature.type.toLowerCase().includes('valve') || feature.type.toLowerCase().includes('tee');

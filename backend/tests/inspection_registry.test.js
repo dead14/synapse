@@ -179,8 +179,10 @@ test('inspection anchors are tenant scoped, ordered by distance, and use a compo
     assert.equal(page.rows.length, 2);
     assert.deepEqual(page.nextCursor, { distanceM: 121, id: 43 });
     assert.match(calls[0].sql, /p\.organization_id = \$2/);
-    assert.match(calls[0].sql, /Girth Weld/);
-    assert.match(calls[0].sql, /Tee \/ Branch Connection/);
+    assert.match(calls[0].sql, /f\.feature_type IN/);
+    assert.match(calls[0].sql, /'Girth Weld'/);
+    assert.match(calls[0].sql, /'Tee \/ Branch Connection'/);
+    assert.match(calls[0].sql, /bend\|elbow\|jog/);
     assert.match(calls[0].sql, /f\.log_distance_m > \$3/);
     assert.match(calls[0].sql, /ORDER BY f\.log_distance_m ASC, f\.id ASC/);
     assert.deepEqual(calls[0].values, [9, 4, 120, 40, 3]);

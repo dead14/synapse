@@ -1,4 +1,5 @@
 import { buildHistoricalLanes } from './historicalLanes.ts';
+import { isBendFeature } from './bendGeometry.ts';
 import { interpolateAlongRoute } from './geo.ts';
 import { pairKey } from './pairing.ts';
 import { maxOf } from '../utils/numericRange.ts';
@@ -242,7 +243,7 @@ export function buildMatchingSpatialFeatures({
     stats: {
       totalLength: maxMasterDistance,
       gwCount: gws.length,
-      bendCount: physicalFeatures.filter((feature) => feature.type.includes('bend')).length,
+      bendCount: physicalFeatures.filter(isBendFeature).length,
       missingGwCount: historicalLanes.reduce((total, lane) => total + lane.gws.filter((gw) => gw.status === 'MISSING_IN_MASTER').length, 0),
     },
   };

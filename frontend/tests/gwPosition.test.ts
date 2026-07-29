@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getGwPositionDetails } from '../src/sectioning/gwPosition.ts';
+import { getGwPositionDetails, getOriginalLd } from '../src/sectioning/gwPosition.ts';
 
 test('getGwPositionDetails presents actual NEW and OLD log distances for a matched weld', () => {
   const details = getGwPositionDetails({
@@ -39,4 +39,11 @@ test('getGwPositionDetails keeps an unmatched weld explicit without inventing an
 
   assert.equal(details.primaryDistance, '83.900 m');
   assert.equal(details.pairedDistance, null);
+});
+
+test('getOriginalLd reads nested source data instead of the backend-adjusted plot position', () => {
+  assert.equal(getOriginalLd({
+    abs_distance_m: 650.75,
+    raw: { log_distance_m: 612.25 },
+  }), '612.25');
 });

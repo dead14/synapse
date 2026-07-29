@@ -1,5 +1,13 @@
 import type { SpatialFeature } from './types';
 
+export function isBendType(type: string) {
+  return /\b(bend|elbow|jog)\b/.test(type.toLowerCase());
+}
+
+export function isBendFeature(feature: SpatialFeature) {
+  return isBendType(feature.type);
+}
+
 function readRawNumber(feature: SpatialFeature, patterns: RegExp[]): number | null {
   for (const [key, rawValue] of Object.entries(feature.rawData || {})) {
     const normalizedKey = key.toLowerCase().replaceAll('_', ' ');
@@ -17,7 +25,7 @@ function readRawNumber(feature: SpatialFeature, patterns: RegExp[]): number | nu
  */
 export function bendDefinition(feature: SpatialFeature) {
   const angleFromColumn = readRawNumber(feature, [/bend.*angle/, /deflection/, /^angle$/, /degree/]);
-  const angleFromType = Number.parseFloat(feature.type.match(/(?:bend|elbow)[^0-9]*(\d+(?:\.\d+)?)/i)?.[1] || '');
+  const angleFromType = Number.parseFloat(feature.type.match(/(?:bend|elbow|jog)[^0-9]*(\d+(?:\.\d+)?)/i)?.[1] || '');
   const angleDeg = Math.max(5, Math.min(175, angleFromColumn ?? (Number.isFinite(angleFromType) ? angleFromType : 90)));
   return { angleDeg, inferred: angleFromColumn === null && !Number.isFinite(angleFromType) };
 }

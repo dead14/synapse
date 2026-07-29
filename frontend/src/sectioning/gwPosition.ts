@@ -11,9 +11,43 @@ export function formatLogDistance(distance: number | null | undefined) {
 
 export function getOriginalLd(rawData: Record<string, unknown> | undefined) {
   if (!rawData) return null;
-  for (const key of ['Log Distance', 'Log Distance (m)', 'log_distance_m', 'log_distance', 'odometer', 'distance', 'dist', 'val']) {
-    if (rawData[key] !== undefined && rawData[key] !== null && String(rawData[key]).trim() !== '') {
-      return String(rawData[key]);
+  const source = rawData.raw && typeof rawData.raw === 'object' && !Array.isArray(rawData.raw)
+    ? rawData.raw as Record<string, unknown>
+    : null;
+  const sourceKeys = [
+    'Original LD',
+    'original_ld',
+    'source_log_distance_m',
+    'raw_log_distance_m',
+    'Log Distance',
+    'Log Distance (m)',
+    'Log Dist NEW (m)',
+    'log_distance_m',
+    'log_distance',
+    'Odometer',
+    'odometer',
+  ];
+  const read = (candidate: Record<string, unknown>) => {
+    for (const key of sourceKeys) {
+      if (candidate[key] !== undefined && candidate[key] !== null && String(candidate[key]).trim() !== '') {
+        return String(candidate[key]);
+      }
+    }
+    return null;
+  };
+
+  const nestedSourceLd = source ? read(source) : null;
+  if (nestedSourceLd !== null) return nestedSourceLd;
+  const directSourceLd = read(rawData);
+  if (directSourceLd !== null) return directSourceLd;
+
+  // Legacy in-memory rows used `dist`/`distance` for source LD. Do not use
+  // those ambiguous fields when an adjusted absolute position is present.
+  if (rawData.abs_distance_m === undefined) {
+    for (const key of ['distance', 'dist', 'val']) {
+      if (rawData[key] !== undefined && rawData[key] !== null && String(rawData[key]).trim() !== '') {
+        return String(rawData[key]);
+      }
     }
   }
   return null;

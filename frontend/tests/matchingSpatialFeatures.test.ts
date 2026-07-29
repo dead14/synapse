@@ -81,3 +81,26 @@ test('buildMatchingSpatialFeatures matches persisted anchor feature_id instead o
 
   assert.equal(features.gws.find((gw) => gw.id === 'NEW-001')?.status, 'MATCHED');
 });
+
+test('buildMatchingSpatialFeatures plots an elbow at its aligned position while preserving source LD', () => {
+  const features = buildMatchingSpatialFeatures({
+    masterRun: { year: '2026' },
+    masterRows: [{
+      id: 81,
+      feature_id: 'BEND-081',
+      type: 'Other',
+      feature_identification: 'Pipeline Elbow',
+      abs_distance_m: 650.75,
+      raw: { log_distance_m: 612.25 },
+    }],
+  });
+
+  const bend = features.allFeatures.find((feature) => feature.id === 'BEND-081');
+  assert.ok(bend);
+  assert.equal(bend.dist, 650.75);
+  assert.match(bend.type, /elbow/);
+  assert.equal(features.stats.bendCount, 1);
+  assert.equal(bend.rawData.raw && typeof bend.rawData.raw === 'object'
+    ? (bend.rawData.raw as Record<string, unknown>).log_distance_m
+    : null, 612.25);
+});
