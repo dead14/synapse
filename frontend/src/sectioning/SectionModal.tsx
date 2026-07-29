@@ -19,6 +19,7 @@ const SECTION_TYPES = [
   { id: 'ROC', label: 'ROC - Road Crossing' },
   { id: 'BUR', label: 'BUR - Buried Normal' },
   { id: 'CAS', label: 'CAS - Cased Section' },
+  { id: 'BND', label: 'BND - Bend' },
   { id: 'OTH', label: 'OTH - Other' }
 ];
 

@@ -7,6 +7,7 @@ export const SECTION_TYPE_COLORS: Record<string, string> = {
   ROC: '#fb923c',
   BUR: '#84cc16',
   CAS: '#94a3b8',
+  BND: '#f472b6',
   UNCLASSIFIED: '#cbd5e1',
   OTH: SECTION_FALLBACK_COLOR,
 };
