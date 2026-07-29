@@ -5,6 +5,7 @@ import { canInspectGwPrecisely, clampSchematicZoom, shouldShowUnmatchedMarkerLab
 import { sectionColor } from './sectionColors';
 import { bendDefinition } from './bendGeometry';
 import WeldTable from './WeldTable';
+import { getOriginalLd } from './gwPosition';
 
 interface SchematicProps {
   features: SpatialFeatures;
@@ -46,7 +47,7 @@ function buildRouteGeometry(features: SpatialFeatures, zoom: number): RouteGeome
   const paddingX = 90;
   const baselineY = 125;
   const bendFeatures = features.allFeatures
-    .filter((feature) => feature.type.toLowerCase().includes('bend') && feature.dist > 0 && feature.dist < totalLength)
+    .filter((feature) => feature.type.toLowerCase().includes('bend'))
     .sort((left, right) => left.dist - right.dist)
     .filter((feature, index, list) => index === 0 || Math.abs(feature.dist - list[index - 1].dist) > 0.001);
   const bends: BendGeometry[] = bendFeatures.map((feature) => {
@@ -249,7 +250,7 @@ export default function SectioningSchematic({
                   onClick={() => { if (isGw) activateGw(feature); }}
                   onKeyDown={isGw && canInspectGws ? markerKeyDown(feature) : undefined}
                 >
-                  <title>{`${feature.type} · ${feature.id} · abs ${feature.dist.toFixed(3)} m · ${isUnmatched ? 'No OLD pair' : feature.status}`}</title>
+                  <title>{`${feature.type} · ${feature.id} · abs ${feature.dist.toFixed(3)} m${getOriginalLd(feature.rawData) ? ` · Orig LD: ${getOriginalLd(feature.rawData)}` : ''} · ${isUnmatched ? 'No OLD pair' : feature.status}`}</title>
                   {isInspected && (
                     <rect x={position.x - boxW / 2 - 3} y={position.y - boxH / 2 - 3} width={boxW + 6} height={boxH + 6} rx={rx + 3} fill="none" stroke="#1d4ed8" strokeWidth="1.5" />
                   )}
@@ -320,7 +321,7 @@ export default function SectioningSchematic({
                         onKeyDown={canInspectGws ? markerKeyDown(gw) : undefined}
                       >
                         <rect x={x - boxW / 2} y={y - boxH / 2} width={boxW} height={boxH} rx={rx} fill={color} />
-                        <title>{`${gw.id} · abs ${gw.dist.toFixed(3)} m · ${gw.status}`}</title>
+                        <title>{`${gw.id} · abs ${gw.dist.toFixed(3)} m${getOriginalLd(gw.rawData) ? ` · Orig LD: ${getOriginalLd(gw.rawData)}` : ''} · ${gw.status}`}</title>
                         
                         {unmatched && showUnmatchedLabels && (
                           <g pointerEvents="none">

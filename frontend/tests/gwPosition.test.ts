@@ -18,6 +18,7 @@ test('getGwPositionDetails presents actual NEW and OLD log distances for a match
   assert.deepEqual(details, {
     primaryLabel: 'Log distance NEW',
     primaryDistance: '1870.354 m',
+    primaryOriginalLd: null,
     pairedLabel: 'Log distance OLD',
     pairedDistance: '1868.810 m',
     pairedId: 'GW-OLD-01',
