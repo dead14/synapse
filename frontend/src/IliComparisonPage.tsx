@@ -76,6 +76,7 @@ const JobProgressBar = ({ progress, message }: { progress: number; message: stri
 
 interface IliComparisonPageProps {
   readOnly?: boolean;
+  sharedInterventions?: unknown[];
   shareAccess?: {
     id: string;
     accessToken: string;
@@ -85,6 +86,7 @@ interface IliComparisonPageProps {
 
 export default function IliComparisonPage({
   readOnly = false,
+  sharedInterventions,
   shareAccess,
 }: IliComparisonPageProps = {}) {
   const sharedId = shareAccess?.id;
@@ -163,7 +165,7 @@ export default function IliComparisonPage({
           )
           : fetchAlignmentResult(requestedSessionId, progress, controller.signal);
         const sessionPromise = readOnly
-          ? Promise.resolve({ config: { interventions: [] as InterventionEvent[] } })
+          ? Promise.resolve({ config: { interventions: (sharedInterventions ?? []) as InterventionEvent[] } })
           : apiFetch<{ config?: Record<string, unknown> & { interventions?: InterventionEvent[] } }>(
             `/api/wizard/session/${encodeURIComponent(requestedSessionId)}`,
             { signal: controller.signal },
@@ -425,6 +427,7 @@ export default function IliComparisonPage({
                 exportData={includedData}
                 pipelineData={pipelineExportData}
                 sessionId={sessionId}
+                interventions={interventions}
               />
             </div>
           </div>

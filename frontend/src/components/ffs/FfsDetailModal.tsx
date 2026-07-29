@@ -224,7 +224,7 @@ export default function FfsDetailModal({
       role="dialog"
       aria-modal="true"
       aria-label={`Calculation breakdown for the feature at log distance ${n.ld}`}
-      className="fixed inset-0 z-[999] flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[100000] flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-sm"
       onClick={onClose}
     >
       <div

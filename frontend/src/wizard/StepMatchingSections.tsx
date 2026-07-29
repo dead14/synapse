@@ -48,7 +48,7 @@ interface Props {
 const SECTION_TYPES: Array<[string, string]> = [
   ['UNCLASSIFIED', 'Unclassified'], ['BUR', 'Buried'], ['AL', 'Aerial'],
   ['RL', 'River Crossing'], ['ROC', 'Road Crossing'], ['RIS', 'Riser'],
-  ['CAS', 'Cased'], ['OTH', 'Other'],
+  ['CAS', 'Cased'], ['BND', 'Bend'], ['OTH', 'Other'],
 ];
 const EMPTY_RUN: Record<string, unknown> = {};
 

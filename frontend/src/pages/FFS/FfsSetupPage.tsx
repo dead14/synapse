@@ -599,8 +599,6 @@ export default function FfsSetupPage() {
                 ['SMYS [MPa]', smysMpa, setSmysMpa],
                 ['Design Factor', designFactor, setDesignFactor],
                 ['Operating Pressure [MPa]', operatingPressureMpa, setOperatingPressureMpa],
-                ['Fallback CR Depth [mm/y]', fallbackDepthGrowth, setFallbackDepthGrowth],
-                ['Fallback CR Length [mm/y]', fallbackLengthGrowth, setFallbackLengthGrowth],
               ].map(([label, value, setter]) => (
                 <label key={label as string} className="block text-xs font-semibold text-slate-500">
                   {label as string}
@@ -615,10 +613,6 @@ export default function FfsSetupPage() {
                 </label>
               ))}
             </div>
-            <p className="text-xs text-slate-500">
-              Fallback growth rates are only used when a released anomaly has no measured growth. Use 0 only when
-              that engineering assumption is intentional.
-            </p>
               </>
             ) : (
               <>

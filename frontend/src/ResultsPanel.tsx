@@ -85,6 +85,7 @@ interface ResultsPanelProps {
   exportData?: any[];
   pipelineData?: Record<string, unknown>;
   sessionId?: string;
+  interventions?: unknown[];
 }
 
 /** Parse a clock value to hours (0..12) regardless of format ("HH:MM" or Excel serial fraction). */
@@ -326,6 +327,7 @@ export default function ResultsPanel({
   exportData,
   pipelineData,
   sessionId = '',
+  interventions: interventionsProp,
 }: ResultsPanelProps) {
   const data = useMemo(() => {
     let flattened: any[] = [];
@@ -927,6 +929,7 @@ export default function ResultsPanel({
                 sourceRef={sessionId ? `alignment-session:${sessionId}` : undefined}
                 rows={includedInterventionRows(data)}
                 referenceOnly
+                interventions={interventionsProp}
                 summary={summaryCounts ? [
                   { label: 'GW locked', value: summaryCounts.gwLocked },
                   { label: 'Anomaly matched', value: summaryCounts.anomalyMatched },

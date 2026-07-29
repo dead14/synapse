@@ -126,12 +126,18 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
     lengthKm: '',
     productMedium: '',
     maopPsi: '',
+    designPressureMpa: '',
+    operatingPressureMpa: '',
     outerDiameter: '',
     nominalWtMm: '',
     materialGrade: '',
+    smysMpa: '',
+    designFactor: '',
     seamType: '',
     externalCoating: '',
     installationYear: '',
+    buildYear: '',
+    designLifeYears: '',
     locationClass: '',
   });
   const setPipelineField = (field: keyof typeof pipelineData, value: string) => {
@@ -395,13 +401,9 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
             
             {isExpanded('asset') && (
               <div className="alignment-config-panel__body grid grid-cols-1 sm:grid-cols-2">
-                <div>
-                  <label className="ds-field__label">Pipeline Name (Session Name)</label>
-                  <input type="text" value={sessionName} onChange={(e) => setSessionName(e.target.value)} className="ds-input" placeholder="e.g. SMR-SBY Gas Line" />
-                </div>
-                <div>
-                  <label className="ds-field__label">Segment Route</label>
-                  <input type="text" value={pipelineData.segmentRoute} onChange={(event) => setPipelineField('segmentRoute', event.target.value)} className="ds-input" placeholder="e.g. Station A - Station B" />
+                <div className="sm:col-span-2">
+                  <label className="ds-field__label">Pipeline Name (From — To)</label>
+                  <input type="text" value={sessionName} onChange={(e) => setSessionName(e.target.value)} className="ds-input" placeholder="e.g. Station A — Station B" />
                 </div>
                 <div>
                   <label className="ds-field__label">Environment</label>
@@ -414,8 +416,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                   </select>
                 </div>
                 <div>
-                  <label className="ds-field__label">Length (km)</label>
-                  <input type="number" value={pipelineData.lengthKm} onChange={(event) => setPipelineField('lengthKm', event.target.value)} className="ds-input" placeholder="150" />
+                  <label className="ds-field__label">Pipe Length (km)</label>
+                  <input type="number" value={pipelineData.lengthKm} onChange={(event) => setPipelineField('lengthKm', event.target.value)} className="ds-input" placeholder="e.g. 150" />
                 </div>
                 <div>
                   <label className="ds-field__label">Product Medium</label>
@@ -429,8 +431,12 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                   </select>
                 </div>
                 <div>
-                  <label className="ds-field__label">MAOP (psi)</label>
-                  <input type="number" value={pipelineData.maopPsi} onChange={(event) => setPipelineField('maopPsi', event.target.value)} className="ds-input" placeholder="e.g. 1200" />
+                  <label className="ds-field__label">Build Year</label>
+                  <input type="text" value={pipelineData.buildYear} onChange={(event) => setPipelineField('buildYear', event.target.value)} className="ds-input" placeholder="e.g. 1995" />
+                </div>
+                <div>
+                  <label className="ds-field__label">Design Life (years)</label>
+                  <input type="number" value={pipelineData.designLifeYears} onChange={(event) => setPipelineField('designLifeYears', event.target.value)} className="ds-input" placeholder="e.g. 30" />
                 </div>
               </div>
             )}
@@ -452,17 +458,27 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
               <div className="alignment-config-panel__body grid grid-cols-1 sm:grid-cols-2">
                 <div>
                   <label className="ds-field__label">Outer Diameter (OD)</label>
-                  <select className="ds-select" value={pipelineData.outerDiameter} onChange={(event) => setPipelineField('outerDiameter', event.target.value)}>
-                    <option value="">Not provided</option>
-                    <option value="10 inch">10 inch</option>
-                    <option value="12 inch">12 inch</option>
-                    <option value="24 inch">24 inch</option>
-                    <option value="36 inch">36 inch</option>
-                  </select>
+                  <input type="text" value={pipelineData.outerDiameter} onChange={(event) => setPipelineField('outerDiameter', event.target.value)} className="ds-input" placeholder="e.g. 10 inch or 273.1 mm" />
                 </div>
                 <div>
                   <label className="ds-field__label">Nominal WT (mm)</label>
                   <input type="number" step="0.01" value={pipelineData.nominalWtMm} onChange={(event) => setPipelineField('nominalWtMm', event.target.value)} className="ds-input" placeholder="e.g. 12.7" />
+                </div>
+                <div>
+                  <label className="ds-field__label">MAOP (psi)</label>
+                  <input type="number" value={pipelineData.maopPsi} onChange={(event) => setPipelineField('maopPsi', event.target.value)} className="ds-input" placeholder="e.g. 1200" />
+                </div>
+                <div>
+                  <label className="ds-field__label">Design Pressure (MPa)</label>
+                  <input type="number" step="0.01" value={pipelineData.designPressureMpa} onChange={(event) => setPipelineField('designPressureMpa', event.target.value)} className="ds-input" placeholder="e.g. 10.0" />
+                </div>
+                <div>
+                  <label className="ds-field__label">Operating Pressure (MPa)</label>
+                  <input type="number" step="0.01" value={pipelineData.operatingPressureMpa} onChange={(event) => setPipelineField('operatingPressureMpa', event.target.value)} className="ds-input" placeholder="e.g. 9.46" />
+                </div>
+                <div>
+                  <label className="ds-field__label">Design Factor</label>
+                  <input type="number" step="0.01" value={pipelineData.designFactor} onChange={(event) => setPipelineField('designFactor', event.target.value)} className="ds-input" placeholder="e.g. 0.72" />
                 </div>
                 <div>
                   <label className="ds-field__label">Material Grade</label>
@@ -473,7 +489,12 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                     <option value="API 5L X60">API 5L X60</option>
                     <option value="API 5L X65">API 5L X65</option>
                     <option value="API 5L X70">API 5L X70</option>
+                    <option value="API 5L X80">API 5L X80</option>
                   </select>
+                </div>
+                <div>
+                  <label className="ds-field__label">SMYS (MPa)</label>
+                  <input type="number" step="0.1" value={pipelineData.smysMpa} onChange={(event) => setPipelineField('smysMpa', event.target.value)} className="ds-input" placeholder="e.g. 358.5" />
                 </div>
                 <div>
                   <label className="ds-field__label">Seam Type</label>

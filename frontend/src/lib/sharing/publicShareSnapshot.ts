@@ -30,11 +30,13 @@ export interface PublicShareSnapshot {
   columns: PublicShareColumn[];
   rows: Array<Record<string, PublicShareValue>>;
   notes: string[];
+  interventions?: unknown[];
 }
 
 interface BuildSnapshotOptions {
   summary?: PublicShareSummaryItem[];
   notes?: string[];
+  interventions?: unknown[];
 }
 
 const MAX_ROWS = 10_000;
@@ -251,5 +253,8 @@ export function buildPublicShareSnapshot(
     columns: columns.map((column) => ({ ...column })),
     rows: rows.map((row) => projectRow(kind, row, columns)),
     notes: (options.notes ?? []).map((note) => String(note)),
+    ...(options.interventions && options.interventions.length > 0
+      ? { interventions: options.interventions }
+      : {}),
   };
 }
