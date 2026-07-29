@@ -1448,6 +1448,9 @@
 .sec-bend-grid { display: flex; flex-wrap: wrap; gap: 0.375rem; }
 
 .sec-bend {
+  appearance: none;
+  color: inherit;
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 0.3125rem;
@@ -1456,8 +1459,11 @@
   background: var(--ds-surface-sunken);
   padding: 0.25rem 0.5rem;
   font-size: var(--ds-t-xs);
+  text-align: left;
 }
 
+.sec-bend:hover { border-color: var(--ds-warning); background: var(--ds-warning-soft); }
+.sec-bend:focus-visible { outline: 2px solid var(--ds-focus); outline-offset: 2px; }
 .sec-bend i { color: var(--ds-warning); font-style: normal; }
 .sec-bend strong { color: var(--ds-ink); font-family: var(--ds-font-data); font-size: var(--ds-t-micro); }
 .sec-bend small { color: var(--ds-muted); font-family: var(--ds-font-data); font-size: var(--ds-t-micro); }

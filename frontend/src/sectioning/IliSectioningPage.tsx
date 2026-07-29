@@ -8,7 +8,9 @@ import SectionMap from './SectionMap';
 import { apiFetch } from '../utils/api';
 import { fetchAlignmentComparison } from '../utils/alignment';
 import { buildHistoricalLanes, parseWallThicknessMm } from './historicalLanes';
+import { isBendFeature, isBendType } from './bendGeometry';
 import { formatCoordinate, interpolateAlongRoute, parseCoordinate, routeLengthMeters } from './geo';
+import { getOriginalLd } from './gwPosition';
 import { pairKey } from './pairing';
 import { sectionColor } from './sectionColors';
 import { countMissingInRange, coveragePercent, validateSectionRange } from './sectionRanges';
@@ -275,16 +277,41 @@ export default function IliSectioningPage() {
 
     // First pass to find maxDist
     data.forEach(row => {
-      const dist = Number(row.dist ?? row['Log Dist NEW (m)']);
+      const dist = Number(
+        row.dist ?? 
+        row.abs_distance_m ?? 
+        row.log_distance_m ??
+        row.raw?.log_distance_m ?? 
+        row['Log Dist NEW (m)'] ??
+        row['Log Distance'] ??
+        row['Odometer']
+      );
       if (!isNaN(dist) && dist > maxDist) maxDist = dist;
     });
 
     data.forEach(row => {
       // The latest/NEW run is always the spatial master.
-      const dist = Number(row.dist ?? row['Log Dist NEW (m)']);
+      const dist = Number(
+        row.dist ?? 
+        row.abs_distance_m ?? 
+        row.log_distance_m ??
+        row.raw?.log_distance_m ?? 
+        row['Log Dist NEW (m)'] ??
+        row['Log Distance'] ??
+        row['Odometer']
+      );
       if (isNaN(dist)) return;
       
-      const type = String(row.type ?? row.originalType ?? row['Feature Type NEW'] ?? '').toLowerCase();
+      const type = String(
+        row.type ?? 
+        row.originalType ?? 
+        row.feature_type ??
+        row.feature_identification ??
+        row['Feature Type NEW'] ?? 
+        row['Feature Type'] ??
+        row['Feature Identification'] ??
+        ''
+      ).toLowerCase();
       const identif = String(row.id ?? row['Identif. NEW'] ?? `NEW-${allFeatures.length + 1}`);
       const matched = findMatch(identif, dist) as any;
       
@@ -329,7 +356,7 @@ export default function IliSectioningPage() {
       if (type.includes('weld')) {
         gws.push(feature);
       }
-      if (type.includes('bend')) {
+      if (isBendType(type)) {
         bendCount++;
       }
     });
@@ -528,20 +555,27 @@ export default function IliSectioningPage() {
                       <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded-md">{features?.stats?.bendCount || 0} Total Bends</span>
                     </div>
                     <div className="flex gap-3 overflow-x-auto pb-2 custom-scrollbar flex-1 items-start">
-                      {features?.allFeatures?.filter(f => f.type.includes('bend')).map((bend, i) => (
-                        <div key={i} className="min-w-[200px] border border-orange-100 rounded-lg p-3 bg-orange-50/30 hover:bg-orange-50 hover:border-orange-200 cursor-pointer transition-colors shadow-sm">
+                      {features?.allFeatures?.filter(isBendFeature).map((bend, i) => (
+                        <button
+                          key={`${bend.id}-${bend.dist}`}
+                          type="button"
+                          onClick={() => handleInspectGw(bend)}
+                          className="min-w-[200px] border border-orange-100 rounded-lg p-3 bg-orange-50/30 hover:bg-orange-50 hover:border-orange-200 cursor-pointer transition-colors shadow-sm text-left"
+                          aria-label={`Inspect bend ${i + 1}, source LD ${getOriginalLd(bend.rawData) ?? 'unavailable'}`}
+                        >
                           <div className="flex justify-between items-start mb-2">
                             <span className="text-xs font-bold text-orange-700 tracking-wide">BEND {String(i+1).padStart(2,'0')}</span>
                             <span className="text-[10px] font-bold bg-orange-100 text-orange-800 px-2 py-0.5 rounded-full">{bend.status}</span>
                           </div>
-                          <div className="text-sm font-mono font-semibold text-gray-900 mb-1">{bend.dist.toFixed(3)} m</div>
+                          <div className="text-sm font-mono font-semibold text-gray-900 mb-1">Source LD {getOriginalLd(bend.rawData) ?? 'unavailable'}</div>
+                          <div className="text-xs font-mono text-gray-500 mb-1">Plot {bend.dist.toFixed(3)} m</div>
                           <div className="flex items-center text-xs text-gray-500 gap-3 mt-2">
                             <span className="flex items-center gap-1" title="Angle"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg> {bend.rawData.angleDeg ? Number(bend.rawData.angleDeg).toFixed(1) : 'N/A'}°</span>
                             <span className="flex items-center gap-1" title="Clock Pos"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> {String(bend.rawData.clockPos || '-')}</span>
                           </div>
-                        </div>
+                        </button>
                       ))}
-                      {(!features?.allFeatures?.some(f => f.type.includes('bend'))) && (
+                      {(!features?.allFeatures?.some(isBendFeature)) && (
                         <div className="text-sm text-gray-400 italic flex items-center justify-center w-full h-full">No bends detected in this run.</div>
                       )}
                     </div>
@@ -776,7 +810,10 @@ export default function IliSectioningPage() {
                       <div className="text-[10px] font-bold text-blue-600 uppercase tracking-wider mb-1 flex items-center gap-1"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> Selected feature</div>
                       <div className="text-base font-bold text-gray-900 mb-1">{inspectedGw.id}</div>
                       <div className="text-xs text-gray-700 mb-2 font-medium">{inspectedGw.runRole === 'MASTER' ? 'NEW' : 'OLD'} {inspectedGw.runYear || ''} · <span className={inspectedGw.status === 'MATCHED' ? 'text-green-600' : 'text-orange-600'}>{inspectedGw.status || 'UNRESOLVED'}</span></div>
-                      <div className="text-xs font-mono bg-white border border-blue-100 px-2 py-1 rounded inline-block text-gray-800 shadow-sm">{inspectedGw.dist.toFixed(3)} m</div>
+                      {getOriginalLd(inspectedGw.rawData) && (
+                        <div className="text-xs font-mono bg-white border border-blue-100 px-2 py-1 rounded inline-block text-gray-800 shadow-sm">Source LD {getOriginalLd(inspectedGw.rawData)}</div>
+                      )}
+                      <div className="mt-2 text-xs font-mono text-gray-600">Plot position {inspectedGw.dist.toFixed(3)} m</div>
                       {Number.isFinite(inspectedGw.wallThicknessMm) && (
                         <div className="mt-2 text-xs font-semibold text-orange-700 bg-orange-50 inline-block px-2 py-1 rounded">Wall thickness {Number(inspectedGw.wallThicknessMm).toFixed(1)} mm</div>
                       )}

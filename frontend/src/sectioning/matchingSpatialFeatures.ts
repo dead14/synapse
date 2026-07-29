@@ -1,4 +1,5 @@
 import { buildHistoricalLanes } from './historicalLanes.ts';
+import { isBendFeature } from './bendGeometry.ts';
 import { interpolateAlongRoute } from './geo.ts';
 import { pairKey } from './pairing.ts';
 import { maxOf } from '../utils/numericRange.ts';
@@ -22,9 +23,16 @@ interface Input {
 }
 
 const finiteDistance = (row: Record<string, unknown>) => {
-  for (const value of [row.dist, row.log_distance_m, row.odometer, row.distance, row.val]) {
+  for (const value of [row.dist, row.abs_distance_m, row.log_distance_m, row.odometer, row.distance, row.val]) {
     const distance = Number(value);
     if (Number.isFinite(distance)) return distance;
+  }
+  if (row.raw && typeof row.raw === 'object') {
+    const raw = row.raw as Record<string, unknown>;
+    for (const value of [raw.dist, raw.log_distance_m, raw.odometer, raw.distance, raw.val]) {
+      const distance = Number(value);
+      if (Number.isFinite(distance)) return distance;
+    }
   }
   return null;
 };
@@ -235,7 +243,7 @@ export function buildMatchingSpatialFeatures({
     stats: {
       totalLength: maxMasterDistance,
       gwCount: gws.length,
-      bendCount: physicalFeatures.filter((feature) => feature.type.includes('bend')).length,
+      bendCount: physicalFeatures.filter(isBendFeature).length,
       missingGwCount: historicalLanes.reduce((total, lane) => total + lane.gws.filter((gw) => gw.status === 'MISSING_IN_MASTER').length, 0),
     },
   };

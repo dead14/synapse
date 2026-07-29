@@ -1,4 +1,4 @@
-const { ALIGNMENT_ANCHOR_FEATURE_TYPE_SQL } = require('../alignment/alignmentAnchorTypes');
+const { alignmentAnchorSqlPredicate } = require('../alignment/alignmentAnchorTypes');
 
 async function listOwnedInspectionRuns(pool, orgId, { limit, beforeId }) {
     const values = [orgId];
@@ -80,13 +80,7 @@ async function listOwnedInspectionAnchors(pool, runId, orgId, { limit, after }) 
          JOIN pipelines p ON p.id = sr.pipeline_id
          WHERE f.run_id = $1
            AND p.organization_id = $2
-           AND (
-               f.feature_type IN (${ALIGNMENT_ANCHOR_FEATURE_TYPE_SQL})
-               OR (
-                   COALESCE(f.feature_type, '') IN ('', 'Other')
-                   AND COALESCE(f.feature_identification, '') ~* '(weld|girth|seam|valve|tee)'
-               )
-           )
+           AND ${alignmentAnchorSqlPredicate('f')}
            ${cursorClause}
          ORDER BY f.log_distance_m ASC, f.id ASC
          LIMIT $${limitParameter}`,

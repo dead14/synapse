@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { FiAlertTriangle, FiChevronLeft, FiChevronRight, FiMap, FiTarget } from 'react-icons/fi';
 import { type SectionDraft } from '../sectioning/SectionComposer';
 import GwPositionCard from '../sectioning/GwPositionCard';
+import { getOriginalLd } from '../sectioning/gwPosition';
 import SectioningSchematic from '../sectioning/SectioningSchematic';
-import { bendAngleDeg } from '../sectioning/bendGeometry';
+import { bendAngleDeg, isBendFeature, isBendType } from '../sectioning/bendGeometry';
 import SectionMap from '../sectioning/SectionMap';
 import SectionTable from '../sectioning/SectionTable';
 import SectionWorkbench from '../sectioning/SectionWorkbench';
@@ -168,7 +169,7 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
       features.allFeatures
         .filter((feature) => {
           const type = feature.type.toLowerCase();
-          return type.includes('bend') || type.includes('valve') || type.includes('tee');
+          return isBendType(type) || type.includes('valve') || type.includes('tee');
         })
         .map((feature) => {
           const type = feature.type.toLowerCase();
@@ -208,7 +209,9 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
   );
 
   const bendFeatures = useMemo(
-    () => features.allFeatures.filter((feature) => feature.type.toLowerCase().includes('bend')).sort((left, right) => left.dist - right.dist),
+    () => features.allFeatures.filter((feature) => {
+      return isBendFeature(feature);
+    }).sort((left, right) => left.dist - right.dist),
     [features.allFeatures],
   );
 
@@ -465,6 +468,7 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
               onZoomChange={setZoom}
               selectedGWs={selectedGws}
               onGwClick={handleGwClick}
+              inspectedGw={inspectedGw}
               onInspectGw={setInspectedGw}
               unmatchedSelectionEnabled={includeUnmatchedGws}
               selectedRange={startIndex !== null && endIndex !== null
@@ -491,11 +495,17 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
           <div className="sec-bend-grid">
             {isLoadingMasterEvidence && <span className="ds-toolbar__hint">Loading bend locations from master data…</span>}
             {bendFeatures.map((bend, index) => (
-              <span key={bend.id} className="sec-bend">
+              <button
+                key={`${bend.id}-${bend.dist}`}
+                type="button"
+                className="sec-bend"
+                onClick={() => setInspectedGw(bend)}
+                aria-label={`Inspect bend ${index + 1}, source LD ${getOriginalLd(bend.rawData) ?? 'unavailable'}`}
+              >
                 <i aria-hidden="true">◆</i>
                 <strong>BEND {String(index + 1).padStart(2, '0')}</strong>
-                <small>{(bend.dist / 1000).toFixed(2)} km · {bendAngleDeg(bend).toFixed(0)}°</small>
-              </span>
+                <small>Source LD {getOriginalLd(bend.rawData) ?? 'unavailable'} · plot {(bend.dist / 1000).toFixed(2)} km · {bendAngleDeg(bend).toFixed(0)}°</small>
+              </button>
             ))}
             {!isLoadingMasterEvidence && bendFeatures.length === 0 && (
               <span className="ds-toolbar__hint">No bends detected from master data yet.</span>

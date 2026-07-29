@@ -1,5 +1,5 @@
 const {
-    ALIGNMENT_ANCHOR_FEATURE_TYPE_SQL,
+    alignmentAnchorSqlPredicate,
     canonicalAlignmentAnchorType,
 } = require('./alignmentAnchorTypes');
 
@@ -64,13 +64,7 @@ async function loadOwnedRunAnchors(pool, runId, orgId, { maxAnchors = MAX_DTW_AN
          JOIN pipelines p ON p.id = sr.pipeline_id
          WHERE f.run_id = $1
            AND p.organization_id = $2
-           AND (
-               f.feature_type IN (${ALIGNMENT_ANCHOR_FEATURE_TYPE_SQL})
-               OR (
-                   COALESCE(f.feature_type, '') IN ('', 'Other')
-                   AND COALESCE(f.feature_identification, '') ~* '(weld|girth|seam|valve|tee|offtake|branch|bend|elbow|launcher|receiver)'
-               )
-           )
+           AND ${alignmentAnchorSqlPredicate('f')}
          ORDER BY f.log_distance_m ASC, f.id ASC
          LIMIT $3`,
         [runId, orgId, maxAnchors + 1],
