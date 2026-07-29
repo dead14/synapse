@@ -113,7 +113,7 @@ export default function FfsResultsTable({
   };
 
   const selectClass =
-    'rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200';
+    'rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-700 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200';
 
   return (
     <div className="space-y-4">
@@ -180,7 +180,7 @@ export default function FfsResultsTable({
           </select>
 
           {highlighted > 0 && (
-            <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-400">
+            <span className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-2 text-[11px] font-semibold text-amber-700 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-400">
               {highlighted} row{highlighted === 1 ? '' : 's'} under {config.highlightYears} y
             </span>
           )}
@@ -190,7 +190,7 @@ export default function FfsResultsTable({
       {/* Table */}
       <Panel padded={false} className="overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1180px] border-collapse text-xs">
+          <table className="w-full min-w-[1180px] border-collapse text-[10px] leading-tight">
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-900/60">
                 {COLUMNS.map((column) => {
@@ -199,7 +199,7 @@ export default function FfsResultsTable({
                     <th
                       key={column.key}
                       scope="col"
-                      className={`whitespace-nowrap border-b border-slate-200 px-3 py-2.5 text-${column.align} dark:border-slate-700`}
+                      className={`whitespace-nowrap border-b border-slate-200 px-2 py-2 text-${column.align} dark:border-slate-700`}
                     >
                       <button
                         type="button"
@@ -247,24 +247,24 @@ export default function FfsResultsTable({
                     }`}
                   >
                     <td
-                      className={`whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums text-slate-800 dark:text-slate-100 ${
+                      className={`whitespace-nowrap px-2 py-2 text-right font-semibold tabular-nums text-slate-800 dark:text-slate-100 ${
                         failed ? 'border-l-[3px] border-l-rose-500' : 'border-l-[3px] border-l-emerald-500'
                       }`}
                     >
                       {Number(n.ld).toLocaleString(undefined, { maximumFractionDigits: 3 })}
                     </td>
-                    <td className="max-w-[160px] truncate px-3 py-2 text-slate-600 dark:text-slate-300">
+                    <td className="max-w-[160px] truncate px-2 py-2 text-slate-600 dark:text-slate-300">
                       {n.section}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">{n.surface}</td>
-                    <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-800 dark:text-slate-100">
+                    <td className="whitespace-nowrap px-2 py-2 text-slate-600 dark:text-slate-300">{n.surface}</td>
+                    <td className="px-2 py-2 text-right font-semibold tabular-nums text-slate-800 dark:text-slate-100">
                       {n.maxDepthPct.toFixed(1)}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-600 dark:text-slate-300">
+                    <td className="px-2 py-2 text-right tabular-nums text-slate-600 dark:text-slate-300">
                       {n.length.toFixed(0)}
                     </td>
                     <td
-                      className={`px-3 py-2 text-right font-bold tabular-nums ${
+                      className={`px-2 py-2 text-right font-bold tabular-nums ${
                         n.ERF > 1
                           ? 'text-rose-600 dark:text-rose-400'
                           : n.ERF >= screening.reviewBandErf
@@ -274,32 +274,32 @@ export default function FfsResultsTable({
                     >
                       {formatErf(n.ERF)}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-amber-600 dark:text-amber-400">
+                    <td className="px-2 py-2 text-right tabular-nums text-amber-600 dark:text-amber-400">
                       {formatErf(item.conservative.ERF)}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-600 dark:text-slate-300">
+                    <td className="px-2 py-2 text-right tabular-nums text-slate-600 dark:text-slate-300">
                       {n.safePressure.toFixed(3)}
                     </td>
-                    <td className="px-3 py-2 text-center">
+                    <td className="px-2 py-2 text-center">
                       <SeverityBadge
                         severity={failed ? 'fail' : 'pass'}
                         label={failed ? 'Not acceptable' : 'Acceptable'}
                       />
                     </td>
                     <td
-                      className={`px-3 py-2 text-right font-semibold tabular-nums ${
+                      className={`px-2 py-2 text-right font-semibold tabular-nums ${
                         belowThreshold ? 'text-amber-600 dark:text-amber-400' : 'text-slate-700 dark:text-slate-200'
                       }`}
                     >
                       {n.expectedLife >= 200 ? '>200' : n.expectedLife.toFixed(1)}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-center tabular-nums text-slate-500 dark:text-slate-400">
+                    <td className="whitespace-nowrap px-2 py-2 text-center tabular-nums text-slate-500 dark:text-slate-400">
                       {n.yearService}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-slate-500 dark:text-slate-400">
+                    <td className="whitespace-nowrap px-2 py-2 text-slate-500 dark:text-slate-400">
                       {n.failureCriteria}
                     </td>
-                    <td className="px-3 py-2 text-center">
+                    <td className="px-2 py-2 text-center">
                       <PriorityLabel priority={item.priority} />
                     </td>
                   </tr>
@@ -308,7 +308,7 @@ export default function FfsResultsTable({
 
               {!pageRows.length && (
                 <tr>
-                  <td colSpan={COLUMNS.length} className="px-3 py-12 text-center text-slate-400">
+                  <td colSpan={COLUMNS.length} className="px-2 py-12 text-center text-slate-400">
                     No feature matches the current filters.
                   </td>
                 </tr>
