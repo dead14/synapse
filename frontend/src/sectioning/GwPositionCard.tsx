@@ -19,7 +19,13 @@ export default function GwPositionCard({ feature, onDismiss }: Props) {
         <span>{feature.runRole === 'MASTER' ? 'NEW master' : `OLD ${feature.runYear || ''}`} · {status}</span>
       </div>
       <dl>
-        <div><dt>{details.primaryLabel}</dt><dd>{details.primaryDistance}</dd></div>
+        <div>
+          <dt>{details.primaryLabel}</dt>
+          <dd>
+            {details.primaryDistance}
+            {details.primaryOriginalLd && <span style={{ opacity: 0.7, fontSize: '0.85em', marginLeft: '0.5rem', fontWeight: 500 }}>(Orig LD: {details.primaryOriginalLd})</span>}
+          </dd>
+        </div>
         {details.pairedDistance && <div><dt>{details.pairedLabel}{details.pairedId ? ` · ${details.pairedId}` : ''}</dt><dd>{details.pairedDistance}</dd></div>}
       </dl>
       <button type="button" onClick={onDismiss} aria-label="Close weld position details"><FiX /></button>
