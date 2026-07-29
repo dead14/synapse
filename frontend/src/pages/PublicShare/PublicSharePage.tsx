@@ -127,6 +127,7 @@ function PublicIliAlignmentPreview({
         <main id="main-content" tabIndex={-1} className="engine-main">
           <IliComparisonPage
             readOnly
+            sharedInterventions={share.snapshot?.interventions}
             shareAccess={{
               id: share.id,
               accessToken,

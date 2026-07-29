@@ -28,6 +28,7 @@ interface ShareSnapshotButtonProps {
   referenceOnly?: boolean;
   summary?: PublicShareSummaryItem[];
   notes?: string[];
+  interventions?: unknown[];
   disabled?: boolean;
   className?: string;
   label?: string;
@@ -54,6 +55,7 @@ export default function ShareSnapshotButton({
   referenceOnly = false,
   summary,
   notes,
+  interventions,
   disabled = false,
   className = '',
   label = 'Share',
@@ -94,7 +96,7 @@ export default function ShareSnapshotButton({
       const snapshot = buildPublicShareSnapshot(
         kind,
         referenceOnly ? [] : rows,
-        { summary, notes },
+        { summary, notes, interventions },
       );
       const share = await createPublicShare({
         kind,
