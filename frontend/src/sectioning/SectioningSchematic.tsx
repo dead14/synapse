@@ -47,7 +47,10 @@ function buildRouteGeometry(features: SpatialFeatures, zoom: number): RouteGeome
   const paddingX = 90;
   const baselineY = 125;
   const bendFeatures = features.allFeatures
-    .filter((feature) => feature.type.toLowerCase().includes('bend'))
+    .filter((feature) => {
+      const t = feature.type.toLowerCase();
+      return t.includes('bend') || t.includes('elbow') || t.includes('jog');
+    })
     .sort((left, right) => left.dist - right.dist)
     .filter((feature, index, list) => index === 0 || Math.abs(feature.dist - list[index - 1].dist) > 0.001);
   const bends: BendGeometry[] = bendFeatures.map((feature) => {
@@ -226,7 +229,8 @@ export default function SectioningSchematic({
 
             {/* Master Features (GWs, Valves, etc) */}
             {features.allFeatures.map((feature, index) => {
-              if (feature.type.toLowerCase().includes('bend')) return null;
+              const t = feature.type.toLowerCase();
+              if (t.includes('bend') || t.includes('elbow') || t.includes('jog')) return null;
               const position = geometry.positionAt(feature.dist);
               const isGw = /weld|girth|seam|gw/.test(feature.type.toLowerCase());
               const isValve = feature.type.toLowerCase().includes('valve') || feature.type.toLowerCase().includes('tee');

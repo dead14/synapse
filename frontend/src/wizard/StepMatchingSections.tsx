@@ -168,7 +168,7 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
       features.allFeatures
         .filter((feature) => {
           const type = feature.type.toLowerCase();
-          return type.includes('bend') || type.includes('valve') || type.includes('tee');
+          return type.includes('bend') || type.includes('elbow') || type.includes('jog') || type.includes('valve') || type.includes('tee');
         })
         .map((feature) => {
           const type = feature.type.toLowerCase();
@@ -208,7 +208,10 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
   );
 
   const bendFeatures = useMemo(
-    () => features.allFeatures.filter((feature) => feature.type.toLowerCase().includes('bend')).sort((left, right) => left.dist - right.dist),
+    () => features.allFeatures.filter((feature) => {
+      const t = feature.type.toLowerCase();
+      return t.includes('bend') || t.includes('elbow') || t.includes('jog');
+    }).sort((left, right) => left.dist - right.dist),
     [features.allFeatures],
   );
 

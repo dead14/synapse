@@ -275,16 +275,41 @@ export default function IliSectioningPage() {
 
     // First pass to find maxDist
     data.forEach(row => {
-      const dist = Number(row.dist ?? row['Log Dist NEW (m)']);
+      const dist = Number(
+        row.dist ?? 
+        row.abs_distance_m ?? 
+        row.log_distance_m ??
+        row.raw?.log_distance_m ?? 
+        row['Log Dist NEW (m)'] ??
+        row['Log Distance'] ??
+        row['Odometer']
+      );
       if (!isNaN(dist) && dist > maxDist) maxDist = dist;
     });
 
     data.forEach(row => {
       // The latest/NEW run is always the spatial master.
-      const dist = Number(row.dist ?? row['Log Dist NEW (m)']);
+      const dist = Number(
+        row.dist ?? 
+        row.abs_distance_m ?? 
+        row.log_distance_m ??
+        row.raw?.log_distance_m ?? 
+        row['Log Dist NEW (m)'] ??
+        row['Log Distance'] ??
+        row['Odometer']
+      );
       if (isNaN(dist)) return;
       
-      const type = String(row.type ?? row.originalType ?? row['Feature Type NEW'] ?? '').toLowerCase();
+      const type = String(
+        row.type ?? 
+        row.originalType ?? 
+        row.feature_type ??
+        row.feature_identification ??
+        row['Feature Type NEW'] ?? 
+        row['Feature Type'] ??
+        row['Feature Identification'] ??
+        ''
+      ).toLowerCase();
       const identif = String(row.id ?? row['Identif. NEW'] ?? `NEW-${allFeatures.length + 1}`);
       const matched = findMatch(identif, dist) as any;
       
@@ -329,7 +354,7 @@ export default function IliSectioningPage() {
       if (type.includes('weld')) {
         gws.push(feature);
       }
-      if (type.includes('bend')) {
+      if (type.includes('bend') || type.includes('elbow') || type.includes('jog')) {
         bendCount++;
       }
     });
