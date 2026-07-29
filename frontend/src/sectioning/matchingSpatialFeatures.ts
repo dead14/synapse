@@ -23,7 +23,17 @@ interface Input {
 }
 
 const finiteDistance = (row: Record<string, unknown>) => {
-  for (const value of [row.dist, row.abs_distance_m, row.log_distance_m, row.odometer, row.distance, row.val]) {
+  for (const value of [
+    row.plot_distance_m,
+    row.aligned_distance_m,
+    row.alignedDist,
+    row.dist,
+    row.abs_distance_m,
+    row.log_distance_m,
+    row.odometer,
+    row.distance,
+    row.val,
+  ]) {
     const distance = Number(value);
     if (Number.isFinite(distance)) return distance;
   }

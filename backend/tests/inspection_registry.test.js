@@ -79,6 +79,7 @@ test('inspection anchor serialization deliberately exposes a compact viewer shap
         sourceFeatureId: 'GW-003',
         dist: 120.5,
         log_distance_m: 120.5,
+        source_log_distance_m: 120.5,
         type: 'Girth Weld',
         originalType: 'Girth Weld',
         feature_type: 'Girth Weld',
@@ -179,9 +180,9 @@ test('inspection anchors are tenant scoped, ordered by distance, and use a compo
     assert.equal(page.rows.length, 2);
     assert.deepEqual(page.nextCursor, { distanceM: 121, id: 43 });
     assert.match(calls[0].sql, /p\.organization_id = \$2/);
-    assert.match(calls[0].sql, /f\.feature_type IN/);
-    assert.match(calls[0].sql, /'Girth Weld'/);
-    assert.match(calls[0].sql, /'Tee \/ Branch Connection'/);
+    assert.match(calls[0].sql, /LOWER\(BTRIM\(COALESCE\(f\.feature_type/);
+    assert.match(calls[0].sql, /'girth weld'/);
+    assert.match(calls[0].sql, /'tee \/ branch connection'/);
     assert.match(calls[0].sql, /bend\|elbow\|jog/);
     assert.match(calls[0].sql, /f\.log_distance_m > \$3/);
     assert.match(calls[0].sql, /ORDER BY f\.log_distance_m ASC, f\.id ASC/);

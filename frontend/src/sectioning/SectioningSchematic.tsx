@@ -224,7 +224,7 @@ export default function SectioningSchematic({
                 role={onInspectGw ? 'button' : undefined}
                 tabIndex={onInspectGw ? 0 : undefined}
                 aria-label={onInspectGw
-                  ? `Bend ${index + 1}, source LD ${getOriginalLd(bend.feature.rawData) ?? 'unavailable'}, plot position ${bend.feature.dist.toFixed(3)} m`
+                  ? `Bend ${index + 1}, source LD ${getOriginalLd(bend.feature.rawData, bend.feature.runRole) ?? 'unavailable'}, plot position ${bend.feature.dist.toFixed(3)} m`
                   : undefined}
                 className={onInspectGw ? 'cursor-pointer' : ''}
                 onClick={() => onInspectGw?.(bend.feature)}
@@ -239,7 +239,7 @@ export default function SectioningSchematic({
                 <text x={bend.point.x} y={bend.point.y - 45} textAnchor="middle" fontSize="9" fill="#b45309">{(bend.feature.dist / 1000).toFixed(2)} km / {bend.angleDeg.toFixed(0)}°</text>
                 <line x1={bend.point.x} y1={bend.point.y - 38} x2={bend.point.x} y2={bend.point.y - 12} stroke="#f59e0b" strokeWidth="1" />
                 <path d={`M ${bend.point.x} ${bend.point.y - 12} l 4 4 l -4 4 l -4 -4 z`} fill="#f59e0b" />
-                <title>{`Bend ${index + 1} · source LD ${getOriginalLd(bend.feature.rawData) ?? 'unavailable'} · plot ${bend.feature.dist.toFixed(3)} m · ${bend.angleDeg.toFixed(0)}°${bend.inferred ? ' · inferred' : ''}`}</title>
+                <title>{`Bend ${index + 1} · source LD ${getOriginalLd(bend.feature.rawData, bend.feature.runRole) ?? 'unavailable'} · plot ${bend.feature.dist.toFixed(3)} m · ${bend.angleDeg.toFixed(0)}°${bend.inferred ? ' · inferred' : ''}`}</title>
               </g>
             ))}
 
@@ -269,7 +269,7 @@ export default function SectioningSchematic({
                   onClick={() => { if (isGw) activateGw(feature); }}
                   onKeyDown={isGw && canInspectGws ? markerKeyDown(feature) : undefined}
                 >
-                  <title>{`${feature.type} · ${feature.id} · abs ${feature.dist.toFixed(3)} m${getOriginalLd(feature.rawData) ? ` · Orig LD: ${getOriginalLd(feature.rawData)}` : ''} · ${isUnmatched ? 'No OLD pair' : feature.status}`}</title>
+                  <title>{`${feature.type} · ${feature.id} · abs ${feature.dist.toFixed(3)} m${getOriginalLd(feature.rawData, feature.runRole) ? ` · Orig LD: ${getOriginalLd(feature.rawData, feature.runRole)}` : ''} · ${isUnmatched ? 'No OLD pair' : feature.status}`}</title>
                   {isInspected && (
                     <rect x={position.x - boxW / 2 - 3} y={position.y - boxH / 2 - 3} width={boxW + 6} height={boxH + 6} rx={rx + 3} fill="none" stroke="#1d4ed8" strokeWidth="1.5" />
                   )}
@@ -340,7 +340,7 @@ export default function SectioningSchematic({
                         onKeyDown={canInspectGws ? markerKeyDown(gw) : undefined}
                       >
                         <rect x={x - boxW / 2} y={y - boxH / 2} width={boxW} height={boxH} rx={rx} fill={color} />
-                        <title>{`${gw.id} · abs ${gw.dist.toFixed(3)} m${getOriginalLd(gw.rawData) ? ` · Orig LD: ${getOriginalLd(gw.rawData)}` : ''} · ${gw.status}`}</title>
+                        <title>{`${gw.id} · abs ${gw.dist.toFixed(3)} m${getOriginalLd(gw.rawData, gw.runRole) ? ` · Orig LD: ${getOriginalLd(gw.rawData, gw.runRole)}` : ''} · ${gw.status}`}</title>
                         
                         {unmatched && showUnmatchedLabels && (
                           <g pointerEvents="none">
