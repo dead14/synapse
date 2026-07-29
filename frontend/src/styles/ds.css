@@ -1009,6 +1009,48 @@
 /* Chart frame inside a DS panel */
 .viz-frame { position: relative; display: grid; gap: 0.625rem; }
 
+/* Corrosion overview: the operating question comes before the evidence. */
+.corrosion-review-brief { border-top: 3px solid var(--ds-primary) !important; }
+.corrosion-review-route {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.corrosion-review-route__step {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r-sm);
+  background: var(--ds-surface-sunken);
+  padding: 0.5rem 0.625rem;
+}
+.corrosion-review-route__step > span {
+  color: var(--ds-primary-ink);
+  font-family: var(--ds-font-data);
+  font-size: var(--ds-t-micro);
+  font-weight: 700;
+}
+.corrosion-review-route__step > div { display: grid; min-width: 0; gap: 0.0625rem; }
+.corrosion-review-route__step strong { color: var(--ds-ink); font-size: var(--ds-t-xs); font-weight: 650; }
+.corrosion-review-route__step small { color: var(--ds-muted); font-size: var(--ds-t-micro); line-height: 1.3; }
+.corrosion-queue__intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ds-gap);
+}
+.corrosion-queue__eyebrow {
+  margin: 0 0 0.1875rem;
+  color: var(--ds-muted);
+  font-family: var(--ds-font-data);
+  font-size: var(--ds-t-micro);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 /* Severity chip — status colour always paired with its written label */
 .viz-sev {
   display: inline-flex;
@@ -1165,6 +1207,8 @@
 .life-rows__bar { display: block; height: 100%; border-radius: 4px; cursor: pointer; }
 
 @media (max-width: 48rem) {
+  .corrosion-review-route { grid-template-columns: 1fr; }
+  .corrosion-queue__intro { align-items: stretch; flex-direction: column; }
   .life-rows__row { grid-template-columns: minmax(0, 1fr) 3.5rem; row-gap: 0.25rem; }
   .life-rows__kp, .life-rows__track { grid-column: 1 / -1; }
   .seg-bars__row { grid-template-columns: minmax(4rem, 6rem) minmax(0, 1fr) 2.5rem; }

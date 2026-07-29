@@ -440,7 +440,7 @@ export default function ResultsPanel({
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [containerHeight, setContainerHeight] = useState(800); // fallback until measured
-  const ROW_HEIGHT = 24; // px per row — keep in sync with .results-table td height in synapse-tokens.css
+  const ROW_HEIGHT = 22; // px per row — keep in sync with .results-table td height in synapse-tokens.css
   const OVERSCAN = 10; // extra rows to render above/below viewport
 
   // Extract all columns
@@ -1096,7 +1096,7 @@ export default function ResultsPanel({
               onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
             >
               {(activeTab === 'Results' || activeTab === 'Interventions' || activeTab === 'Excluded') && (
-                <table className="results-table w-max text-left border-collapse text-[11px] leading-tight table-fixed break-words min-w-full">
+                <table className="results-table w-max text-left border-collapse text-[10px] leading-tight table-fixed break-words min-w-full">
                   <thead className="sticky top-0 z-10">
                     <tr>
                       {visibleColumns.filter(c => allColumns.includes(c)).map((col, idx) => (
@@ -1298,7 +1298,7 @@ export default function ResultsPanel({
               )}
 
               {(activeTab === 'ILI Run 1' || activeTab === 'ILI Run 2') && (
-                <table className="results-table results-table--run w-full text-left border-collapse text-[11px] leading-tight table-fixed break-words">
+                <table className="results-table results-table--run w-full text-left border-collapse text-[10px] leading-tight table-fixed break-words">
                   <thead className="sticky top-0 z-10">
                       <tr>
                         <th className="px-1.5 py-2 font-bold">Defect ID</th>

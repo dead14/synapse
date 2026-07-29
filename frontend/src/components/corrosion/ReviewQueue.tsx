@@ -34,11 +34,14 @@ export default function ReviewQueue({ features, pageSize = 25 }: Props) {
 
   return (
     <div className="ds-stack ds-stack--sm">
-      <div className="ds-row" style={{ justifyContent: 'space-between' }}>
-        <p className="viz-note">
-          Ranked by depth, ERF, measured growth, and projected remaining life. The order is a
-          starting point for review, not a decision.
-        </p>
+      <div className="corrosion-queue__intro">
+        <div>
+          <p className="corrosion-queue__eyebrow">Review order</p>
+          <p className="viz-note">
+            Ranked by depth, ERF, measured growth, and projected remaining life. The order is a
+            starting point for review, not a decision.
+          </p>
+        </div>
         {criticalCount > 0 && <Badge tone="danger">{criticalCount.toLocaleString()} critical</Badge>}
       </div>
 
@@ -48,11 +51,11 @@ export default function ReviewQueue({ features, pageSize = 25 }: Props) {
             <tr>
               <th style={{ width: '2.5rem' }}>#</th>
               <th>Feature</th>
-              <th className="ds-table__num">KP</th>
-              <th className="ds-table__num">Depth</th>
-              <th className="ds-table__num">Growth</th>
+              <th className="ds-table__num">KP [km]</th>
+              <th className="ds-table__num">Depth [%WT]</th>
+              <th className="ds-table__num">Growth [%WT/y]</th>
               <th className="ds-table__num">ERF</th>
-              <th className="ds-table__num">Life</th>
+              <th className="ds-table__num">Life [y]</th>
               <th>Severity</th>
               <th>Why it is here</th>
             </tr>

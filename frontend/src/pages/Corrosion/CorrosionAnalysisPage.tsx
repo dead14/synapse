@@ -271,6 +271,31 @@ export default function CorrosionAnalysisPage() {
 
       {!loading && !error && (
         <div className="ds-stack ds-stack--lg">
+          <Panel className="corrosion-review-brief">
+            <PanelHeader
+              plain
+              eyebrow="Engineering review route"
+              title="Screen severity, locate the concentration, then make the FFS handoff"
+              subtitle="Overview is a screening sequence: establish the population, find the stretch that needs attention, then decide whether to release the run to fitness-for-service."
+            />
+            <PanelBody tight>
+              <div className="corrosion-review-route" aria-label="Engineering review sequence">
+                <div className="corrosion-review-route__step">
+                  <span>01</span>
+                  <div><strong>Screen</strong><small>Depth, ERF, and growth</small></div>
+                </div>
+                <div className="corrosion-review-route__step">
+                  <span>02</span>
+                  <div><strong>Locate</strong><small>Concentration along the line</small></div>
+                </div>
+                <div className="corrosion-review-route__step">
+                  <span>03</span>
+                  <div><strong>Release</strong><small>One controlled FFS handoff</small></div>
+                </div>
+              </div>
+            </PanelBody>
+          </Panel>
+
           {/* Vitals band — the four numbers that frame everything below */}
           <StatGrid>
             <Stat lead label="Metal loss" value={vitals.metalLoss.toLocaleString()} hint={`${vitals.assessable.toLocaleString()} with complete dimensions`} />
@@ -292,13 +317,21 @@ export default function CorrosionAnalysisPage() {
             <div className="ds-stack">
               <div className="ds-grid-2">
                 <Panel>
-                  <PanelHeader plain eyebrow="Population" title="Wall loss distribution" subtitle="How deep the metal loss on this line actually is." />
+                  <PanelHeader plain eyebrow="01 | screening range" title="How severe is the wall loss?" subtitle="Read the depth population against the 80 %WT B31G screening boundary." />
                   <PanelBody><DepthHistogram features={metalLoss} /></PanelBody>
                 </Panel>
 
                 <Panel>
-                  <PanelHeader plain eyebrow="Severity mix" title="Where the population sits" subtitle="Banded on whichever of depth or ERF binds first." />
+                  <PanelHeader plain eyebrow="01 | risk posture" title="Which population needs attention?" subtitle="Severity uses whichever of depth or ERF is more limiting." />
                   <PanelBody className="ds-stack ds-stack--sm">
+                    <Callout
+                      tone={vitals.severity.critical + vitals.severity.high > 0 ? 'warning' : 'success'}
+                      title={vitals.severity.critical + vitals.severity.high > 0
+                        ? `${(vitals.severity.critical + vitals.severity.high).toLocaleString()} feature(s) are high or critical`
+                        : 'No feature is currently in a high or critical band'}
+                    >
+                      This is the population to prioritise before the FFS handoff.
+                    </Callout>
                     <div className="seg-bars">
                       <div className="seg-bars__row">
                         <span className="seg-bars__label">All metal loss</span>
@@ -341,7 +374,7 @@ export default function CorrosionAnalysisPage() {
               </div>
 
               <Panel>
-                <PanelHeader plain eyebrow="Location" title="Corrosion density along the line" subtitle="Where the anomalies concentrate, and the worst contiguous stretch." />
+                <PanelHeader plain eyebrow="02 | location" title="Where should inspection focus first?" subtitle="The shaded window marks the densest contiguous stretch; use it to target the next engineering review." />
                 <PanelBody><KpDensity features={metalLoss} /></PanelBody>
               </Panel>
             </div>
@@ -456,18 +489,18 @@ export default function CorrosionAnalysisPage() {
           {/* The FFS gate — one validation for the whole population */}
           <Panel>
             <PanelHeader
-              eyebrow="Handoff"
-              title="Validate for fitness-for-service"
+              eyebrow="03 | handoff decision"
+              title="Release this reviewed population to fitness-for-service"
               subtitle="One decision for the run, taken after the analysis above — not per anomaly."
               icon={<FiCheckCircle aria-hidden="true" />}
               actions={validated ? <Badge tone="success">Validated</Badge> : <Badge tone="neutral">Not yet validated</Badge>}
             />
             <PanelBody className="ds-stack ds-stack--sm">
               <StatGrid>
-                <Stat lead compact label="Will be released" value={vitals.metalLoss.toLocaleString()} hint="All metal loss on the NEW run" />
-                <Stat compact label="Complete dimensions" value={vitals.assessable.toLocaleString()} hint="B31G can assess these" tone="success" />
-                <Stat compact label="Incomplete" value={vitals.incomplete.toLocaleString()} hint="Will be rejected by the engine" tone={vitals.incomplete > 0 ? 'warning' : 'neutral'} />
-                <Stat compact label="Currently validated" value={releasedCount.toLocaleString()} hint={review?.stale ? 'Stale — re-validate' : 'Saved'} />
+                <Stat lead compact label="Population sent to FFS" value={vitals.metalLoss.toLocaleString()} hint="All metal loss on the NEW run" />
+                <Stat compact label="B31G-ready" value={vitals.assessable.toLocaleString()} hint="Complete dimensions" tone="success" />
+                <Stat compact label="Needs data repair" value={vitals.incomplete.toLocaleString()} hint="FFS will record the rejection reason" tone={vitals.incomplete > 0 ? 'warning' : 'neutral'} />
+                <Stat compact label="Validated now" value={releasedCount.toLocaleString()} hint={review?.stale ? 'Stale — re-validate' : 'Saved'} />
               </StatGrid>
 
               {vitals.incomplete > 0 && (

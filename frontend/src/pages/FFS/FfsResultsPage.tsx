@@ -296,35 +296,29 @@ export default function FfsResultsPage() {
           </Callout>
         )}
 
-        {/* Tabs */}
-        <div
-          role="tablist"
-          aria-label="Assessment views"
-          className="flex gap-0 overflow-x-auto border-b border-slate-200 dark:border-slate-700"
-        >
-          {TABS.map((tab) => {
-            const Icon = tab.icon;
-            const active = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                role="tab"
-                type="button"
-                aria-selected={active}
-                aria-controls={`ffs-panel-${tab.id}`}
-                id={`ffs-tab-${tab.id}`}
-                onClick={() => setActiveTab(tab.id)}
-                className={`-mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-5 py-3 text-[13px] font-semibold transition-colors ${
-                  active
-                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                {tab.label}
-              </button>
-            );
-          })}
+        {/* Matches the Corrosion Analysis view switcher for a shared review workflow. */}
+        <div className="max-w-full overflow-x-auto">
+          <div role="tablist" aria-label="Assessment views" className="ds-segmented w-max">
+            {TABS.map((tab) => {
+              const Icon = tab.icon;
+              const active = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  role="tab"
+                  type="button"
+                  aria-selected={active}
+                  aria-controls={`ffs-panel-${tab.id}`}
+                  id={`ffs-tab-${tab.id}`}
+                  className={`ds-segmented__option${active ? ' is-active' : ''}`}
+                  onClick={() => setActiveTab(tab.id)}
+                >
+                  <Icon aria-hidden="true" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Panels */}
