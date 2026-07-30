@@ -4,6 +4,8 @@ export interface FfsConfig {
   modifiedSa: 'smys69' | 'smys11';
   iliDate: Date;
   highlightYears: number;
+  /** Units selected by the engineer; B31G values are normalized to MPa and mm. */
+  inputUnits?: { pressure: 'MPa' | 'bar' | 'psi'; diameter: 'mm' | 'in' };
 }
 
 /**

@@ -1947,6 +1947,10 @@ body {
   margin-bottom: 0.8rem;
 }
 
+.syn-registry-grid--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .syn-registry-import,
 .syn-registry-readiness {
   padding: 1.25rem;
@@ -2094,6 +2098,18 @@ body {
 
 .syn-registry-table td > .syn-pill {
   margin-bottom: 0.3rem;
+}
+
+.syn-registry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.syn-registry-actions strong,
+.syn-registry-actions a {
+  width: 100%;
 }
 
 .syn-action--small {

@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import {
   FiAlertTriangle,
   FiArrowDown,
   FiCheckCircle,
   FiDatabase,
+  FiDownload,
   FiFileText,
   FiRefreshCw,
   FiSearch,
@@ -20,7 +22,12 @@ import {
   type InspectionProfile,
   type InspectionRun,
 } from '../../domain/inspection';
-import { apiFetch } from '../../utils/api';
+import { apiFetch, apiUrl } from '../../utils/api';
+import {
+  createAlignmentSessionExportPayload,
+  waitForAlignmentExport,
+  type AlignmentExportJob,
+} from '../../utils/alignmentExport';
 
 type RegistryResponse = { items?: unknown; nextCursor?: unknown };
 
@@ -49,6 +56,20 @@ function statusLabel(status: InspectionRun['evidence']['status']) {
   return 'Evidence unavailable';
 }
 
+function workflowPresentation(run: InspectionRun) {
+  const sessionId = run.workflow.alignmentSessionId;
+  if (run.workflow.stage === 'ffs' && sessionId !== null) {
+    return { label: 'FFS review ready', href: `/ffs?sessionId=${sessionId}`, action: 'Open FFS' };
+  }
+  if (run.workflow.stage === 'runcomp' && sessionId !== null) {
+    return { label: 'Runcomp ready', href: `/ili-comparison?sessionId=${sessionId}`, action: 'Open Runcomp' };
+  }
+  if (run.workflow.stage === 'alignment' && sessionId !== null) {
+    return { label: 'Alignment in progress', href: `/ili-comparison?sessionId=${sessionId}`, action: 'View progress' };
+  }
+  return { label: 'Imported', href: '/alignment', action: 'Start alignment' };
+}
+
 export default function InspectionRegistryPage() {
   const [runs, setRuns] = useState<InspectionRun[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -63,6 +84,7 @@ export default function InspectionRegistryPage() {
   const [uploading, setUploading] = useState(false);
   const [profile, setProfile] = useState<InspectionProfile | null>(null);
   const [profileRunId, setProfileRunId] = useState<number | null>(null);
+  const [downloadingSessionId, setDownloadingSessionId] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function loadRuns({ append = false, cursor = null }: { append?: boolean; cursor?: string | null } = {}) {
@@ -136,6 +158,56 @@ export default function InspectionRegistryPage() {
     }
   }
 
+  async function downloadRuncomp(run: InspectionRun) {
+    const sessionId = run.workflow.alignmentSessionId;
+    if (!run.workflow.downloadAvailable || sessionId === null) return;
+    setDownloadingSessionId(sessionId);
+    setError(null);
+    try {
+      const response = await fetch(apiUrl('/api/alignment/export-excel'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(createAlignmentSessionExportPayload(sessionId, {
+          pipelineName: run.pipelineName,
+          inspectionRuns: [{ runId: run.id, vendor: run.vendor || '', year: run.surveyYear || '' }],
+        })),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error || `Unable to prepare Runcomp download (${response.status}).`);
+      }
+      if (response.status === 202) {
+        const queued = await response.json() as AlignmentExportJob;
+        if (!queued.exportId) throw new Error('The Runcomp export did not return an identifier.');
+        await waitForAlignmentExport(
+          () => apiFetch<AlignmentExportJob>(`/api/alignment/exports/${encodeURIComponent(queued.exportId)}`),
+          () => new Promise((resolve) => window.setTimeout(resolve, 2_000)),
+        );
+        const link = document.createElement('a');
+        link.href = apiUrl(`/api/alignment/exports/${encodeURIComponent(queued.exportId)}/download`);
+        link.download = 'synapse_alignment_report.xlsx';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } else {
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'synapse_alignment_report.xlsx';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Runcomp download could not be prepared.');
+    } finally {
+      setDownloadingSessionId(null);
+    }
+  }
+
   return (
     <div className="syn-page">
       <PageMeta title="ILI Runs · Synapse" description="Canonical vendor-agnostic inspection registry" />
@@ -152,7 +224,7 @@ export default function InspectionRegistryPage() {
         {error && <div className="syn-alert syn-alert--danger" role="alert"><FiAlertTriangle aria-hidden="true" /><span>{error}</span></div>}
         {notice && <div className="syn-alert syn-alert--success" role="status"><FiCheckCircle aria-hidden="true" /><span>{notice}</span></div>}
 
-        <section className="syn-registry-grid" aria-label="Inspection data intake">
+        <section className="syn-registry-grid syn-registry-grid--single" aria-label="Inspection data intake">
           <article className="syn-panel syn-registry-import">
             <header className="syn-section-heading">
               <div><p className="syn-kicker">Vendor-agnostic parser</p><h2 className="syn-heading">Import an ILI run</h2></div>
@@ -174,16 +246,6 @@ export default function InspectionRegistryPage() {
             <p className="syn-registry-note">A successful import persists parser version, universal schema version, row audit, uploader, and SHA-256 source fingerprint. It does not silently coerce failed rows into engineering evidence.</p>
           </article>
 
-          <aside className="syn-panel syn-panel--ink syn-registry-readiness">
-            <p className="syn-kicker">Registry snapshot</p>
-            <h2 className="syn-heading">Data quality before analysis.</h2>
-            <p>Alignment, FFS, risk, and repairs should consume canonical runs—not browser-only files or unnamed sessions.</p>
-            <div className="syn-registry-metrics">
-              <div><strong className="syn-data">{summary.runCount}</strong><span>runs in view</span></div>
-              <div><strong className="syn-data">{summary.acceptedRows.toLocaleString('en-GB')}</strong><span>accepted rows</span></div>
-              <div><strong className="syn-data">{summary.reviewCount}</strong><span>need review</span></div>
-            </div>
-          </aside>
         </section>
 
         <section className="syn-panel syn-registry-table-panel" aria-labelledby="registry-title">
@@ -193,19 +255,22 @@ export default function InspectionRegistryPage() {
           </header>
           <div className="syn-table-wrap">
             <table className="syn-table syn-registry-table">
-              <thead><tr><th scope="col">Pipeline / source</th><th scope="col">Vendor / year</th><th scope="col">Evidence</th><th scope="col">Parser provenance</th><th scope="col">Quality</th></tr></thead>
+              <thead><tr><th scope="col">Pipeline / source</th><th scope="col">Vendor / year</th><th scope="col">Evidence</th><th scope="col">Parser provenance</th><th scope="col">Process / actions</th></tr></thead>
               <tbody>
                 {loading && <tr><td colSpan={5}><div className="syn-table-loading" role="status"><span className="syn-skeleton" /><span className="syn-skeleton" /><span className="syn-skeleton" /></div></td></tr>}
                 {!loading && runs.length === 0 && <tr><td colSpan={5}><div className="syn-empty-table"><FiSearch aria-hidden="true" /><strong>No canonical inspection runs</strong><span>Import a vendor export above to create the first evidence-backed run.</span></div></td></tr>}
-                {!loading && runs.map((run) => (
+                {!loading && runs.map((run) => {
+                  const workflow = workflowPresentation(run);
+                  return (
                   <tr key={run.id}>
                     <td><strong>{run.pipelineName}</strong><small>{run.sourceFile || 'Source name not recorded'} · {formatDate(run.uploadedAt)}</small></td>
                     <td><strong>{run.vendor || 'Vendor not recorded'}</strong><small>{run.surveyYear ?? 'Year not recorded'} · {run.rowCount.toLocaleString('en-GB')} rows</small></td>
                     <td><span className={statusClass(run.evidence.status)}><span className="syn-dot" />{statusLabel(run.evidence.status)}</span><small>{run.evidence.acceptedRows.toLocaleString('en-GB')} accepted · {run.evidence.rejectedRows} rejected</small></td>
                     <td><strong>{run.provenance.parserVersion || 'Not recorded'}</strong><small>{run.provenance.sourceSha256 ? `${run.provenance.sourceSha256.slice(0, 12)}…` : 'Source fingerprint unavailable'}</small></td>
-                    <td><SynButton variant="outline" size="sm" type="button" onClick={() => void showProfile(run.id)}>{profileRunId === run.id ? 'Hide profile' : 'Profile'}</SynButton></td>
+                    <td><div className="syn-registry-actions"><strong>{workflow.label}</strong><Link to={workflow.href}>{workflow.action}</Link><SynButton variant="outline" size="sm" type="button" onClick={() => void showProfile(run.id)}>{profileRunId === run.id ? 'Hide profile' : 'Profile'}</SynButton>{run.workflow.downloadAvailable && <SynButton variant="outline" size="sm" type="button" disabled={downloadingSessionId === run.workflow.alignmentSessionId} onClick={() => void downloadRuncomp(run)}><FiDownload aria-hidden="true" />{downloadingSessionId === run.workflow.alignmentSessionId ? 'Preparing...' : 'Download'}</SynButton>}</div></td>
                   </tr>
-                ))}
+                  );
+                })}
                 {profileRunId !== null && profile && <tr><td colSpan={5}><div className="syn-registry-profile" role="status"><strong>Run {profile.runId} quality profile</strong><span>{profile.featureCount.toLocaleString('en-GB')} features · {formatNumber(profile.distanceRangeM.minimum)}–{formatNumber(profile.distanceRangeM.maximum)} m</span><span>Depth {formatNumber(profile.coverage.depthPercent)}% · wall thickness {formatNumber(profile.coverage.wallThicknessPercent)}% · clock {formatNumber(profile.coverage.clockPositionPercent)}%</span><span>{profile.invalid.missingFeatureType} missing feature types · {profile.invalid.depthOutOfRange} depth values out of range</span></div></td></tr>}
               </tbody>
             </table>

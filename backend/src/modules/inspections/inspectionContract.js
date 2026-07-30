@@ -101,6 +101,12 @@ function countWarnings(warnings) {
     }, 0);
 }
 
+function workflowStage(value) {
+    return value === 'alignment' || value === 'runcomp' || value === 'ffs'
+        ? value
+        : 'imported';
+}
+
 function serializeInspectionRun(row = {}) {
     const audit = asObject(row.ingestion_audit);
     const acceptedRows = asNonNegativeInteger(
@@ -109,6 +115,7 @@ function serializeInspectionRun(row = {}) {
     );
     const rejectedRows = asNonNegativeInteger(audit.rejected_rows, 0);
     const warningCount = countWarnings(audit.quality_warnings);
+    const stage = workflowStage(row.workflow_stage);
     const evidenceStatus = acceptedRows === 0
         ? 'unavailable'
         : rejectedRows > 0 || warningCount > 0
@@ -141,6 +148,11 @@ function serializeInspectionRun(row = {}) {
             warnings: asObject(audit.quality_warnings),
             numericCoercions: asObject(audit.numeric_coercions),
             rejectionReasons: asObject(audit.rejection_reasons),
+        },
+        workflow: {
+            stage,
+            alignmentSessionId: asNonNegativeInteger(row.workflow_session_id),
+            downloadAvailable: stage === 'runcomp' || stage === 'ffs',
         },
     };
 }

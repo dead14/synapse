@@ -14,6 +14,12 @@ export type InspectionEvidence = {
   warningCount: number;
 };
 
+export type InspectionWorkflow = {
+  stage: 'imported' | 'alignment' | 'runcomp' | 'ffs';
+  alignmentSessionId: number | null;
+  downloadAvailable: boolean;
+};
+
 export type InspectionRun = {
   id: number;
   pipelineId: number;
@@ -25,6 +31,7 @@ export type InspectionRun = {
   rowCount: number;
   provenance: InspectionProvenance;
   evidence: InspectionEvidence;
+  workflow: InspectionWorkflow;
 };
 
 export type InspectionPage = {
@@ -84,10 +91,17 @@ function normalizeStatus(value: unknown): InspectionEvidence['status'] {
   return value === 'ready' || value === 'review' ? value : 'unavailable';
 }
 
+function normalizeWorkflowStage(value: unknown): InspectionWorkflow['stage'] {
+  return value === 'alignment' || value === 'runcomp' || value === 'ffs' ? value : 'imported';
+}
+
 function normalizeInspectionRun(value: unknown): InspectionRun {
   const run = record(value);
   const provenance = record(run.provenance);
   const evidence = record(run.evidence);
+  const workflow = record(run.workflow);
+  const stage = normalizeWorkflowStage(workflow.stage);
+  const alignmentSessionId = nullableNonNegativeInteger(workflow.alignmentSessionId);
 
   return {
     id: nonNegativeInteger(run.id),
@@ -111,6 +125,13 @@ function normalizeInspectionRun(value: unknown): InspectionRun {
       mappedColumns: nullableNonNegativeInteger(evidence.mappedColumns),
       recognizedHeaderFields: nullableNonNegativeInteger(evidence.recognizedHeaderFields),
       warningCount: nonNegativeInteger(evidence.warningCount),
+    },
+    workflow: {
+      stage,
+      alignmentSessionId,
+      downloadAvailable: (stage === 'runcomp' || stage === 'ffs')
+        && workflow.downloadAvailable === true
+        && alignmentSessionId !== null,
     },
   };
 }
