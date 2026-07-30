@@ -23,16 +23,14 @@ function InputCard({
   description: string;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-700 dark:bg-slate-900/40">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-        {label}
-      </p>
-      <p className="mt-1.5 text-lg font-bold tabular-nums text-slate-900 dark:text-slate-50">
+    <div className="ffs-detail__input-card">
+      <p className="ffs-detail__input-label">{label}</p>
+      <p className="ffs-detail__input-value">
         {value}
-        {unit && <span className="ml-1 text-[11px] font-normal text-slate-400">{unit}</span>}
+        {unit && <span className="ffs-detail__input-unit">{unit}</span>}
       </p>
-      <p className="mt-1 text-[10px] text-slate-400">
-        <span className="font-mono text-indigo-500 dark:text-indigo-400">{symbol}</span>
+      <p className="ffs-detail__input-desc">
+        <span className="ffs-detail__input-symbol">{symbol}</span>
         {' = '}
         {description}
       </p>
@@ -47,6 +45,7 @@ function CalcStep({
   result,
   unit,
   note,
+  step,
   tone = 'default',
   sideBySide,
 }: {
@@ -56,6 +55,7 @@ function CalcStep({
   result: string;
   unit?: string;
   note?: string;
+  step?: number;
   tone?: 'default' | 'accent' | 'good' | 'warn' | 'bad';
   sideBySide?: {
     name: string;
@@ -65,62 +65,39 @@ function CalcStep({
     unit?: string;
   };
 }) {
-  const toneText = {
-    default: 'text-slate-900 dark:text-slate-50',
-    accent: 'text-indigo-600 dark:text-indigo-400',
-    good: 'text-emerald-600 dark:text-emerald-400',
-    warn: 'text-amber-600 dark:text-amber-400',
-    bad: 'text-rose-600 dark:text-rose-400',
-  }[tone];
-
-  const toneBorder = {
-    default: 'border-slate-200 dark:border-slate-700',
-    accent: 'border-indigo-200 dark:border-indigo-800/60',
-    good: 'border-emerald-200 dark:border-emerald-800/60',
-    warn: 'border-amber-200 dark:border-amber-800/60',
-    bad: 'border-rose-200 dark:border-rose-800/60',
-  }[tone];
+  const toneClass = `ffs-detail__calc-step--${tone}`;
 
   if (sideBySide) {
     return (
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <div className={`rounded-lg border ${toneBorder} bg-slate-50/70 p-3 dark:bg-slate-900/40`}>
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                {name}
-              </p>
-              <p className="mt-1.5 break-words font-mono text-[11px] leading-relaxed text-indigo-600 dark:text-indigo-400">
-                {formula}
-              </p>
-              <p className="mt-0.5 break-words font-mono text-[10px] leading-relaxed text-slate-400">
-                = {substitution}
-              </p>
+      <div className="ffs-detail__calc-pair">
+        <div className={`ffs-detail__calc-step ${toneClass}`}>
+          <div className="ffs-detail__calc-body">
+            <div className="ffs-detail__calc-info">
+              {step && <span className="ffs-detail__calc-num">{step}</span>}
+              <div>
+                <p className="ffs-detail__calc-name">{name}</p>
+                <p className="ffs-detail__calc-formula">{formula}</p>
+                <p className="ffs-detail__calc-sub">= {substitution}</p>
+              </div>
             </div>
-            <p className={`shrink-0 text-right text-lg font-bold tabular-nums ${toneText}`}>
+            <p className="ffs-detail__calc-result">
               {result}
-              {unit && <span className="ml-1 text-[10px] font-normal text-slate-400">{unit}</span>}
+              {unit && <span className="ffs-detail__calc-unit">{unit}</span>}
             </p>
           </div>
         </div>
-        <div className="rounded-lg border border-indigo-200 bg-indigo-50/50 p-3 dark:border-indigo-800/60 dark:bg-indigo-950/20">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                {sideBySide.name}
-              </p>
-              <p className="mt-1.5 break-words font-mono text-[11px] leading-relaxed text-indigo-600 dark:text-indigo-400">
-                {sideBySide.formula}
-              </p>
-              <p className="mt-0.5 break-words font-mono text-[10px] leading-relaxed text-slate-400">
-                = {sideBySide.substitution}
-              </p>
+        <div className="ffs-detail__calc-step ffs-detail__calc-step--accent">
+          <div className="ffs-detail__calc-body">
+            <div className="ffs-detail__calc-info">
+              <div>
+                <p className="ffs-detail__calc-name">{sideBySide.name}</p>
+                <p className="ffs-detail__calc-formula">{sideBySide.formula}</p>
+                <p className="ffs-detail__calc-sub">= {sideBySide.substitution}</p>
+              </div>
             </div>
-            <p className="shrink-0 text-right text-lg font-bold tabular-nums text-indigo-600 dark:text-indigo-400">
+            <p className="ffs-detail__calc-result ffs-detail__calc-result--accent">
               {sideBySide.result}
-              {sideBySide.unit && (
-                <span className="ml-1 text-[10px] font-normal text-slate-400">{sideBySide.unit}</span>
-              )}
+              {sideBySide.unit && <span className="ffs-detail__calc-unit">{sideBySide.unit}</span>}
             </p>
           </div>
         </div>
@@ -129,27 +106,22 @@ function CalcStep({
   }
 
   return (
-    <div className={`rounded-lg border ${toneBorder} bg-slate-50/70 p-3 dark:bg-slate-900/40`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-            {name}
-            {note && (
-              <span className="ml-2 rounded border border-slate-300 px-1.5 py-0.5 text-[9px] font-semibold normal-case tracking-normal text-slate-500 dark:border-slate-600 dark:text-slate-400">
-                {note}
-              </span>
-            )}
-          </p>
-          <p className="mt-1.5 break-words font-mono text-[11px] leading-relaxed text-indigo-600 dark:text-indigo-400">
-            {formula}
-          </p>
-          <p className="mt-0.5 break-words font-mono text-[10px] leading-relaxed text-slate-400">
-            = {substitution}
-          </p>
+    <div className={`ffs-detail__calc-step ${toneClass}`}>
+      <div className="ffs-detail__calc-body">
+        <div className="ffs-detail__calc-info">
+          {step && <span className="ffs-detail__calc-num">{step}</span>}
+          <div>
+            <p className="ffs-detail__calc-name">
+              {name}
+              {note && <span className="ffs-detail__calc-note">{note}</span>}
+            </p>
+            <p className="ffs-detail__calc-formula">{formula}</p>
+            <p className="ffs-detail__calc-sub">= {substitution}</p>
+          </div>
         </div>
-        <p className={`shrink-0 text-right text-lg font-bold tabular-nums ${toneText}`}>
+        <p className="ffs-detail__calc-result">
           {result}
-          {unit && <span className="ml-1 text-[10px] font-normal text-slate-400">{unit}</span>}
+          {unit && <span className="ffs-detail__calc-unit">{unit}</span>}
         </p>
       </div>
     </div>
@@ -169,23 +141,14 @@ function LifeCard({
   description: string;
   tone?: 'default' | 'accent' | 'warn' | 'bad';
 }) {
-  const toneText = {
-    default: 'text-slate-900 dark:text-slate-50',
-    accent: 'text-indigo-600 dark:text-indigo-400',
-    warn: 'text-amber-600 dark:text-amber-400',
-    bad: 'text-rose-600 dark:text-rose-400',
-  }[tone];
-
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-700 dark:bg-slate-900/40">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-        {label}
-      </p>
-      <p className={`mt-1 text-base font-bold tabular-nums ${toneText}`}>
+    <div className={`ffs-detail__life-card ffs-detail__life-card--${tone}`}>
+      <p className="ffs-detail__life-label">{label}</p>
+      <p className="ffs-detail__life-value">
         {value}
-        {unit && <span className="ml-1 text-[10px] font-normal text-slate-400">{unit}</span>}
+        {unit && <span className="ffs-detail__life-unit">{unit}</span>}
       </p>
-      <p className="mt-0.5 text-[10px] text-slate-400">{description}</p>
+      <p className="ffs-detail__life-desc">{description}</p>
     </div>
   );
 }
@@ -218,55 +181,54 @@ export default function FfsDetailModal({
   const k = isOriginal ? 2 / 3 : 0.85;
   const methodLabel = isOriginal ? 'Original B31G' : 'Modified B31G';
   const areaLabel = isOriginal ? '⅔dL' : '0.85dL';
+  const failed = n.acceptance === 'Un-Acceptable';
 
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-label={`Calculation breakdown for the feature at log distance ${n.ld}`}
-      className="fixed inset-0 z-[100000] flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-sm"
+      className="ffs-detail__overlay"
       onClick={onClose}
     >
-      <div
-        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800"
-        onClick={(event) => event.stopPropagation()}
-      >
+      <div className="ffs-detail__dialog" onClick={(event) => event.stopPropagation()}>
+        {/* Accent bar */}
+        <div className={`ffs-detail__accent-bar ${failed ? 'ffs-detail__accent-bar--fail' : 'ffs-detail__accent-bar--pass'}`} />
+
         {/* Header */}
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-3">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-slate-50">
+        <div className="ffs-detail__header">
+          <div className="ffs-detail__header-left">
+            <div className="ffs-detail__header-title-row">
+              <h2 className="ffs-detail__title">
                 DEFECT @ LD {Number(n.ld).toLocaleString()} m
               </h2>
-              <span className="rounded-full border border-indigo-300 bg-indigo-50 px-2.5 py-0.5 text-[10px] font-bold text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
-                {methodLabel} · {areaLabel}
+              <span className="ffs-detail__method-badge">
+                {methodLabel} &middot; {areaLabel}
               </span>
             </div>
-            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              {n.section} · {n.surface} · {n.acceptance}
+            <p className="ffs-detail__subtitle">
+              {n.section} &middot; {n.surface} &middot; {n.acceptance}
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-3">
+          <div className="ffs-detail__header-right">
             <SeverityBadge severity={item.conservative.severity} />
             <button
               type="button"
               onClick={onClose}
               aria-label="Close calculation breakdown"
-              className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+              className="ffs-detail__close-btn"
             >
-              <FiX className="h-4 w-4" />
+              <FiX />
             </button>
           </div>
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-6 py-5">
+        <div className="ffs-detail__body">
           {/* Input Parameters */}
-          <section className="mb-6">
-            <h3 className="mb-3 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              Input parameters
-            </h3>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <section className="ffs-detail__section">
+            <h3 className="ffs-detail__section-title">Input parameters</h3>
+            <div className="ffs-detail__input-grid">
               <InputCard
                 label="Max Depth"
                 symbol={'dₘₑₐₛ'}
@@ -281,7 +243,7 @@ export default function FfsDetailModal({
                 description="Nominal"
               />
               <InputCard
-                label={`Outer Diameter (D)`}
+                label="Outer Diameter (D)"
                 symbol={'Dₛ'}
                 value={n.od.toFixed(1)}
                 unit="mm"
@@ -332,21 +294,19 @@ export default function FfsDetailModal({
           </section>
 
           {/* Step-by-step Calculation */}
-          <section className="mb-6">
-            <h3 className="mb-3 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              Step-by-step calculation (at ILI date)
-            </h3>
-            <div className="space-y-2">
-              {/* Safety Factor */}
+          <section className="ffs-detail__section">
+            <h3 className="ffs-detail__section-title">Step-by-step calculation (at ILI date)</h3>
+            <div className="ffs-detail__calc-list">
               <CalcStep
+                step={1}
                 name="Safety Factor (SF)"
                 formula="SF = 1 / DF"
                 substitution={`1 / ${n.df.toFixed(3)}`}
                 result={fmt(n.SF)}
               />
 
-              {/* Defect Depth */}
               <CalcStep
+                step={2}
                 name="Defect Depth (d)"
                 formula="d = (Depth% / 100) × t"
                 substitution={`(${n.maxDepthPct.toFixed(2)} / 100) × ${n.wall.toFixed(2)}`}
@@ -354,28 +314,28 @@ export default function FfsDetailModal({
                 unit="mm"
               />
 
-              {/* D/T Ratio */}
               <CalcStep
+                step={3}
                 name="D/T Ratio"
                 formula="d/t = d / t"
                 substitution={`${fmt(n.d, 4)} / ${n.wall.toFixed(2)}`}
                 result={fmt(n.dt)}
               />
 
-              {/* Z Factor */}
               <CalcStep
+                step={4}
                 name="Z Factor"
                 formula={'z = L² / (D × t)'}
                 substitution={`${n.length.toFixed(0)}² / (${n.od.toFixed(1)} × ${n.wall.toFixed(2)})`}
                 result={fmt(n.z)}
               />
 
-              {/* Folias Factor */}
               {isOriginal ? (
                 n.M !== null ? (
                   <CalcStep
+                    step={5}
                     name="M Factor (Folias)"
-                    formula={'M = √(1 + 0.8z)'}
+                    formula={'√(1 + 0.8z)'}
                     substitution={`√(1 + 0.8 × ${fmt(n.z)})`}
                     result={fmt(n.M)}
                     note={`z≤20`}
@@ -383,6 +343,7 @@ export default function FfsDetailModal({
                   />
                 ) : (
                   <CalcStep
+                    step={5}
                     name="M Factor (Folias)"
                     formula="M not used for z > 20"
                     substitution="Long-anomaly branch selected"
@@ -392,6 +353,7 @@ export default function FfsDetailModal({
                 )
               ) : (
                 <CalcStep
+                  step={5}
                   name="M Factor (Folias)"
                   formula={
                     n.z <= 50
@@ -409,8 +371,8 @@ export default function FfsDetailModal({
                 />
               )}
 
-              {/* Flow Stress */}
               <CalcStep
+                step={6}
                 name={'Flow Stress (Sᶠₗₒᵂ)'}
                 formula={
                   isOriginal || config.modifiedSa === 'smys11'
@@ -426,8 +388,8 @@ export default function FfsDetailModal({
                 unit="MPa"
               />
 
-              {/* Remaining Strength */}
               <CalcStep
+                step={7}
                 name={'Flow Stress Sᶠ'}
                 formula={
                   isOriginal && n.M === null
@@ -444,8 +406,8 @@ export default function FfsDetailModal({
                 tone="accent"
               />
 
-              {/* Failure Pressure */}
               <CalcStep
+                step={8}
                 name={'Failure Pressure Pᶠ'}
                 formula={'Pᶠ = 2 × Sᶠ × t / D'}
                 substitution={`2 × ${fmt(n.Sf, 4)} × ${n.wall.toFixed(2)} / ${n.od.toFixed(1)}`}
@@ -453,8 +415,8 @@ export default function FfsDetailModal({
                 unit="MPa"
               />
 
-              {/* Hoop Stress + Safe Pressure (side by side) */}
               <CalcStep
+                step={9}
                 name={'Hoop Stress S₀'}
                 formula={'S₀ = P₀ × D / (2t)'}
                 substitution={`${n.p0.toFixed(3)} × ${n.od.toFixed(1)} / (2 × ${n.wall.toFixed(2)})`}
@@ -469,8 +431,8 @@ export default function FfsDetailModal({
                 }}
               />
 
-              {/* ERF */}
               <CalcStep
+                step={10}
                 name={'ERF — Estimated Repair Factor'}
                 formula={'ERF = S₀ / (Sᶠ × DF)'}
                 substitution={`${fmt(n.So, 4)} / (${fmt(n.Sf, 4)} × ${n.df.toFixed(3)})`}
@@ -479,34 +441,23 @@ export default function FfsDetailModal({
               />
 
               {/* Acceptance Level */}
-              <div
-                className={`rounded-lg border p-3 ${
-                  n.acceptance === 'Acceptable'
-                    ? 'border-emerald-200 bg-emerald-50/50 dark:border-emerald-800/60 dark:bg-emerald-950/20'
-                    : 'border-rose-200 bg-rose-50/50 dark:border-rose-800/60 dark:bg-rose-950/20'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                      Acceptance Level
-                    </p>
-                    <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-indigo-600 dark:text-indigo-400">
-                      ERF {'<'} 1 AND Depth {'<'} 80%
-                    </p>
-                    <p className="mt-0.5 font-mono text-[10px] text-slate-400">
-                      = ERF={formatErf(n.ERF)} {n.ERF < 1 ? '✓' : '✗'} & Depth=
-                      {n.maxDepthPct.toFixed(2)}% {n.maxDepthPct < 80 ? '✓' : '✗'}
-                    </p>
+              <div className={`ffs-detail__acceptance ${failed ? 'ffs-detail__acceptance--fail' : 'ffs-detail__acceptance--pass'}`}>
+                <div className="ffs-detail__calc-body">
+                  <div className="ffs-detail__calc-info">
+                    <span className="ffs-detail__calc-num">11</span>
+                    <div>
+                      <p className="ffs-detail__calc-name">Acceptance Level</p>
+                      <p className="ffs-detail__calc-formula">
+                        ERF {'<'} 1 AND Depth {'<'} 80%
+                      </p>
+                      <p className="ffs-detail__calc-sub">
+                        = ERF={formatErf(n.ERF)} {n.ERF < 1 ? '✓' : '✗'} & Depth=
+                        {n.maxDepthPct.toFixed(2)}% {n.maxDepthPct < 80 ? '✓' : '✗'}
+                      </p>
+                    </div>
                   </div>
-                  <p
-                    className={`shrink-0 text-right text-lg font-bold ${
-                      n.acceptance === 'Acceptable'
-                        ? 'text-emerald-600 dark:text-emerald-400'
-                        : 'text-rose-600 dark:text-rose-400'
-                    }`}
-                  >
-                    {n.acceptance === 'Acceptable' ? 'Acceptable' : 'Not Acceptable'}
+                  <p className={`ffs-detail__calc-result ${failed ? 'ffs-detail__calc-result--bad' : 'ffs-detail__calc-result--good'}`}>
+                    {failed ? 'Not Acceptable' : 'Acceptable'}
                   </p>
                 </div>
               </div>
@@ -514,35 +465,21 @@ export default function FfsDetailModal({
           </section>
 
           {/* Screening Tiers */}
-          <section className="mb-6">
-            <h3 className="mb-3 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              Screening tiers
-            </h3>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[520px] border-collapse text-[10px] leading-tight">
+          <section className="ffs-detail__section">
+            <h3 className="ffs-detail__section-title">Screening tiers</h3>
+            <div className="ffs-detail__tiers-wrap">
+              <table className="ffs-detail__tiers-table">
                 <thead>
-                  <tr className="bg-slate-100 dark:bg-slate-900/60">
-                    <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                      Tier
-                    </th>
-                    <th className="px-2 py-2 text-right text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                      Depth [%]
-                    </th>
-                    <th className="px-2 py-2 text-right text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                      Length [mm]
-                    </th>
-                    <th className="px-2 py-2 text-right text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                      P_safe [MPa]
-                    </th>
-                    <th className="px-2 py-2 text-right text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                      ERF
-                    </th>
-                    <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                      Status
-                    </th>
+                  <tr>
+                    <th className="text-left">Tier</th>
+                    <th className="text-right">Depth [%]</th>
+                    <th className="text-right">Length [mm]</th>
+                    <th className="text-right">P_safe [MPa]</th>
+                    <th className="text-right">ERF</th>
+                    <th className="text-center">Status</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                <tbody>
                   {[
                     {
                       label: 'Nominal — as reported',
@@ -569,13 +506,13 @@ export default function FfsDetailModal({
                       severity: item.forecast.severity,
                     },
                   ].map((tier) => (
-                    <tr key={tier.label} className="text-slate-700 dark:text-slate-300">
-                      <td className="px-2 py-2 font-medium">{tier.label}</td>
-                      <td className="px-2 py-2 text-right tabular-nums">{tier.depth.toFixed(1)}</td>
-                      <td className="px-2 py-2 text-right tabular-nums">{tier.length.toFixed(0)}</td>
-                      <td className="px-2 py-2 text-right tabular-nums">{fmt(tier.safe, 3)}</td>
-                      <td className="px-2 py-2 text-right font-bold tabular-nums">{formatErf(tier.erf)}</td>
-                      <td className="px-2 py-2 text-center">
+                    <tr key={tier.label}>
+                      <td className="font-medium">{tier.label}</td>
+                      <td className="text-right tabular-nums">{tier.depth.toFixed(1)}</td>
+                      <td className="text-right tabular-nums">{tier.length.toFixed(0)}</td>
+                      <td className="text-right tabular-nums">{fmt(tier.safe, 3)}</td>
+                      <td className="text-right font-bold tabular-nums">{formatErf(tier.erf)}</td>
+                      <td className="text-center">
                         <SeverityBadge severity={tier.severity} />
                       </td>
                     </tr>
@@ -586,11 +523,9 @@ export default function FfsDetailModal({
           </section>
 
           {/* Expected Life Projection */}
-          <section className="mb-5">
-            <h3 className="mb-3 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              Expected life projection
-            </h3>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <section className="ffs-detail__section">
+            <h3 className="ffs-detail__section-title">Expected life projection</h3>
+            <div className="ffs-detail__life-grid">
               <LifeCard
                 label="Expected Life"
                 value={n.expectedLife >= 200 ? '>200' : n.expectedLife.toFixed(2)}
@@ -628,11 +563,11 @@ export default function FfsDetailModal({
               />
             </div>
 
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <span className="text-[11px] text-slate-500 dark:text-slate-400">Engineering priority:</span>
+            <div className="ffs-detail__priority-row">
+              <span className="ffs-detail__priority-label">Engineering priority:</span>
               <PriorityLabel priority={item.priority} />
               {item.clockHour !== null && (
-                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                <span className="ffs-detail__priority-label">
                   Clock {n.orient}
                   {item.bottomQuadrant && ' · bottom quadrant'}
                 </span>

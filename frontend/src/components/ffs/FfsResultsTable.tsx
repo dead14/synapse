@@ -190,7 +190,7 @@ export default function FfsResultsTable({
       {/* Table */}
       <Panel padded={false} className="overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1180px] border-collapse text-[10px] leading-tight">
+          <table className="ffs-table w-full min-w-[1180px] border-collapse">
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-900/60">
                 {COLUMNS.map((column) => {

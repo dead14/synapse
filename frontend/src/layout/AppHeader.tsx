@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FiChevronDown, FiHexagon, FiMoreHorizontal } from 'react-icons/fi';
+import { FiChevronDown, FiMenu, FiX } from 'react-icons/fi';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 
 import { ThemeToggleButton } from '../components/common/ThemeToggleButton';
@@ -50,10 +50,7 @@ export default function AppHeader() {
       <div className="engine-header__bar">
         <div className="engine-header__primary">
           <Link to="/" className="engine-brand" aria-label="Synapse dashboard">
-            <span className="engine-brand__mark">
-              <FiHexagon aria-hidden="true" />
-              <span>S</span>
-            </span>
+            <img src="/logo.png" alt="" className="engine-brand__logo" aria-hidden="true" />
             <span className="engine-brand__copy">
               <strong>Synapse</strong>
               <small>Integrity OS</small>
@@ -67,7 +64,7 @@ export default function AppHeader() {
             aria-label="Toggle application menu"
             aria-expanded={applicationMenuOpen}
           >
-            <FiMoreHorizontal aria-hidden="true" />
+            {applicationMenuOpen ? <FiX aria-hidden="true" /> : <FiMenu aria-hidden="true" />}
           </button>
 
           <nav className="engine-nav" aria-label="Workspace navigation" ref={navRef}>
