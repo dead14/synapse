@@ -121,6 +121,8 @@ test('inspection run serialization preserves measured parser evidence without in
         row_count: '1250',
         parser_version: 'parser-v1',
         schema_version: 'schema-v1',
+        workflow_stage: 'runcomp',
+        workflow_session_id: 77,
         ingestion_audit: {
             source_rows: 1252,
             accepted_rows: 1250,
@@ -137,6 +139,11 @@ test('inspection run serialization preserves measured parser evidence without in
     assert.equal(run.evidence.warningCount, 1);
     assert.equal(run.evidence.status, 'review');
     assert.equal(run.provenance.sourceSha256, 'a'.repeat(64));
+    assert.deepEqual(run.workflow, {
+        stage: 'runcomp',
+        alignmentSessionId: 77,
+        downloadAvailable: true,
+    });
 });
 
 test('inspection repository applies organization scope and limit plus one pagination', async () => {
@@ -153,6 +160,7 @@ test('inspection repository applies organization scope and limit plus one pagina
     assert.equal(page.rows.length, 2);
     assert.equal(page.nextCursor, 11);
     assert.match(calls[0].sql, /p\.organization_id = \$1/);
+    assert.match(calls[0].sql, /COALESCE\(s\.organization_id, session_pipeline\.organization_id\) = \$1/);
     assert.match(calls[0].sql, /sr\.id < \$2/);
     assert.deepEqual(calls[0].values, [7, 13, 3]);
 });

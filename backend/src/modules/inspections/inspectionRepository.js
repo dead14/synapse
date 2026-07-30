@@ -11,9 +11,41 @@ async function listOwnedInspectionRuns(pool, orgId, { limit, beforeId }) {
         `SELECT sr.id, sr.pipeline_id, p.name AS pipeline_name,
                 sr.survey_year, sr.vendor, sr.source_file, sr.source_object_key, sr.source_sha256,
                 sr.uploaded_at, sr.row_count, sr.parser_version,
-                sr.schema_version, sr.ingestion_audit
+                sr.schema_version, sr.ingestion_audit,
+                workflow.workflow_stage, workflow.workflow_session_id
          FROM survey_runs sr
          JOIN pipelines p ON p.id = sr.pipeline_id
+         LEFT JOIN LATERAL (
+             SELECT s.id AS workflow_session_id,
+                    CASE
+                        WHEN EXISTS (
+                            SELECT 1 FROM ffs_candidates c
+                            WHERE c.session_id = s.id AND c.selected = true
+                        ) THEN 'ffs'
+                        WHEN EXISTS (
+                            SELECT 1 FROM alignment_jobs j
+                            WHERE j.session_id = s.id
+                              AND j.organization_id = $1
+                              AND j.state = 'completed'
+                        ) THEN 'runcomp'
+                        WHEN s.status = 'in_progress' THEN 'alignment'
+                        ELSE 'imported'
+                    END AS workflow_stage
+             FROM alignment_sessions s
+             LEFT JOIN pipelines session_pipeline ON session_pipeline.id = s.pipeline_id
+             WHERE (s.run_old_id = sr.id OR s.run_new_id = sr.id)
+               AND COALESCE(s.organization_id, session_pipeline.organization_id) = $1
+             ORDER BY CASE
+                 WHEN EXISTS (SELECT 1 FROM ffs_candidates c WHERE c.session_id = s.id AND c.selected = true) THEN 3
+                 WHEN EXISTS (SELECT 1 FROM alignment_jobs j WHERE j.session_id = s.id AND j.organization_id = $1 AND j.state = 'completed') THEN 2
+                 WHEN s.status = 'in_progress' THEN 1
+                 ELSE 0
+             END DESC,
+             s.completed_at DESC NULLS LAST,
+             s.started_at DESC,
+             s.id DESC
+             LIMIT 1
+         ) workflow ON true
          WHERE p.organization_id = $1
            ${cursorClause}
          ORDER BY sr.id DESC

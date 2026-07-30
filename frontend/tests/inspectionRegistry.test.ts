@@ -18,6 +18,7 @@ test('normalizes canonical inspection evidence without inventing provenance', ()
       sourceFile: 'north.csv',
       uploadedAt: '2026-07-16T00:00:00.000Z',
       rowCount: 120,
+      workflow: { stage: 'runcomp', alignmentSessionId: 44, downloadAvailable: true },
       provenance: {
         sourceSha256: 'a'.repeat(64),
         parserVersion: 'parser-v1',
@@ -38,6 +39,9 @@ test('normalizes canonical inspection evidence without inventing provenance', ()
 
   assert.equal(page.items[0].evidence.rejectedRows, 2);
   assert.equal(page.items[0].provenance.sourceSha256, 'a'.repeat(64));
+  assert.deepEqual(page.items[0].workflow, {
+    stage: 'runcomp', alignmentSessionId: 44, downloadAvailable: true,
+  });
   assert.equal(page.nextCursor, '3');
 
   const emptyProvenance = normalizeInspectionPage({ items: [{ id: 9 }] }).items[0].provenance;

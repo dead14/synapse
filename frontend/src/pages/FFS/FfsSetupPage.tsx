@@ -26,6 +26,7 @@ import {
   type InterventionEvent,
 } from '../../utils/interventions';
 import { getAlignmentImportReadiness, mapAlignmentRowsToFfs } from '../../lib/ffs/alignmentImport';
+import { convertLength, convertPressure, toMegapascals, toMillimetres, type LengthUnit, type PressureUnit } from '../../lib/ffs/units';
 import {
   fetchFfsCandidates,
   fetchFfsEligibleSessions,
@@ -78,8 +79,27 @@ export default function FfsSetupPage() {
   const [smysMpa, setSmysMpa] = useState('');
   const [designFactor, setDesignFactor] = useState('0.72');
   const [operatingPressureMpa, setOperatingPressureMpa] = useState('');
+  const [pressureUnit, setPressureUnit] = useState<PressureUnit>('MPa');
+  const [diameterUnit, setDiameterUnit] = useState<LengthUnit>('mm');
   const [fallbackDepthGrowth, setFallbackDepthGrowth] = useState('0');
   const [fallbackLengthGrowth, setFallbackLengthGrowth] = useState('0');
+
+  const normalizeDisplayValue = (
+    value: string,
+    convert: (numeric: number) => number,
+  ) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Number(convert(numeric).toFixed(6)).toString() : value;
+  };
+  const outerDiameterMmForCalculation = normalizeDisplayValue(
+    outerDiameterMm,
+    (value) => toMillimetres(value, diameterUnit),
+  );
+  const smysMpaForCalculation = normalizeDisplayValue(smysMpa, (value) => toMegapascals(value, pressureUnit));
+  const operatingPressureMpaForCalculation = normalizeDisplayValue(
+    operatingPressureMpa,
+    (value) => toMegapascals(value, pressureUnit),
+  );
 
   const alignmentReadinessReasons = getAlignmentImportReadiness({
     lineName,
@@ -87,10 +107,10 @@ export default function FfsSetupPage() {
     selectedRunId,
     alignmentRowCount: alignmentRows.length,
     selectedFeatureCount: selectedKeys.size,
-    outerDiameterMm,
-    smysMpa,
+    outerDiameterMm: outerDiameterMmForCalculation,
+    smysMpa: smysMpaForCalculation,
     designFactor,
-    operatingPressureMpa,
+    operatingPressureMpa: operatingPressureMpaForCalculation,
     fallbackDepthGrowthMmPerYear: fallbackDepthGrowth,
     fallbackLengthGrowthMmPerYear: fallbackLengthGrowth,
   });
@@ -214,6 +234,7 @@ export default function FfsSetupPage() {
         modifiedSa,
         iliDate: new Date(iliDate),
         highlightYears,
+        inputUnits: { pressure: pressureUnit, diameter: diameterUnit },
       };
 
       if (sourceMode === 'manual') {
@@ -238,10 +259,10 @@ export default function FfsSetupPage() {
       }
 
       const imported = mapAlignmentRowsToFfs(alignmentRows, {
-        outerDiameterMm: Number(outerDiameterMm),
-        smysMpa: Number(smysMpa),
+        outerDiameterMm: Number(outerDiameterMmForCalculation),
+        smysMpa: Number(smysMpaForCalculation),
         designFactor: Number(designFactor),
-        operatingPressureMpa: Number(operatingPressureMpa),
+        operatingPressureMpa: Number(operatingPressureMpaForCalculation),
         fallbackDepthGrowthMmPerYear: Number(fallbackDepthGrowth),
         fallbackLengthGrowthMmPerYear: Number(fallbackLengthGrowth),
       }, selectedRunId, { selectedKeys, reasons });
@@ -594,25 +615,54 @@ export default function FfsSetupPage() {
             )}
 
             <div className="grid grid-cols-2 gap-3">
-              {[
-                ['Outer Diameter [mm]', outerDiameterMm, setOuterDiameterMm],
-                ['SMYS [MPa]', smysMpa, setSmysMpa],
-                ['Design Factor', designFactor, setDesignFactor],
-                ['Operating Pressure [MPa]', operatingPressureMpa, setOperatingPressureMpa],
-              ].map(([label, value, setter]) => (
-                <label key={label as string} className="block text-xs font-semibold text-slate-500">
-                  {label as string}
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={value as string}
-                    onChange={(event) => (setter as (value: string) => void)(event.target.value)}
-                    className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                  />
-                </label>
-              ))}
+              <label className="block text-xs font-semibold text-slate-500">
+                Outer Diameter [{diameterUnit}]
+                <select
+                  value={diameterUnit}
+                  onChange={(event) => {
+                    const next = event.target.value as LengthUnit;
+                    setOuterDiameterMm((value) => normalizeDisplayValue(value, (numeric) => convertLength(numeric, diameterUnit, next)));
+                    setDiameterUnit(next);
+                  }}
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  aria-label="Outer diameter unit"
+                >
+                  <option value="mm">mm</option>
+                  <option value="in">inch</option>
+                </select>
+                <input type="number" min="0" step="any" value={outerDiameterMm} onChange={(event) => setOuterDiameterMm(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
+              </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                Pressure unit
+                <select
+                  value={pressureUnit}
+                  onChange={(event) => {
+                    const next = event.target.value as PressureUnit;
+                    setSmysMpa((value) => normalizeDisplayValue(value, (numeric) => convertPressure(numeric, pressureUnit, next)));
+                    setOperatingPressureMpa((value) => normalizeDisplayValue(value, (numeric) => convertPressure(numeric, pressureUnit, next)));
+                    setPressureUnit(next);
+                  }}
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                >
+                  <option value="MPa">MPa</option>
+                  <option value="bar">bar</option>
+                  <option value="psi">psi</option>
+                </select>
+              </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                SMYS [{pressureUnit}]
+                <input type="number" min="0" step="any" value={smysMpa} onChange={(event) => setSmysMpa(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
+              </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                Design Factor
+                <input type="number" min="0" step="any" value={designFactor} onChange={(event) => setDesignFactor(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
+              </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                Operating Pressure [{pressureUnit}]
+                <input type="number" min="0" step="any" value={operatingPressureMpa} onChange={(event) => setOperatingPressureMpa(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
+              </label>
             </div>
+            <p className="text-xs text-slate-500">Inputs are converted to MPa and mm before the ASME B31G calculation; changing units preserves the same physical value.</p>
               </>
             ) : (
               <>
