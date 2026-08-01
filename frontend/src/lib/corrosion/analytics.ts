@@ -10,8 +10,8 @@
  * All functions are pure so they can be unit-tested without a DOM.
  */
 
-import type { CorrosionFeature } from './analysis.ts';
-import { isMetalLoss } from './analysis.ts';
+import type { CorrosionAnalysisConfig, CorrosionFeature } from './analysis.ts';
+import { DEFAULT_CORROSION_ANALYSIS_CONFIG, isMetalLoss } from './analysis.ts';
 
 /* ── Severity ─────────────────────────────────────────────────────────────── */
 
@@ -414,6 +414,150 @@ export function severityBySection(
       };
     })
     .sort((left, right) => right.total - left.total);
+}
+
+/* ── Corrosion growth rate per section ────────────────────────────────────── */
+
+export interface SectionGrowth {
+  section: string;
+  /** Distance of the first and last reported feature in this stretch, in metres. */
+  startM: number | null;
+  endM: number | null;
+  /** Metal-loss features in the section. */
+  total: number;
+  /** Features carrying a usable growth rate — the population every rate below is drawn from. */
+  measured: number;
+  /** Measurably corroding at or above the active-growth threshold. */
+  active: number;
+  /** Features whose reported depth shrank between runs. */
+  negative: number;
+  /** Mean growth over the measured population, in %WT/year. */
+  meanPctWtPerYear: number | null;
+  medianPctWtPerYear: number | null;
+  /** 95th percentile — the rate an assessment would actually be run at. */
+  p95PctWtPerYear: number | null;
+  maxPctWtPerYear: number | null;
+  /**
+   * The same rates converted through each feature's own wall thickness, in
+   * mm/year — the unit B31G forecasts consume. Null when no feature in the
+   * section reports a wall thickness.
+   */
+  meanMmPerYear: number | null;
+  maxMmPerYear: number | null;
+  maxDepthPct: number | null;
+  /** Soonest a feature in this section reaches the wall-loss limit, in years. */
+  worstRemainingLife: number | null;
+  /** Feature driving `maxPctWtPerYear`, for the "which one" question. */
+  fastestFeature: CorrosionFeature | null;
+}
+
+function percentile(sorted: number[], fraction: number): number | null {
+  if (sorted.length === 0) return null;
+  if (sorted.length === 1) return sorted[0];
+  const position = (sorted.length - 1) * fraction;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) return sorted[lower];
+  return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
+}
+
+/**
+ * Corrosion growth rate broken out per section.
+ *
+ * Density and severity per section already existed; the rate did not, and the
+ * rate is what decides a reassessment interval. A river crossing corroding at
+ * 0.4 %WT/yr and a buried stretch at 0.05 %WT/yr do not get the same next
+ * inspection date, and reading that out of a per-KP profile means eyeballing
+ * which windows fall inside which section.
+ *
+ * The mean is reported next to the P95 deliberately: growth populations are
+ * skewed and tolerance-driven, so the mean understates what an assessment
+ * should be run at. Negative rates are counted rather than dropped — a large
+ * negative tail means the two vendors sized the same defects differently and
+ * the section's rates should not be trusted at all.
+ */
+export function growthBySection(
+  features: CorrosionFeature[],
+  config: CorrosionAnalysisConfig = DEFAULT_CORROSION_ANALYSIS_CONFIG,
+): SectionGrowth[] {
+  const bySection = new Map<string, CorrosionFeature[]>();
+  for (const feature of features) {
+    const name = feature.section.trim();
+    if (UNSECTIONED.has(name.toLowerCase())) continue;
+    const bucket = bySection.get(name);
+    if (bucket) bucket.push(feature);
+    else bySection.set(name, [feature]);
+  }
+
+  const rows: SectionGrowth[] = [];
+  for (const [section, members] of bySection) {
+    const distances = members
+      .map((feature) => feature.distanceM)
+      .filter((value): value is number => value !== null && Number.isFinite(value));
+    const rates = members
+      .map((feature) => feature.depthGrowthPctWtPerYear)
+      .filter((value): value is number => value !== null && Number.isFinite(value));
+    const positive = [...rates].filter((rate) => rate > 0).sort((left, right) => left - right);
+
+    let fastestFeature: CorrosionFeature | null = null;
+    let maxPct: number | null = null;
+    let maxMm: number | null = null;
+    let mmSum = 0;
+    let mmCount = 0;
+    let maxDepthPct: number | null = null;
+    let worstRemainingLife: number | null = null;
+
+    for (const feature of members) {
+      const rate = feature.depthGrowthPctWtPerYear;
+      if (rate !== null && (maxPct === null || rate > maxPct)) {
+        maxPct = rate;
+        fastestFeature = feature;
+      }
+      if (rate !== null && feature.wallMm !== null && feature.wallMm > 0) {
+        const mm = (rate / 100) * feature.wallMm;
+        mmSum += mm;
+        mmCount += 1;
+        if (maxMm === null || mm > maxMm) maxMm = mm;
+      }
+      if (feature.depthPct !== null && (maxDepthPct === null || feature.depthPct > maxDepthPct)) {
+        maxDepthPct = feature.depthPct;
+      }
+      const life = remainingLifeYears(feature);
+      if (life !== null && (worstRemainingLife === null || life < worstRemainingLife)) {
+        worstRemainingLife = life;
+      }
+    }
+
+    const sortedRates = [...rates].sort((left, right) => left - right);
+    rows.push({
+      section,
+      startM: distances.length > 0 ? Math.min(...distances) : null,
+      endM: distances.length > 0 ? Math.max(...distances) : null,
+      total: members.length,
+      measured: rates.length,
+      active: members.filter((feature) => {
+        const rate = feature.depthGrowthPctWtPerYear;
+        return rate !== null && rate >= config.activeGrowthPctWtPerYear;
+      }).length,
+      negative: rates.filter((rate) => rate < 0).length,
+      meanPctWtPerYear: rates.length > 0 ? rates.reduce((sum, rate) => sum + rate, 0) / rates.length : null,
+      medianPctWtPerYear: percentile(sortedRates, 0.5),
+      // The P95 is taken over the growing population: including a long negative
+      // tail would drag the design rate below rates that are actually occurring.
+      p95PctWtPerYear: percentile(positive, 0.95),
+      maxPctWtPerYear: maxPct,
+      meanMmPerYear: mmCount > 0 ? mmSum / mmCount : null,
+      maxMmPerYear: maxMm,
+      maxDepthPct,
+      worstRemainingLife,
+      fastestFeature,
+    });
+  }
+
+  // Worst-first: the section an engineer has to act on is the one growing
+  // fastest, not the one holding the most features.
+  return rows.sort((left, right) => (right.p95PctWtPerYear ?? right.maxPctWtPerYear ?? -Infinity)
+    - (left.p95PctWtPerYear ?? left.maxPctWtPerYear ?? -Infinity));
 }
 
 /* ── Review queue ─────────────────────────────────────────────────────────── */

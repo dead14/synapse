@@ -41,6 +41,7 @@ import DepthLengthEnvelope, { type PipeGeometry } from '../../components/corrosi
 import KpDensity from '../../components/corrosion/KpDensity';
 import RemainingLife from '../../components/corrosion/RemainingLife';
 import ReviewQueue from '../../components/corrosion/ReviewQueue';
+import SectionGrowth from '../../components/corrosion/SectionGrowth';
 import SegmentSeverity from '../../components/corrosion/SegmentSeverity';
 import { SEVERITY_ORDER_VARS, SEVERITY_LABEL } from '../../components/corrosion/vizPrimitives';
 import { fetchAlignmentResult, type ComparisonRow } from '../../utils/alignment';
@@ -443,6 +444,20 @@ export default function CorrosionAnalysisPage() {
                 <PanelBody><RemainingLife features={metalLoss} /></PanelBody>
               </Panel>
 
+              {/* Growth per named stretch, not only per KP window — a section is
+                  what a reassessment interval is actually written against. */}
+              {sectioned && (
+                <Panel>
+                  <PanelHeader
+                    plain
+                    eyebrow="Segment rate"
+                    title="Growth rate by section"
+                    subtitle="The same growth population split across the sections defined during alignment, with each section's KP extent."
+                  />
+                  <PanelBody><SectionGrowth features={metalLoss} /></PanelBody>
+                </Panel>
+              )}
+
               <Callout tone="info" icon={<FiInfo aria-hidden="true" />} title="How to read these numbers">
                 Growth here is the difference between two reported depths divided by the interval —
                 it carries both runs&apos; tool tolerance. A negative rate does not mean the wall grew
@@ -458,6 +473,15 @@ export default function CorrosionAnalysisPage() {
                 <Panel>
                   <PanelHeader plain eyebrow="Segment profile" title="Severity by section" subtitle="Feature count and severity mix across the sections defined during alignment." />
                   <PanelBody><SegmentSeverity features={metalLoss} /></PanelBody>
+                </Panel>
+                <Panel>
+                  <PanelHeader
+                    plain
+                    eyebrow="Segment rate"
+                    title="Corrosion growth rate by section"
+                    subtitle="How fast each named stretch is actually corroding, with the KP extent it covers — the number a reassessment interval is set from."
+                  />
+                  <PanelBody><SectionGrowth features={metalLoss} /></PanelBody>
                 </Panel>
                 <Panel>
                   <PanelHeader plain eyebrow="Location" title="Density within the sectioned line" subtitle="Hotspots read against the same axis the sections were drawn on." />
