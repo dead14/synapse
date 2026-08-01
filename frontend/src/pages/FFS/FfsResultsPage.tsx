@@ -178,9 +178,12 @@ export default function FfsResultsPage() {
               </p>
               <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
                 ILI tolerance +{screening.depthTolerancePct}% WT and +{screening.lengthToleranceMm} mm/end ·
-                growth {screening.growthRateMmPerYear.toFixed(2)} mm/y over {screening.forecastYears} y · review
-                band ERF {screening.reviewBandErf.toFixed(2)} · interaction{' '}
-                {screening.interactionSpacingFactor}t
+                growth{' '}
+                {screening.growthBasis === 'measured'
+                  ? `per-feature measured (fallback ${screening.growthRateMmPerYear.toFixed(2)} mm/y)`
+                  : `uniform ${screening.growthRateMmPerYear.toFixed(2)} mm/y`}{' '}
+                over {screening.forecastYears} y · review band ERF {screening.reviewBandErf.toFixed(2)} ·
+                interaction {screening.interactionSpacingFactor}t
               </p>
             </div>
             <button
@@ -199,6 +202,38 @@ export default function FfsResultsPage() {
 
           {assumptionsOpen && (
             <div className="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700">
+              {/* The growth basis governs the forecast tier, the remaining-life
+                  search, and every priority derived from them, so it sits above
+                  the numeric fields rather than among them. */}
+              <div className="mb-4 flex flex-wrap items-center gap-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Growth basis
+                </p>
+                <div role="radiogroup" aria-label="Growth basis" className="ds-segmented w-max">
+                  {([
+                    { value: 'measured', label: 'Per-feature measured', hint: 'Uses each anomaly’s own reported corrosion rate — the same basis as the expected life column.' },
+                    { value: 'uniform', label: 'Uniform assumed rate', hint: 'Applies one rate to the whole population, for when the run pair’s growth numbers are not trusted.' },
+                  ] as const).map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={screening.growthBasis === option.value}
+                      title={option.hint}
+                      className={`ds-segmented__option${screening.growthBasis === option.value ? ' is-active' : ''}`}
+                      onClick={() => setScreening((s) => ({ ...s, growthBasis: option.value }))}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {screening.growthBasis === 'measured'
+                    ? 'The rate below is the fallback for features whose run pair reported no growth.'
+                    : 'The rate below is applied to every feature, overriding the reported rates.'}
+                </p>
+              </div>
+
               <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-7">
                 <NumberField
                   label="ILI depth tol."
@@ -217,7 +252,7 @@ export default function FfsResultsPage() {
                   step={1}
                 />
                 <NumberField
-                  label="Growth rate"
+                  label={screening.growthBasis === 'measured' ? 'Fallback growth' : 'Uniform growth'}
                   value={screening.growthRateMmPerYear}
                   onChange={(growthRateMmPerYear) => setScreening((s) => ({ ...s, growthRateMmPerYear }))}
                   unit="mm/y"

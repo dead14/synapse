@@ -145,7 +145,9 @@ export function buildNarrative(
     items: [
       `ILI depth tolerance of +${screening.depthTolerancePct}% of wall thickness applied as an absolute addition for the conservative screen.`,
       `ILI length tolerance of +${screening.lengthToleranceMm} mm per end, giving a conservative length of reported + ${2 * screening.lengthToleranceMm} mm.`,
-      `Corrosion growth rate of ${screening.growthRateMmPerYear.toFixed(2)} mm/year applied radially for the ${screening.forecastYears}-year forecast.`,
+      screening.growthBasis === 'measured'
+        ? `Each feature is grown radially at its own measured corrosion rate for the ${screening.forecastYears}-year forecast; features carrying no measured rate use ${screening.growthRateMmPerYear.toFixed(2)} mm/year.`
+        : `A uniform corrosion growth rate of ${screening.growthRateMmPerYear.toFixed(2)} mm/year is applied radially to every feature for the ${screening.forecastYears}-year forecast.`,
       `Engineering review band starts at ERF ${screening.reviewBandErf.toFixed(2)}; ERF above 1.00 is reported as exceeding the calculated safe pressure.`,
       `Axial interaction screened at ${screening.interactionSpacingFactor}t edge-to-edge separation.`,
       'Temperature derating, residual stress, and pressure cycling are not applied.',

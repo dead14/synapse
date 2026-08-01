@@ -13,12 +13,24 @@ export interface FfsConfig {
  * project decisions rather than ASME B31G formulas, so they stay in their own
  * type and are always shown to the engineer alongside the nominal result.
  */
+/**
+ * Which corrosion rate drives the forecast and the remaining-life search.
+ *
+ * `measured` uses each feature's own reported rate — the same basis as the
+ * nominal expected life — and falls back to the uniform rate only where a
+ * feature carries none. `uniform` applies one rate to the whole population,
+ * which is what you want when the run pair's growth numbers are not trusted.
+ */
+export type FfsGrowthBasis = 'measured' | 'uniform';
+
 export interface FfsScreeningConfig {
   /** Added to reported depth as absolute percentage points of wall thickness. */
   depthTolerancePct: number;
   /** Added to each end of the reported axial length, in mm. */
   lengthToleranceMm: number;
-  /** Radial metal-loss growth used for the forecast, in mm/year. */
+  /** How the forecast and remaining-life figures pick a growth rate. */
+  growthBasis: FfsGrowthBasis;
+  /** The uniform radial growth rate, and the fallback under `measured`, in mm/year. */
   growthRateMmPerYear: number;
   /** Forecast horizon in years. */
   forecastYears: number;
@@ -33,6 +45,7 @@ export interface FfsScreeningConfig {
 export const DEFAULT_SCREENING_CONFIG: FfsScreeningConfig = {
   depthTolerancePct: 10,
   lengthToleranceMm: 10,
+  growthBasis: 'measured',
   growthRateMmPerYear: 0.1,
   forecastYears: 5,
   reviewBandErf: 0.9,
@@ -103,6 +116,15 @@ export interface FfsTier {
   safePressure: number;
   ERF: number;
   severity: FfsSeverity;
+  /**
+   * True when this tier's depth is past the 80 %WT limit B31G is written for.
+   * The tier is still evaluated — the tolerance and forecast tiers are meant to
+   * push features past the limit — but the ERF is no longer a code result and
+   * must be presented as an indicator, not an assessment.
+   */
+  beyondDepthLimit: boolean;
+  /** The growth rate this tier was projected with, in mm/year. */
+  growthRateMmPerYear: number;
 }
 
 /**

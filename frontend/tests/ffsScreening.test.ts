@@ -75,6 +75,7 @@ test('the forecast tier grows depth radially from the conservative basis', () =>
     ...DEFAULT_SCREENING_CONFIG,
     depthTolerancePct: 0,
     lengthToleranceMm: 0,
+    growthBasis: 'uniform',
     growthRateMmPerYear: 0.93,
     forecastYears: 5,
   };
@@ -85,6 +86,44 @@ test('the forecast tier grows depth radially from the conservative basis', () =>
   assert.ok(item.forecast.ERF > item.conservative.ERF);
 });
 
+test('the measured basis forecasts each feature at its own reported rate', () => {
+  const screening: FfsScreeningConfig = {
+    ...DEFAULT_SCREENING_CONFIG,
+    depthTolerancePct: 0,
+    lengthToleranceMm: 0,
+    growthBasis: 'measured',
+    growthRateMmPerYear: 0.93,
+    forecastYears: 5,
+  };
+  // The row reports 0.1 mm/y, so the configured 0.93 mm/y must not be used.
+  const item = screenOne({ 'Max Depth [%]': '40', 'CR Length [mm/y]': '0' }, screening);
+
+  assert.equal(item.forecast.growthRateMmPerYear, 0.1);
+  // 0.1 mm/y over 5 years on a 9.3 mm wall adds 0.5 mm, i.e. ~5.4 points.
+  assert.equal(Math.round(item.forecast.depthPct), 45);
+});
+
+test('the measured basis falls back to the configured rate when a feature reports none', () => {
+  const screening: FfsScreeningConfig = {
+    ...DEFAULT_SCREENING_CONFIG,
+    growthBasis: 'measured',
+    growthRateMmPerYear: 0.5,
+  };
+  const item = screenOne({ 'CR Depth [mm/y]': '0' }, screening);
+
+  assert.equal(item.forecast.growthRateMmPerYear, 0.5);
+});
+
+test('a tier past the 80 %WT applicability limit is flagged rather than presented as a code result', () => {
+  const screening: FfsScreeningConfig = { ...DEFAULT_SCREENING_CONFIG, depthTolerancePct: 10 };
+  const item = screenOne({ 'Max Depth [%]': '75' }, screening);
+
+  assert.equal(item.nominal.maxDepthPct, 75);
+  assert.equal(item.conservative.depthPct, 85);
+  assert.equal(item.conservative.beyondDepthLimit, true, 'the tolerance tier is past the B31G domain');
+  assert.equal(item.conservative.severity, 'fail');
+});
+
 test('a feature already past ERF 1 reports no remaining life', () => {
   const item = screenOne({ 'Max Depth [%]': '78', 'Length [mm]': '400' });
   assert.ok(item.conservative.ERF >= 1);
@@ -92,7 +131,11 @@ test('a feature already past ERF 1 reports no remaining life', () => {
 });
 
 test('life to ERF 1 is unbounded when nothing is growing', () => {
-  const screening: FfsScreeningConfig = { ...DEFAULT_SCREENING_CONFIG, growthRateMmPerYear: 0 };
+  const screening: FfsScreeningConfig = {
+    ...DEFAULT_SCREENING_CONFIG,
+    growthBasis: 'uniform',
+    growthRateMmPerYear: 0,
+  };
   const item = screenOne({ 'Max Depth [%]': '20', 'Length [mm]': '30' }, screening);
 
   assert.equal(item.lifeToErf1, Number.POSITIVE_INFINITY);
@@ -100,10 +143,24 @@ test('life to ERF 1 is unbounded when nothing is growing', () => {
 });
 
 test('life to ERF 1 shortens as the assumed growth rate rises', () => {
-  const slow = screenOne({ 'Max Depth [%]': '35' }, { ...DEFAULT_SCREENING_CONFIG, growthRateMmPerYear: 0.05 });
-  const fast = screenOne({ 'Max Depth [%]': '35' }, { ...DEFAULT_SCREENING_CONFIG, growthRateMmPerYear: 0.3 });
+  const uniform: FfsScreeningConfig = { ...DEFAULT_SCREENING_CONFIG, growthBasis: 'uniform' };
+  const slow = screenOne({ 'Max Depth [%]': '35' }, { ...uniform, growthRateMmPerYear: 0.05 });
+  const fast = screenOne({ 'Max Depth [%]': '35' }, { ...uniform, growthRateMmPerYear: 0.3 });
 
   assert.ok(fast.lifeToErf1 < slow.lifeToErf1);
+});
+
+test('life to ERF 1 and the nominal expected life share the measured growth rate', () => {
+  // The two figures answer different questions — one includes ILI tolerance, the
+  // other is the code result — but under the measured basis they must at least
+  // be projected from the same rate, which is what used to differ silently.
+  const item = screenOne({ 'Max Depth [%]': '45', 'CR Depth [mm/y]': '0.2' });
+
+  assert.equal(item.forecast.growthRateMmPerYear, 0.2);
+  assert.ok(
+    item.lifeToErf1 <= item.nominal.expectedLife,
+    'the tolerance-adjusted life cannot outlast the as-reported life on the same rate',
+  );
 });
 
 test('severity separates the review band from outright rejection', () => {

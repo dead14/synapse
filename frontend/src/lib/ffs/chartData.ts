@@ -1,9 +1,11 @@
+import { acceptableDepthRatio, type B31gGeometry } from './b31g.ts';
 import {
   assignBinIndex,
   bucketIndexFor,
   buildLdBins,
   isInternal,
   type DepthBucket,
+  type LdBin,
 } from './statistics.ts';
 import type { FfsConfig, FfsScreenedResult } from './types.ts';
 
@@ -32,6 +34,8 @@ export interface StackedSeries {
 export interface StackedBarData {
   labels: string[];
   series: StackedSeries[];
+  /** Bin bounds in metres, so a caller can relate a bar back to the line. */
+  bins: LdBin[];
 }
 
 /**
@@ -60,7 +64,7 @@ export function buildDepthByLd(
     if (binIndex >= 0 && bucketIndex >= 0) series[bucketIndex].data[binIndex] += 1;
   }
 
-  return { labels: bins.map((bin) => bin.label), series };
+  return { labels: bins.map((bin) => bin.label), series, bins };
 }
 
 export interface SplitScatter {
@@ -119,6 +123,14 @@ export interface EnvelopeCurve {
   wall: number;
   color: string;
   points: { x: number; y: number }[];
+  /** How many features share this wall thickness. */
+  count: number;
+  /**
+   * True when the features on this wall do not all share one OD / SMYS /
+   * pressure. The curve is drawn for the most common combination, so a mixed
+   * group means some markers are being read against a curve that is not theirs.
+   */
+  mixedGeometry: boolean;
 }
 
 const ENVELOPE_COLORS = [
@@ -150,49 +162,48 @@ export function buildEnvelopeCurves(
   const walls = [...byWall.keys()].sort((a, b) => a - b);
 
   return walls.map((wall, i) => {
-    const sample = byWall.get(wall)![0].nominal;
-    const { od, smys, df, p0 } = sample;
-    const so = (p0 * od) / (2 * wall);
-    const sflow =
-      config.method === 'original'
-        ? 1.1 * smys
-        : config.modifiedSa === 'smys11'
-          ? 1.1 * smys
-          : smys + 69;
+    const members = byWall.get(wall)!;
+    // The curve belongs to a line geometry, not to a feature. Pick the geometry
+    // the most features on this wall actually share, and say so when the group
+    // is mixed rather than silently drawing the first row's pipe.
+    const tally = new Map<string, { count: number; geometry: B31gGeometry }>();
+    for (const member of members) {
+      const { od, smys, df, p0 } = member.nominal;
+      const key = `${od}|${smys}|${df}|${p0}`;
+      const entry = tally.get(key);
+      if (entry) entry.count += 1;
+      else {
+        tally.set(key, {
+          count: 1,
+          geometry: {
+            wallThickness: wall,
+            outerDiameter: od,
+            smysMpa: smys,
+            designFactor: df,
+            operatingPressureMpa: p0,
+          },
+        });
+      }
+    }
+    const geometry = [...tally.values()].sort((a, b) => b.count - a.count)[0].geometry;
 
     const points: { x: number; y: number }[] = [];
     for (let s = 1; s <= steps; s++) {
       const length = (maxLengthMm * s) / steps;
-      const z = (length * length) / (od * wall);
-
-      // Solve Sf(d/t) = So/df for d/t. Both B31G forms rearrange to a closed
-      // form once the Folias factor is known.
-      const target = so / df;
-      let dt: number | null = null;
-
-      if (config.method === 'original' && z > 20) {
-        // Sf = sflow * (1 - dt)
-        dt = 1 - target / sflow;
-      } else {
-        const M =
-          config.method === 'original'
-            ? Math.sqrt(1 + 0.8 * z)
-            : z <= 50
-              ? Math.sqrt(Math.max(1, 1 + 0.6275 * z - 0.003375 * z * z))
-              : 0.032 * z + 3.3;
-        const k = config.method === 'original' ? 2 / 3 : 0.85;
-        // sflow(1 - k·dt) = target(1 - k·dt/M)  =>  dt = (sflow - target) / (k(sflow - target/M))
-        const denominator = k * (sflow - target / M);
-        if (denominator !== 0) dt = (sflow - target) / denominator;
-      }
-
-      if (dt === null || !Number.isFinite(dt)) continue;
-      const depthPct = dt * 100;
+      const ratio = acceptableDepthRatio(length, geometry, config.method, config.modifiedSa);
+      if (ratio === null) continue;
+      const depthPct = ratio * 100;
       if (depthPct <= 0 || depthPct > 100) continue;
       points.push({ x: length, y: Math.min(100, depthPct) });
     }
 
-    return { wall, color: ENVELOPE_COLORS[i % ENVELOPE_COLORS.length], points };
+    return {
+      wall,
+      color: ENVELOPE_COLORS[i % ENVELOPE_COLORS.length],
+      points,
+      count: members.length,
+      mixedGeometry: tally.size > 1,
+    };
   });
 }
 
@@ -204,15 +215,21 @@ export interface ErfProfilePoint {
   item: FfsScreenedResult;
 }
 
-/** Spatial ERF profile carrying all three screening tiers per feature. */
+/**
+ * Spatial ERF profile carrying all three screening tiers per feature.
+ *
+ * A feature with no remaining capacity keeps its infinite ERF here. Zeroing it,
+ * as this used to, drew the worst feature on the line at the bottom of the axis
+ * where it reads as the safest one; the consumer clamps it to the top instead.
+ */
 export function buildErfProfile(items: FfsScreenedResult[]): ErfProfilePoint[] {
   return [...items]
     .sort((a, b) => numericLd(a) - numericLd(b))
     .map((item) => ({
       ld: numericLd(item),
-      nominal: Number.isFinite(item.nominal.ERF) ? item.nominal.ERF : 0,
-      conservative: Number.isFinite(item.conservative.ERF) ? item.conservative.ERF : 0,
-      forecast: Number.isFinite(item.forecast.ERF) ? item.forecast.ERF : 0,
+      nominal: item.nominal.ERF,
+      conservative: item.conservative.ERF,
+      forecast: item.forecast.ERF,
       item,
     }));
 }

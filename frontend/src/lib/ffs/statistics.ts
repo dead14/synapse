@@ -61,11 +61,15 @@ export function buildLdBins(items: FfsScreenedResult[], binSizeM: number): LdBin
   return bins;
 }
 
+/**
+ * Bins are evenly spaced from `bins[0].start`, so the index is arithmetic. The
+ * previous linear search made every distribution table and stacked chart cost
+ * features × bins, which is what made a large run pair stall on a small bin size.
+ */
 export function assignBinIndex(item: FfsScreenedResult, bins: LdBin[], binSizeM: number): number {
-  if (!bins.length) return -1;
-  const raw = Math.floor(numericLd(item) / binSizeM) * binSizeM;
-  const index = bins.findIndex((bin) => bin.start === raw);
-  return index >= 0 ? index : -1;
+  if (!bins.length || !(binSizeM > 0)) return -1;
+  const index = Math.floor((numericLd(item) - bins[0].start) / binSizeM);
+  return index >= 0 && index < bins.length ? index : -1;
 }
 
 export function bucketIndexFor(depthPct: number, buckets: DepthBucket[]): number {

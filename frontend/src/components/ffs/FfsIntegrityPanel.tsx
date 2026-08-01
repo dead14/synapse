@@ -206,7 +206,9 @@ function ErfProfileChart({
   const ldMin = profile[0].ld;
   const ldMax = profile[profile.length - 1].ld;
   const ldSpan = ldMax - ldMin || 1;
-  const maxErf = Math.max(1.25, ...profile.map((p) => p.forecast)) * 1.08;
+  // Collapsed features carry an infinite ERF; the axis is scaled on the finite
+  // population and those points clamp to the top of the plot.
+  const maxErf = Math.max(1.25, ...profile.map((p) => p.forecast).filter(Number.isFinite)) * 1.08;
 
   const xOf = (ld: number) => margin.left + ((ld - ldMin) / ldSpan) * plotW;
   const yOf = (erf: number) => margin.top + plotH - (Math.min(erf, maxErf) / maxErf) * plotH;
@@ -393,7 +395,9 @@ export default function FfsIntegrityPanel({
         <Stat
           label={`Max ${screening.forecastYears} y forecast ERF`}
           value={formatErf(kpis.maxForecastErf?.forecast.ERF ?? 0)}
-          foot={`At ${screening.growthRateMmPerYear.toFixed(2)} mm/y`}
+          foot={screening.growthBasis === 'measured'
+            ? 'At each feature’s measured rate'
+            : `At ${screening.growthRateMmPerYear.toFixed(2)} mm/y`}
           tone={(kpis.maxForecastErf?.forecast.ERF ?? 0) > 1 ? 'bad' : 'accent'}
         />
         <Stat

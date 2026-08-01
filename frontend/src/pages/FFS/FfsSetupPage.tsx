@@ -450,13 +450,18 @@ export default function FfsSetupPage() {
                       min={0}
                       step={1}
                     />
+                    {/* Under the default measured basis this rate only applies
+                        to features whose run pair reported no growth. The basis
+                        itself is switched on the results page, where the effect
+                        on the numbers is visible. */}
                     <NumberField
-                      label="Growth rate"
+                      label={screening.growthBasis === 'measured' ? 'Fallback growth' : 'Uniform growth'}
                       value={screening.growthRateMmPerYear}
                       onChange={(growthRateMmPerYear) => setScreening((s) => ({ ...s, growthRateMmPerYear }))}
                       unit="mm/y"
                       min={0}
                       step={0.01}
+                      hint={screening.growthBasis === 'measured' ? 'Used only where no rate was measured' : undefined}
                     />
                     <NumberField
                       label="Forecast horizon"
