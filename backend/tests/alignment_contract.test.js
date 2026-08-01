@@ -2,7 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+    comparisonRowDistance,
     normalizeComparisonResult,
+    sortComparisonByDistance,
     summarizeComparison,
     validateDtwPayload,
     validateTieInTransform,
@@ -57,6 +59,77 @@ test('normalizeComparisonResult flattens Hungarian buckets in stable order', () 
 
     assert.deepEqual(result.comparison.map((row) => row.id), ['gw', 'matched', 'new']);
     assert.equal(result.groups, groups);
+});
+
+test('normalizeComparisonResult orders the flattened buckets along the line', () => {
+    // The engine emits GW first, then matched anomalies, then the rest. Read in
+    // that order the exported workbook is a list of feature classes, not a walk
+    // down the pipeline.
+    const groups = {
+        gw_locked: [
+            { id: 'gw-far', 'Log Dist NEW (m)': 900 },
+            { id: 'gw-near', 'Log Dist NEW (m)': 100 },
+        ],
+        anomaly_matched: [{ id: 'ml-mid', 'Log Dist NEW (m)': 500 }],
+        bypassed_new: [{ id: 'bend', 'Log Dist NEW (m)': 300 }],
+    };
+
+    const result = normalizeComparisonResult(groups);
+
+    assert.deepEqual(
+        result.comparison.map((row) => row.id),
+        ['gw-near', 'bend', 'ml-mid', 'gw-far'],
+    );
+    assert.equal(result.groups, groups, 'the engine buckets stay untouched for the audit');
+});
+
+test('an OLD-only row is placed by its own odometer, not dropped to the start', () => {
+    const result = normalizeComparisonResult({
+        anomaly_matched: [
+            { id: 'a', 'Log Dist NEW (m)': 100 },
+            { id: 'c', 'Log Dist NEW (m)': 900 },
+        ],
+        anomaly_only_old: [{ id: 'b', 'Log Dist NEW (m)': '-', 'Log Dist OLD (m)': 500 }],
+    });
+
+    assert.deepEqual(result.comparison.map((row) => row.id), ['a', 'b', 'c']);
+});
+
+test('a row reporting no distance at all sinks to the end rather than to KP 0', () => {
+    const ordered = sortComparisonByDistance([
+        { id: 'no-distance' },
+        { id: 'far', 'Log Dist NEW (m)': 4000 },
+        { id: 'dash', 'Log Dist NEW (m)': '-', 'Log Dist OLD (m)': '-' },
+        { id: 'near', 'Log Dist NEW (m)': 12 },
+    ]);
+
+    assert.deepEqual(ordered.map((row) => row.id), ['near', 'far', 'no-distance', 'dash']);
+});
+
+test('rows sharing a distance keep the order the engine emitted them in', () => {
+    const ordered = sortComparisonByDistance([
+        { id: 'first', 'Log Dist NEW (m)': 250 },
+        { id: 'second', 'Log Dist NEW (m)': 250 },
+        { id: 'third', 'Log Dist NEW (m)': 250 },
+    ]);
+
+    assert.deepEqual(ordered.map((row) => row.id), ['first', 'second', 'third']);
+});
+
+test('comparisonRowDistance prefers the NEW odometer and reads the absolute fallback', () => {
+    assert.equal(comparisonRowDistance({ 'Log Dist NEW (m)': '1234.5' }), 1234.5);
+    assert.equal(
+        comparisonRowDistance({ 'Log Dist NEW (m)': '-', 'Abs. Dist NEW (m)': 77 }),
+        77,
+        'the absolute NEW column stands in when the log column is blank',
+    );
+    assert.equal(
+        comparisonRowDistance({ 'Log Dist NEW (m)': 10, 'Log Dist OLD (m)': 999 }),
+        10,
+        'the table is read against the NEW run, so its odometer wins',
+    );
+    assert.equal(comparisonRowDistance({ 'Log Dist NEW (m)': 'n/a' }), null);
+    assert.equal(comparisonRowDistance(null), null);
 });
 
 test('normalizeComparisonResult rejects unsupported engine output', () => {

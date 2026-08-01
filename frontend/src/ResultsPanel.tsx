@@ -683,6 +683,8 @@ export default function ResultsPanel({
   }, [processedData, activeTab, radioFilter, unmatchedOld, unmatchedNew, distanceStart, distanceEnd, searchQuery, filterConfig]);
 
   const sortedData = useMemo(() => {
+    // No column chosen means the master-axis order `processedData` already
+    // applied, which is the pipeline order.
     if (!sortConfig) return filteredData;
     return [...filteredData].sort((a, b) => {
       const aVal = alignmentDisplayValue(a, sortConfig.key);
@@ -763,8 +765,13 @@ export default function ResultsPanel({
     try {
       const payload = sessionId
         ? createAlignmentSessionExportPayload(sessionId, pipelineData || {})
+        // The session path is ordered by the server. This one ships rows from
+        // the browser, so it has to put them on the master axis itself — the
+        // workbook must read down the line either way.
         : createAlignmentExportPayload(
-          includedInterventionRows(Array.isArray(exportData) ? exportData : data),
+          sortAlignmentRowsByMasterAxis(
+            includedInterventionRows(Array.isArray(exportData) ? exportData : data),
+          ),
           pipelineData || {},
         );
       const response = await fetch(apiUrl('/api/alignment/export-excel'), {

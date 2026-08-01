@@ -1,3 +1,4 @@
+import { evaluateB31g, type B31gGeometry } from './b31g.ts';
 import type {
   FfsAction,
   FfsCluster,
@@ -22,9 +23,32 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function geometryOf(nominal: FfsResult): B31gGeometry {
+  return {
+    wallThickness: nominal.wall,
+    outerDiameter: nominal.od,
+    smysMpa: nominal.smys,
+    designFactor: nominal.df,
+    operatingPressureMpa: nominal.p0,
+  };
+}
+
 /**
- * Evaluates B31G at an arbitrary depth and length. Mirrors calcEngine but is
- * parameterised on dimensions so the same maths drives every screening tier.
+ * The growth rate a tier should be projected with.
+ *
+ * Under the `measured` basis this is the feature's own reported depth rate, so
+ * the forecast and the remaining-life search sit on the same footing as the
+ * nominal expected life. The configured rate is the fallback for features whose
+ * run pair produced no usable growth, and the single rate under `uniform`.
+ */
+export function growthRateFor(nominal: FfsResult, screening: FfsScreeningConfig): number {
+  if (screening.growthBasis === 'uniform') return screening.growthRateMmPerYear;
+  return nominal.crDepth > 0 ? nominal.crDepth : screening.growthRateMmPerYear;
+}
+
+/**
+ * Evaluates B31G at an arbitrary depth and length through the shared kernel, so
+ * every screening tier is the same maths as the nominal code result.
  */
 function evaluateTier(
   depthPct: number,
@@ -32,58 +56,27 @@ function evaluateTier(
   nominal: FfsResult,
   config: FfsConfig,
   screening: FfsScreeningConfig,
+  growthRateMmPerYear: number,
 ): FfsTier {
-  const { wall, od, smys, df, So } = nominal;
   const safeDepthPct = clamp(depthPct, 0, 99.5);
-  const dMm = (safeDepthPct / 100) * wall;
+  const dMm = (safeDepthPct / 100) * nominal.wall;
   const safeLength = Math.max(0.001, lengthMm);
-  const dt = dMm / wall;
-  const z = (safeLength * safeLength) / (od * wall);
-
-  let M: number | null;
-  let sflow: number;
-  let Sf: number;
-
-  if (config.method === 'original') {
-    sflow = 1.1 * smys;
-    if (z <= 20) {
-      M = Math.sqrt(1 + 0.8 * z);
-      const num = 1 - (2 / 3) * dt;
-      const den = 1 - (2 / 3) * (dt / M);
-      Sf = den > 0 && num > 0 ? (sflow * num) / den : 0;
-    } else {
-      M = null;
-      Sf = sflow * (1 - dt);
-    }
-  } else {
-    sflow = config.modifiedSa === 'smys11' ? 1.1 * smys : smys + 69;
-    if (z <= 50) {
-      M = Math.sqrt(Math.max(1, 1 + 0.6275 * z - 0.003375 * z * z));
-    } else {
-      M = 0.032 * z + 3.3;
-    }
-    const num = 1 - 0.85 * dt;
-    const den = 1 - (0.85 * dt) / M;
-    Sf = den > 0 && num > 0 ? (sflow * num) / den : 0;
-  }
-
-  const Pf = (2 * Sf * wall) / od;
-  const safePressure = Pf * df;
-  // A collapsed remaining-strength term means the feature has no capacity left.
-  const ERF = Sf > 0 ? So / (Sf * df) : Number.POSITIVE_INFINITY;
+  const result = evaluateB31g(dMm, safeLength, geometryOf(nominal), config.method, config.modifiedSa);
 
   return {
     depthPct: safeDepthPct,
     lengthMm: safeLength,
     dMm,
-    z,
-    M,
-    sflow,
-    Sf,
-    Pf,
-    safePressure,
-    ERF,
-    severity: severityOf(ERF, safeDepthPct, screening),
+    z: result.z,
+    M: result.foliasFactor,
+    sflow: result.flowStressMpa,
+    Sf: result.failureStressMpa,
+    Pf: result.failurePressureMpa,
+    safePressure: result.safePressureMpa,
+    ERF: result.erf,
+    severity: severityOf(result.erf, safeDepthPct, screening),
+    beyondDepthLimit: result.beyondDepthLimit,
+    growthRateMmPerYear,
   };
 }
 
@@ -92,7 +85,9 @@ export function severityOf(
   depthPct: number,
   screening: FfsScreeningConfig,
 ): FfsSeverity {
-  if (!Number.isFinite(erf) || erf > 1 || depthPct >= screening.depthRejectionPct) return 'fail';
+  // ERF 1.0 is the safe-pressure limit itself, not a margin — it fails, which is
+  // also what the nominal acceptance column says.
+  if (!Number.isFinite(erf) || erf >= 1 || depthPct >= screening.depthRejectionPct) return 'fail';
   if (erf >= screening.reviewBandErf) return 'review';
   return 'pass';
 }
@@ -121,14 +116,14 @@ function findLifeToErf1(
   nominal: FfsResult,
   config: FfsConfig,
   screening: FfsScreeningConfig,
+  growth: number,
 ): number {
-  const growth = screening.growthRateMmPerYear;
   const baseDepth = nominal.maxDepthPct + screening.depthTolerancePct;
   const length = nominal.length + 2 * screening.lengthToleranceMm;
 
   const erfAtYear = (years: number) => {
     const depthPct = baseDepth + ((growth * years) / nominal.wall) * 100;
-    return evaluateTier(depthPct, length, nominal, config, screening).ERF;
+    return evaluateTier(depthPct, length, nominal, config, screening, growth).ERF;
   };
 
   if (erfAtYear(0) >= 1) return 0;
@@ -169,16 +164,16 @@ export function screenResults(
   screening: FfsScreeningConfig,
 ): FfsScreenedResult[] {
   return results.map((nominal, index) => {
+    const growth = growthRateFor(nominal, screening);
     const conservativeDepth = nominal.maxDepthPct + screening.depthTolerancePct;
     const conservativeLength = nominal.length + 2 * screening.lengthToleranceMm;
-    const conservative = evaluateTier(conservativeDepth, conservativeLength, nominal, config, screening);
+    const conservative = evaluateTier(conservativeDepth, conservativeLength, nominal, config, screening, growth);
 
-    const grownDepth =
-      conservativeDepth + ((screening.growthRateMmPerYear * screening.forecastYears) / nominal.wall) * 100;
+    const grownDepth = conservativeDepth + ((growth * screening.forecastYears) / nominal.wall) * 100;
     const grownLength = conservativeLength + nominal.crLength * screening.forecastYears;
-    const forecast = evaluateTier(grownDepth, grownLength, nominal, config, screening);
+    const forecast = evaluateTier(grownDepth, grownLength, nominal, config, screening, growth);
 
-    const lifeToErf1 = findLifeToErf1(nominal, config, screening);
+    const lifeToErf1 = findLifeToErf1(nominal, config, screening, growth);
     const clockHour = parseClockHour(nominal.orient);
 
     return {
@@ -245,18 +240,20 @@ export function findInteractions(
 ): FfsInteractionPair[] {
   const sorted = [...items].sort((a, b) => numericLd(a) - numericLd(b));
   const pairs: FfsInteractionPair[] = [];
+  // The scan can only stop once the centre gap clears the *longest* feature in
+  // the population. Cutting off on the current pair's lengths skipped a long
+  // downstream anomaly whose near edge still fell inside the threshold.
+  const longestMm = sorted.reduce((max, item) => Math.max(max, item.nominal.length), 0);
 
   for (let i = 0; i < sorted.length; i++) {
     const a = sorted[i];
     const thresholdMm = screening.interactionSpacingFactor * a.nominal.wall;
+    const scanLimitMm = thresholdMm + (a.nominal.length + longestMm) / 2;
     for (let j = i + 1; j < sorted.length; j++) {
       const b = sorted[j];
       const centerGapMm = (numericLd(b) - numericLd(a)) * 1000;
-      const halfLengths = (a.nominal.length + b.nominal.length) / 2;
-      // Once the centre gap clears the widest possible interacting span, every
-      // later feature is further still — stop scanning this anchor.
-      if (centerGapMm - halfLengths > thresholdMm) break;
-      const edgeGapMm = centerGapMm - halfLengths;
+      if (centerGapMm > scanLimitMm) break;
+      const edgeGapMm = centerGapMm - (a.nominal.length + b.nominal.length) / 2;
       if (edgeGapMm <= thresholdMm) {
         pairs.push({ a, b, edgeGapMm, thresholdMm });
       }

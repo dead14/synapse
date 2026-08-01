@@ -8,10 +8,19 @@ import {
   Legend
 } from 'chart.js';
 
-ChartJS.register(LinearScale, PointElement, Tooltip, Legend);
+import {
+  SECTION_RIBBON_PADDING,
+  sectionBandsPlugin,
+  sectionTooltipLine,
+} from '../../lib/sections/sectionBandsPlugin';
+import type { SectionBandsPluginOptions } from '../../lib/sections/sectionBandsPlugin';
+
+ChartJS.register(LinearScale, PointElement, Tooltip, Legend, sectionBandsPlugin);
 
 interface CrVsDistanceChartProps {
   data: any[];
+  /** Section ribbon config, when the run has been sectioned. */
+  sectionBands?: SectionBandsPluginOptions;
   filters: {
     matched: string;
     unmatched: string;
@@ -53,7 +62,7 @@ export function corrosionRateMmPerYear(row: any): number | null {
   return yearSpan !== null ? ((depth2Pct / 100) * wt) / yearSpan : null;
 }
 
-export default function CrVsDistanceChart({ data, filters }: CrVsDistanceChartProps) {
+export default function CrVsDistanceChart({ data, filters, sectionBands }: CrVsDistanceChartProps) {
   const chartRef = useRef<any>(null);
 
   const chartData = useMemo(() => {
@@ -84,6 +93,12 @@ export default function CrVsDistanceChart({ data, filters }: CrVsDistanceChartPr
 
   const hasPoints = chartData.matchedCRs.length + chartData.unmatchedNewCRs.length > 0;
 
+  // A run pair routinely carries tens of thousands of features. Animating every
+  // marker on every update is the dominant cost on a real dataset, so past this
+  // size only the finished frame is drawn.
+  const heavy = chartData.matchedCRs.length + chartData.unmatchedNewCRs.length > 2_000;
+
+
   const datasets = [
     {
       label: 'Matched Defect CR',
@@ -106,6 +121,12 @@ export default function CrVsDistanceChart({ data, filters }: CrVsDistanceChartPr
   const options = {
     responsive: true,
     maintainAspectRatio: false,
+    // Skip the transition and the per-update parse pass on a large population.
+    animation: heavy ? (false as const) : undefined,
+    parsing: false as const,
+    interaction: { mode: 'nearest' as const, intersect: true, axis: 'xy' as const },
+    // Reserve the strip the section ribbon is drawn in, so it never covers a point.
+    layout: sectionBands ? { padding: { top: SECTION_RIBBON_PADDING } } : undefined,
     scales: {
       x: {
         type: 'linear' as const,
@@ -123,6 +144,7 @@ export default function CrVsDistanceChart({ data, filters }: CrVsDistanceChartPr
       }
     },
     plugins: {
+      sectionBands,
       legend: {
         position: 'top' as const,
         labels: {
@@ -133,7 +155,9 @@ export default function CrVsDistanceChart({ data, filters }: CrVsDistanceChartPr
         callbacks: {
           label: (context: any) => {
             const pt = context.raw;
-            return `${context.dataset.label}: Dist ${pt.x.toFixed(3)}m, CR ${pt.y.toFixed(3)} mm/yr`;
+            const line = `${context.dataset.label}: Dist ${pt.x.toFixed(3)}m, CR ${pt.y.toFixed(3)} mm/yr`;
+            const band = sectionBands ? sectionTooltipLine(sectionBands.bands, pt.x) : null;
+            return band ? [line, band] : line;
           }
         }
       }

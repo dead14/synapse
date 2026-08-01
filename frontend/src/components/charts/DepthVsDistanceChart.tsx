@@ -8,12 +8,21 @@ import {
   Tooltip,
   Legend
 } from 'chart.js';
-import type { Plugin } from 'chart.js';
+import { createMatchLinesPlugin } from './matchLinesPlugin';
 
-ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend);
+import {
+  SECTION_RIBBON_PADDING,
+  sectionBandsPlugin,
+  sectionTooltipLine,
+} from '../../lib/sections/sectionBandsPlugin';
+import type { SectionBandsPluginOptions } from '../../lib/sections/sectionBandsPlugin';
+
+ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend, sectionBandsPlugin);
 
 interface DepthVsDistanceChartProps {
   data: any[];
+  /** Section ribbon config, when the run has been sectioned. */
+  sectionBands?: SectionBandsPluginOptions;
   filters: {
     matched: string;
     unmatched: string;
@@ -31,7 +40,7 @@ const asNumber = (value: unknown): number | null => {
 
 const isMatchedRow = (row: any) => row['Match/Unmatch'] === 'Matched' || row['Match/Unmatch'] === 'Match';
 
-export default function DepthVsDistanceChart({ data, filters }: DepthVsDistanceChartProps) {
+export default function DepthVsDistanceChart({ data, filters, sectionBands }: DepthVsDistanceChartProps) {
   const chartRef = useRef<any>(null);
 
   // Parse data
@@ -79,7 +88,7 @@ export default function DepthVsDistanceChart({ data, filters }: DepthVsDistanceC
 
       // Add line if matched
       if (isMatched && dist1 !== null && depth1 !== null && dist2 !== null && depth2 !== null) {
-        lines.push({ x1: dist1, y1: depth1, x2: dist2, y2: depth2, color: '#cbd5e1' });
+        lines.push({ x1: dist1, y1: depth1, x2: dist2, y2: depth2 });
       }
     });
 
@@ -89,38 +98,20 @@ export default function DepthVsDistanceChart({ data, filters }: DepthVsDistanceC
   const hasPoints = chartData.run1Matched.length + chartData.run1Unmatched.length
     + chartData.run2Matched.length + chartData.run2Unmatched.length > 0;
 
-  const matchLinesPlugin: Plugin = {
-    id: 'matchLinesPlugin',
-    beforeDraw(chart) {
-      const { ctx, chartArea, scales: { x, y } } = chart;
-      if (!chartArea || !x || !y) return; // Prevent crash on initial render
-      
-      ctx.save();
-      
-      chartData.lines.forEach(line => {
-        const x1Px = x.getPixelForValue(line.x1);
-        const y1Px = y.getPixelForValue(line.y1);
-        const x2Px = x.getPixelForValue(line.x2);
-        const y2Px = y.getPixelForValue(line.y2);
+  // A run pair routinely carries tens of thousands of features. Animating every
+  // marker on every update is the dominant cost on a real dataset, so past this
+  // size only the finished frame is drawn.
+  const heavy = chartData.run1Matched.length + chartData.run1Unmatched.length
+    + chartData.run2Matched.length + chartData.run2Unmatched.length > 2_000;
 
-        // Simple culling
-        if (
-          Math.max(x1Px, x2Px) >= chartArea.left &&
-          Math.min(x1Px, x2Px) <= chartArea.right &&
-          Math.max(y1Px, y2Px) >= chartArea.top &&
-          Math.min(y1Px, y2Px) <= chartArea.bottom
-        ) {
-          ctx.beginPath();
-          ctx.moveTo(x1Px, y1Px);
-          ctx.lineTo(x2Px, y2Px);
-          ctx.lineWidth = 1;
-          ctx.strokeStyle = line.color;
-          ctx.stroke();
-        }
-      });
-      ctx.restore();
-    }
-  };
+
+  // Memoised: a new plugin object on every render forces Chart.js to rebuild
+  // its plugin state, and this one is rebuilt only when the ties change.
+  const matchLinesPlugin = useMemo(
+    () => createMatchLinesPlugin(chartData.lines, '#cbd5e1'),
+    [chartData.lines],
+  );
+  const chartPlugins = useMemo(() => [matchLinesPlugin], [matchLinesPlugin]);
 
   const datasets = [
     {
@@ -160,6 +151,12 @@ export default function DepthVsDistanceChart({ data, filters }: DepthVsDistanceC
   const options = {
     responsive: true,
     maintainAspectRatio: false,
+    // Skip the transition and the per-update parse pass on a large population.
+    animation: heavy ? (false as const) : undefined,
+    parsing: false as const,
+    interaction: { mode: 'nearest' as const, intersect: true, axis: 'xy' as const },
+    // Reserve the strip the section ribbon is drawn in, so it never covers a point.
+    layout: sectionBands ? { padding: { top: SECTION_RIBBON_PADDING } } : undefined,
     scales: {
       x: {
         type: 'linear' as const,
@@ -178,6 +175,7 @@ export default function DepthVsDistanceChart({ data, filters }: DepthVsDistanceC
       }
     },
     plugins: {
+      sectionBands,
       legend: {
         position: 'top' as const,
         labels: {
@@ -188,7 +186,9 @@ export default function DepthVsDistanceChart({ data, filters }: DepthVsDistanceC
         callbacks: {
           label: (context: any) => {
             const pt = context.raw;
-            return `${context.dataset.label}: Dist ${pt.x.toFixed(3)}m, Depth ${pt.y}`;
+            const line = `${context.dataset.label}: Dist ${pt.x.toFixed(3)}m, Depth ${pt.y}`;
+            const band = sectionBands ? sectionTooltipLine(sectionBands.bands, pt.x) : null;
+            return band ? [line, band] : line;
           }
         }
       }
@@ -206,7 +206,7 @@ export default function DepthVsDistanceChart({ data, filters }: DepthVsDistanceC
         ref={chartRef}
         data={{ datasets }}
         options={options}
-        plugins={[matchLinesPlugin]}
+        plugins={chartPlugins}
       />
     </div>
   );

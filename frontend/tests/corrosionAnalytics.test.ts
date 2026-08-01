@@ -7,6 +7,7 @@ import {
   countBySeverity,
   densityByKp,
   depthHistogram,
+  growthBySection,
   growthHistogram,
   hasSections,
   orientationVerdict,
@@ -302,4 +303,63 @@ test('vitals report the worst case and how much of the population is unusable', 
   assert.equal(vitals.maxErf, 1.2);
   assert.equal(vitals.activeGrowth, 1);
   assert.equal(vitals.worstRemainingLife, 2);
+});
+
+/* ── Growth per section ───────────────────────────────────────────────────── */
+
+test('growth per section reports the rate, the spread, and the extent it covers', () => {
+  const rows = growthBySection([
+    feature({ section: 'RC#86', distanceM: 900, depthGrowthPctWtPerYear: 0.8, wallMm: 10 }),
+    feature({ section: 'RC#86', distanceM: 1400, depthGrowthPctWtPerYear: 0.2, wallMm: 10 }),
+    feature({ section: 'BUR-02', distanceM: 4000, depthGrowthPctWtPerYear: 0.05, wallMm: 8 }),
+  ]);
+
+  assert.equal(rows.length, 2);
+  // Worst-first: the section an engineer has to act on comes out on top.
+  assert.equal(rows[0].section, 'RC#86');
+  assert.equal(rows[0].startM, 900);
+  assert.equal(rows[0].endM, 1400);
+  assert.equal(rows[0].total, 2);
+  assert.equal(rows[0].measured, 2);
+  assert.equal(rows[0].meanPctWtPerYear, 0.5);
+  assert.equal(rows[0].maxPctWtPerYear, 0.8);
+  // 0.5 %WT/y through a 10 mm wall is 0.05 mm/y.
+  assert.equal(rows[0].meanMmPerYear, 0.05);
+  assert.equal(rows[0].fastestFeature?.depthGrowthPctWtPerYear, 0.8);
+});
+
+test('unsectioned features never form a section row', () => {
+  const rows = growthBySection([
+    feature({ section: '-', depthGrowthPctWtPerYear: 2 }),
+    feature({ section: 'Unclassified', depthGrowthPctWtPerYear: 2 }),
+  ]);
+
+  assert.deepEqual(rows, []);
+});
+
+test('shrinking features are counted rather than dropped from the section', () => {
+  // A large negative tail is how an engineer sees that the two vendors sized the
+  // same defects differently, so it must survive into the section summary.
+  const [row] = growthBySection([
+    feature({ section: 'AL-1', depthGrowthPctWtPerYear: -0.4, wallMm: 10 }),
+    feature({ section: 'AL-1', depthGrowthPctWtPerYear: -0.2, wallMm: 10 }),
+    feature({ section: 'AL-1', depthGrowthPctWtPerYear: 0.6, wallMm: 10 }),
+  ]);
+
+  assert.equal(row.measured, 3);
+  assert.equal(row.negative, 2);
+  assert.ok(Math.abs((row.meanPctWtPerYear ?? NaN)) < 1e-9, 'the mean nets out to zero');
+  // The design rate is taken over the growing population only.
+  assert.equal(row.p95PctWtPerYear, 0.6);
+});
+
+test('a section with no measured growth reports nulls instead of zeros', () => {
+  const [row] = growthBySection([
+    feature({ section: 'CAS-3', depthGrowthPctWtPerYear: null, depthPct: 42 }),
+  ]);
+
+  assert.equal(row.measured, 0);
+  assert.equal(row.meanPctWtPerYear, null);
+  assert.equal(row.p95PctWtPerYear, null);
+  assert.equal(row.maxDepthPct, 42, 'depth is still summarised without a rate');
 });

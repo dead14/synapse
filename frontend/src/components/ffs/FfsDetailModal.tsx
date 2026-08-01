@@ -498,7 +498,7 @@ export default function FfsDetailModal({
                       severity: item.conservative.severity,
                     },
                     {
-                      label: `Forecast — ${screening.forecastYears} y at ${screening.growthRateMmPerYear.toFixed(2)} mm/y`,
+                      label: `Forecast — ${screening.forecastYears} y at ${item.forecast.growthRateMmPerYear.toFixed(3)} mm/y` + (screening.growthBasis === 'measured' ? ' (measured)' : ' (uniform)'),
                       depth: item.forecast.depthPct,
                       length: item.forecast.lengthMm,
                       safe: item.forecast.safePressure,

@@ -26,6 +26,13 @@ import {
 } from '../../lib/ffs/chartData';
 import { DEFAULT_DEPTH_BUCKETS, type DepthBucket } from '../../lib/ffs/statistics';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
+import { buildSectionBands, type SectionBand } from '../../lib/sections/bands';
+import {
+  SECTION_RIBBON_PADDING,
+  sectionBandsPlugin,
+  sectionTooltipLine,
+} from '../../lib/sections/sectionBandsPlugin';
+import SectionBandLegend from '../sections/SectionBandLegend';
 import ChartCard, { ColorControl, SettingsSectionLabel, type PointShape } from './ChartCard';
 import { Callout } from './FfsPrimitives';
 
@@ -38,6 +45,7 @@ ChartJS.register(
   Tooltip,
   Legend,
   Title,
+  sectionBandsPlugin,
 );
 
 /** Chart.js colours resolved from the active theme so both modes stay legible. */
@@ -231,6 +239,9 @@ export default function FfsChartsPanel({
     externalColor: '#f97316',
   });
   const [hiddenWalls, setHiddenWalls] = useState<Set<number>>(new Set());
+  // One held section for the whole panel, so highlighting RC#86 on the ERF
+  // profile highlights the same stretch on every other distance chart.
+  const [heldBandId, setHeldBandId] = useState<string | null>(null);
 
   const instances = useRef<Record<string, Chart | null>>({});
 
@@ -243,12 +254,40 @@ export default function FfsChartsPanel({
     };
 
   /**
+   * Every input that changes what the figures look like, as one comparable
+   * value. The capture below keys off this rather than off "any render":
+   * `onFiguresCaptured` lifts the PNGs into the parent's state, which re-renders
+   * this panel, so an unkeyed effect re-armed itself and the panel sat there
+   * re-encoding eight canvases to PNG every 900 ms for as long as the tab was
+   * open. That loop is what made the Charts tab so heavy.
+   */
+  const figureSignature = JSON.stringify([
+    items.length,
+    config.method,
+    config.modifiedSa,
+    screening.reviewBandErf,
+    screening.depthTolerancePct,
+    screening.lengthToleranceMm,
+    screening.growthBasis,
+    screening.growthRateMmPerYear,
+    screening.forecastYears,
+    depthBin, internalBin, externalBin,
+    buckets, internalBuckets, externalBuckets,
+    orientStyle, crDepthStyle, crLengthStyle, erfStyle, screenStyle,
+    [...hiddenWalls].sort(),
+    heldBandId,
+    theme.isDark,
+  ]);
+  const capturedSignature = useRef<string | null>(null);
+
+  /**
    * Snapshots each chart to a PNG so the narrative can embed the figures even
    * after this panel unmounts. Debounced so it runs once the charts have
    * settled rather than on every intermediate render.
    */
   useEffect(() => {
     if (!onFiguresCaptured) return;
+    if (capturedSignature.current === figureSignature) return;
     const timer = setTimeout(() => {
       const images: Record<string, string> = {};
       for (const [chartId, instance] of Object.entries(instances.current)) {
@@ -265,14 +304,42 @@ export default function FfsChartsPanel({
         ctx.drawImage(canvas, 0, 0);
         images[chartId] = output.toDataURL('image/png');
       }
-      if (Object.keys(images).length) onFiguresCaptured(images);
+      if (!Object.keys(images).length) return;
+      capturedSignature.current = figureSignature;
+      onFiguresCaptured(images);
     }, 900);
     return () => clearTimeout(timer);
-  });
+  }, [figureSignature, onFiguresCaptured]);
 
   const maxLength = useMemo(
     () => Math.max(50, ...items.map((item) => item.nominal.length)) * 1.1,
     [items],
+  );
+
+  const bands = useMemo<SectionBand[]>(
+    () => buildSectionBands(items.map((item) => ({
+      distanceM: Number(item.nominal.ld),
+      section: item.nominal.section,
+    }))),
+    [items],
+  );
+  const heldBand = useMemo(
+    () => bands.find((band) => band.id === heldBandId) ?? null,
+    [bands, heldBandId],
+  );
+
+  /** Plugin block for a chart whose x axis is log distance in metres. */
+  const sectionBandOptions = useMemo(
+    () => (bands.length
+      ? {
+          bands,
+          selectedId: heldBandId,
+          onSelect: setHeldBandId,
+          labelColor: '#ffffff',
+          ribbonBackground: theme.isDark ? 'rgba(15,23,42,0.6)' : 'rgba(241,245,249,0.8)',
+        }
+      : undefined),
+    [bands, heldBandId, theme.isDark],
   );
 
   const depthByLd = useMemo(() => buildDepthByLd(items, depthBin, buckets), [items, depthBin, buckets]);
@@ -295,10 +362,17 @@ export default function FfsChartsPanel({
     [items, config, maxLength],
   );
 
+  // An ILI run pair routinely carries tens of thousands of anomalies. Animating
+  // every marker on every update is what makes these charts crawl, so past this
+  // size the transition is dropped and only the finished frame is drawn.
+  const heavy = items.length > 2_000;
+  const animation = heavy ? (false as const) : undefined;
+
   /** Shared axis and tooltip configuration for the stacked bar charts. */
   const barOptions = (yLabel: string, xLabel: string): ChartOptions<'bar'> => ({
     responsive: true,
     maintainAspectRatio: false,
+    animation,
     interaction: { mode: 'index', intersect: false },
     scales: {
       x: {
@@ -331,14 +405,27 @@ export default function FfsChartsPanel({
     },
   });
 
-  /** Shared configuration for the scatter charts, including click-to-select. */
+  /**
+   * Shared configuration for the scatter charts, including click-to-select.
+   * `distanceAxis` adds the section ribbon and the section tooltip line to any
+   * chart whose x axis is log distance in metres.
+   */
   const scatterOptions = (
     xLabel: string,
     yLabel: string,
     extra?: Partial<ChartOptions<'scatter'>>,
+    distanceAxis = false,
   ): ChartOptions<'scatter'> => ({
     responsive: true,
     maintainAspectRatio: false,
+    animation,
+    // The points already carry {x, y}, so Chart.js can read them directly
+    // instead of walking the whole series to normalise it on every update.
+    parsing: false,
+    // Hit-testing every marker on every mouse move is the other half of the
+    // cost; the nearest-point mode with a radius keeps hover cheap.
+    interaction: { mode: 'nearest', intersect: true, axis: 'xy' },
+    layout: distanceAxis && sectionBandOptions ? { padding: { top: SECTION_RIBBON_PADDING } } : undefined,
     onClick: (_event, elements) => {
       const first = elements[0];
       if (!first) return;
@@ -361,6 +448,7 @@ export default function FfsChartsPanel({
       },
     },
     plugins: {
+      sectionBands: distanceAxis ? sectionBandOptions : undefined,
       legend: {
         position: 'top',
         labels: { color: theme.text, font: { size: 10 }, boxWidth: 8, boxHeight: 8, usePointStyle: true },
@@ -377,11 +465,16 @@ export default function FfsChartsPanel({
             const point = context.raw as FfsPoint;
             if (!point?.item) return '';
             const n = point.item.nominal;
-            return [
+            const lines = [
               `LD ${Number(n.ld).toLocaleString()} m · ${n.section}`,
               `${n.surface} · depth ${n.maxDepthPct.toFixed(1)}% · L ${n.length.toFixed(0)} mm`,
               `ERF ${Number.isFinite(n.ERF) ? n.ERF.toFixed(3) : '∞'} · life ${n.expectedLife.toFixed(1)} y`,
             ];
+            // Name the stretch the point sits in, so the reader does not have to
+            // map the metre value back onto the section list themselves.
+            const band = distanceAxis ? sectionTooltipLine(bands, point.x) : null;
+            if (band) lines.push(band);
+            return lines;
           },
         },
       },
@@ -414,15 +507,30 @@ export default function FfsChartsPanel({
       },
     ].filter((dataset) => dataset.data.length > 0);
 
-  const barDatasets = (series: { label: string; color: string; data: number[] }[]) =>
-    series.map((s) => ({
+  /**
+   * Stacked bars, dimmed outside the held section. The bar charts bin distance
+   * into categories rather than plotting it, so they cannot carry the ribbon —
+   * dimming is how the held stretch reads on them.
+   */
+  const barDatasets = (
+    series: { label: string; color: string; data: number[] }[],
+    bins: { start: number; end: number }[],
+  ) => {
+    const inHeldBand = (index: number) => {
+      if (!heldBand || !bins[index]) return true;
+      return bins[index].end > heldBand.startM && bins[index].start <= heldBand.endM;
+    };
+    return series.map((s) => ({
       label: s.label,
       data: s.data,
-      backgroundColor: s.color,
+      backgroundColor: heldBand
+        ? s.data.map((_, index) => (inHeldBand(index) ? s.color : `${s.color}26`))
+        : s.color,
       borderWidth: 0,
       barPercentage: 0.92,
       categoryPercentage: 0.92,
     }));
+  };
 
   if (!items.length) {
     return <Callout tone="warn">No assessed features are available to chart.</Callout>;
@@ -433,7 +541,12 @@ export default function FfsChartsPanel({
       <Callout>
         Charts read from the full assessed population. Click any point to open its calculation trace. Bin sizes,
         depth bands, and marker styling are per-chart and can be exported as PNG for reporting.
+        {bands.length > 0 && ' Click a section — on the ribbon above any distance chart or on a chip below — to hold that stretch highlighted across every chart here.'}
       </Callout>
+
+      {bands.length > 0 && (
+        <SectionBandLegend bands={bands} selectedId={heldBandId} onSelect={setHeldBandId} />
+      )}
 
       {/* Row 1 — depth distribution and orientation */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
@@ -448,7 +561,7 @@ export default function FfsChartsPanel({
           {(registerCanvas) => (
             <Bar
               ref={bind('depth-by-ld', registerCanvas)}
-              data={{ labels: depthByLd.labels, datasets: barDatasets(depthByLd.series) }}
+              data={{ labels: depthByLd.labels, datasets: barDatasets(depthByLd.series, depthByLd.bins) }}
               options={barOptions('Feature count', 'Log distance bin [m]')}
             />
           )}
@@ -487,7 +600,7 @@ export default function FfsChartsPanel({
                     grid: { color: theme.grid },
                   },
                 },
-              })}
+              }, true)}
             />
           )}
         </ChartCard>
@@ -505,7 +618,7 @@ export default function FfsChartsPanel({
             <Scatter
               ref={bind('cr-depth', registerCanvas)}
               data={{ datasets: scatterDatasets(crDepth, crDepthStyle) }}
-              options={scatterOptions('Log distance [m]', 'CR depth [mm/year]')}
+              options={scatterOptions('Log distance [m]', 'CR depth [mm/year]', undefined, true)}
             />
           )}
         </ChartCard>
@@ -520,7 +633,7 @@ export default function FfsChartsPanel({
             <Scatter
               ref={bind('cr-length', registerCanvas)}
               data={{ datasets: scatterDatasets(crLength, crLengthStyle) }}
-              options={scatterOptions('Log distance [m]', 'CR length [mm/year]')}
+              options={scatterOptions('Log distance [m]', 'CR length [mm/year]', undefined, true)}
             />
           )}
         </ChartCard>
@@ -539,7 +652,7 @@ export default function FfsChartsPanel({
           {(registerCanvas) => (
             <Bar
               ref={bind('internal-depth', registerCanvas)}
-              data={{ labels: internalDist.labels, datasets: barDatasets(internalDist.series) }}
+              data={{ labels: internalDist.labels, datasets: barDatasets(internalDist.series, internalDist.bins) }}
               options={barOptions('Internal feature count', 'Log distance bin [m]')}
             />
           )}
@@ -556,7 +669,7 @@ export default function FfsChartsPanel({
           {(registerCanvas) => (
             <Bar
               ref={bind('external-depth', registerCanvas)}
-              data={{ labels: externalDist.labels, datasets: barDatasets(externalDist.series) }}
+              data={{ labels: externalDist.labels, datasets: barDatasets(externalDist.series, externalDist.bins) }}
               options={barOptions('External feature count', 'Log distance bin [m]')}
             />
           )}
@@ -701,7 +814,7 @@ export default function FfsChartsPanel({
                   ...scatterDatasets(erfScatter, erfStyle),
                 ],
               }}
-              options={scatterOptions('Log distance [m]', 'Estimated repair factor')}
+              options={scatterOptions('Log distance [m]', 'Estimated repair factor', undefined, true)}
             />
           )}
         </ChartCard>

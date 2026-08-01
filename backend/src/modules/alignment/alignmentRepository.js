@@ -1,5 +1,18 @@
 const metrics = require('../../observability/metrics');
 
+// Kept in step with COMPARISON_DISTANCE_KEYS in alignmentContract: the export
+// cursor must order rows exactly the way the stored comparison array is ordered.
+// These are literals, never user input — they are interpolated into SQL and must
+// stay that way.
+const EXPORT_DISTANCE_KEYS = Object.freeze([
+    'Log Dist NEW (m)',
+    'Abs. Dist NEW (m)',
+    'Log Dist OLD (m)',
+    'Abs. Dist OLD (m)',
+]);
+/** Optional sign, digits, optional fraction — anything else is not a distance. */
+const NUMERIC_TEXT_PATTERN = '^\\s*-?[0-9]+(\\.[0-9]+)?\\s*$';
+
 function toJson(value) {
     return JSON.stringify(value ?? {});
 }
@@ -281,6 +294,13 @@ async function* iterateOwnedAlignmentExportRows(
                     set_config('synapse.export_org_id', $2, true)`,
             [String(jobId), String(orgId)],
         );
+        // The workbook has to read like the pipeline, so rows leave in distance
+        // order rather than in the order the engine happened to emit its buckets.
+        // Results stored before that ordering moved into the engine output are
+        // still grouped by feature class on disk, and this is what makes their
+        // export come out walkable anyway. Numeric text is guarded: a distance
+        // column can legitimately hold "-" for a row that has no NEW odometer,
+        // and an unguarded cast would abort the whole export.
         await client.query(
             `DECLARE alignment_export_rows NO SCROLL CURSOR FOR
              WITH completed AS (
@@ -296,7 +316,12 @@ async function* iterateOwnedAlignmentExportRows(
              CROSS JOIN LATERAL jsonb_array_elements(
                  COALESCE(c.result_json->'comparison', '[]'::jsonb)
              ) WITH ORDINALITY AS item(value, ordinality)
-             ORDER BY item.ordinality ASC`,
+             ORDER BY COALESCE(
+                 ${EXPORT_DISTANCE_KEYS.map((key) => (
+                     `CASE WHEN item.value->>'${key}' ~ '${NUMERIC_TEXT_PATTERN}'
+                           THEN (item.value->>'${key}')::numeric END`
+                 )).join(',\n                 ')}
+             ) ASC NULLS LAST, item.ordinality ASC`,
         );
         cursorOpen = true;
 

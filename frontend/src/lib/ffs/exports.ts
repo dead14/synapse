@@ -47,6 +47,9 @@ export function exportResultsWorkbook(
     ['Screening assumptions'],
     ['ILI depth tolerance [% WT]', screening.depthTolerancePct],
     ['ILI length tolerance [mm/end]', screening.lengthToleranceMm],
+    ['Growth basis', screening.growthBasis === 'measured'
+      ? 'Per-feature measured rate (configured rate used as the fallback)'
+      : 'Uniform rate applied to every feature'],
     ['Corrosion growth rate [mm/y]', screening.growthRateMmPerYear],
     ['Forecast horizon [years]', screening.forecastYears],
     ['Review band ERF', screening.reviewBandErf],

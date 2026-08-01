@@ -1,10 +1,13 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import Modal from '../common/Modal';
 import DepthVsDistanceChart from './DepthVsDistanceChart';
 import OrientationVsDistanceChart from './OrientationVsDistanceChart';
 import CrVsDistanceChart from './CrVsDistanceChart';
 import CrDistributionChart from './CrDistributionChart';
+import { buildSectionBands } from '../../lib/sections/bands';
+import type { SectionBandsPluginOptions } from '../../lib/sections/sectionBandsPlugin';
+import SectionBandLegend from '../sections/SectionBandLegend';
 import { Button, Segmented } from '../ds';
 
 interface AdvancedChartsProps {
@@ -41,6 +44,26 @@ export default function AdvancedCharts({ data, variant = 'modal', onClose }: Adv
   const [binSize, setBinSize] = useState(0.2);
   const [maxCr, setMaxCr] = useState(2);
   const [minCr, setMinCr] = useState(-2);
+  const [heldBandId, setHeldBandId] = useState<string | null>(null);
+
+  // Sections are read off the NEW run — the current state of the line, and the
+  // axis every one of these charts is plotted against.
+  const bands = useMemo(
+    () => buildSectionBands(data.map((row) => ({
+      distanceM: Number(row['Log Dist NEW (m)']),
+      section: String(row['Section NEW'] ?? row.Section ?? '-'),
+    }))),
+    [data],
+  );
+
+  // Memoised so a filter toggle does not hand every chart a new options object
+  // and force a full Chart.js update for nothing.
+  const sectionBands = useMemo<SectionBandsPluginOptions | undefined>(
+    () => (bands.length
+      ? { bands, selectedId: heldBandId, onSelect: setHeldBandId, labelColor: '#ffffff' }
+      : undefined),
+    [bands, heldBandId],
+  );
 
   const body: ReactNode = (
     <div className="adv-charts">
@@ -53,11 +76,16 @@ export default function AdvancedCharts({ data, variant = 'modal', onClose }: Adv
             />
           </div>
 
+          {bands.length > 0 && activeTab !== 'CrDistribution' && (
+            <SectionBandLegend bands={bands} selectedId={heldBandId} onSelect={setHeldBandId} />
+          )}
+
           {/* Chart Area */}
           <div className="adv-charts__plot">
              {activeTab === 'DepthVsDistance' ? (
                 <DepthVsDistanceChart 
-                   data={data} 
+                   data={data}
+                   sectionBands={sectionBands} 
                    filters={{
                      matched: matchedFilter,
                      unmatched: unmatchedFilter,
@@ -69,6 +97,7 @@ export default function AdvancedCharts({ data, variant = 'modal', onClose }: Adv
              ) : activeTab === 'OrientationVsDistance' ? (
                 <OrientationVsDistanceChart
                    data={data}
+                   sectionBands={sectionBands}
                    filters={{
                      matched: matchedFilter,
                      unmatched: unmatchedFilter,
@@ -80,6 +109,7 @@ export default function AdvancedCharts({ data, variant = 'modal', onClose }: Adv
              ) : activeTab === 'CrVsDistance' ? (
                 <CrVsDistanceChart
                    data={data}
+                   sectionBands={sectionBands}
                    filters={{
                      matched: matchedFilter,
                      unmatched: unmatchedFilter,
