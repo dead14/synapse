@@ -1482,9 +1482,77 @@
   .sec-draft { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto; }
 }
 
+/* Section bands above a distance chart — names the stretch, holds the highlight */
+.section-band-legend { display: grid; gap: 0.375rem; margin-bottom: 0.5rem; }
+
+.section-band-legend__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3125rem;
+}
+
+.section-band-legend__title {
+  margin-right: 0.125rem;
+  color: var(--ds-ink-faint, var(--ds-ink-soft));
+  font-size: var(--ds-t-2xs, 0.6875rem);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.section-band-legend__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  border: 1px solid var(--ds-line);
+  border-radius: 999px;
+  background: var(--ds-surface);
+  padding: 0.1875rem 0.5rem;
+  color: var(--ds-ink-soft);
+  font-size: var(--ds-t-2xs, 0.6875rem);
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.section-band-legend__chip:hover { border-color: var(--ds-primary); color: var(--ds-ink); }
+
+.section-band-legend__chip.is-held {
+  border-color: var(--ds-primary);
+  background: var(--ds-primary-soft, var(--ds-surface-sunken));
+  color: var(--ds-ink);
+}
+
+.section-band-legend__swatch {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: 0 0 auto;
+  border-radius: 2px;
+}
+
+.section-band-legend__more {
+  border: 0;
+  background: none;
+  padding: 0.1875rem 0.25rem;
+  color: var(--ds-primary);
+  font-size: var(--ds-t-2xs, 0.6875rem);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.section-band-legend__detail {
+  margin: 0;
+  color: var(--ds-ink-soft);
+  font-size: var(--ds-t-2xs, 0.6875rem);
+  line-height: 1.5;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ds-btn, .ds-segmented__option, .ds-switch, .ds-switch::after, .ds-table tbody tr,
-  .ds-input, .ds-select, .ds-textarea, .sec-brush__section { transition-duration: 1ms !important; }
+  .ds-input, .ds-select, .ds-textarea, .sec-brush__section,
+  .section-band-legend__chip { transition-duration: 1ms !important; }
   .ds-exec__caret { animation: none; }
   .ds-exec__track i { transition-duration: 1ms; }
 }

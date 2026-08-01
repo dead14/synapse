@@ -8,13 +8,22 @@ import {
   Tooltip,
   Legend
 } from 'chart.js';
-import type { Plugin } from 'chart.js';
+import { createMatchLinesPlugin } from './matchLinesPlugin';
 import { parseClockToDegrees } from '../../utils/clock';
 
-ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend);
+import {
+  SECTION_RIBBON_PADDING,
+  sectionBandsPlugin,
+  sectionTooltipLine,
+} from '../../lib/sections/sectionBandsPlugin';
+import type { SectionBandsPluginOptions } from '../../lib/sections/sectionBandsPlugin';
+
+ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend, sectionBandsPlugin);
 
 interface OrientationVsDistanceChartProps {
   data: any[];
+  /** Section ribbon config, when the run has been sectioned. */
+  sectionBands?: SectionBandsPluginOptions;
   filters: {
     matched: string;
     unmatched: string;
@@ -39,7 +48,7 @@ const clockDegrees = (value: unknown): number | null => {
   return Number.isFinite(degrees) ? degrees : null;
 };
 
-export default function OrientationVsDistanceChart({ data, filters }: OrientationVsDistanceChartProps) {
+export default function OrientationVsDistanceChart({ data, filters, sectionBands }: OrientationVsDistanceChartProps) {
   const chartRef = useRef<any>(null);
 
   const chartData = useMemo(() => {
@@ -80,7 +89,7 @@ export default function OrientationVsDistanceChart({ data, filters }: Orientatio
 
       // Add line if matched
       if (isMatched && dist1 !== null && orient1 !== null && dist2 !== null && orient2 !== null) {
-        lines.push({ x1: dist1, y1: orient1, x2: dist2, y2: orient2, color: 'black' });
+        lines.push({ x1: dist1, y1: orient1, x2: dist2, y2: orient2 });
       }
     });
 
@@ -90,37 +99,18 @@ export default function OrientationVsDistanceChart({ data, filters }: Orientatio
   const hasPoints = chartData.run1Matched.length + chartData.run1Unmatched.length
     + chartData.run2Matched.length + chartData.run2Unmatched.length > 0;
 
-  const matchLinesPlugin: Plugin = {
-    id: 'matchLinesPlugin',
-    beforeDraw(chart) {
-      const { ctx, chartArea, scales: { x, y } } = chart;
-      if (!chartArea || !x || !y) return;
-      
-      ctx.save();
-      
-      chartData.lines.forEach(line => {
-        const x1Px = x.getPixelForValue(line.x1);
-        const y1Px = y.getPixelForValue(line.y1);
-        const x2Px = x.getPixelForValue(line.x2);
-        const y2Px = y.getPixelForValue(line.y2);
+  // A run pair routinely carries tens of thousands of features. Animating every
+  // marker on every update is the dominant cost on a real dataset, so past this
+  // size only the finished frame is drawn.
+  const heavy = chartData.run1Matched.length + chartData.run1Unmatched.length
+    + chartData.run2Matched.length + chartData.run2Unmatched.length > 2_000;
 
-        if (
-          Math.max(x1Px, x2Px) >= chartArea.left &&
-          Math.min(x1Px, x2Px) <= chartArea.right &&
-          Math.max(y1Px, y2Px) >= chartArea.top &&
-          Math.min(y1Px, y2Px) <= chartArea.bottom
-        ) {
-          ctx.beginPath();
-          ctx.moveTo(x1Px, y1Px);
-          ctx.lineTo(x2Px, y2Px);
-          ctx.lineWidth = 1;
-          ctx.strokeStyle = line.color;
-          ctx.stroke();
-        }
-      });
-      ctx.restore();
-    }
-  };
+
+  const matchLinesPlugin = useMemo(
+    () => createMatchLinesPlugin(chartData.lines, 'rgba(15,23,42,0.35)'),
+    [chartData.lines],
+  );
+  const chartPlugins = useMemo(() => [matchLinesPlugin], [matchLinesPlugin]);
 
   const isRect = filters.visualType === 'Rectangles';
 
@@ -162,6 +152,12 @@ export default function OrientationVsDistanceChart({ data, filters }: Orientatio
   const options = {
     responsive: true,
     maintainAspectRatio: false,
+    // Skip the transition and the per-update parse pass on a large population.
+    animation: heavy ? (false as const) : undefined,
+    parsing: false as const,
+    interaction: { mode: 'nearest' as const, intersect: true, axis: 'xy' as const },
+    // Reserve the strip the section ribbon is drawn in, so it never covers a point.
+    layout: sectionBands ? { padding: { top: SECTION_RIBBON_PADDING } } : undefined,
     scales: {
       x: {
         type: 'linear' as const,
@@ -182,6 +178,7 @@ export default function OrientationVsDistanceChart({ data, filters }: Orientatio
       }
     },
     plugins: {
+      sectionBands,
       legend: {
         position: 'top' as const,
         labels: {
@@ -192,7 +189,9 @@ export default function OrientationVsDistanceChart({ data, filters }: Orientatio
         callbacks: {
           label: (context: any) => {
             const pt = context.raw;
-            return `${context.dataset.label}: Dist ${pt.x.toFixed(3)}m, Orient ${pt.y}°`;
+            const line = `${context.dataset.label}: Dist ${pt.x.toFixed(3)}m, Orient ${pt.y}°`;
+            const band = sectionBands ? sectionTooltipLine(sectionBands.bands, pt.x) : null;
+            return band ? [line, band] : line;
           }
         }
       }
@@ -210,7 +209,7 @@ export default function OrientationVsDistanceChart({ data, filters }: Orientatio
         ref={chartRef}
         data={{ datasets }}
         options={options}
-        plugins={[matchLinesPlugin]}
+        plugins={chartPlugins}
       />
     </div>
   );
