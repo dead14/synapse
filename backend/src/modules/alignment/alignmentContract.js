@@ -648,9 +648,56 @@ function normalizeInterventionEvent(event) {
     };
 }
 
+// Distance fields, in the order they are trusted. The comparison table is read
+// against the NEW run, so a row's position on the line is its NEW odometer; an
+// OLD-only row has no NEW odometer and falls back to its own.
+const COMPARISON_DISTANCE_KEYS = Object.freeze([
+    'Log Dist NEW (m)',
+    'Abs. Dist NEW (m)',
+    'Log Dist OLD (m)',
+    'Abs. Dist OLD (m)',
+]);
+
+/**
+ * Position of a comparison row along the line, or null when it reports none.
+ */
+function comparisonRowDistance(row) {
+    if (!row || typeof row !== 'object') return null;
+    for (const key of COMPARISON_DISTANCE_KEYS) {
+        const raw = row[key];
+        if (raw === undefined || raw === null || raw === '' || raw === '-') continue;
+        const value = Number(raw);
+        if (Number.isFinite(value)) return value;
+    }
+    return null;
+}
+
+/**
+ * Orders comparison rows the way the line runs.
+ *
+ * The engine emits its findings in buckets — locked girth welds, then matched
+ * anomalies, then the only-in-one-run rows, then bypassed and filtered — and
+ * flattening those buckets produced a table that read "every GW, then every
+ * metal loss, then everything else". That is a processing order, not a
+ * pipeline, and it made the exported workbook impossible to walk feature by
+ * feature. Sorting is stable, so rows sharing a distance keep their bucket
+ * order and a row with no distance at all sinks to the end rather than to KP 0.
+ */
+function sortComparisonByDistance(rows) {
+    return rows
+        .map((row, index) => ({ row, index, distance: comparisonRowDistance(row) }))
+        .sort((left, right) => {
+            if (left.distance === null && right.distance === null) return left.index - right.index;
+            if (left.distance === null) return 1;
+            if (right.distance === null) return -1;
+            return left.distance - right.distance || left.index - right.index;
+        })
+        .map((entry) => entry.row);
+}
+
 function normalizeComparisonResult(engineOutput) {
     if (Array.isArray(engineOutput)) {
-        return { comparison: engineOutput, groups: null };
+        return { comparison: sortComparisonByDistance(engineOutput), groups: null };
     }
 
     if (!engineOutput || typeof engineOutput !== 'object') {
@@ -663,10 +710,12 @@ function normalizeComparisonResult(engineOutput) {
             .filter((key) => !COMPARISON_GROUP_ORDER.includes(key))
             .sort(),
     ];
-    const comparison = orderedKeys.flatMap((key) => (
+    const comparison = sortComparisonByDistance(orderedKeys.flatMap((key) => (
         Array.isArray(engineOutput[key]) ? engineOutput[key] : []
-    ));
+    )));
 
+    // `groups` keeps the engine's own buckets untouched: the conservation audit
+    // and every per-group count are defined on them.
     return { comparison, groups: engineOutput };
 }
 
@@ -723,7 +772,9 @@ function summarizeComparison(comparison) {
 module.exports = {
     ACCEPTED_TIEIN_DECISION_STATUSES,
     COMPARISON_GROUP_ORDER,
+    comparisonRowDistance,
     normalizeComparisonResult,
+    sortComparisonByDistance,
     summarizeComparison,
     validateDtwPayload,
     validateTieInTransform,
