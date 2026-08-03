@@ -78,7 +78,9 @@ export default function SpoolUnrolled2D({
     const clockDeg = data.clockDeg ?? feature.clockDeg;
     const axialM = ((data.lengthMm ?? 0) / 1000) * markerScale;
     const boxWidth = Math.max(MIN_BOX, (axialM / spanM) * plotWidth);
-    const arcDeg = (arcWidthDeg(data.widthMm, odMm) ?? 8) * markerScale;
+    // Same rule as the 3D patches: only a true arc gets the exaggeration.
+    const trueArc = arcWidthDeg(data.widthMm, odMm);
+    const arcDeg = trueArc === null ? 8 : trueArc * markerScale;
     const boxHeight = Math.max(MIN_BOX, (arcDeg / 360) * PLOT_HEIGHT);
     return {
       x: toX(maM) - boxWidth / 2,

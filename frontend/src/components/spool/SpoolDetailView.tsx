@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FiCamera, FiCrosshair, FiDownload, FiEye, FiHome, FiLayers, FiMaximize2,
-  FiRotateCcw, FiScissors, FiX, FiZoomIn, FiZoomOut,
+  FiMinimize2, FiRotateCcw, FiScissors, FiX, FiZoomIn, FiZoomOut,
 } from 'react-icons/fi';
 
 import Modal from '../common/Modal';
@@ -35,6 +35,16 @@ import SpoolUnrolled2D from './SpoolUnrolled2D.tsx';
 import SpoolAnomalyList from './SpoolAnomalyList.tsx';
 import SpoolInspector from './SpoolInspector.tsx';
 import SpoolControlPanel from './SpoolControlPanel.tsx';
+import SpoolResizer from './SpoolResizer.tsx';
+import {
+  COLLAPSED_LAYOUT,
+  DEFAULT_LAYOUT,
+  clampPane,
+  isMaximised,
+  readLayout,
+  writeLayout,
+  type SpoolLayout,
+} from './spoolLayout.ts';
 import { DEPTH_PALETTE_LABEL, depthGradient, type DepthPalette } from './spoolPalette.ts';
 import './spool.css';
 
@@ -90,9 +100,38 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
   const [showAxialScale, setShowAxialScale] = useState(true);
   const [measureMode, setMeasureMode] = useState(false);
   const [measurePicks, setMeasurePicks] = useState<SpoolFeature[]>([]);
+  const [layout, setLayout] = useState<SpoolLayout>(readLayout);
+  /** Sizes to come back to when the stage stops being maximised. */
+  const [restoreLayout, setRestoreLayout] = useState<SpoolLayout | null>(null);
 
   const stageRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+
+  useEffect(() => { writeLayout(layout); }, [layout]);
+
+  const resizePane = (key: keyof SpoolLayout, delta: number) => {
+    setRestoreLayout(null);
+    setLayout((current) => ({ ...current, [key]: clampPane(key, current[key] + delta) }));
+  };
+
+  const togglePane = (key: keyof SpoolLayout) => {
+    setRestoreLayout(null);
+    setLayout((current) => ({ ...current, [key]: current[key] === 0 ? DEFAULT_LAYOUT[key] : 0 }));
+  };
+
+  const maximised = isMaximised(layout);
+
+  const toggleMaximise = () => {
+    if (maximised && restoreLayout) {
+      setLayout(restoreLayout);
+      setRestoreLayout(null);
+    } else {
+      setRestoreLayout(layout);
+      setLayout(COLLAPSED_LAYOUT);
+    }
+    // The stage just changed shape, so reframe the pipe for the viewport it has.
+    setCommand((current) => ({ preset: 'home', nonce: current.nonce + 1 }));
+  };
 
   // A new spool selection resets the window; nothing else survives the change,
   // because a filter tuned to the previous spool means nothing on this one.
@@ -296,6 +335,15 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
           >
             <FiCrosshair /> Measure
           </button>
+          <span className="spool-view__sep" />
+          <button
+            type="button"
+            className={`ds-btn ds-btn--xs ${maximised ? 'ds-btn--primary' : 'ds-btn--ghost'}`}
+            onClick={toggleMaximise}
+            title="Give the whole window to the pipe (the panels drag back out)"
+          >
+            {maximised ? <FiMinimize2 /> : <FiMaximize2 />} {maximised ? 'Restore panels' : 'Maximise view'}
+          </button>
         </div>
 
         <div className="spool-view__legend">
@@ -315,24 +363,41 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
         </div>
       </div>
 
-      {/* Body */}
-      <div className="spool-view__body">
-        <SpoolControlPanel
-          layers={layers}
-          onLayersChange={setLayers}
-          filters={filters}
-          onFiltersChange={setFilters}
-          onReset={() => setFilters(defaultFilters(range.startM, range.endM))}
-          counts={counts}
-          extent={{ startM: model.extentM?.startM ?? range.startM, endM: model.extentM?.endM ?? range.endM }}
-          visibleCount={visible.length}
-          totalCount={model.features.length}
-          odMm={odMm}
-          onOdChange={setOdMm}
-          hasComparison={model.hasComparison}
+      {/* Body. Every pane is drag-sized: the stage is the one that has to grow
+          when a reviewer is actually reading metal, so nothing here is fixed. */}
+      <div
+        className="spool-view__body"
+        style={{ gridTemplateColumns: `${layout.railW}px 0.375rem minmax(0, 1fr) 0.375rem ${layout.detailW}px` }}
+      >
+        {layout.railW > 0 && (
+          <SpoolControlPanel
+            layers={layers}
+            onLayersChange={setLayers}
+            filters={filters}
+            onFiltersChange={setFilters}
+            onReset={() => setFilters(defaultFilters(range.startM, range.endM))}
+            counts={counts}
+            extent={{ startM: model.extentM?.startM ?? range.startM, endM: model.extentM?.endM ?? range.endM }}
+            visibleCount={visible.length}
+            totalCount={model.features.length}
+            odMm={odMm}
+            onOdChange={setOdMm}
+            hasComparison={model.hasComparison}
+          />
+        )}
+        {layout.railW === 0 && <div className="spool-view__stub" />}
+
+        <SpoolResizer
+          axis="x"
+          label="Resize the layers and filters panel"
+          onResize={(delta) => resizePane('railW', delta)}
+          onToggle={() => togglePane('railW')}
         />
 
-        <div className="spool-view__centre">
+        <div
+          className="spool-view__centre"
+          style={{ gridTemplateRows: `minmax(0, 1fr) 0.375rem ${layout.lowerH}px` }}
+        >
           <div className="spool-view__stage" ref={stageRef}>
             {stage === '3D' ? (
               <>
@@ -416,7 +481,14 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
             )}
           </div>
 
-          <div className="spool-view__lower">
+          <SpoolResizer
+            axis="y"
+            label="Resize the unrolled view and anomaly list"
+            onResize={(delta) => resizePane('lowerH', -delta)}
+            onToggle={() => togglePane('lowerH')}
+          />
+
+          <div className="spool-view__lower" hidden={layout.lowerH === 0}>
             {stage === '3D' && (
               <section className="spool-view__unrolled">
                 <div className="spool-view__unrolled-head">
@@ -458,14 +530,23 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
           </div>
         </div>
 
-        <SpoolInspector
-          feature={selected}
-          currentRunLabel={model.currentRun.label}
-          previousRunLabel={model.previousRun.label}
-          onFocusInView={(feature) => focusOn(feature, Math.max(0.75, (stageEnd - stageStart) * 0.08))}
-          onShowNeighbours={(feature) => focusOn(feature, 3)}
-          onOpenInTable={(feature) => { onSelectRowIdx?.(feature.rowIndex); onClose(); }}
+        <SpoolResizer
+          axis="x"
+          label="Resize the anomaly details panel"
+          onResize={(delta) => resizePane('detailW', -delta)}
+          onToggle={() => togglePane('detailW')}
         />
+
+        {layout.detailW > 0 ? (
+          <SpoolInspector
+            feature={selected}
+            currentRunLabel={model.currentRun.label}
+            previousRunLabel={model.previousRun.label}
+            onFocusInView={(feature) => focusOn(feature, Math.max(0.75, (stageEnd - stageStart) * 0.08))}
+            onShowNeighbours={(feature) => focusOn(feature, 3)}
+            onOpenInTable={(feature) => { onSelectRowIdx?.(feature.rowIndex); onClose(); }}
+          />
+        ) : <div className="spool-view__stub" />}
       </div>
 
       {/* Footer */}
