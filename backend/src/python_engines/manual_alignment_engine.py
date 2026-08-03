@@ -2,7 +2,7 @@ import json
 import os
 import sys
 
-from hungarian_engine import HungarianAnomalyAlignmentEngine
+from hungarian_engine import CLUSTER_BYPASS_REASON, HungarianAnomalyAlignmentEngine
 
 
 def _manual_row(feature, side, status, result_group, old_year, new_year):
@@ -11,6 +11,11 @@ def _manual_row(feature, side, status, result_group, old_year, new_year):
         "match_status": status,
         "Match/Unmatch": status,
         "Result Group": result_group,
+        "Bypass Reason": (
+            CLUSTER_BYPASS_REASON
+            if HungarianAnomalyAlignmentEngine._is_cluster_feature(feature)
+            else "-"
+        ),
         "Run Year OLD": old_year,
         "Run Year NEW": new_year,
         "Source Key OLD": feature.get("source_key") if is_old else "-",

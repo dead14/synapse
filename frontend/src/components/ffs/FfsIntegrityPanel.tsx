@@ -537,7 +537,7 @@ export default function FfsIntegrityPanel({
                   onClick={() => onSelect(action.target)}
                   className="grid w-full grid-cols-[64px_1fr_auto] gap-3 rounded-lg border border-slate-200 p-3 text-left transition-colors hover:border-indigo-300 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:hover:border-indigo-700 dark:hover:bg-slate-700/40"
                 >
-                  <span className="text-[10px] font-bold leading-tight text-indigo-600 dark:text-indigo-400">
+                  <span className="text-[10px] font-bold leading-tight text-slate-700 dark:text-slate-200">
                     {action.code}
                     <span className="mt-0.5 block font-normal tabular-nums text-slate-400">
                       {numericLd(action.target).toFixed(0)} m

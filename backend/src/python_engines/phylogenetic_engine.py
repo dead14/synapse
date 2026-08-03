@@ -52,6 +52,23 @@ def _is_weld_kind(feature_type) -> bool:
     return bool(_WELD_KIND_PATTERN.search(str(feature_type or "").strip().lower()))
 
 
+# Same rule as hungarian_engine._is_cluster_feature: a vendor-merged corrosion
+# group is never aligned across runs, because the grouping itself changes
+# between reports.  It is conserved as a bypass row so ERF / FFS still see it.
+_CLUSTER_KIND_PATTERN = re.compile(r"\b(?:cluster|klaster|kluster)s?(?:ed|ing)?\b", re.IGNORECASE)
+
+CLUSTER_BYPASS_REASON = "Clustered metal loss — excluded from alignment"
+
+
+def _is_cluster_feature(feature: ILIFeature | None) -> bool:
+    if feature is None:
+        return False
+    return any(
+        _CLUSTER_KIND_PATTERN.search(str(label or ""))
+        for label in (feature.feature_type, feature.feature_identification)
+    )
+
+
 def _resolve_phylogenetic_runs(params_json: dict) -> list[dict]:
     """Extract run references from a phylogenetic session.
 
@@ -331,6 +348,8 @@ def perform_phylogenetic_alignment(session_id: int):
             matched_rows = []
             only_old_rows = []
             only_new_rows = []
+            bypassed_old_rows = []
+            bypassed_new_rows = []
 
             matched_source_ids = set()
             matched_target_ids = set()
@@ -340,6 +359,11 @@ def perform_phylogenetic_alignment(session_id: int):
                     for match in block.matches:
                         src_feat = source_features.get(match.source_feature_id)
                         tgt_feat = target_features.get(match.target_feature_id)
+                        if _is_cluster_feature(src_feat) or _is_cluster_feature(tgt_feat):
+                            # Neither id is marked consumed, so both sides fall
+                            # through to the bypass sweep below and stay in the
+                            # report as unaligned rows.
+                            continue
                         if src_feat and tgt_feat:
                             row = _feature_to_row(tgt_feat, "new", "Matched", src_feat)
                             row["pair_index"] = pair_idx
@@ -350,18 +374,34 @@ def perform_phylogenetic_alignment(session_id: int):
                             matched_source_ids.add(match.source_feature_id)
                             matched_target_ids.add(match.target_feature_id)
 
+            # "Only OLD" is a claim that the feature was looked for and not
+            # found.  A cluster was never looked for, so it is reported as
+            # bypassed instead — otherwise every cluster reads as a defect that
+            # disappeared between runs.
             for fid, feat in source_features.items():
-                if fid not in matched_source_ids:
-                    row = _feature_to_row(feat, "old", "Only OLD")
-                    row["pair_index"] = pair_idx
-                    row["pair_label"] = f"{source_run.get('year', '?')}-{target_run.get('year', '?')}"
+                if fid in matched_source_ids:
+                    continue
+                clustered = _is_cluster_feature(feat)
+                row = _feature_to_row(feat, "old", "Bypassed OLD" if clustered else "Only OLD")
+                row["pair_index"] = pair_idx
+                row["pair_label"] = f"{source_run.get('year', '?')}-{target_run.get('year', '?')}"
+                if clustered:
+                    row["Bypass Reason"] = CLUSTER_BYPASS_REASON
+                    bypassed_old_rows.append(row)
+                else:
                     only_old_rows.append(row)
 
             for fid, feat in target_features.items():
-                if fid not in matched_target_ids:
-                    row = _feature_to_row(feat, "new", "Only NEW")
-                    row["pair_index"] = pair_idx
-                    row["pair_label"] = f"{source_run.get('year', '?')}-{target_run.get('year', '?')}"
+                if fid in matched_target_ids:
+                    continue
+                clustered = _is_cluster_feature(feat)
+                row = _feature_to_row(feat, "new", "Bypassed NEW" if clustered else "Only NEW")
+                row["pair_index"] = pair_idx
+                row["pair_label"] = f"{source_run.get('year', '?')}-{target_run.get('year', '?')}"
+                if clustered:
+                    row["Bypass Reason"] = CLUSTER_BYPASS_REASON
+                    bypassed_new_rows.append(row)
+                else:
                     only_new_rows.append(row)
 
             pair_summary = {
@@ -373,6 +413,8 @@ def perform_phylogenetic_alignment(session_id: int):
                 "matched": len(matched_rows),
                 "only_old": len(only_old_rows),
                 "only_new": len(only_new_rows),
+                "bypassed_old": len(bypassed_old_rows),
+                "bypassed_new": len(bypassed_new_rows),
                 "status": "error" if pair_error is not None else "completed",
                 # Resolution metadata: every warping index for this pair is
                 # quantised to this step, so downstream readers must not treat
@@ -397,6 +439,8 @@ def perform_phylogenetic_alignment(session_id: int):
                 "anomaly_matched": matched_rows,
                 "anomaly_only_old": only_old_rows,
                 "anomaly_only_new": only_new_rows,
+                "bypassed_old": bypassed_old_rows,
+                "bypassed_new": bypassed_new_rows,
             })
 
         # Flatten into the standard output format
@@ -405,6 +449,8 @@ def perform_phylogenetic_alignment(session_id: int):
         anomaly_matched = []
         anomaly_only_old = []
         anomaly_only_new = []
+        bypassed_old = []
+        bypassed_new = []
 
         for pair_result in all_pair_results:
             for row in pair_result["anomaly_matched"]:
@@ -414,6 +460,8 @@ def perform_phylogenetic_alignment(session_id: int):
                     anomaly_matched.append(row)
             anomaly_only_old.extend(pair_result["anomaly_only_old"])
             anomaly_only_new.extend(pair_result["anomaly_only_new"])
+            bypassed_old.extend(pair_result["bypassed_old"])
+            bypassed_new.extend(pair_result["bypassed_new"])
 
         json_output = {
             "gw_locked": gw_locked,
@@ -421,23 +469,24 @@ def perform_phylogenetic_alignment(session_id: int):
             "anomaly_matched": anomaly_matched,
             "anomaly_only_old": anomaly_only_old,
             "anomaly_only_new": anomaly_only_new,
-            "bypassed_old": [],
-            "bypassed_new": [],
+            "bypassed_old": bypassed_old,
+            "bypassed_new": bypassed_new,
             "filtered_old": [],
             "filtered_new": [],
             "phylogenetic_summary": combined_report_summary,
             "audit": {
                 "total_input_old": sum(
-                    p.get("matched", 0) + p.get("only_old", 0)
+                    p.get("matched", 0) + p.get("only_old", 0) + p.get("bypassed_old", 0)
                     for p in combined_report_summary["pairs"]
                 ),
                 "total_input_new": sum(
-                    p.get("matched", 0) + p.get("only_new", 0)
+                    p.get("matched", 0) + p.get("only_new", 0) + p.get("bypassed_new", 0)
                     for p in combined_report_summary["pairs"]
                 ),
                 "total_output": (
                     len(gw_locked) + len(anomaly_matched)
                     + len(anomaly_only_old) + len(anomaly_only_new)
+                    + len(bypassed_old) + len(bypassed_new)
                 ),
             },
         }

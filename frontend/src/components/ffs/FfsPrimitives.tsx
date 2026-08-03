@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import type { FfsPriority, FfsSeverity } from '../../lib/ffs/types';
 
-/** Panel surface used for every FFS card, matching the app's slate/indigo shell. */
+/** Panel surface used for every FFS card. Colour on a card carries meaning
+ * (pass / review / fail) — it is never decoration. */
 export function Panel({
   children,
   className = '',
@@ -104,7 +105,7 @@ export function Stat({
 }) {
   const toneClass = {
     default: 'text-slate-900 dark:text-slate-50',
-    accent: 'text-indigo-600 dark:text-indigo-400',
+    accent: 'text-slate-900 dark:text-slate-50',
     good: 'text-emerald-600 dark:text-emerald-400',
     warn: 'text-amber-600 dark:text-amber-400',
     bad: 'text-rose-600 dark:text-rose-400',
@@ -129,11 +130,12 @@ export function Callout({
   tone = 'info',
   children,
 }: {
-  tone?: 'info' | 'warn' | 'danger';
+  tone?: 'neutral' | 'info' | 'warn' | 'danger';
   children: ReactNode;
 }) {
   const toneClass = {
-    info: 'border-l-indigo-500 bg-indigo-50/70 text-slate-700 dark:bg-indigo-950/25 dark:text-slate-300',
+    neutral: 'border-l-slate-400 bg-slate-50 text-slate-700 dark:border-l-slate-500 dark:bg-slate-900/40 dark:text-slate-300',
+    info: 'border-l-slate-500 bg-slate-50 text-slate-700 dark:border-l-slate-400 dark:bg-slate-900/40 dark:text-slate-300',
     warn: 'border-l-amber-500 bg-amber-50/70 text-amber-900 dark:bg-amber-950/25 dark:text-amber-200',
     danger: 'border-l-rose-500 bg-rose-50/70 text-rose-900 dark:bg-rose-950/25 dark:text-rose-200',
   }[tone];

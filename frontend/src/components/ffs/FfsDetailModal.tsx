@@ -13,10 +13,19 @@ import {
 import type { FfsRepairCreditDecision } from '../../lib/ffs/reportCase';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
 import { Callout, PriorityLabel, SeverityBadge, formatErf } from './FfsPrimitives';
+import FfsScenarioLab from './FfsScenarioLab.tsx';
 
 function fmt(value: number | null, digits = 4): string {
   if (value === null) return 'n/a';
   return Number.isFinite(value) ? value.toFixed(digits) : '∞';
+}
+
+/** Expresses a capacity as a multiple of the pressure the ERF is measured against. */
+function timesRequired(value: number, requiredPressureMpa: number): string {
+  if (!Number.isFinite(value) || !Number.isFinite(requiredPressureMpa) || requiredPressureMpa <= 0) {
+    return 'no required-pressure basis';
+  }
+  return `${(value / requiredPressureMpa).toFixed(2)}× required pressure`;
 }
 
 function InputCard({
@@ -149,7 +158,7 @@ function LifeCard({
   value: string;
   unit?: string;
   description: string;
-  tone?: 'default' | 'accent' | 'warn' | 'bad';
+  tone?: 'default' | 'accent' | 'good' | 'warn' | 'bad';
 }) {
   return (
     <div className={`ffs-detail__life-card ffs-detail__life-card--${tone}`}>
@@ -260,26 +269,35 @@ export default function FfsDetailModal({
             <FiX />
           </button>
         </div>
-        {/* Accent bar */}
-        <div className={`ffs-detail__accent-bar ${failed ? 'ffs-detail__accent-bar--fail' : 'ffs-detail__accent-bar--pass'}`} />
-
         {/* Header */}
         <div className="ffs-detail__header">
           <div className="ffs-detail__header-left">
-            <div className="ffs-detail__header-title-row">
-              <h2 id="ffs-detail-title" ref={titleRef} tabIndex={-1} className="ffs-detail__title">
-                DEFECT @ LD {Number(n.ld).toLocaleString()} m
-              </h2>
-              <span className="ffs-detail__method-badge">
-                {methodProfileLabel(config)} &middot; {areaLabel}
+            <h2 id="ffs-detail-title" ref={titleRef} tabIndex={-1} className="ffs-detail__title">
+              LD {Number(n.ld).toLocaleString()} m
+            </h2>
+            <p className="ffs-detail__subtitle">
+              {n.featureId ? <>ID: {n.featureId} &middot; </> : null}
+              Section: {n.section} &middot; Surface: {n.surface}
+            </p>
+            <div className="ffs-detail__status-row">
+              <span
+                className={`ffs-detail__status-pill ffs-detail__status-pill--${
+                  n.acceptance === 'Acceptable' ? 'pass' : 'fail'
+                }`}
+              >
+                {n.acceptance === 'Acceptable' ? <FiCheckCircle aria-hidden="true" /> : <FiXCircle aria-hidden="true" />}
+                {n.acceptance === 'Acceptable' ? 'Pass' : 'Fail'} at required pressure
+              </span>
+              <span className="ffs-detail__status-chip">
+                Conservative screen: <SeverityBadge severity={item.conservative.severity} />
+              </span>
+              <span className="ffs-detail__status-chip">
+                Priority: <PriorityLabel priority={item.priority} />
               </span>
             </div>
-            <p className="ffs-detail__subtitle">
-              {n.featureId ? `${n.featureId} · ` : ''}{n.section} · {n.surface} · {n.acceptance}
+            <p className="ffs-detail__method-badge">
+              Method profile: {methodProfileLabel(config)} &middot; {areaLabel} area term
             </p>
-          </div>
-          <div className="ffs-detail__header-right">
-            <SeverityBadge severity={item.conservative.severity} />
           </div>
         </div>
 
@@ -288,17 +306,36 @@ export default function FfsDetailModal({
           <section className="ffs-detail__section">
             <h3 className="ffs-detail__section-title">Capacity at required pressure</h3>
             <div className="ffs-detail__metric-grid">
-              <LifeCard label="Failure pressure" value={fmt(n.Pf, 3)} unit="MPa" description="Calculated Pf" />
-              <LifeCard label="Safe pressure" value={fmt(n.safePressure, 3)} unit="MPa" description="Pf × design factor" tone="accent" />
+              <LifeCard
+                label="Failure pressure"
+                value={fmt(n.Pf, 3)}
+                unit="MPa"
+                description={timesRequired(n.Pf, n.p0)}
+              />
+              <LifeCard
+                label="Safe pressure"
+                value={fmt(n.safePressure, 3)}
+                unit="MPa"
+                description={timesRequired(n.safePressure, n.p0)}
+                tone="good"
+              />
               <LifeCard label="Required pressure" value={fmt(n.p0, 3)} unit="MPa" description={pressureBasisLabel(config)} />
               <LifeCard
                 label="ERF"
                 value={formatErf(n.ERF)}
-                description="Required pressure / safe pressure"
+                description={Number.isFinite(n.ERF) ? `${(n.ERF * 100).toFixed(1)}% of safe pressure used` : 'No safe-pressure basis'}
                 tone={n.ERF >= 1 ? 'bad' : n.ERF >= screening.reviewBandErf ? 'warn' : 'default'}
               />
             </div>
           </section>
+
+          <FfsScenarioLab
+            key={item.key}
+            featureKey={item.key}
+            nominal={n}
+            config={config}
+            screening={screening}
+          />
 
           {/* Input Parameters */}
           <section className="ffs-detail__section">
@@ -480,7 +517,7 @@ export default function FfsDetailModal({
             </div>
             {n.repairStatus !== 'unrepaired' && (
               <div className="mt-3">
-                <Callout tone={repairCredited ? 'info' : 'warn'}>
+                <Callout tone={repairCredited ? 'neutral' : 'warn'}>
                   {repairCredited
                     ? 'This completed permanent repair is excluded from the as-managed population after minimum evidence validation.'
                     : 'This feature remains active in the as-managed population. Temporary repairs, ambiguous identity, incomplete evidence, and out-of-window completion dates receive no capacity credit.'}
@@ -758,21 +795,19 @@ export default function FfsDetailModal({
               />
             </div>
 
-            <div className="ffs-detail__priority-row">
-              <span className="ffs-detail__priority-label">Engineering priority:</span>
-              <PriorityLabel priority={item.priority} />
-              {item.clockHour !== null && (
+            {item.clockHour !== null && (
+              <div className="ffs-detail__priority-row">
                 <span className="ffs-detail__priority-label">
                   Clock {n.orient}
                   {item.bottomQuadrant && ' · bottom quadrant'}
                 </span>
-              )}
-            </div>
+              </div>
+            )}
           </section>
 
           {/* Final callout */}
           {n.lifeStatus !== 'calculated' ? (
-            <Callout>
+            <Callout tone="neutral">
               {n.lifeStatus === 'insufficient-growth-basis'
                 ? 'No service-limit date is calculated because neither depth nor length has a positive growth basis.'
                 : `Neither the 80% depth limit nor ERF 1.0 is reached inside the configured ${n.analysisHorizonYears}-year analysis horizon.`}{' '}
@@ -786,7 +821,7 @@ export default function FfsDetailModal({
                   ? 'danger'
                   : n.expectedLife !== null && n.expectedLife < config.highlightYears
                     ? 'warn'
-                    : 'info'
+                    : 'neutral'
               }
             >
               <strong>

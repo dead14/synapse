@@ -13,6 +13,7 @@ import {
   alignmentResultColumns,
   alignmentDisplayValue,
   depthGrowthMmPerYear,
+  isClusteredAlignmentRow,
   MASTER_AXIS_COLUMN,
   sortAlignmentRowsByMasterAxis,
   summarizeConservationAudit,
@@ -397,6 +398,7 @@ export default function ResultsPanel({
   // feature that has no NEW pair yet.
   const reassignCandidates = useMemo(() => data
     .filter((row: any) => !isExcludedRow(row)
+      && !isClusteredAlignmentRow(row)
       && (hasRowValue(row, 'Source Key OLD') || hasRowValue(row, 'Identif. OLD'))
       && !hasRowValue(row, 'Source Key NEW') && !hasRowValue(row, 'Identif. NEW'))
     .sort((a: any, b: any) => (parseFloat(a['Log Dist OLD (m)']) || 0) - (parseFloat(b['Log Dist OLD (m)']) || 0)), [data]);
@@ -1194,7 +1196,13 @@ export default function ResultsPanel({
                         {sortedData.slice(visibleRows.startIdx, visibleRows.endIdx + 1).map((row: any, i: number) => {
                           const actualIdx = visibleRows.startIdx + i;
                           const isSelected = selectedRowIdx !== null && selectedRowIdx !== undefined && row.__origIdx === selectedRowIdx;
-                          const isDragTarget = activeTab === 'Interventions' && draggedRowIdx !== null && draggedRowIdx !== row.__origIdx;
+                          // Clusters are held out of alignment by the engine;
+                          // the manual path must not put them back in.
+                          const isClusterRow = isClusteredAlignmentRow(row);
+                          const isDragTarget = activeTab === 'Interventions'
+                            && draggedRowIdx !== null
+                            && draggedRowIdx !== row.__origIdx
+                            && !isClusterRow;
                           
                           const isMatch = row['Match/Unmatch'] === 'Matched' || row['Match/Unmatch'] === 'Match';
                           const featType = String(row['Feature Type OLD'] || row['Feature Type NEW'] || '').toLowerCase();
@@ -1215,6 +1223,7 @@ export default function ResultsPanel({
                           const bgClass = '';
 
                           const isReassignableSource = activeTab === 'Interventions'
+                            && !isClusterRow
                             && (hasRowValue(row, 'Source Key NEW') || hasRowValue(row, 'Identif. NEW'));
 
                           return (
@@ -1257,11 +1266,11 @@ export default function ResultsPanel({
                                 return (
                                   <td 
                                     key={j} 
-                                    className={`px-2 whitespace-nowrap overflow-hidden text-ellipsis ${col === DEPTH_GROWTH_COLUMN || col === 'Length Growth (mm/yr)' ? 'font-bold' : ''} ${activeTab === 'Interventions' && isNewDataCol ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                                    className={`px-2 whitespace-nowrap overflow-hidden text-ellipsis ${col === DEPTH_GROWTH_COLUMN || col === 'Length Growth (mm/yr)' ? 'font-bold' : ''} ${activeTab === 'Interventions' && isNewDataCol && !isClusterRow ? 'cursor-grab active:cursor-grabbing' : ''}`}
                                     style={col === DEPTH_GROWTH_COLUMN || col === 'Length Growth (mm/yr)' ? { color: 'var(--syn-info, #155eef)' } : undefined}
-                                    draggable={activeTab === 'Interventions' && isNewDataCol && val !== '-' && val !== null && val !== undefined}
+                                    draggable={activeTab === 'Interventions' && isNewDataCol && !isClusterRow && val !== '-' && val !== null && val !== undefined}
                                     onDragStart={(e) => {
-                                      if (activeTab === 'Interventions' && isNewDataCol) {
+                                      if (activeTab === 'Interventions' && isNewDataCol && !isClusterRow) {
                                         setDraggedRowIdx(row.__origIdx);
                                         e.dataTransfer.effectAllowed = "move";
                                       }
