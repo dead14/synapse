@@ -204,6 +204,7 @@ export function mapAlignmentRowsToFfs(
 
     accepted.push({
       row: {
+        'Feature ID': featureId,
         'LD [m]': numericText(distance),
         Section: text(source['Section NEW'], text(source.Section)),
         Surface: text(source['Surface NEW']),
@@ -218,6 +219,12 @@ export function mapAlignmentRowsToFfs(
         'Outer Diameter Ds': numericText(engineering.outerDiameterMm),
         'SMYS [MPa]': numericText(engineering.smysMpa),
         'Operating Pressure P₀ [MPa]': numericText(engineering.operatingPressureMpa),
+        'Repair Status': 'Unrepaired',
+        'Repair Method': '',
+        'Repair Date': '',
+        'Repair Reference': '',
+        Recommendation: '',
+        'Action Owner': '',
       },
       provenance: {
         alignmentSessionId,

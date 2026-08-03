@@ -20,6 +20,7 @@ import {
 } from '../src/lib/ffs/statistics.ts';
 import { buildEnvelopeCurves } from '../src/lib/ffs/chartData.ts';
 import { buildNarrative } from '../src/lib/ffs/narrative.ts';
+import type { FfsReportContext } from '../src/lib/ffs/reportCase.ts';
 import { DEFAULT_SCREENING_CONFIG, type FfsConfig, type FfsScreeningConfig } from '../src/lib/ffs/types.ts';
 
 const config: FfsConfig = {
@@ -28,6 +29,11 @@ const config: FfsConfig = {
   modifiedSa: 'smys69',
   iliDate: new Date('2024-01-01'),
   highlightYears: 5,
+};
+
+const reportContext: FfsReportContext = {
+  inspectionDateIso: '2024-01-01',
+  asOfDateIso: '2026-08-03',
 };
 
 function row(overrides: Partial<Record<string, string>> = {}): Record<string, string> {
@@ -138,8 +144,61 @@ test('life to ERF 1 is unbounded when nothing is growing', () => {
   };
   const item = screenOne({ 'Max Depth [%]': '20', 'Length [mm]': '30' }, screening);
 
-  assert.equal(item.lifeToErf1, Number.POSITIVE_INFINITY);
-  assert.equal(formatLife(item.lifeToErf1), '>200 y');
+  assert.equal(item.lifeToErf1, null);
+  assert.equal(item.lifeToErf1Status, 'insufficient-growth-basis');
+  assert.equal(formatLife(item.lifeToErf1, item.lifeToErf1Status, 30), 'Not calculated');
+});
+
+test('nominal life does not turn the numerical search bound into a service-limit date', () => {
+  const result = processRow(
+    row({
+      'Max Depth [%]': '20',
+      'Length [mm]': '30',
+      'CR Depth [mm/y]': '0.001',
+      'CR Length [mm/y]': '0',
+    }),
+    { ...config, analysisHorizonYears: 30 },
+  );
+
+  assert.equal(result.lifeStatus, 'not-reached-within-horizon');
+  assert.equal(result.expectedLife, null);
+  assert.equal(result.yearService, null);
+  assert.equal(result.failureCriteria, null);
+  assert.equal(result.atFailure_ERF, null);
+  assert.equal(result.atFailure_depth, null);
+  assert.equal(result.atFailure_Sf, null);
+});
+
+test('nominal life is not calculated without a positive depth or length growth basis', () => {
+  const result = processRow(
+    row({
+      'CR Depth [mm/y]': '0',
+      'CR Length [mm/y]': '0',
+    }),
+    { ...config, analysisHorizonYears: 30 },
+  );
+
+  assert.equal(result.lifeStatus, 'insufficient-growth-basis');
+  assert.equal(result.expectedLife, null);
+  assert.equal(result.yearService, null);
+  assert.equal(result.failureCriteria, null);
+});
+
+test('a calculated life retains its governing criterion and service-limit date', () => {
+  const result = processRow(
+    row({
+      'Max Depth [%]': '70',
+      'CR Depth [mm/y]': '0.93',
+      'CR Length [mm/y]': '0',
+    }),
+    { ...config, analysisHorizonYears: 30 },
+  );
+
+  assert.equal(result.lifeStatus, 'calculated');
+  assert.ok(result.expectedLife !== null && result.expectedLife > 0 && result.expectedLife < 2);
+  assert.ok(result.failureCriteria === 'Depth = 80%' || result.failureCriteria === 'ERF = 1');
+  assert.match(result.yearService ?? '', /^2024-/);
+  assert.ok(result.atFailure_depth !== null);
 });
 
 test('life to ERF 1 shortens as the assumed growth rate rises', () => {
@@ -147,7 +206,10 @@ test('life to ERF 1 shortens as the assumed growth rate rises', () => {
   const slow = screenOne({ 'Max Depth [%]': '35' }, { ...uniform, growthRateMmPerYear: 0.05 });
   const fast = screenOne({ 'Max Depth [%]': '35' }, { ...uniform, growthRateMmPerYear: 0.3 });
 
-  assert.ok(fast.lifeToErf1 < slow.lifeToErf1);
+  assert.equal(slow.lifeToErf1Status, 'not-reached-within-horizon');
+  assert.equal(slow.lifeToErf1, null);
+  assert.equal(fast.lifeToErf1Status, 'calculated');
+  assert.ok(fast.lifeToErf1 !== null && fast.lifeToErf1 > 0);
 });
 
 test('life to ERF 1 and the nominal expected life share the measured growth rate', () => {
@@ -168,6 +230,7 @@ test('severity separates the review band from outright rejection', () => {
 
   assert.equal(severityOf(0.5, 30, screening), 'pass');
   assert.equal(severityOf(0.95, 30, screening), 'review');
+  assert.equal(severityOf(1, 30, screening), 'fail', 'ERF equal to the limit is not acceptable');
   assert.equal(severityOf(1.01, 30, screening), 'fail');
   assert.equal(severityOf(0.2, 85, screening), 'fail', 'the depth limit rejects regardless of ERF');
   assert.equal(severityOf(Number.POSITIVE_INFINITY, 10, screening), 'fail');
@@ -237,12 +300,83 @@ test('the action register ranks by priority and dates the most severe as immedia
     config,
     DEFAULT_SCREENING_CONFIG,
   );
-  const actions = buildActionRegister(items, DEFAULT_SCREENING_CONFIG);
+  const actions = buildActionRegister(items, DEFAULT_SCREENING_CONFIG, reportContext);
 
   assert.equal(actions[0].code, 'ACT-01');
   assert.equal(actions[0].target.nominal.ld, 20, 'the worst feature leads the register');
   assert.equal(actions[0].due, 'Immediate');
   assert.match(actions[0].recommendation, /pressure control/i);
+});
+
+test('the action register removes only evidence-qualified permanent repairs', () => {
+  const items = screenResults(
+    [
+      processRow(row({
+        'Feature ID': 'REPAIR-CREDITED',
+        'LD [m]': '10',
+        'Repair Status': 'Permanent repair verified',
+        'Repair Method': 'Cut and replace',
+        'Repair Date': '2025-01-10',
+        'Repair Reference': 'WO-10',
+      }), config),
+      processRow(row({
+        'Feature ID': 'REPAIR-INCOMPLETE',
+        'LD [m]': '20',
+        'Repair Status': 'Permanent repair verified',
+        'Repair Method': '',
+        'Repair Date': '',
+        'Repair Reference': '',
+      }), config),
+    ],
+    config,
+    DEFAULT_SCREENING_CONFIG,
+  );
+
+  const actions = buildActionRegister(items, DEFAULT_SCREENING_CONFIG, reportContext);
+
+  assert.deepEqual(actions.map((action) => action.target.nominal.featureId), ['REPAIR-INCOMPLETE']);
+});
+
+test('temporary repair notes and source text cannot suppress an immediate pressure-control action', () => {
+  const item = screenOne({
+    'Feature ID': 'TEMP-UNSAFE',
+    'Max Depth [%]': '78',
+    'Length [mm]': '400',
+    'Repair Status': 'Temporary repair',
+    'Repair Method': 'Clamp',
+    'Repair Date': '2025-01-01',
+    'Repair Reference': 'TEMP-1',
+    Recommendation: 'Monitor annually',
+  });
+
+  const action = buildActionRegister([item], DEFAULT_SCREENING_CONFIG, reportContext)[0];
+
+  assert.equal(action.due, 'Immediate');
+  assert.match(action.recommendation, /pressure control/i);
+  assert.match(action.recommendation, /temporary repair remains active/i);
+  assert.match(action.recommendation, /Monitor annually/i);
+});
+
+test('an exact ERF limit and a rounded zero life both require an immediate action', () => {
+  const nominal = processRow(row({ 'Feature ID': 'EXACT-LIMIT', 'Max Depth [%]': '35' }), config);
+  const initial = screenResults([nominal], config, DEFAULT_SCREENING_CONFIG)[0];
+  nominal.p0 /= initial.conservative.ERF;
+  const exactLimit = screenResults([nominal], config, DEFAULT_SCREENING_CONFIG)[0];
+  assert.ok(Math.abs(exactLimit.conservative.ERF - 1) < 1e-12);
+  assert.equal(exactLimit.priority, 'High');
+  exactLimit.conservative.ERF = 1;
+  assert.equal(
+    buildActionRegister([exactLimit], DEFAULT_SCREENING_CONFIG, reportContext)[0].due,
+    'Immediate',
+  );
+
+  const roundedNow = screenOne({ 'Feature ID': 'ROUNDED-NOW', 'Max Depth [%]': '35' });
+  roundedNow.conservative.ERF = 0.999;
+  roundedNow.lifeToErf1 = 0;
+  roundedNow.lifeToErf1Status = 'calculated';
+  const roundedAction = buildActionRegister([roundedNow], DEFAULT_SCREENING_CONFIG, reportContext)[0];
+  assert.equal(roundedAction.due, 'Immediate');
+  assert.match(roundedAction.recommendation, /capacity limit/i);
 });
 
 test('KPIs report the governing feature in each dimension', () => {

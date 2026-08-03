@@ -7,12 +7,14 @@ import {
   FiDownload,
   FiFileText,
   FiGrid,
+  FiShield,
   FiSliders,
   FiTable,
 } from 'react-icons/fi';
 import PageMeta from '../../components/common/PageMeta';
 import SynButton from '../../components/ui/SynButton';
 import FfsChartsPanel from '../../components/ffs/FfsChartsPanel';
+import FfsCaseReviewPanel from '../../components/ffs/FfsCaseReviewPanel';
 import FfsDetailModal from '../../components/ffs/FfsDetailModal';
 import FfsIntegrityPanel from '../../components/ffs/FfsIntegrityPanel';
 import FfsNarrativePanel from '../../components/ffs/FfsNarrativePanel';
@@ -25,20 +27,27 @@ import { exportResultsWorkbook } from '../../lib/ffs/exports';
 import type { AlignmentImportProvenance } from '../../lib/ffs/alignmentImport';
 import { screenResults } from '../../lib/ffs/screening';
 import {
+  buildFfsReportCase,
+  createFfsReportContext,
+  formatLocalCalendarDate,
+} from '../../lib/ffs/reportCase';
+import {
   DEFAULT_SCREENING_CONFIG,
   type FfsConfig,
   type FfsResult,
+  type FfsRepairDispositionPatch,
   type FfsScreenedResult,
   type FfsScreeningConfig,
 } from '../../lib/ffs/types';
 
-type TabId = 'results' | 'charts' | 'statistics' | 'integrity' | 'narrative';
+type TabId = 'results' | 'charts' | 'statistics' | 'integrity' | 'case' | 'narrative';
 
 const TABS: { id: TabId; label: string; icon: typeof FiTable }[] = [
   { id: 'results', label: 'Results', icon: FiTable },
   { id: 'charts', label: 'Charts', icon: FiBarChart2 },
   { id: 'statistics', label: 'Statistics', icon: FiGrid },
   { id: 'integrity', label: 'Integrity review', icon: FiActivity },
+  { id: 'case', label: 'Case review', icon: FiShield },
   { id: 'narrative', label: 'Narrative', icon: FiFileText },
 ];
 
@@ -76,6 +85,8 @@ export default function FfsResultsPage() {
   // Figures snapshotted by the Charts tab, kept so the narrative can embed them
   // after that panel unmounts.
   const [chartImages, setChartImages] = useState<Record<string, string>>({});
+  const [repairOverrides, setRepairOverrides] = useState<Record<number, FfsRepairDispositionPatch>>({});
+  const [reportAsOfDateIso] = useState(() => formatLocalCalendarDate());
   const handleFiguresCaptured = useCallback((images: Record<string, string>) => {
     setChartImages((previous) => ({ ...previous, ...images }));
   }, []);
@@ -83,12 +94,40 @@ export default function FfsResultsPage() {
   const results = state?.results ?? NO_RESULTS;
   const config = state?.config;
 
-  const screened = useMemo(
-    () => (config ? screenResults(results, config, screening) : []),
-    [results, config, screening],
+  const resultsWithRepairReview = useMemo(
+    () => results.map((result, index) => ({ ...result, ...(repairOverrides[index] ?? {}) })),
+    [results, repairOverrides],
   );
 
-  if (!state || !config) {
+  const updateRepairDisposition = useCallback((index: number, patch: FfsRepairDispositionPatch) => {
+    setRepairOverrides((previous) => ({ ...previous, [index]: patch }));
+  }, []);
+
+  const resetRepairDisposition = useCallback((index: number) => {
+    setRepairOverrides((previous) => {
+      if (!(index in previous)) return previous;
+      const next = { ...previous };
+      delete next[index];
+      return next;
+    });
+  }, []);
+
+  const screened = useMemo(
+    () => (config ? screenResults(resultsWithRepairReview, config, screening) : []),
+    [resultsWithRepairReview, config, screening],
+  );
+  const reportContext = useMemo(
+    () => config
+      ? { ...createFfsReportContext(config), asOfDateIso: reportAsOfDateIso }
+      : null,
+    [config, reportAsOfDateIso],
+  );
+  const reportCase = useMemo(
+    () => reportContext ? buildFfsReportCase(screened, reportContext) : null,
+    [screened, reportContext],
+  );
+
+  if (!state || !config || !reportContext || !reportCase) {
     return <Navigate to="/ffs" replace />;
   }
 
@@ -156,10 +195,16 @@ export default function FfsResultsPage() {
           <SynButton
             variant="lime"
             size="sm"
-            onClick={() => exportResultsWorkbook(screened, config, screening, state.alignmentImport?.accepted)}
+            onClick={() => exportResultsWorkbook(
+              screened,
+              config,
+              screening,
+              state.alignmentImport?.accepted,
+              reportContext,
+            )}
           >
             <span className="inline-flex items-center gap-2">
-              <FiDownload /> Export Excel
+              <FiDownload /> {reportCase.readiness.status === 'blocked' ? 'Download Draft Excel' : 'Export Excel'}
             </span>
           </SynButton>
         </div>
@@ -410,7 +455,26 @@ export default function FfsResultsPage() {
               items={screened}
               config={config}
               screening={screening}
+              reportContext={reportContext}
               onSelect={setSelected}
+            />
+          )}
+        </div>
+
+        <div
+          role="tabpanel"
+          id="ffs-panel-case"
+          aria-labelledby="ffs-tab-case"
+          hidden={activeTab !== 'case'}
+        >
+          {activeTab === 'case' && (
+            <FfsCaseReviewPanel
+              items={screened}
+              reportContext={reportContext}
+              onSelect={setSelected}
+              onUpdateRepair={updateRepairDisposition}
+              onResetRepair={resetRepairDisposition}
+              changedRepairIndexes={new Set(Object.keys(repairOverrides).map(Number))}
             />
           )}
         </div>
@@ -426,6 +490,7 @@ export default function FfsResultsPage() {
               items={screened}
               config={config}
               screening={screening}
+              reportContext={reportContext}
               chartImages={chartImages}
               onOpenCharts={() => setActiveTab('charts')}
             />
@@ -437,6 +502,7 @@ export default function FfsResultsPage() {
         item={selected}
         config={config}
         screening={screening}
+        repairCreditDecision={selected ? reportCase.repairCreditDecisions.get(selected) ?? null : null}
         onClose={() => setSelected(null)}
       />
     </div>

@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react';
 import { FiChevronDown, FiChevronUp, FiSearch } from 'react-icons/fi';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
+import { formatLifeProjection, lifeProjectionStatusLabel, lifeSortValue } from '../../lib/ffs/lifeProjection';
 import { Callout, Panel, PriorityLabel, SeverityBadge, formatErf } from './FfsPrimitives';
 
 const PAGE_SIZE = 100;
 
 type SortKey =
   | 'ld'
+  | 'featureId'
   | 'section'
   | 'surface'
   | 'depth'
@@ -18,19 +20,21 @@ type SortKey =
   | 'expectedLife'
   | 'yearService'
   | 'failureCriteria'
+  | 'repairStatus'
   | 'priority';
 
 interface Column {
   key: SortKey;
   header: string;
   align: 'left' | 'right' | 'center';
-  value: (item: FfsScreenedResult) => number | string;
+  value: (item: FfsScreenedResult) => number | string | null;
 }
 
 const PRIORITY_RANK = { High: 3, Medium: 2, Routine: 1 } as const;
 
 const COLUMNS: Column[] = [
   { key: 'ld', header: 'LD [m]', align: 'right', value: (i) => Number(i.nominal.ld) || 0 },
+  { key: 'featureId', header: 'Feature ID', align: 'left', value: (i) => i.nominal.featureId ?? '' },
   { key: 'section', header: 'Section', align: 'left', value: (i) => i.nominal.section },
   { key: 'surface', header: 'Surface', align: 'left', value: (i) => i.nominal.surface },
   { key: 'depth', header: 'Depth [%]', align: 'right', value: (i) => i.nominal.maxDepthPct },
@@ -39,9 +43,10 @@ const COLUMNS: Column[] = [
   { key: 'conservativeErf', header: 'ERF cons.', align: 'right', value: (i) => i.conservative.ERF },
   { key: 'safePressure', header: 'P_safe [MPa]', align: 'right', value: (i) => i.nominal.safePressure },
   { key: 'acceptance', header: 'Acceptance', align: 'center', value: (i) => i.nominal.acceptance },
-  { key: 'expectedLife', header: 'Life [y]', align: 'right', value: (i) => i.nominal.expectedLife },
-  { key: 'yearService', header: 'Service limit', align: 'center', value: (i) => i.nominal.yearService },
-  { key: 'failureCriteria', header: 'Criterion', align: 'left', value: (i) => i.nominal.failureCriteria },
+  { key: 'expectedLife', header: 'Life projection', align: 'right', value: (i) => lifeSortValue(i.nominal.expectedLife) },
+  { key: 'yearService', header: 'Service limit', align: 'center', value: (i) => i.nominal.yearService ?? '' },
+  { key: 'failureCriteria', header: 'Projection status', align: 'left', value: (i) => i.nominal.failureCriteria ?? i.nominal.lifeStatus },
+  { key: 'repairStatus', header: 'Repair', align: 'center', value: (i) => i.nominal.repairStatus },
   { key: 'priority', header: 'Priority', align: 'center', value: (i) => PRIORITY_RANK[i.priority] },
 ];
 
@@ -76,17 +81,25 @@ export default function FfsResultsTable({
     return items
       .filter((item) => {
         if (query) {
-          const haystack = `${item.nominal.ld} ${item.nominal.section} ${item.nominal.surface} ${item.nominal.orient}`;
+          const haystack = `${item.nominal.featureId ?? ''} ${item.nominal.ld} ${item.nominal.section} ${item.nominal.surface} ${item.nominal.orient} ${item.nominal.repairReference ?? ''}`;
           if (!haystack.toLowerCase().includes(query)) return false;
         }
         if (acceptance !== 'All' && item.nominal.acceptance !== acceptance) return false;
-        if (criterion !== 'All' && !item.nominal.failureCriteria.includes(criterion)) return false;
+        if (
+          criterion !== 'All' &&
+          item.nominal.failureCriteria !== criterion &&
+          item.nominal.lifeStatus !== criterion
+        ) return false;
         if (priority !== 'All' && item.priority !== priority) return false;
         return true;
       })
       .sort((a, b) => {
         const av = column.value(a);
         const bv = column.value(b);
+        if (av === null || bv === null) {
+          if (av === bv) return 0;
+          return av === null ? 1 : -1;
+        }
         if (typeof av === 'number' && typeof bv === 'number') {
           // Push non-finite ERF values (no remaining capacity) to the severe end.
           const safeA = Number.isFinite(av) ? av : Number.MAX_VALUE;
@@ -100,14 +113,16 @@ export default function FfsResultsTable({
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const pageRows = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
-  const highlighted = filtered.filter((item) => item.nominal.expectedLife < config.highlightYears).length;
+  const highlighted = filtered.filter(
+    (item) => item.nominal.expectedLife !== null && item.nominal.expectedLife < config.highlightYears,
+  ).length;
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDir((dir) => (dir === 'asc' ? 'desc' : 'asc'));
     } else {
       setSortKey(key);
-      setSortDir(key === 'ld' || key === 'section' ? 'asc' : 'desc');
+      setSortDir(key === 'ld' || key === 'featureId' || key === 'section' ? 'asc' : 'desc');
     }
     setPage(1);
   };
@@ -129,7 +144,7 @@ export default function FfsResultsTable({
                 setSearch(event.target.value);
                 setPage(1);
               }}
-              placeholder="Search log distance, section, surface, or orientation"
+              placeholder="Search Feature ID, log distance, section, surface, orientation, or repair reference"
               aria-label="Search features"
               className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
             />
@@ -159,9 +174,10 @@ export default function FfsResultsTable({
             className={selectClass}
           >
             <option value="All">All criteria</option>
-            <option value="ERF">ERF = 1</option>
-            <option value="Depth">Depth limit</option>
-            <option value="N/A">Beyond horizon</option>
+            <option value="ERF = 1">ERF = 1</option>
+            <option value="Depth = 80%">Depth limit</option>
+            <option value="not-reached-within-horizon">Limit not reached</option>
+            <option value="insufficient-growth-basis">No growth basis</option>
           </select>
 
           <select
@@ -190,7 +206,7 @@ export default function FfsResultsTable({
       {/* Table */}
       <Panel padded={false} className="overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="ffs-table w-full min-w-[1180px] border-collapse">
+          <table className="ffs-table w-full min-w-[1380px] border-collapse">
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-900/60">
                 {COLUMNS.map((column) => {
@@ -226,12 +242,12 @@ export default function FfsResultsTable({
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700/70">
               {pageRows.map((item) => {
                 const n = item.nominal;
-                const belowThreshold = n.expectedLife < config.highlightYears;
+                const belowThreshold = n.expectedLife !== null && n.expectedLife < config.highlightYears;
                 const failed = n.acceptance === 'Un-Acceptable';
 
                 return (
                   <tr
-                    key={item.key}
+                    key={`${item.key}-${item.index}`}
                     onClick={() => onSelect(item)}
                     tabIndex={0}
                     onKeyDown={(event) => {
@@ -252,6 +268,9 @@ export default function FfsResultsTable({
                       }`}
                     >
                       {Number(n.ld).toLocaleString(undefined, { maximumFractionDigits: 3 })}
+                    </td>
+                    <td className="max-w-[150px] truncate px-2 py-2 font-mono text-[10px] font-semibold text-slate-700 dark:text-slate-200">
+                      {n.featureId ?? '—'}
                     </td>
                     <td className="max-w-[160px] truncate px-2 py-2 text-slate-600 dark:text-slate-300">
                       {n.section}
@@ -291,13 +310,28 @@ export default function FfsResultsTable({
                         belowThreshold ? 'text-amber-600 dark:text-amber-400' : 'text-slate-700 dark:text-slate-200'
                       }`}
                     >
-                      {n.expectedLife >= 200 ? '>200' : n.expectedLife.toFixed(1)}
+                      {formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears)}
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 text-center tabular-nums text-slate-500 dark:text-slate-400">
-                      {n.yearService}
+                      {n.yearService ?? '—'}
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 text-slate-500 dark:text-slate-400">
-                      {n.failureCriteria}
+                      {lifeProjectionStatusLabel(n.lifeStatus, n.failureCriteria, n.analysisHorizonYears)}
+                    </td>
+                    <td className="px-2 py-2 text-center">
+                      <span className={`inline-flex rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
+                        n.repairStatus === 'permanent-repair-verified'
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800/60 dark:bg-emerald-950/30 dark:text-emerald-300'
+                          : n.repairStatus === 'temporary-repair'
+                            ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-300'
+                            : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-400'
+                      }`}>
+                        {n.repairStatus === 'permanent-repair-verified'
+                          ? 'Permanent'
+                          : n.repairStatus === 'temporary-repair'
+                            ? 'Temporary'
+                            : 'None'}
+                      </span>
                     </td>
                     <td className="px-2 py-2 text-center">
                       <PriorityLabel priority={item.priority} />

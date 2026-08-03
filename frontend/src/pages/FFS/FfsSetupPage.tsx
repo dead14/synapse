@@ -39,6 +39,7 @@ import {
   MANUAL_FFS_ACCEPT,
   readManualFfsFile,
 } from '../../lib/ffs/manualWorkbook.ts';
+import { DEFAULT_FFS_ANALYSIS_HORIZON_YEARS } from '../../lib/ffs/lifeProjection.ts';
 
 /**
  * FFS intake supports either a reviewed alignment release or a separately
@@ -53,6 +54,7 @@ export default function FfsSetupPage() {
   const [modifiedSa, setModifiedSa] = useState<'smys69' | 'smys11'>('smys69');
   const [iliDate, setIliDate] = useState('');
   const [highlightYears, setHighlightYears] = useState(5);
+  const [analysisHorizonYears, setAnalysisHorizonYears] = useState(DEFAULT_FFS_ANALYSIS_HORIZON_YEARS);
   const [screening, setScreening] = useState<FfsScreeningConfig>(DEFAULT_SCREENING_CONFIG);
   const [screeningOpen, setScreeningOpen] = useState(false);
 
@@ -234,6 +236,7 @@ export default function FfsSetupPage() {
         modifiedSa,
         iliDate: new Date(iliDate),
         highlightYears,
+        analysisHorizonYears,
         inputUnits: { pressure: pressureUnit, diameter: diameterUnit },
       };
 
@@ -406,6 +409,22 @@ export default function FfsSetupPage() {
                   min="0" step="0.5"
                 />
               </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900/40">
+              <NumberField
+                label="Life analysis horizon"
+                value={analysisHorizonYears}
+                onChange={setAnalysisHorizonYears}
+                unit="years"
+                min={1}
+                max={100}
+                step={1}
+              />
+              <p className="mt-2 text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
+                Numerical projection boundary only. If neither ERF 1.0 nor 80% depth is reached inside this
+                window, Synapse reports no service-limit date.
+              </p>
             </div>
 
             <div className="my-4 h-px bg-slate-200 dark:bg-slate-700"></div>
@@ -680,7 +699,9 @@ export default function FfsSetupPage() {
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
                         Manual rows are assessed as a separate source and are never mixed with released alignment
-                        features. XLSX, XLS, and CSV files up to 10 MB are supported.
+                        features. XLSX, XLS, and CSV files up to 10 MB are supported. The template includes optional
+                        Feature ID, repair evidence, recommendation, and action-owner fields used by Case Review;
+                        Feature ID becomes mandatory when the output is prepared as an auditable report.
                       </p>
                     </div>
                   </div>

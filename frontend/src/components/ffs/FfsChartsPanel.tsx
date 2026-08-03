@@ -33,6 +33,7 @@ import {
   sectionTooltipLine,
 } from '../../lib/sections/sectionBandsPlugin';
 import SectionBandLegend from '../sections/SectionBandLegend';
+import { formatLifeProjection } from '../../lib/ffs/lifeProjection';
 import ChartCard, { ColorControl, SettingsSectionLabel, type PointShape } from './ChartCard';
 import { Callout } from './FfsPrimitives';
 
@@ -468,7 +469,7 @@ export default function FfsChartsPanel({
             const lines = [
               `LD ${Number(n.ld).toLocaleString()} m · ${n.section}`,
               `${n.surface} · depth ${n.maxDepthPct.toFixed(1)}% · L ${n.length.toFixed(0)} mm`,
-              `ERF ${Number.isFinite(n.ERF) ? n.ERF.toFixed(3) : '∞'} · life ${n.expectedLife.toFixed(1)} y`,
+              `ERF ${Number.isFinite(n.ERF) ? n.ERF.toFixed(3) : '∞'} · life ${formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears)}`,
             ];
             // Name the stretch the point sits in, so the reader does not have to
             // map the metre value back onto the section list themselves.

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { FiX } from 'react-icons/fi';
-import { formatLife } from '../../lib/ffs/screening';
+import { formatLifeProjection, lifeProjectionStatusLabel } from '../../lib/ffs/lifeProjection';
+import type { FfsRepairCreditDecision } from '../../lib/ffs/reportCase';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
 import { Callout, PriorityLabel, SeverityBadge, formatErf } from './FfsPrimitives';
 
@@ -157,11 +158,13 @@ export default function FfsDetailModal({
   item,
   config,
   screening,
+  repairCreditDecision,
   onClose,
 }: {
   item: FfsScreenedResult | null;
   config: FfsConfig;
   screening: FfsScreeningConfig;
+  repairCreditDecision: FfsRepairCreditDecision | null;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -182,6 +185,7 @@ export default function FfsDetailModal({
   const methodLabel = isOriginal ? 'Original B31G' : 'Modified B31G';
   const areaLabel = isOriginal ? '⅔dL' : '0.85dL';
   const failed = n.acceptance === 'Un-Acceptable';
+  const repairCredited = repairCreditDecision?.credited === true;
 
   return (
     <div
@@ -207,7 +211,7 @@ export default function FfsDetailModal({
               </span>
             </div>
             <p className="ffs-detail__subtitle">
-              {n.section} &middot; {n.surface} &middot; {n.acceptance}
+              {n.featureId ? `${n.featureId} · ` : ''}{n.section} · {n.surface} · {n.acceptance}
             </p>
           </div>
           <div className="ffs-detail__header-right">
@@ -291,6 +295,66 @@ export default function FfsDetailModal({
                 description="Growth rate"
               />
             </div>
+          </section>
+
+          {/* Repair disposition and evidence */}
+          <section className="mb-6">
+            <h3 className="mb-3 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Repair disposition and evidence
+            </h3>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <InputCard
+                label="Feature identity"
+                symbol="ID"
+                value={n.featureId ?? '—'}
+                description={n.featureId ? 'Stable report key' : 'Required for report readiness'}
+              />
+              <InputCard
+                label="Repair status"
+                symbol="R"
+                value={
+                  n.repairStatus === 'permanent-repair-verified'
+                    ? 'Permanent'
+                    : n.repairStatus === 'temporary-repair'
+                      ? 'Temporary'
+                      : 'Unrepaired'
+                }
+                description={repairCredited ? 'Evidence-qualified capacity credit' : 'Active in as-managed case'}
+              />
+              <InputCard
+                label="Repair method"
+                symbol="Method"
+                value={n.repairMethod ?? '—'}
+                description={n.repairStatus === 'unrepaired' ? 'No repair recorded' : 'Evidence field'}
+              />
+              <InputCard
+                label="Completion date"
+                symbol="Date"
+                value={n.repairDate ?? '—'}
+                description="YYYY-MM-DD"
+              />
+              <InputCard
+                label="Evidence reference"
+                symbol="Ref"
+                value={n.repairReference ?? '—'}
+                description="Work order, dossier, or certificate"
+              />
+              <InputCard
+                label="Action owner"
+                symbol="Owner"
+                value={n.actionOwner ?? '—'}
+                description={n.recommendation ?? 'No recommendation recorded'}
+              />
+            </div>
+            {n.repairStatus !== 'unrepaired' && (
+              <div className="mt-3">
+                <Callout tone={repairCredited ? 'info' : 'warn'}>
+                  {repairCredited
+                    ? 'This completed permanent repair is excluded from the as-managed population after minimum evidence validation.'
+                    : 'This feature remains active in the as-managed population. Temporary repairs, ambiguous identity, incomplete evidence, and out-of-window completion dates receive no capacity credit.'}
+                </Callout>
+              </div>
+            )}
           </section>
 
           {/* Step-by-step Calculation */}
@@ -528,20 +592,19 @@ export default function FfsDetailModal({
             <div className="ffs-detail__life-grid">
               <LifeCard
                 label="Expected Life"
-                value={n.expectedLife >= 200 ? '>200' : n.expectedLife.toFixed(2)}
-                unit="yrs"
-                description={`tₗᶠᶠₑ = min(tₑʀᶠ, t₈₀%)`}
-                tone={n.expectedLife < config.highlightYears ? 'warn' : 'default'}
+                value={formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears)}
+                description={`Bounded to the ${n.analysisHorizonYears}-year analysis horizon`}
+                tone={n.expectedLife !== null && n.expectedLife < config.highlightYears ? 'warn' : 'default'}
               />
               <LifeCard
-                label="Year Service"
-                value={n.yearService}
-                description={`ILI Date + tₗᶠᶠₑ`}
+                label="Service Limit Date"
+                value={n.yearService ?? '—'}
+                description={n.yearService ? 'ILI date + calculated limit time' : 'No finite date established'}
               />
               <LifeCard
-                label="Failure Criteria"
-                value={n.failureCriteria.startsWith('N/A') ? 'N/A' : n.failureCriteria}
-                description="First condition hit"
+                label="Projection Status"
+                value={lifeProjectionStatusLabel(n.lifeStatus, n.failureCriteria, n.analysisHorizonYears)}
+                description={n.failureCriteria ? 'First condition reached' : 'No failure point calculated'}
                 tone={n.failureCriteria === 'ERF = 1' ? 'bad' : 'default'}
               />
               <LifeCard
@@ -551,7 +614,7 @@ export default function FfsDetailModal({
               />
               <LifeCard
                 label="Depth % at Failure"
-                value={`${n.atFailure_depth.toFixed(2)}`}
+                value={n.atFailure_depth === null ? '—' : n.atFailure_depth.toFixed(2)}
                 unit="%"
                 description={`d/t × 100 @ tₗᶠᶠₑ`}
               />
@@ -576,26 +639,28 @@ export default function FfsDetailModal({
           </section>
 
           {/* Final callout */}
-          {n.failureCriteria.startsWith('N/A') ? (
+          {n.lifeStatus !== 'calculated' ? (
             <Callout>
-              Neither the depth limit nor ERF 1.0 is reached within the 200-year search horizon at the
-              supplied growth rates. This is a screening calculation — final disposition requires an
-              approved procedure and independent checking.
+              {n.lifeStatus === 'insufficient-growth-basis'
+                ? 'No service-limit date is calculated because neither depth nor length has a positive growth basis.'
+                : `Neither the 80% depth limit nor ERF 1.0 is reached inside the configured ${n.analysisHorizonYears}-year analysis horizon.`}{' '}
+              This is not a prediction of unlimited service life. Final disposition requires an approved
+              procedure and independent checking.
             </Callout>
           ) : (
             <Callout
               tone={
                 n.acceptance === 'Un-Acceptable'
                   ? 'danger'
-                  : n.expectedLife < config.highlightYears
+                  : n.expectedLife !== null && n.expectedLife < config.highlightYears
                     ? 'warn'
                     : 'info'
               }
             >
               <strong>
                 {n.failureCriteria === 'ERF = 1'
-                  ? `ERF reached 1.0 at ${n.expectedLife.toFixed(2)} years`
-                  : `Depth limit reached at ${n.expectedLife.toFixed(2)} years`}
+                  ? `ERF reached 1.0 at ${n.expectedLife?.toFixed(2)} years`
+                  : `Depth limit reached at ${n.expectedLife?.toFixed(2)} years`}
                 {' — '}
                 Year Service: {n.yearService}
               </strong>

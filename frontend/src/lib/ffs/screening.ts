@@ -11,14 +11,13 @@ import type {
   FfsSeverity,
   FfsTier,
 } from './types.ts';
+import { buildFfsReportCase, type FfsReportContext } from './reportCase.ts';
+import { analysisHorizonYears, formatLifeProjection, lifeSortValue } from './lifeProjection.ts';
 
 /** Features closer together than this along the pipeline form one location zone. */
 const CLUSTER_GAP_M = 10;
 /** Depth at or above which a feature is treated as severe regardless of ERF. */
 const SEVERE_DEPTH_PCT = 70;
-/** Upper bound for the life-to-ERF-1 search, in years. */
-const LIFE_SEARCH_MAX_YEARS = 200;
-
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -110,14 +109,16 @@ export function parseClockHour(orient: string | undefined): number | null {
 
 /**
  * Years until the tolerance-adjusted feature reaches ERF 1.0, found by
- * bisection on the forecast depth. Infinity when it never gets there.
+ * bisection on the forecast depth. The numerical search is bounded by the
+ * assessment horizon and never becomes a service-life claim.
  */
 function findLifeToErf1(
   nominal: FfsResult,
   config: FfsConfig,
   screening: FfsScreeningConfig,
   growth: number,
-): number {
+): Pick<FfsScreenedResult, 'lifeToErf1' | 'lifeToErf1Status'> {
+  const horizonYears = analysisHorizonYears(config);
   const baseDepth = nominal.maxDepthPct + screening.depthTolerancePct;
   const length = nominal.length + 2 * screening.lengthToleranceMm;
 
@@ -126,31 +127,33 @@ function findLifeToErf1(
     return evaluateTier(depthPct, length, nominal, config, screening, growth).ERF;
   };
 
-  if (erfAtYear(0) >= 1) return 0;
-  if (growth <= 0) return Number.POSITIVE_INFINITY;
-  if (erfAtYear(LIFE_SEARCH_MAX_YEARS) < 1) return Number.POSITIVE_INFINITY;
+  if (erfAtYear(0) >= 1) return { lifeToErf1: 0, lifeToErf1Status: 'calculated' };
+  if (growth <= 0) return { lifeToErf1: null, lifeToErf1Status: 'insufficient-growth-basis' };
+  if (erfAtYear(horizonYears) < 1) {
+    return { lifeToErf1: null, lifeToErf1Status: 'not-reached-within-horizon' };
+  }
 
   let lo = 0;
-  let hi = LIFE_SEARCH_MAX_YEARS;
+  let hi = horizonYears;
   for (let i = 0; i < 60; i++) {
     const mid = (lo + hi) / 2;
     if (erfAtYear(mid) >= 1) hi = mid;
     else lo = mid;
   }
-  return Math.round(hi * 100) / 100;
+  return { lifeToErf1: Math.round(hi * 100) / 100, lifeToErf1Status: 'calculated' };
 }
 
 function derivePriority(
   nominal: FfsResult,
   conservative: FfsTier,
   forecast: FfsTier,
-  lifeToErf1: number,
+  lifeToErf1: number | null,
   screening: FfsScreeningConfig,
 ): FfsPriority {
-  if (conservative.ERF > 1 || forecast.ERF > 1) return 'High';
+  if (conservative.ERF >= 1 || forecast.ERF >= 1) return 'High';
   if (nominal.maxDepthPct >= SEVERE_DEPTH_PCT) return 'High';
   if (conservative.ERF >= screening.reviewBandErf) return 'High';
-  if (nominal.maxDepthPct >= 50 || lifeToErf1 < 10) return 'Medium';
+  if (nominal.maxDepthPct >= 50 || (lifeToErf1 !== null && lifeToErf1 < 10)) return 'Medium';
   return 'Routine';
 }
 
@@ -173,17 +176,17 @@ export function screenResults(
     const grownLength = conservativeLength + nominal.crLength * screening.forecastYears;
     const forecast = evaluateTier(grownDepth, grownLength, nominal, config, screening, growth);
 
-    const lifeToErf1 = findLifeToErf1(nominal, config, screening, growth);
+    const lifeProjection = findLifeToErf1(nominal, config, screening, growth);
     const clockHour = parseClockHour(nominal.orient);
 
     return {
-      key: `${nominal.section}|${nominal.ld}|${index}`,
+      key: nominal.featureId ?? `${nominal.section}|${nominal.ld}|${index}`,
       index,
       nominal,
       conservative,
       forecast,
-      lifeToErf1,
-      priority: derivePriority(nominal, conservative, forecast, lifeToErf1, screening),
+      ...lifeProjection,
+      priority: derivePriority(nominal, conservative, forecast, lifeProjection.lifeToErf1, screening),
       clockHour,
       bottomQuadrant: clockHour !== null && clockHour >= 4 && clockHour <= 8,
     };
@@ -271,27 +274,34 @@ const PRIORITY_RANK: Record<FfsPriority, number> = { High: 3, Medium: 2, Routine
 export function buildActionRegister(
   items: FfsScreenedResult[],
   screening: FfsScreeningConfig,
+  reportContext: FfsReportContext,
   limit = 12,
 ): FfsAction[] {
-  const ranked = [...items].sort(
+  const reportCase = buildFfsReportCase(items, reportContext);
+  const ranked = reportCase.asManagedItems
+    .sort(
     (a, b) =>
       PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority] ||
       b.conservative.ERF - a.conservative.ERF,
-  );
+    );
 
   return ranked.slice(0, limit).map((target, i) => {
     let recommendation: string;
     let due: string;
 
-    if (target.conservative.ERF > 1) {
+    if (target.conservative.ERF >= 1) {
       recommendation =
         'Apply operating-pressure control and raise an approved repair or detailed FFS assessment.';
+      due = 'Immediate';
+    } else if (target.lifeToErf1 === 0) {
+      recommendation =
+        'Treat the projected capacity limit as reached now; confirm operating-pressure control and escalate the engineering disposition.';
       due = 'Immediate';
     } else if (target.nominal.maxDepthPct >= SEVERE_DEPTH_PCT) {
       recommendation =
         'Validate depth and morphology by excavation or NDE; confirm coating, CP, and local environment.';
       due = '0-3 months';
-    } else if (target.lifeToErf1 < 10) {
+    } else if (target.lifeToErf1 !== null && target.lifeToErf1 < 10) {
       recommendation =
         'Confirm the corrosion growth rate and set a reassessment date before the capacity limit is reached.';
       due = 'Under 6 months';
@@ -299,16 +309,29 @@ export function buildActionRegister(
       recommendation =
         'Independent review of ILI tolerances and feature association; confirm the pressure margin.';
       due = 'Engineering review';
+    } else if (target.nominal.repairStatus === 'temporary-repair') {
+      recommendation =
+        'Review the temporary-repair evidence, operating limitations, and permanent-repair plan.';
+      due = 'Engineering review';
     } else {
       recommendation = 'Retain in the monitoring plan and correlate with CP, coating, and the next ILI.';
       due = 'Planned';
     }
 
+    const supplementalNotes = [
+      target.nominal.repairStatus === 'temporary-repair'
+        ? 'Temporary repair remains active and receives no capacity credit.'
+        : '',
+      target.nominal.recommendation?.trim()
+        ? `Recorded disposition: ${target.nominal.recommendation.trim()}`
+        : '',
+    ].filter(Boolean);
+
     return {
       code: `ACT-${String(i + 1).padStart(2, '0')}`,
       target,
       priority: target.priority,
-      recommendation,
+      recommendation: [recommendation, ...supplementalNotes].join(' '),
       due,
     };
   });
@@ -340,22 +363,25 @@ export function buildKpis(items: FfsScreenedResult[]): FfsKpiSet {
   const byNominal = [...items].sort((a, b) => b.nominal.ERF - a.nominal.ERF);
   const byConservative = [...items].sort((a, b) => b.conservative.ERF - a.conservative.ERF);
   const byForecast = [...items].sort((a, b) => b.forecast.ERF - a.forecast.ERF);
-  const byLife = [...items].sort((a, b) => a.lifeToErf1 - b.lifeToErf1);
+  const byLife = items
+    .filter((item) => item.lifeToErf1Status === 'calculated')
+    .sort((a, b) => lifeSortValue(a.lifeToErf1) - lifeSortValue(b.lifeToErf1));
 
   return {
     maxNominalErf: byNominal[0],
     maxConservativeErf: byConservative[0],
     maxForecastErf: byForecast[0],
-    minLife: byLife[0],
+    minLife: byLife[0] ?? null,
     escalatedCount: items.filter((item) => item.conservative.severity !== 'pass').length,
     bottomQuadrantCount: items.filter((item) => item.bottomQuadrant).length,
     totalCount: items.length,
   };
 }
 
-export function formatLife(years: number): string {
-  if (!Number.isFinite(years)) return '>200 y';
-  if (years >= 200) return '>200 y';
-  if (years < 0.1) return 'Now';
-  return `${years.toFixed(1)} y`;
+export function formatLife(
+  years: number | null,
+  status: FfsScreenedResult['lifeToErf1Status'],
+  horizonYears: number,
+): string {
+  return formatLifeProjection(years, status, horizonYears);
 }

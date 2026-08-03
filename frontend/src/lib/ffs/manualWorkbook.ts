@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 
-import { REQUIRED_COLUMNS } from './types.ts';
+import { OPTIONAL_COLUMNS, REQUIRED_COLUMNS } from './types.ts';
 import { validateHeaders } from './validation.ts';
 
 export const MAX_MANUAL_FFS_ROWS = 10_000;
@@ -27,12 +27,20 @@ const SAMPLE_ROW = [
   508,
   358,
   6.5,
+  'F-001',
+  'Unrepaired',
+  '',
+  '',
+  '',
+  '',
+  '',
 ];
 
 export function createManualFfsTemplate(): XLSX.WorkBook {
   const workbook = XLSX.utils.book_new();
-  const sheet = XLSX.utils.aoa_to_sheet([[...REQUIRED_COLUMNS], SAMPLE_ROW]);
-  sheet['!cols'] = REQUIRED_COLUMNS.map((column) => ({
+  const templateColumns = [...REQUIRED_COLUMNS, ...OPTIONAL_COLUMNS];
+  const sheet = XLSX.utils.aoa_to_sheet([templateColumns, SAMPLE_ROW]);
+  sheet['!cols'] = templateColumns.map((column) => ({
     wch: Math.max(14, Math.min(34, column.length + 2)),
   }));
   XLSX.utils.book_append_sheet(workbook, sheet, 'ILI data');
@@ -71,10 +79,11 @@ export function parseManualFfsWorkbook(data: ArrayBuffer): ManualFfsWorkbook {
   }
 
   const headerIndexes = new Map(headerRow.map((header, index) => [header, index]));
+  const importedColumns = [...REQUIRED_COLUMNS, ...OPTIONAL_COLUMNS];
   const rows = dataRows.map((row) => Object.fromEntries(
-    REQUIRED_COLUMNS.map((column) => [
+    importedColumns.map((column) => [
       column,
-      String(row[headerIndexes.get(column) as number] ?? '').trim(),
+      String(row[headerIndexes.get(column) ?? -1] ?? '').trim(),
     ]),
   ));
   return { rows, missingColumns: [] };

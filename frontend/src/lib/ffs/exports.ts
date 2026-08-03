@@ -3,6 +3,14 @@ import type { DistributionTable, WorstRow } from './statistics.ts';
 import type { NarrativeBlock } from './narrative.ts';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from './types.ts';
 import type { AlignmentImportProvenance } from './alignmentImport.ts';
+import { analysisHorizonYears, formatLifeProjection, lifeProjectionStatusLabel } from './lifeProjection.ts';
+import {
+  buildFfsReportCase,
+  createFfsReportContext,
+  type FfsReportCase,
+  type FfsReportContext,
+  type FfsScenarioSummary,
+} from './reportCase.ts';
 
 function triggerDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -19,21 +27,66 @@ function safeFilename(name: string): string {
   return (name || 'ffs-assessment').replace(/[^\w.-]+/g, '_').slice(0, 80);
 }
 
-function num(value: number, digits = 4): number | string {
-  return Number.isFinite(value) ? Number(value.toFixed(digits)) : '';
+function num(value: number | null, digits = 4): number | string {
+  return value !== null && Number.isFinite(value) ? Number(value.toFixed(digits)) : '';
 }
 
 /**
  * Exports the full assessment: one row per feature with the nominal result, the
  * conservative screen, the forecast, and the derived engineering fields.
  */
-export function exportResultsWorkbook(
+function repairStatusLabel(status: FfsScreenedResult['nominal']['repairStatus']): string {
+  if (status === 'permanent-repair-verified') return 'Permanent repair verified';
+  if (status === 'temporary-repair') return 'Temporary repair';
+  return 'Unrepaired';
+}
+
+function scenarioRow(id: string, label: string, scenario: FfsScenarioSummary): (string | number)[] {
+  const erf = scenario.governingErf?.nominal;
+  const life = scenario.governingLife?.nominal;
+  return [
+    id,
+    label,
+    scenario.populationCount,
+    scenario.acceptableCount,
+    scenario.unacceptableCount,
+    erf?.featureId ?? '',
+    erf?.ld ?? '',
+    erf ? num(erf.ERF) : '',
+    life?.featureId ?? '',
+    life
+      ? formatLifeProjection(life.expectedLife, life.lifeStatus, life.analysisHorizonYears)
+      : scenario.lifeSummaryStatus === 'insufficient-growth-basis'
+        ? 'Not calculated - growth basis unavailable'
+        : scenario.lifeSummaryStatus === 'not-reached-within-horizon'
+          ? 'Limit not reached within analysis horizon'
+          : scenario.lifeSummaryStatus === 'mixed-unbounded'
+            ? 'Mixed: growth basis unavailable / limit not reached'
+            : scenario.lifeSummaryStatus === 'empty'
+              ? 'No active feature'
+              : 'Not established',
+    life?.yearService ?? '',
+    scenario.lifeStatusCounts.calculated,
+    scenario.lifeStatusCounts['not-reached-within-horizon'],
+    scenario.lifeStatusCounts['insufficient-growth-basis'],
+  ];
+}
+
+/** Builds the auditable workbook without triggering a browser download. */
+export function buildResultsWorkbook(
   items: FfsScreenedResult[],
   config: FfsConfig,
   screening: FfsScreeningConfig,
   provenance: AlignmentImportProvenance[] = [],
-): void {
+  reportContext: FfsReportContext = createFfsReportContext(config),
+): XLSX.WorkBook {
   const workbook = XLSX.utils.book_new();
+  const reportCase = buildFfsReportCase(items, reportContext);
+  const readinessLabel = reportCase.readiness.status === 'blocked'
+    ? 'Blocked'
+    : reportCase.readiness.status === 'ready-with-warnings'
+      ? 'Ready with warnings'
+      : 'Ready';
 
   const parameters = [
     ['FFS assessment parameters'],
@@ -43,6 +96,7 @@ export function exportResultsWorkbook(
     ['Flow stress basis', config.method === 'original' ? '1.1 x SMYS' : config.modifiedSa === 'smys11' ? '1.1 x SMYS' : 'SMYS + 69 MPa'],
     ['ILI inspection date', config.iliDate.toISOString().split('T')[0]],
     ['Highlight threshold [years]', config.highlightYears],
+    ['Life analysis horizon [years]', analysisHorizonYears(config)],
     [],
     ['Screening assumptions'],
     ['ILI depth tolerance [% WT]', screening.depthTolerancePct],
@@ -57,40 +111,68 @@ export function exportResultsWorkbook(
     ['Depth rejection limit [% WT]', screening.depthRejectionPct],
     [],
     ['Total features assessed', items.length],
+    ['As-managed active features', reportCase.asManaged.populationCount],
+    ['Verified permanent repairs', reportCase.repairCounts.permanentVerified],
+    ['Permanent repair labels pending capacity credit', reportCase.repairCounts.permanentPendingEvidence],
+    ['Temporary repairs kept active', reportCase.repairCounts.temporary],
+    ['Report readiness', readinessLabel],
+    ['Report as-of date', reportContext.asOfDateIso],
     ['Generated', new Date().toISOString()],
     [],
-    ['This is a screening calculation. Final disposition requires an approved procedure and independent checking.'],
+    ['This is an engineering calculation record. Final disposition requires an approved procedure and independent checking.'],
+    ['Risk ranking and next-inspection scheduling are outside this FFS report scope.'],
   ];
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(parameters), 'Parameters');
 
+  const scenarioHeader = [
+    'Scenario ID', 'Scenario', 'Population', 'Acceptable', 'Not acceptable',
+    'Governing ERF feature', 'Governing ERF LD [m]', 'Governing ERF',
+    'Governing life feature', 'Governing life projection', 'Service limit date',
+    'Calculated life count', 'Limit not reached count', 'Growth basis unavailable count',
+  ];
+  const scenarioSheet = XLSX.utils.aoa_to_sheet([
+    ['FFS scenario comparison'],
+    ['Capacity credit requires a unique feature ID and complete permanent-repair evidence dated from ILI through report as-of.'],
+    scenarioHeader,
+    scenarioRow('INSPECTED', 'As-inspected', reportCase.asInspected),
+    scenarioRow('MANAGED', 'As-managed', reportCase.asManaged),
+  ]);
+  scenarioSheet['!cols'] = scenarioHeader.map((label) => ({ wch: Math.min(30, Math.max(12, label.length + 2)) }));
+  scenarioSheet['!freeze'] = { xSplit: 0, ySplit: 3 };
+  XLSX.utils.book_append_sheet(workbook, scenarioSheet, 'Scenarios');
+
   const header = [
-    'LD [m]', 'Section', 'Surface', 'Orientation', 'Max depth [%]', 'Length [mm]', 'Width [mm]',
+    'Feature ID', 'LD [m]', 'Section', 'Surface', 'Orientation', 'Max depth [%]', 'Length [mm]', 'Width [mm]',
     'Wall [mm]', 'OD [mm]', 'SMYS [MPa]', 'Design factor', 'P0 [MPa]',
     'CR depth [mm/y]', 'CR length [mm/y]',
     'd [mm]', 'd/t', 'z', 'M', 'S_flow [MPa]', 'Sf [MPa]', 'Pf [MPa]', 'S0 [MPa]',
-    'P_safe [MPa]', 'ERF nominal', 'Acceptance', 'Expected life [y]', 'Year of service limit',
-    'Failure criterion',
+    'P_safe [MPa]', 'ERF nominal', 'Acceptance', 'Expected life', 'Service limit date',
+    'Life projection status',
     'Conservative depth [%]', 'Conservative length [mm]', 'ERF conservative', 'P_safe conservative [MPa]',
     'Forecast depth [%]', 'ERF forecast', 'Life to ERF 1 [y]', 'Priority', 'Severity',
     'Clock hour', 'Bottom quadrant',
+    'Repair status', 'Repair method', 'Repair date', 'Repair reference', 'Recommendation', 'Action owner',
   ];
 
   const rows = items.map((item) => {
     const n = item.nominal;
     return [
-      n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2), num(n.width, 2),
+      n.featureId ?? '', n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2), num(n.width, 2),
       num(n.wall, 2), num(n.od, 2), num(n.smys, 2), num(n.df, 4), num(n.p0, 4),
       num(n.crDepth, 4), num(n.crLength, 4),
       num(n.d), num(n.dt), num(n.z), n.M === null ? 'n/a' : num(n.M), num(n.sflow), num(n.Sf),
       num(n.Pf), num(n.So), num(n.safePressure), num(n.ERF), n.acceptance,
-      num(n.expectedLife, 2), n.yearService, n.failureCriteria,
+      formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears), n.yearService ?? '',
+      lifeProjectionStatusLabel(n.lifeStatus, n.failureCriteria, n.analysisHorizonYears),
       num(item.conservative.depthPct, 2), num(item.conservative.lengthMm, 2),
       num(item.conservative.ERF), num(item.conservative.safePressure),
       num(item.forecast.depthPct, 2), num(item.forecast.ERF),
-      Number.isFinite(item.lifeToErf1) ? num(item.lifeToErf1, 2) : '>200',
+      formatLifeProjection(item.lifeToErf1, item.lifeToErf1Status, n.analysisHorizonYears),
       item.priority, item.conservative.severity,
       item.clockHour === null ? '' : num(item.clockHour, 2),
       item.bottomQuadrant ? 'Yes' : 'No',
+      repairStatusLabel(n.repairStatus), n.repairMethod ?? '', n.repairDate ?? '', n.repairReference ?? '',
+      n.recommendation ?? '', n.actionOwner ?? '',
     ];
   });
 
@@ -98,6 +180,40 @@ export function exportResultsWorkbook(
   sheet['!cols'] = header.map((label) => ({ wch: Math.min(22, Math.max(10, label.length + 2)) }));
   sheet['!freeze'] = { xSplit: 0, ySplit: 1 };
   XLSX.utils.book_append_sheet(workbook, sheet, 'Assessment');
+
+  const repairHeader = [
+    'Feature ID', 'LD [m]', 'Status', 'Method', 'Completion date',
+    'Evidence reference', 'Recommendation', 'Action owner', 'Managed scenario treatment',
+  ];
+  const repairRows = items
+    .filter((item) => item.nominal.repairStatus !== 'unrepaired')
+    .map((item) => {
+      const n = item.nominal;
+      return [
+        n.featureId ?? '', n.ld, repairStatusLabel(n.repairStatus), n.repairMethod ?? '',
+        n.repairDate ?? '', n.repairReference ?? '', n.recommendation ?? '', n.actionOwner ?? '',
+        reportCase.repairCreditDecisions.get(item)?.credited
+          ? 'Excluded after evidence validation'
+          : 'Remains active; no capacity credit',
+      ];
+    });
+  const repairSheet = XLSX.utils.aoa_to_sheet([repairHeader, ...repairRows]);
+  repairSheet['!cols'] = repairHeader.map((label) => ({ wch: Math.min(34, Math.max(12, label.length + 2)) }));
+  repairSheet['!freeze'] = { xSplit: 0, ySplit: 1 };
+  XLSX.utils.book_append_sheet(workbook, repairSheet, 'Repair register');
+
+  const readinessHeader = ['Severity', 'Code', 'Affected features', 'Finding'];
+  const readinessRows = reportCase.readiness.findings.map((finding) => [
+    finding.severity.toUpperCase(), finding.code, finding.affectedCount, finding.message,
+  ]);
+  const readinessSheet = XLSX.utils.aoa_to_sheet([
+    ['Report readiness', readinessLabel],
+    readinessHeader,
+    ...readinessRows,
+  ]);
+  readinessSheet['!cols'] = [{ wch: 18 }, { wch: 38 }, { wch: 20 }, { wch: 90 }];
+  readinessSheet['!freeze'] = { xSplit: 0, ySplit: 2 };
+  XLSX.utils.book_append_sheet(workbook, readinessSheet, 'Readiness');
 
   // The dataset the engine actually consumed, with the Corrosion Analysis
   // decision that released each feature. This is the auditable record of what
@@ -124,10 +240,31 @@ export function exportResultsWorkbook(
     XLSX.utils.book_append_sheet(workbook, sourceSheet, 'Source data');
   }
 
+  return workbook;
+}
+
+export function exportResultsWorkbook(
+  items: FfsScreenedResult[],
+  config: FfsConfig,
+  screening: FfsScreeningConfig,
+  provenance: AlignmentImportProvenance[] = [],
+  reportContext: FfsReportContext = createFfsReportContext(config),
+): void {
+  const workbook = buildResultsWorkbook(items, config, screening, provenance, reportContext);
+  const reportCase = buildFfsReportCase(items, reportContext);
+
   const blob = new Blob([XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
-  triggerDownload(blob, `${safeFilename(config.lineName)}_FFS_assessment.xlsx`);
+  triggerDownload(blob, resultsWorkbookFilename(config, reportCase.readiness.status));
+}
+
+export function resultsWorkbookFilename(
+  config: FfsConfig,
+  readinessStatus: FfsReportCase['readiness']['status'],
+): string {
+  const draft = readinessStatus === 'blocked' ? 'DRAFT_' : '';
+  return `${safeFilename(config.lineName)}_FFS_${draft}assessment.xlsx`;
 }
 
 /** Exports the two statistics tables as separate sheets. */
@@ -169,8 +306,8 @@ export function exportStatisticsWorkbook(
 
   const worstHeader = [
     'LD bin [m]', 'Features in bin', 'LD [m]', 'Section', 'Surface',
-    'Depth [%]', 'Length [mm]', 'ERF', 'Conservative ERF', 'Expected life [y]',
-    'Life to ERF 1 [y]', 'Priority', 'Acceptance',
+    'Depth [%]', 'Length [mm]', 'ERF', 'Conservative ERF', 'Expected life projection',
+    'Life to ERF 1 projection', 'Priority', 'Acceptance',
   ];
   const worstBody = worstRows
     .filter((row) => row.worst !== null)
@@ -180,8 +317,8 @@ export function exportStatisticsWorkbook(
       return [
         row.bin.label, row.count, n.ld, n.section, n.surface,
         num(n.maxDepthPct, 2), num(n.length, 2), num(n.ERF), num(item.conservative.ERF),
-        num(n.expectedLife, 2),
-        Number.isFinite(item.lifeToErf1) ? num(item.lifeToErf1, 2) : '>200',
+        formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears),
+        formatLifeProjection(item.lifeToErf1, item.lifeToErf1Status, n.analysisHorizonYears),
         item.priority, n.acceptance,
       ];
     });
@@ -216,8 +353,14 @@ export function exportNarrativeDoc(
   blocks: NarrativeBlock[],
   config: FfsConfig,
   chartImages: Record<string, string> = {},
+  documentStatus: 'ready' | 'ready-with-warnings' | 'blocked' = 'ready',
 ): void {
   const body: string[] = [];
+  const statusLabel = documentStatus === 'blocked'
+    ? 'DRAFT — REPORT READINESS BLOCKED'
+    : documentStatus === 'ready-with-warnings'
+      ? 'READY WITH WARNINGS — ENGINEERING ACKNOWLEDGEMENT REQUIRED'
+      : 'REPORT READINESS CHECKS COMPLETE';
 
   for (const block of blocks) {
     switch (block.kind) {
@@ -306,6 +449,10 @@ export function exportNarrativeDoc(
     `<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View></w:WordDocument></xml><![endif]-->` +
     `<style>@page{size:A4;margin:2cm;} body{font-family:Calibri,sans-serif;}</style></head>` +
     `<body>` +
+    `<p style="font-family:Calibri,sans-serif;font-size:9pt;font-weight:bold;letter-spacing:0.8pt;` +
+    `color:${documentStatus === 'blocked' ? '#a61b1b' : documentStatus === 'ready-with-warnings' ? '#8a5b00' : '#16794a'};` +
+    `border:1pt solid currentColor;padding:6pt 8pt;text-align:center;margin:0 0 14pt;">` +
+    `${escapeHtml(statusLabel)}</p>` +
     `<p style="font-family:Calibri,sans-serif;font-size:9pt;letter-spacing:1pt;color:#1463ff;` +
     `text-transform:uppercase;margin:0 0 2pt;">Fitness-for-service assessment</p>` +
     `<h1 style="font-family:Calibri,sans-serif;font-size:20pt;color:#0f2745;margin:0 0 4pt;">` +
@@ -320,7 +467,7 @@ export function exportNarrativeDoc(
 
   triggerDownload(
     new Blob(['﻿', html], { type: 'application/msword' }),
-    `${safeFilename(config.lineName)}_FFS_narrative.doc`,
+    `${safeFilename(config.lineName)}_FFS_${documentStatus === 'blocked' ? 'DRAFT_' : ''}narrative.doc`,
   );
 }
 

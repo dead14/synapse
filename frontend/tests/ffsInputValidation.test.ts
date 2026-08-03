@@ -6,7 +6,7 @@ import { FfsInputValidationError } from '../src/lib/ffs/inputValidation.ts';
 import { REQUIRED_COLUMNS, type FfsConfig } from '../src/lib/ffs/types.ts';
 import { validateData } from '../src/lib/ffs/validation.ts';
 
-function validRow(overrides: Partial<Record<(typeof REQUIRED_COLUMNS)[number], string>> = {}) {
+function validRow(overrides: Record<string, string> = {}) {
   return {
     [REQUIRED_COLUMNS[0]]: '100.5',
     [REQUIRED_COLUMNS[1]]: 'Joint-1',
@@ -109,4 +109,27 @@ test('processRow and processAllRows fail closed for invalid inputs', async () =>
 test('rejects invalid runtime configuration values', () => {
   const invalidConfig = { ...config, iliDate: new Date('invalid') };
   assert.throws(() => processRow(validRow(), invalidConfig), /ILI date/i);
+
+  assert.throws(
+    () => processRow(validRow(), { ...config, analysisHorizonYears: 0 }),
+    /analysis horizon/i,
+  );
+  assert.throws(
+    () => processRow(validRow(), { ...config, analysisHorizonYears: 101 }),
+    /analysis horizon/i,
+  );
+});
+
+test('validates optional repair disposition values and real calendar dates', () => {
+  assert.deepEqual(validateData([validRow({
+    'Repair Status': 'Permanent repair verified',
+    'Repair Date': '2024-02-29',
+  })]), []);
+
+  const errors = validateData([validRow({
+    'Repair Status': 'Completed',
+    'Repair Date': '2025-02-29',
+  })]);
+
+  assert.deepEqual(errors.map((error) => error.col), ['Repair Status', 'Repair Date']);
 });

@@ -1,5 +1,6 @@
 import { validateData, type ValidationError } from './validation.ts';
 import type { FfsConfig } from './types.ts';
+import { MAX_FFS_ANALYSIS_HORIZON_YEARS } from './lifeProjection.ts';
 
 export class FfsInputValidationError extends TypeError {
   readonly code = 'INVALID_FFS_INPUT';
@@ -25,6 +26,18 @@ export function assertValidFfsConfig(config: FfsConfig): void {
   }
   if (!Number.isFinite(config.highlightYears) || config.highlightYears < 0) {
     throw new FfsInputValidationError([{ row: 0, col: 'highlightYears', msg: 'Highlight years must be finite and non-negative' }]);
+  }
+  if (
+    config.analysisHorizonYears !== undefined &&
+    (!Number.isFinite(config.analysisHorizonYears) ||
+      config.analysisHorizonYears < 1 ||
+      config.analysisHorizonYears > MAX_FFS_ANALYSIS_HORIZON_YEARS)
+  ) {
+    throw new FfsInputValidationError([{
+      row: 0,
+      col: 'analysisHorizonYears',
+      msg: `Analysis horizon must be between 1 and ${MAX_FFS_ANALYSIS_HORIZON_YEARS} years`,
+    }]);
   }
 }
 

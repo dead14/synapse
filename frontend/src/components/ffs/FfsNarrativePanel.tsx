@@ -7,6 +7,7 @@ import {
   type NarrativeBlock,
   type NarrativeOptions,
 } from '../../lib/ffs/narrative';
+import { buildFfsReportCase, type FfsReportContext } from '../../lib/ffs/reportCase';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
 import SynButton from '../ui/SynButton';
 import { Callout, Panel } from './FfsPrimitives';
@@ -19,12 +20,14 @@ export default function FfsNarrativePanel({
   items,
   config,
   screening,
+  reportContext,
   chartImages,
   onOpenCharts,
 }: {
   items: FfsScreenedResult[];
   config: FfsConfig;
   screening: FfsScreeningConfig;
+  reportContext: FfsReportContext;
   chartImages: Record<string, string>;
   /** Switches to the Charts tab, which snapshots the figures. */
   onOpenCharts: () => void;
@@ -33,9 +36,10 @@ export default function FfsNarrativePanel({
   const [draft, setDraft] = useState<NarrativeOptions>(DEFAULT_NARRATIVE_OPTIONS);
 
   const blocks = useMemo(
-    () => buildNarrative(items, config, screening, options),
-    [items, config, screening, options],
+    () => buildNarrative(items, config, screening, options, reportContext),
+    [items, config, screening, options, reportContext],
   );
+  const reportCase = useMemo(() => buildFfsReportCase(items, reportContext), [items, reportContext]);
 
   const capturedCount = Object.keys(chartImages).length;
 
@@ -101,15 +105,25 @@ export default function FfsNarrativePanel({
               type="button"
               variant="lime"
               size="sm"
-              onClick={() => exportNarrativeDoc(blocks, config, chartImages)}
+              onClick={() => exportNarrativeDoc(blocks, config, chartImages, reportCase.readiness.status)}
             >
               <span className="inline-flex items-center gap-2">
-                <FiDownload /> Download Word
+                <FiDownload /> {reportCase.readiness.status === 'blocked' ? 'Download Draft Word' : 'Download Word'}
               </span>
             </SynButton>
           </div>
         </div>
       </Panel>
+
+      {reportCase.readiness.status === 'blocked' ? (
+        <Callout tone="danger">
+          This report is marked <strong>Draft</strong>. Resolve the blocking identity or repair-evidence findings in <strong>Case review</strong> before approval.
+        </Callout>
+      ) : reportCase.readiness.status === 'ready-with-warnings' ? (
+        <Callout tone="warn">
+          The report has no blocking traceability gap, but its readiness warnings require engineering acknowledgement before approval.
+        </Callout>
+      ) : null}
 
       {!capturedCount && (
         <Callout tone="warn">

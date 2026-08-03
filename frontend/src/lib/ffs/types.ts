@@ -4,9 +4,20 @@ export interface FfsConfig {
   modifiedSa: 'smys69' | 'smys11';
   iliDate: Date;
   highlightYears: number;
+  /** Bounded projection window; this is not a claim about pipeline service life. */
+  analysisHorizonYears?: number;
   /** Units selected by the engineer; B31G values are normalized to MPa and mm. */
   inputUnits?: { pressure: 'MPa' | 'bar' | 'psi'; diameter: 'mm' | 'in' };
 }
+
+export type FfsLifeStatus =
+  | 'calculated'
+  | 'not-reached-within-horizon'
+  | 'insufficient-growth-basis';
+
+export type FfsFailureCriterion = 'Depth = 80%' | 'ERF = 1';
+
+export type FfsRepairStatus = 'unrepaired' | 'temporary-repair' | 'permanent-repair-verified';
 
 /**
  * Screening assumptions layered on top of the code calculation. These are
@@ -54,6 +65,7 @@ export const DEFAULT_SCREENING_CONFIG: FfsScreeningConfig = {
 };
 
 export interface FfsInput {
+  featureId: string | null;
   ld: number | string;
   section: string;
   surface: string;
@@ -68,7 +80,23 @@ export interface FfsInput {
   od: number;
   smys: number;
   p0: number;
+  repairStatus: FfsRepairStatus;
+  repairMethod: string | null;
+  repairDate: string | null;
+  repairReference: string | null;
+  recommendation: string | null;
+  actionOwner: string | null;
 }
+
+export type FfsRepairDispositionPatch = Pick<
+  FfsInput,
+  | 'repairStatus'
+  | 'repairMethod'
+  | 'repairDate'
+  | 'repairReference'
+  | 'recommendation'
+  | 'actionOwner'
+>;
 
 export interface FfsResult extends FfsInput {
   SF: number;
@@ -84,12 +112,15 @@ export interface FfsResult extends FfsInput {
   ERF: number;
   acceptance: 'Acceptable' | 'Un-Acceptable';
   branch: string;
-  expectedLife: number;
-  yearService: string;
-  failureCriteria: string;
-  atFailure_ERF: number;
-  atFailure_depth: number;
-  atFailure_Sf: number;
+  /** Null unless a limit is reached inside the configured analysis horizon. */
+  expectedLife: number | null;
+  yearService: string | null;
+  failureCriteria: FfsFailureCriterion | null;
+  lifeStatus: FfsLifeStatus;
+  analysisHorizonYears: number;
+  atFailure_ERF: number | null;
+  atFailure_depth: number | null;
+  atFailure_Sf: number | null;
   method: 'original' | 'modified';
   saMode: 'smys69' | 'smys11';
 }
@@ -138,8 +169,9 @@ export interface FfsScreenedResult {
   nominal: FfsResult;
   conservative: FfsTier;
   forecast: FfsTier;
-  /** Years until the conservative ERF reaches 1.0. Infinity when never. */
-  lifeToErf1: number;
+  /** Years until conservative ERF reaches 1.0; null when no finite limit is established. */
+  lifeToErf1: number | null;
+  lifeToErf1Status: FfsLifeStatus;
   priority: FfsPriority;
   /** Clock hour 0–11.99 parsed from the orientation string, or null. */
   clockHour: number | null;
@@ -175,4 +207,14 @@ export const REQUIRED_COLUMNS = [
   'Width [mm]', 'Orient. (hrs:mins)', 'Nominal Wall Thickness [mm]',
   'CR Depth [mm/y]', 'CR Length [mm/y]', 'Design Factor',
   'Outer Diameter Ds', 'SMYS [MPa]', 'Operating Pressure P₀ [MPa]'
+] as const;
+
+export const OPTIONAL_COLUMNS = [
+  'Feature ID',
+  'Repair Status',
+  'Repair Method',
+  'Repair Date',
+  'Repair Reference',
+  'Recommendation',
+  'Action Owner',
 ] as const;
