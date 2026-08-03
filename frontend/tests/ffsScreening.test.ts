@@ -109,7 +109,7 @@ test('the measured basis forecasts each feature at its own reported rate', () =>
   assert.equal(Math.round(item.forecast.depthPct), 45);
 });
 
-test('the measured basis falls back to the configured rate when a feature reports none', () => {
+test('a reported zero remains zero and is not silently replaced by a fallback', () => {
   const screening: FfsScreeningConfig = {
     ...DEFAULT_SCREENING_CONFIG,
     growthBasis: 'measured',
@@ -117,7 +117,32 @@ test('the measured basis falls back to the configured rate when a feature report
   };
   const item = screenOne({ 'CR Depth [mm/y]': '0' }, screening);
 
+  assert.equal(item.forecast.growthRateMmPerYear, 0);
+  assert.equal(item.forecast.growthAnalysisBasis, 'reported');
+});
+
+test('an unavailable rate may use a separately labelled explicit fallback', () => {
+  const screening: FfsScreeningConfig = {
+    ...DEFAULT_SCREENING_CONFIG,
+    growthBasis: 'measured',
+    growthRateMmPerYear: 0.5,
+  };
+  const nominal = processRow(row({ 'CR Depth [mm/y]': '0' }), config);
+  nominal.growthEvidence = {
+    ...nominal.growthEvidence!,
+    depth: {
+      observation: 'unavailable',
+      analysisBasis: 'none',
+      rawRateMmPerYear: null,
+      analysisRateMmPerYear: null,
+      formula: null,
+      note: 'No usable source rate.',
+    },
+  };
+  const item = screenResults([nominal], config, screening)[0];
+
   assert.equal(item.forecast.growthRateMmPerYear, 0.5);
+  assert.equal(item.forecast.growthAnalysisBasis, 'explicit-fallback');
 });
 
 test('a tier past the 80 %WT applicability limit is flagged rather than presented as a code result', () => {

@@ -5,6 +5,13 @@ import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from './types.t
 import type { AlignmentImportProvenance } from './alignmentImport.ts';
 import { analysisHorizonYears, formatLifeProjection, lifeProjectionStatusLabel } from './lifeProjection.ts';
 import {
+  engineeringDisposition,
+  growthAnalysisBasisLabel,
+  growthObservationLabel,
+  methodProfileLabel,
+  pressureBasisLabel,
+} from './assessmentProfile.ts';
+import {
   buildFfsReportCase,
   createFfsReportContext,
   type FfsReportCase,
@@ -92,9 +99,10 @@ export function buildResultsWorkbook(
     ['FFS assessment parameters'],
     [],
     ['Pipeline / line', config.lineName],
-    ['Assessment method', config.method === 'original' ? 'Original ASME B31G' : 'Modified ASME B31G'],
+    ['Assessment method profile', methodProfileLabel(config)],
     ['Flow stress basis', config.method === 'original' ? '1.1 x SMYS' : config.modifiedSa === 'smys11' ? '1.1 x SMYS' : 'SMYS + 69 MPa'],
     ['ILI inspection date', config.iliDate.toISOString().split('T')[0]],
+    ['Required pressure basis', pressureBasisLabel(config)],
     ['Highlight threshold [years]', config.highlightYears],
     ['Life analysis horizon [years]', analysisHorizonYears(config)],
     [],
@@ -144,12 +152,14 @@ export function buildResultsWorkbook(
   const header = [
     'Feature ID', 'LD [m]', 'Section', 'Surface', 'Orientation', 'Max depth [%]', 'Length [mm]', 'Width [mm]',
     'Wall [mm]', 'OD [mm]', 'SMYS [MPa]', 'Design factor', 'P0 [MPa]',
-    'CR depth [mm/y]', 'CR length [mm/y]',
+    'CR depth used [mm/y]', 'Depth growth observation', 'Depth analysis basis',
+    'Raw depth growth [mm/y]', 'Growth interval [years]', 'Growth formula', 'Growth evidence note',
+    'CR length used [mm/y]',
     'd [mm]', 'd/t', 'z', 'M', 'S_flow [MPa]', 'Sf [MPa]', 'Pf [MPa]', 'S0 [MPa]',
     'P_safe [MPa]', 'ERF nominal', 'Acceptance', 'Expected life', 'Service limit date',
     'Life projection status',
     'Conservative depth [%]', 'Conservative length [mm]', 'ERF conservative', 'P_safe conservative [MPa]',
-    'Forecast depth [%]', 'ERF forecast', 'Life to ERF 1 [y]', 'Priority', 'Severity',
+    'Forecast depth [%]', 'ERF forecast', 'Life to ERF 1 [y]', 'Priority', 'Severity', 'Engineering disposition',
     'Clock hour', 'Bottom quadrant',
     'Repair status', 'Repair method', 'Repair date', 'Repair reference', 'Recommendation', 'Action owner',
   ];
@@ -159,7 +169,11 @@ export function buildResultsWorkbook(
     return [
       n.featureId ?? '', n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2), num(n.width, 2),
       num(n.wall, 2), num(n.od, 2), num(n.smys, 2), num(n.df, 4), num(n.p0, 4),
-      num(n.crDepth, 4), num(n.crLength, 4),
+      num(n.crDepth, 4), growthObservationLabel(n.growthEvidence?.depth.observation),
+      growthAnalysisBasisLabel(n.growthEvidence?.depth.analysisBasis),
+      num(n.growthEvidence?.depth.rawRateMmPerYear ?? null, 4),
+      n.growthEvidence?.intervalYears ?? '', n.growthEvidence?.depth.formula ?? '',
+      n.growthEvidence?.depth.note ?? '', num(n.crLength, 4),
       num(n.d), num(n.dt), num(n.z), n.M === null ? 'n/a' : num(n.M), num(n.sflow), num(n.Sf),
       num(n.Pf), num(n.So), num(n.safePressure), num(n.ERF), n.acceptance,
       formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears), n.yearService ?? '',
@@ -168,7 +182,7 @@ export function buildResultsWorkbook(
       num(item.conservative.ERF), num(item.conservative.safePressure),
       num(item.forecast.depthPct, 2), num(item.forecast.ERF),
       formatLifeProjection(item.lifeToErf1, item.lifeToErf1Status, n.analysisHorizonYears),
-      item.priority, item.conservative.severity,
+      item.priority, item.conservative.severity, engineeringDisposition(item),
       item.clockHour === null ? '' : num(item.clockHour, 2),
       item.bottomQuadrant ? 'Yes' : 'No',
       repairStatusLabel(n.repairStatus), n.repairMethod ?? '', n.repairDate ?? '', n.repairReference ?? '',
@@ -222,7 +236,9 @@ export function buildResultsWorkbook(
     const sourceHeader = [
       'Feature ID', 'Alignment source key', 'Alignment session', 'Selection reason',
       'LD [m]', 'Section', 'Surface', 'Orientation', 'Max depth [%WT]', 'Length [mm]',
-      'Width [mm]', 'Nominal wall thickness [mm]', 'CR depth [mm/y]', 'CR length [mm/y]',
+      'Width [mm]', 'Nominal wall thickness [mm]', 'CR depth used [mm/y]', 'CR length used [mm/y]',
+      'OLD survey year', 'NEW survey year', 'Interval [years]', 'Depth growth observation',
+      'Depth analysis basis', 'Raw depth growth [mm/y]', 'Depth growth formula', 'Depth growth note',
     ];
     const sourceRows = items.map((item) => {
       const n = item.nominal;
@@ -232,6 +248,12 @@ export function buildResultsWorkbook(
         record?.selectionReason ?? '',
         n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2),
         num(n.width, 2), num(n.wall, 2), num(n.crDepth, 4), num(n.crLength, 4),
+        record?.growthEvidence.oldSurveyYear ?? '', record?.growthEvidence.newSurveyYear ?? '',
+        record?.growthEvidence.intervalYears ?? '',
+        growthObservationLabel(record?.growthEvidence.depth.observation),
+        growthAnalysisBasisLabel(record?.growthEvidence.depth.analysisBasis),
+        num(record?.growthEvidence.depth.rawRateMmPerYear ?? null, 4),
+        record?.growthEvidence.depth.formula ?? '', record?.growthEvidence.depth.note ?? '',
       ];
     });
     const sourceSheet = XLSX.utils.aoa_to_sheet([sourceHeader, ...sourceRows]);

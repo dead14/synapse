@@ -8,6 +8,38 @@ export interface FfsConfig {
   analysisHorizonYears?: number;
   /** Units selected by the engineer; B31G values are normalized to MPa and mm. */
   inputUnits?: { pressure: 'MPa' | 'bar' | 'psi'; diameter: 'mm' | 'in' };
+  /** What the pressure supplied to the ERF comparison represents. */
+  pressureBasis?: FfsPressureBasis;
+}
+
+export type FfsPressureBasis = 'maop' | 'mop' | 'current-operating' | 'other-required';
+
+export type FfsGrowthObservation =
+  | 'matched-measured'
+  | 'new-only-zero-baseline-estimate'
+  | 'apparent-decrease'
+  | 'manual-reported'
+  | 'unavailable';
+
+export type FfsGrowthAnalysisBasis = 'reported' | 'estimated' | 'explicit-fallback' | 'none';
+
+export interface FfsGrowthComponentEvidence {
+  /** What the source data actually says; never overwritten by an analysis fallback. */
+  observation: FfsGrowthObservation;
+  /** What rate, if any, the projection engine consumes. */
+  analysisBasis: FfsGrowthAnalysisBasis;
+  rawRateMmPerYear: number | null;
+  analysisRateMmPerYear: number | null;
+  formula: string | null;
+  note: string;
+}
+
+export interface FfsGrowthEvidence {
+  oldSurveyYear: number | null;
+  newSurveyYear: number | null;
+  intervalYears: number | null;
+  depth: FfsGrowthComponentEvidence;
+  length: FfsGrowthComponentEvidence;
 }
 
 export type FfsLifeStatus =
@@ -27,10 +59,10 @@ export type FfsRepairStatus = 'unrepaired' | 'temporary-repair' | 'permanent-rep
 /**
  * Which corrosion rate drives the forecast and the remaining-life search.
  *
- * `measured` uses each feature's own reported rate — the same basis as the
- * nominal expected life — and falls back to the uniform rate only where a
- * feature carries none. `uniform` applies one rate to the whole population,
- * which is what you want when the run pair's growth numbers are not trusted.
+ * `measured` retains the historical name for compatibility but now uses each
+ * feature's source-evidenced rate. The evidence record distinguishes reported,
+ * estimated, assumed, and unavailable values. `uniform` applies one explicit
+ * assumption to the whole population.
  */
 export type FfsGrowthBasis = 'measured' | 'uniform';
 
@@ -41,7 +73,7 @@ export interface FfsScreeningConfig {
   lengthToleranceMm: number;
   /** How the forecast and remaining-life figures pick a growth rate. */
   growthBasis: FfsGrowthBasis;
-  /** The uniform radial growth rate, and the fallback under `measured`, in mm/year. */
+  /** The uniform radial rate, or explicit fallback only where source evidence is unavailable. */
   growthRateMmPerYear: number;
   /** Forecast horizon in years. */
   forecastYears: number;
@@ -57,7 +89,7 @@ export const DEFAULT_SCREENING_CONFIG: FfsScreeningConfig = {
   depthTolerancePct: 10,
   lengthToleranceMm: 10,
   growthBasis: 'measured',
-  growthRateMmPerYear: 0.1,
+  growthRateMmPerYear: 0,
   forecastYears: 5,
   reviewBandErf: 0.9,
   interactionSpacingFactor: 3,
@@ -86,6 +118,8 @@ export interface FfsInput {
   repairReference: string | null;
   recommendation: string | null;
   actionOwner: string | null;
+  /** Source observation and analysis-use provenance for time projection. */
+  growthEvidence?: FfsGrowthEvidence;
 }
 
 export type FfsRepairDispositionPatch = Pick<
@@ -156,6 +190,9 @@ export interface FfsTier {
   beyondDepthLimit: boolean;
   /** The growth rate this tier was projected with, in mm/year. */
   growthRateMmPerYear: number;
+  /** Evidence behind the rate used by this tier. */
+  growthObservation?: FfsGrowthObservation;
+  growthAnalysisBasis?: FfsGrowthAnalysisBasis | 'uniform-assumption';
 }
 
 /**

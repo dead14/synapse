@@ -3,6 +3,8 @@ import type {
   FfsAction,
   FfsCluster,
   FfsConfig,
+  FfsGrowthAnalysisBasis,
+  FfsGrowthObservation,
   FfsInteractionPair,
   FfsPriority,
   FfsResult,
@@ -35,14 +37,63 @@ function geometryOf(nominal: FfsResult): B31gGeometry {
 /**
  * The growth rate a tier should be projected with.
  *
- * Under the `measured` basis this is the feature's own reported depth rate, so
- * the forecast and the remaining-life search sit on the same footing as the
- * nominal expected life. The configured rate is the fallback for features whose
- * run pair produced no usable growth, and the single rate under `uniform`.
+ * Under the historical `measured` setting this is the feature's source-evidenced
+ * depth rate. A reported zero stays zero; the configured rate is only an
+ * explicit fallback when the evidence says the source rate is unavailable.
  */
 export function growthRateFor(nominal: FfsResult, screening: FfsScreeningConfig): number {
-  if (screening.growthBasis === 'uniform') return screening.growthRateMmPerYear;
-  return nominal.crDepth > 0 ? nominal.crDepth : screening.growthRateMmPerYear;
+  return growthApplicationFor(nominal, screening).rateMmPerYear;
+}
+
+export interface FfsGrowthApplication {
+  rateMmPerYear: number;
+  observation: FfsGrowthObservation;
+  analysisBasis: FfsGrowthAnalysisBasis | 'uniform-assumption';
+}
+
+/**
+ * Resolves the rate and its provenance together. A zero reported rate remains
+ * a reported zero; only an unavailable analysis basis may consume the explicit
+ * screening fallback.
+ */
+export function growthApplicationFor(
+  nominal: FfsResult,
+  screening: FfsScreeningConfig,
+): FfsGrowthApplication {
+  const depthEvidence = nominal.growthEvidence?.depth;
+  if (screening.growthBasis === 'uniform') {
+    return {
+      rateMmPerYear: screening.growthRateMmPerYear,
+      observation: depthEvidence?.observation ?? 'unavailable',
+      analysisBasis: 'uniform-assumption',
+    };
+  }
+  if (depthEvidence?.analysisRateMmPerYear !== null && depthEvidence?.analysisRateMmPerYear !== undefined) {
+    return {
+      rateMmPerYear: depthEvidence.analysisRateMmPerYear,
+      observation: depthEvidence.observation,
+      analysisBasis: depthEvidence.analysisBasis,
+    };
+  }
+  if (!depthEvidence && nominal.crDepth > 0) {
+    return {
+      rateMmPerYear: nominal.crDepth,
+      observation: 'manual-reported',
+      analysisBasis: 'reported',
+    };
+  }
+  if (screening.growthRateMmPerYear > 0) {
+    return {
+      rateMmPerYear: screening.growthRateMmPerYear,
+      observation: depthEvidence?.observation ?? 'unavailable',
+      analysisBasis: 'explicit-fallback',
+    };
+  }
+  return {
+    rateMmPerYear: 0,
+    observation: depthEvidence?.observation ?? 'unavailable',
+    analysisBasis: 'none',
+  };
 }
 
 /**
@@ -56,6 +107,7 @@ function evaluateTier(
   config: FfsConfig,
   screening: FfsScreeningConfig,
   growthRateMmPerYear: number,
+  growthApplication?: FfsGrowthApplication,
 ): FfsTier {
   const safeDepthPct = clamp(depthPct, 0, 99.5);
   const dMm = (safeDepthPct / 100) * nominal.wall;
@@ -76,6 +128,8 @@ function evaluateTier(
     severity: severityOf(result.erf, safeDepthPct, screening),
     beyondDepthLimit: result.beyondDepthLimit,
     growthRateMmPerYear,
+    growthObservation: growthApplication?.observation,
+    growthAnalysisBasis: growthApplication?.analysisBasis,
   };
 }
 
@@ -167,14 +221,31 @@ export function screenResults(
   screening: FfsScreeningConfig,
 ): FfsScreenedResult[] {
   return results.map((nominal, index) => {
-    const growth = growthRateFor(nominal, screening);
+    const growthApplication = growthApplicationFor(nominal, screening);
+    const growth = growthApplication.rateMmPerYear;
     const conservativeDepth = nominal.maxDepthPct + screening.depthTolerancePct;
     const conservativeLength = nominal.length + 2 * screening.lengthToleranceMm;
-    const conservative = evaluateTier(conservativeDepth, conservativeLength, nominal, config, screening, growth);
+    const conservative = evaluateTier(
+      conservativeDepth,
+      conservativeLength,
+      nominal,
+      config,
+      screening,
+      growth,
+      growthApplication,
+    );
 
     const grownDepth = conservativeDepth + ((growth * screening.forecastYears) / nominal.wall) * 100;
     const grownLength = conservativeLength + nominal.crLength * screening.forecastYears;
-    const forecast = evaluateTier(grownDepth, grownLength, nominal, config, screening, growth);
+    const forecast = evaluateTier(
+      grownDepth,
+      grownLength,
+      nominal,
+      config,
+      screening,
+      growth,
+      growthApplication,
+    );
 
     const lifeProjection = findLifeToErf1(nominal, config, screening, growth);
     const clockHour = parseClockHour(nominal.orient);

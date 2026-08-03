@@ -338,6 +338,42 @@ export function buildFfsReportCase(
     ));
   }
 
+  const zeroBaselineEstimateCount = activeItems.filter(
+    (item) => item.nominal.growthEvidence?.depth.observation === 'new-only-zero-baseline-estimate',
+  ).length;
+  if (zeroBaselineEstimateCount > 0) {
+    findings.push(finding(
+      'NEW_ONLY_ZERO_BASELINE_ESTIMATE',
+      'warning',
+      'NEW-only depth rates use an assumed zero-depth OLD-survey baseline. They are estimates, not measured run-pair CGRs.',
+      zeroBaselineEstimateCount,
+    ));
+  }
+
+  const explicitFallbackCount = activeItems.filter(
+    (item) => item.nominal.growthEvidence?.depth.analysisBasis === 'explicit-fallback',
+  ).length;
+  if (explicitFallbackCount > 0) {
+    findings.push(finding(
+      'EXPLICIT_GROWTH_FALLBACK',
+      'warning',
+      'Depth projection uses an engineer-entered fallback where source growth was unavailable or unsuitable.',
+      explicitFallbackCount,
+    ));
+  }
+
+  const apparentDecreaseCount = activeItems.filter(
+    (item) => item.nominal.growthEvidence?.depth.observation === 'apparent-decrease',
+  ).length;
+  if (apparentDecreaseCount > 0) {
+    findings.push(finding(
+      'APPARENT_DEPTH_DECREASE',
+      'warning',
+      'Matched runs report an apparent depth decrease. Preserve the observation and review ILI sizing uncertainty before assigning future growth.',
+      apparentDecreaseCount,
+    ));
+  }
+
   const beyondHorizonCount = activeItems.filter(
     (item) => item.nominal.lifeStatus === 'not-reached-within-horizon',
   ).length;
