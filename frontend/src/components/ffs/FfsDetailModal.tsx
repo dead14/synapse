@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { FiX } from 'react-icons/fi';
 import { formatLifeProjection, lifeProjectionStatusLabel } from '../../lib/ffs/lifeProjection';
+import type { FfsRepairCreditDecision } from '../../lib/ffs/reportCase';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
 import { Callout, PriorityLabel, SeverityBadge, formatErf } from './FfsPrimitives';
 
@@ -157,11 +158,13 @@ export default function FfsDetailModal({
   item,
   config,
   screening,
+  repairCreditDecision,
   onClose,
 }: {
   item: FfsScreenedResult | null;
   config: FfsConfig;
   screening: FfsScreeningConfig;
+  repairCreditDecision: FfsRepairCreditDecision | null;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -182,6 +185,7 @@ export default function FfsDetailModal({
   const methodLabel = isOriginal ? 'Original B31G' : 'Modified B31G';
   const areaLabel = isOriginal ? '⅔dL' : '0.85dL';
   const failed = n.acceptance === 'Un-Acceptable';
+  const repairCredited = repairCreditDecision?.credited === true;
 
   return (
     <div
@@ -207,7 +211,7 @@ export default function FfsDetailModal({
               </span>
             </div>
             <p className="ffs-detail__subtitle">
-              {n.section} &middot; {n.surface} &middot; {n.acceptance}
+              {n.featureId ? `${n.featureId} · ` : ''}{n.section} · {n.surface} · {n.acceptance}
             </p>
           </div>
           <div className="ffs-detail__header-right">
@@ -291,6 +295,66 @@ export default function FfsDetailModal({
                 description="Growth rate"
               />
             </div>
+          </section>
+
+          {/* Repair disposition and evidence */}
+          <section className="mb-6">
+            <h3 className="mb-3 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Repair disposition and evidence
+            </h3>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <InputCard
+                label="Feature identity"
+                symbol="ID"
+                value={n.featureId ?? '—'}
+                description={n.featureId ? 'Stable report key' : 'Required for report readiness'}
+              />
+              <InputCard
+                label="Repair status"
+                symbol="R"
+                value={
+                  n.repairStatus === 'permanent-repair-verified'
+                    ? 'Permanent'
+                    : n.repairStatus === 'temporary-repair'
+                      ? 'Temporary'
+                      : 'Unrepaired'
+                }
+                description={repairCredited ? 'Evidence-qualified capacity credit' : 'Active in as-managed case'}
+              />
+              <InputCard
+                label="Repair method"
+                symbol="Method"
+                value={n.repairMethod ?? '—'}
+                description={n.repairStatus === 'unrepaired' ? 'No repair recorded' : 'Evidence field'}
+              />
+              <InputCard
+                label="Completion date"
+                symbol="Date"
+                value={n.repairDate ?? '—'}
+                description="YYYY-MM-DD"
+              />
+              <InputCard
+                label="Evidence reference"
+                symbol="Ref"
+                value={n.repairReference ?? '—'}
+                description="Work order, dossier, or certificate"
+              />
+              <InputCard
+                label="Action owner"
+                symbol="Owner"
+                value={n.actionOwner ?? '—'}
+                description={n.recommendation ?? 'No recommendation recorded'}
+              />
+            </div>
+            {n.repairStatus !== 'unrepaired' && (
+              <div className="mt-3">
+                <Callout tone={repairCredited ? 'info' : 'warn'}>
+                  {repairCredited
+                    ? 'This completed permanent repair is excluded from the as-managed population after minimum evidence validation.'
+                    : 'This feature remains active in the as-managed population. Temporary repairs, ambiguous identity, incomplete evidence, and out-of-window completion dates receive no capacity credit.'}
+                </Callout>
+              </div>
+            )}
           </section>
 
           {/* Step-by-step Calculation */}

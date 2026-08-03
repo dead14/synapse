@@ -11,6 +11,7 @@ import type {
   FfsSeverity,
   FfsTier,
 } from './types.ts';
+import { buildFfsReportCase, type FfsReportContext } from './reportCase.ts';
 import { analysisHorizonYears, formatLifeProjection, lifeSortValue } from './lifeProjection.ts';
 
 /** Features closer together than this along the pipeline form one location zone. */
@@ -149,7 +150,7 @@ function derivePriority(
   lifeToErf1: number | null,
   screening: FfsScreeningConfig,
 ): FfsPriority {
-  if (conservative.ERF > 1 || forecast.ERF > 1) return 'High';
+  if (conservative.ERF >= 1 || forecast.ERF >= 1) return 'High';
   if (nominal.maxDepthPct >= SEVERE_DEPTH_PCT) return 'High';
   if (conservative.ERF >= screening.reviewBandErf) return 'High';
   if (nominal.maxDepthPct >= 50 || (lifeToErf1 !== null && lifeToErf1 < 10)) return 'Medium';
@@ -179,7 +180,7 @@ export function screenResults(
     const clockHour = parseClockHour(nominal.orient);
 
     return {
-      key: `${nominal.section}|${nominal.ld}|${index}`,
+      key: nominal.featureId ?? `${nominal.section}|${nominal.ld}|${index}`,
       index,
       nominal,
       conservative,
@@ -273,21 +274,28 @@ const PRIORITY_RANK: Record<FfsPriority, number> = { High: 3, Medium: 2, Routine
 export function buildActionRegister(
   items: FfsScreenedResult[],
   screening: FfsScreeningConfig,
+  reportContext: FfsReportContext,
   limit = 12,
 ): FfsAction[] {
-  const ranked = [...items].sort(
+  const reportCase = buildFfsReportCase(items, reportContext);
+  const ranked = reportCase.asManagedItems
+    .sort(
     (a, b) =>
       PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority] ||
       b.conservative.ERF - a.conservative.ERF,
-  );
+    );
 
   return ranked.slice(0, limit).map((target, i) => {
     let recommendation: string;
     let due: string;
 
-    if (target.conservative.ERF > 1) {
+    if (target.conservative.ERF >= 1) {
       recommendation =
         'Apply operating-pressure control and raise an approved repair or detailed FFS assessment.';
+      due = 'Immediate';
+    } else if (target.lifeToErf1 === 0) {
+      recommendation =
+        'Treat the projected capacity limit as reached now; confirm operating-pressure control and escalate the engineering disposition.';
       due = 'Immediate';
     } else if (target.nominal.maxDepthPct >= SEVERE_DEPTH_PCT) {
       recommendation =
@@ -301,16 +309,29 @@ export function buildActionRegister(
       recommendation =
         'Independent review of ILI tolerances and feature association; confirm the pressure margin.';
       due = 'Engineering review';
+    } else if (target.nominal.repairStatus === 'temporary-repair') {
+      recommendation =
+        'Review the temporary-repair evidence, operating limitations, and permanent-repair plan.';
+      due = 'Engineering review';
     } else {
       recommendation = 'Retain in the monitoring plan and correlate with CP, coating, and the next ILI.';
       due = 'Planned';
     }
 
+    const supplementalNotes = [
+      target.nominal.repairStatus === 'temporary-repair'
+        ? 'Temporary repair remains active and receives no capacity credit.'
+        : '',
+      target.nominal.recommendation?.trim()
+        ? `Recorded disposition: ${target.nominal.recommendation.trim()}`
+        : '',
+    ].filter(Boolean);
+
     return {
       code: `ACT-${String(i + 1).padStart(2, '0')}`,
       target,
       priority: target.priority,
-      recommendation,
+      recommendation: [recommendation, ...supplementalNotes].join(' '),
       due,
     };
   });

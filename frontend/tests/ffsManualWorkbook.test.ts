@@ -7,7 +7,7 @@ import {
   createManualFfsTemplate,
   parseManualFfsWorkbook,
 } from '../src/lib/ffs/manualWorkbook.ts';
-import { REQUIRED_COLUMNS } from '../src/lib/ffs/types.ts';
+import { OPTIONAL_COLUMNS, REQUIRED_COLUMNS } from '../src/lib/ffs/types.ts';
 
 function workbookBytes(rows: unknown[][]): ArrayBuffer {
   const workbook = XLSX.utils.book_new();
@@ -15,14 +15,14 @@ function workbookBytes(rows: unknown[][]): ArrayBuffer {
   return XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
 }
 
-test('manual FFS template exposes the exact engine columns and a sample row', () => {
+test('manual FFS template exposes calculation and repair-evidence columns with a sample row', () => {
   const template = createManualFfsTemplate();
   const sheet = template.Sheets[template.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 });
 
-  assert.deepEqual(rows[0], [...REQUIRED_COLUMNS]);
+  assert.deepEqual(rows[0], [...REQUIRED_COLUMNS, ...OPTIONAL_COLUMNS]);
   assert.equal(rows.length, 2);
-  assert.equal(rows[1].length, REQUIRED_COLUMNS.length);
+  assert.equal(rows[1].length, REQUIRED_COLUMNS.length + OPTIONAL_COLUMNS.length);
 });
 
 test('manual workbook parser accepts a valid workbook and normalizes cell values', () => {
@@ -37,6 +37,23 @@ test('manual workbook parser accepts a valid workbook and normalizes cell values
   assert.equal(parsed.rows.length, 1);
   assert.equal(parsed.rows[0][REQUIRED_COLUMNS[0]], '100.5');
   assert.equal(parsed.rows[0][REQUIRED_COLUMNS[6]], '06:00');
+  assert.equal(parsed.rows[0]['Repair Status'], '', 'legacy workbooks default to an unrepaired disposition');
+});
+
+test('manual workbook parser preserves optional feature and repair evidence', () => {
+  const bytes = workbookBytes([
+    [...REQUIRED_COLUMNS, ...OPTIONAL_COLUMNS],
+    [
+      100.5, 'Joint-1', 'Internal', 25, 45, 30, '06:00', 12.7, 0.1, 0.05, 0.72, 508, 358, 6.5,
+      'F-001', 'Temporary repair', 'Composite wrap', '2025-01-20', 'REP-17', 'Permanent repair', 'Integrity',
+    ],
+  ]);
+
+  const parsed = parseManualFfsWorkbook(bytes);
+
+  assert.equal(parsed.rows[0]['Feature ID'], 'F-001');
+  assert.equal(parsed.rows[0]['Repair Status'], 'Temporary repair');
+  assert.equal(parsed.rows[0]['Repair Reference'], 'REP-17');
 });
 
 test('manual workbook parser reports missing columns before assessment', () => {

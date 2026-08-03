@@ -10,6 +10,7 @@ import {
 import { isInternal } from '../../lib/ffs/statistics';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig, FfsSeverity } from '../../lib/ffs/types';
 import { analysisHorizonYears } from '../../lib/ffs/lifeProjection';
+import { buildFfsReportCase, type FfsReportContext } from '../../lib/ffs/reportCase';
 import { Callout, Panel, PanelHeader, PriorityLabel, Stat, formatErf } from './FfsPrimitives';
 
 const SEVERITY_FILL: Record<FfsSeverity, string> = {
@@ -358,17 +359,26 @@ export default function FfsIntegrityPanel({
   items,
   config,
   screening,
+  reportContext,
   onSelect,
 }: {
   items: FfsScreenedResult[];
   config: FfsConfig;
   screening: FfsScreeningConfig;
+  reportContext: FfsReportContext;
   onSelect: (item: FfsScreenedResult) => void;
 }) {
   const kpis = useMemo(() => buildKpis(items), [items]);
   const clusters = useMemo(() => buildClusters(items), [items]);
   const interactions = useMemo(() => findInteractions(items, screening), [items, screening]);
-  const actions = useMemo(() => buildActionRegister(items, screening), [items, screening]);
+  const reportCase = useMemo(
+    () => buildFfsReportCase(items, reportContext),
+    [items, reportContext],
+  );
+  const actions = useMemo(
+    () => buildActionRegister(items, screening, reportContext),
+    [items, screening, reportContext],
+  );
   const horizonYears = analysisHorizonYears(config);
 
   if (!items.length) {
@@ -512,10 +522,10 @@ export default function FfsIntegrityPanel({
         <Panel>
           <PanelHeader
             title="Action register"
-            subtitle="Screening recommendations ranked by priority — assign owners in the controlled system"
+            subtitle="Active as-managed features ranked by priority — assign owners in the controlled system"
             actions={
               <span className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-600 dark:border-rose-800/60 dark:bg-rose-950/30 dark:text-rose-400">
-                {items.filter((item) => item.priority === 'High').length} high priority
+                {reportCase.asManagedItems.filter((item) => item.priority === 'High').length} high priority
               </span>
             }
           />

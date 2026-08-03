@@ -17,6 +17,8 @@ export type FfsLifeStatus =
 
 export type FfsFailureCriterion = 'Depth = 80%' | 'ERF = 1';
 
+export type FfsRepairStatus = 'unrepaired' | 'temporary-repair' | 'permanent-repair-verified';
+
 /**
  * Screening assumptions layered on top of the code calculation. These are
  * project decisions rather than ASME B31G formulas, so they stay in their own
@@ -63,6 +65,7 @@ export const DEFAULT_SCREENING_CONFIG: FfsScreeningConfig = {
 };
 
 export interface FfsInput {
+  featureId: string | null;
   ld: number | string;
   section: string;
   surface: string;
@@ -77,7 +80,23 @@ export interface FfsInput {
   od: number;
   smys: number;
   p0: number;
+  repairStatus: FfsRepairStatus;
+  repairMethod: string | null;
+  repairDate: string | null;
+  repairReference: string | null;
+  recommendation: string | null;
+  actionOwner: string | null;
 }
+
+export type FfsRepairDispositionPatch = Pick<
+  FfsInput,
+  | 'repairStatus'
+  | 'repairMethod'
+  | 'repairDate'
+  | 'repairReference'
+  | 'recommendation'
+  | 'actionOwner'
+>;
 
 export interface FfsResult extends FfsInput {
   SF: number;
@@ -188,4 +207,14 @@ export const REQUIRED_COLUMNS = [
   'Width [mm]', 'Orient. (hrs:mins)', 'Nominal Wall Thickness [mm]',
   'CR Depth [mm/y]', 'CR Length [mm/y]', 'Design Factor',
   'Outer Diameter Ds', 'SMYS [MPa]', 'Operating Pressure P₀ [MPa]'
+] as const;
+
+export const OPTIONAL_COLUMNS = [
+  'Feature ID',
+  'Repair Status',
+  'Repair Method',
+  'Repair Date',
+  'Repair Reference',
+  'Recommendation',
+  'Action Owner',
 ] as const;

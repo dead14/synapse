@@ -699,7 +699,9 @@ export default function FfsSetupPage() {
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
                         Manual rows are assessed as a separate source and are never mixed with released alignment
-                        features. XLSX, XLS, and CSV files up to 10 MB are supported.
+                        features. XLSX, XLS, and CSV files up to 10 MB are supported. The template includes optional
+                        Feature ID, repair evidence, recommendation, and action-owner fields used by Case Review;
+                        Feature ID becomes mandatory when the output is prepared as an auditable report.
                       </p>
                     </div>
                   </div>

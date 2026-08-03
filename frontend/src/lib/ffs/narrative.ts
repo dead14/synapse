@@ -2,6 +2,11 @@ import { formatLife } from './screening.ts';
 import { isInternal } from './statistics.ts';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from './types.ts';
 import { analysisHorizonYears, formatLifeProjection, lifeProjectionStatusLabel, lifeSortValue } from './lifeProjection.ts';
+import {
+  buildFfsReportCase,
+  createFfsReportContext,
+  type FfsReportContext,
+} from './reportCase.ts';
 
 export interface NarrativeTableColumn {
   header: string;
@@ -36,6 +41,8 @@ export const DEFAULT_NARRATIVE_OPTIONS: NarrativeOptions = {
   lifeTableRows: 10,
 };
 
+const NARRATIVE_REPAIR_REGISTER_LIMIT = 100;
+
 function methodName(config: FfsConfig): string {
   return config.method === 'original' ? 'Original ASME B31G' : 'Modified ASME B31G';
 }
@@ -59,6 +66,7 @@ export function buildNarrative(
   config: FfsConfig,
   screening: FfsScreeningConfig,
   options: NarrativeOptions = DEFAULT_NARRATIVE_OPTIONS,
+  reportContext: FfsReportContext = createFfsReportContext(config),
 ): NarrativeBlock[] {
   const blocks: NarrativeBlock[] = [];
   const total = items.length;
@@ -73,6 +81,18 @@ export function buildNarrative(
   const unacceptable = items.filter((item) => item.nominal.acceptance === 'Un-Acceptable');
   const acceptable = total - unacceptable.length;
   const horizonYears = analysisHorizonYears(config);
+  const reportCase = buildFfsReportCase(items, reportContext);
+  const activeItems = reportCase.asManagedItems;
+  const repairItems = items.filter((item) => item.nominal.repairStatus !== 'unrepaired');
+  const narrativeRepairItems = repairItems.slice(0, NARRATIVE_REPAIR_REGISTER_LIMIT);
+  const activeUnacceptable = activeItems.filter((item) => item.nominal.acceptance === 'Un-Acceptable');
+  const activeBelowThreshold = activeItems.filter(
+    (item) => item.nominal.expectedLife !== null && item.nominal.expectedLife < config.highlightYears,
+  );
+  const activeEscalated = activeItems.filter((item) => item.conservative.severity !== 'pass');
+  const activeMaxDepth = activeItems.length > 0
+    ? Math.max(...activeItems.map((item) => item.nominal.maxDepthPct))
+    : null;
   const belowThreshold = items.filter(
     (item) => item.nominal.expectedLife !== null && item.nominal.expectedLife < config.highlightYears,
   );
@@ -99,8 +119,35 @@ export function buildNarrative(
       `This report presents the fitness-for-service (FFS) assessment of ${total.toLocaleString()} metal-loss ` +
       `features reported for ${config.lineName || 'the assessed pipeline'}. The in-line inspection was ` +
       `carried out on ${config.iliDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}. ` +
+      `Repair disposition capacity credit is evaluated as of ${reportContext.asOfDateIso}. ` +
       `Features span log distance ${ldMin.toLocaleString()} m to ${ldMax.toLocaleString()} m, with a maximum ` +
       `reported depth of ${maxDepth.toFixed(1)}% of wall thickness.`,
+  });
+
+  blocks.push({ kind: 'heading', level: 2, text: '1.1  Decision summary' });
+  blocks.push({
+    kind: 'paragraph',
+    text:
+      `As-inspected, ${reportCase.asInspected.populationCount.toLocaleString()} feature(s) were assessed. ` +
+      (reportCase.asInspected.governingErf
+        ? `The governing nominal ERF is ${fmt(reportCase.asInspected.governingErf.nominal.ERF)} at ` +
+          `LD ${Number(reportCase.asInspected.governingErf.nominal.ld).toLocaleString()} m.`
+        : 'No governing feature is available.'),
+  });
+  blocks.push({
+    kind: 'paragraph',
+    text:
+      `As-managed, ${reportCase.asManaged.populationCount.toLocaleString()} active feature(s) remain after ` +
+      `${reportCase.repairCounts.permanentVerified.toLocaleString()} verified permanent repair(s). ` +
+      (reportCase.repairCounts.permanentPendingEvidence > 0
+        ? `${reportCase.repairCounts.permanentPendingEvidence.toLocaleString()} permanent-repair label(s) remain active because identity, evidence, or chronology does not yet qualify for capacity credit. `
+        : '') +
+      `${reportCase.repairCounts.temporary.toLocaleString()} temporary repair(s) remain active and receive ` +
+      `no capacity credit in this scenario.` +
+      (reportCase.asManaged.governingErf
+        ? ` The active governing feature is ${reportCase.asManaged.governingErf.nominal.featureId ?? 'unidentified'} ` +
+          `at LD ${Number(reportCase.asManaged.governingErf.nominal.ld).toLocaleString()} m.`
+        : ' No active governing feature remains.'),
   });
   blocks.push({
     kind: 'paragraph',
@@ -256,6 +303,52 @@ export function buildNarrative(
     },
   });
 
+  blocks.push({ kind: 'heading', level: 2, text: '3.3  Repair disposition' });
+  blocks.push({
+    kind: 'table',
+    table: {
+      caption: 'Table 3-3  Repair disposition register',
+      columns: [
+        { header: 'Feature ID', align: 'left' },
+        { header: 'LD [m]', align: 'right' },
+        { header: 'Status', align: 'left' },
+        { header: 'Method', align: 'left' },
+        { header: 'Date', align: 'center' },
+        { header: 'Evidence reference', align: 'left' },
+        { header: 'Action owner', align: 'left' },
+        { header: 'As-managed treatment', align: 'left' },
+      ],
+      rows: narrativeRepairItems.map((item) => [
+        item.nominal.featureId ?? '—',
+        Number(item.nominal.ld).toLocaleString(),
+        item.nominal.repairStatus === 'permanent-repair-verified'
+          ? 'Permanent repair verified'
+          : item.nominal.repairStatus === 'temporary-repair'
+            ? 'Temporary repair'
+            : 'Unrepaired',
+        item.nominal.repairMethod ?? '—',
+        item.nominal.repairDate ?? '—',
+        item.nominal.repairReference ?? '—',
+        item.nominal.actionOwner ?? '—',
+        reportCase.repairCreditDecisions.get(item)?.credited
+          ? 'Excluded after evidence validation'
+          : 'Active; no capacity credit',
+      ]),
+      criticalRows: narrativeRepairItems
+        .map((item, index) => (item.nominal.repairStatus === 'temporary-repair' ? index : -1))
+        .filter((index) => index >= 0),
+    },
+  });
+  if (repairItems.length > narrativeRepairItems.length) {
+    blocks.push({
+      kind: 'paragraph',
+      text:
+        `The narrative lists the first ${narrativeRepairItems.length.toLocaleString()} of ` +
+        `${repairItems.length.toLocaleString()} repair records to keep the document reviewable. ` +
+        'The complete repair register remains in the Excel assessment appendix.',
+    });
+  }
+
   // ── 4.0 Figures ───────────────────────────────────────────────────
   blocks.push({ kind: 'heading', level: 1, text: '4.0  Figures' });
   blocks.push({ kind: 'figure', caption: 'Figure 4-1  Depth category distribution by log distance', chartId: 'depth-by-ld' });
@@ -303,34 +396,38 @@ export function buildNarrative(
   blocks.push({ kind: 'heading', level: 1, text: '6.0  Conclusions and recommendations' });
 
   const recommendations: string[] = [];
-  if (unacceptable.length > 0) {
+  if (activeUnacceptable.length > 0) {
     recommendations.push(
-      `${unacceptable.length.toLocaleString()} feature(s) exceed the acceptance criteria at the current ` +
+      `${activeUnacceptable.length.toLocaleString()} active as-managed feature(s) exceed the acceptance criteria at the current ` +
         `operating pressure. Apply pressure control and raise an approved repair or a detailed ` +
         `(Level 2 or 3) assessment for these locations before continued operation at present conditions.`,
     );
+  } else if (activeItems.length === 0) {
+    recommendations.push(
+      'No active feature remains after evidence-qualified permanent repairs. Retain the repair dossier and independent approval as the disposition record.',
+    );
   } else {
     recommendations.push(
-      'No feature exceeds the acceptance criteria at the current operating pressure on the nominal ' +
+      'No active feature exceeds the acceptance criteria at the current operating pressure on the nominal ' +
         'calculation. Maintain existing integrity controls and the approved inspection plan.',
     );
   }
-  if (belowThreshold.length > 0) {
+  if (activeBelowThreshold.length > 0) {
     recommendations.push(
-      `${belowThreshold.length.toLocaleString()} feature(s) have an expected remaining life below ` +
+      `${activeBelowThreshold.length.toLocaleString()} active feature(s) have an expected remaining life below ` +
         `${config.highlightYears} years. Confirm the corrosion growth basis against matched prior ILI data and ` +
         `set reassessment or intervention dates accordingly.`,
     );
   }
-  if (escalated.length > 0) {
+  if (activeEscalated.length > 0) {
     recommendations.push(
-      `Verify the ILI tool performance specification for the ${escalated.length.toLocaleString()} feature(s) ` +
+      `Verify the ILI tool performance specification for the ${activeEscalated.length.toLocaleString()} active feature(s) ` +
         `in the review band, since the disposition is sensitive to the assumed depth and length tolerance.`,
     );
   }
-  if (maxDepth >= 70) {
+  if (activeMaxDepth !== null && activeMaxDepth >= 70) {
     recommendations.push(
-      `The deepest reported feature is at ${maxDepth.toFixed(1)}% of wall thickness. Validate depth and ` +
+      `The deepest active feature is at ${activeMaxDepth.toFixed(1)}% of wall thickness. Validate depth and ` +
         `morphology by excavation or in-ditch NDE, and record coating, CP, and environmental condition at ` +
         `the same time.`,
     );
@@ -341,6 +438,38 @@ export function buildNarrative(
   );
 
   blocks.push({ kind: 'list', items: recommendations });
+  blocks.push({ kind: 'heading', level: 2, text: '6.1  Report readiness' });
+  blocks.push({
+    kind: 'paragraph',
+    text:
+      reportCase.readiness.status === 'ready'
+        ? 'Report readiness: ready. No blocking data-consistency or repair-evidence finding was identified.'
+        : `Report readiness: ${reportCase.readiness.status === 'blocked' ? 'blocked' : 'ready with warnings'}. ` +
+          `${reportCase.readiness.findings.length.toLocaleString()} finding(s) require acknowledgement or resolution.`,
+  });
+  if (reportCase.readiness.findings.length > 0) {
+    blocks.push({
+      kind: 'table',
+      table: {
+        caption: 'Table 6-1  Report-readiness findings',
+        columns: [
+          { header: 'Severity', align: 'center' },
+          { header: 'Code', align: 'left' },
+          { header: 'Finding', align: 'left' },
+          { header: 'Affected', align: 'right' },
+        ],
+        rows: reportCase.readiness.findings.map((item) => [
+          item.severity.toUpperCase(),
+          item.code,
+          item.message,
+          item.affectedCount.toLocaleString(),
+        ]),
+        criticalRows: reportCase.readiness.findings
+          .map((item, index) => (item.severity === 'error' ? index : -1))
+          .filter((index) => index >= 0),
+      },
+    });
+  }
   blocks.push({
     kind: 'paragraph',
     text:

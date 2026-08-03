@@ -39,6 +39,7 @@ test('maps the NEW-run alignment anomaly and converts depth growth from %WT/year
   assert.equal(mapped.accepted.length, 1);
   assert.equal(mapped.rejected.length, 0);
   assert.deepEqual(mapped.accepted[0].row, {
+    'Feature ID': 'A-42',
     'LD [m]': '123.45',
     Section: 'KP 0-5',
     Surface: 'External',
@@ -53,6 +54,12 @@ test('maps the NEW-run alignment anomaly and converts depth growth from %WT/year
     'Outer Diameter Ds': '508',
     'SMYS [MPa]': '359',
     'Operating Pressure P₀ [MPa]': '7.2',
+    'Repair Status': 'Unrepaired',
+    'Repair Method': '',
+    'Repair Date': '',
+    'Repair Reference': '',
+    Recommendation: '',
+    'Action Owner': '',
   });
   assert.deepEqual(mapped.accepted[0].provenance, {
     alignmentSessionId: '77',

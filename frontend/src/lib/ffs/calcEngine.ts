@@ -1,4 +1,4 @@
-import type { FfsConfig, FfsResult } from './types';
+import type { FfsConfig, FfsRepairStatus, FfsResult } from './types';
 import { assertValidFfsRow } from './inputValidation.ts';
 import {
   B31G_DEPTH_LIMIT_RATIO,
@@ -57,9 +57,21 @@ function addYears(date: Date, years: number): string {
   return d.toISOString().split('T')[0];
 }
 
+function optionalText(value: string | undefined): string | null {
+  const normalized = String(value ?? '').trim();
+  return normalized || null;
+}
+
+function repairStatusOf(value: string | undefined): FfsRepairStatus {
+  if (value === 'Temporary repair') return 'temporary-repair';
+  if (value === 'Permanent repair verified') return 'permanent-repair-verified';
+  return 'unrepaired';
+}
+
 // Process a single row
 export function processRow(row: Record<string, string>, config: FfsConfig): FfsResult {
   assertValidFfsRow(row, config);
+  const featureId = optionalText(row['Feature ID']);
   const ld = row['LD [m]'];
   const section = row['Section'];
   const surface = row['Surface'];
@@ -74,6 +86,12 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
   const od = parseFloat(row['Outer Diameter Ds']);
   const smys = parseFloat(row['SMYS [MPa]']);
   const p0 = parseFloat(row['Operating Pressure P₀ [MPa]']);
+  const repairStatus = repairStatusOf(row['Repair Status']);
+  const repairMethod = optionalText(row['Repair Method']);
+  const repairDate = optionalText(row['Repair Date']);
+  const repairReference = optionalText(row['Repair Reference']);
+  const recommendation = optionalText(row.Recommendation);
+  const actionOwner = optionalText(row['Action Owner']);
 
   const dInit = (maxDepthPct / 100) * wall;
   const geometry: B31gGeometry = {
@@ -152,8 +170,9 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
   const round4 = (value: number) => (Number.isFinite(value) ? +value.toFixed(4) : value);
 
   return {
-    ld: parseFloat(ld as string) || ld as any, section, surface, maxDepthPct, length, width, orient, wall,
-    crDepth, crLength, df, od, smys, p0,
+    featureId, ld: parseFloat(ld as string) || ld as any, section, surface, maxDepthPct, length, width, orient, wall,
+    crDepth, crLength, df, od, smys, p0, repairStatus, repairMethod, repairDate, repairReference,
+    recommendation, actionOwner,
     SF: +SF.toFixed(4), d: +dInit.toFixed(4), dt: +init.depthRatio.toFixed(4),
     z: +(init.z || 0).toFixed(4), M: init.foliasFactor !== null ? +init.foliasFactor.toFixed(4) : null,
     sflow: +(init.flowStressMpa || 0).toFixed(4),

@@ -27,17 +27,20 @@ export function PanelHeader({
   title,
   subtitle,
   actions,
+  headingLevel = 3,
 }: {
   title: string;
   subtitle?: string;
   actions?: ReactNode;
+  headingLevel?: 2 | 3;
 }) {
+  const Heading = headingLevel === 2 ? 'h2' : 'h3';
   return (
     <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <h3 className="text-[13px] font-bold uppercase tracking-wide text-slate-800 dark:text-slate-100">
+        <Heading className="text-[13px] font-bold uppercase tracking-wide text-slate-800 dark:text-slate-100">
           {title}
-        </h3>
+        </Heading>
         {subtitle && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{subtitle}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
