@@ -1,4 +1,9 @@
 import type { ComparisonRow } from '../../utils/alignment.ts';
+import type {
+  FfsGrowthComponentEvidence,
+  FfsGrowthEvidence,
+  FfsGrowthObservation,
+} from './types.ts';
 
 export interface AlignmentEngineeringInputs {
   outerDiameterMm: number;
@@ -13,6 +18,7 @@ export interface AlignmentImportProvenance {
   alignmentSessionId: string;
   sourceFeatureKey: string;
   featureId: string;
+  growthEvidence: FfsGrowthEvidence;
   /** Engineer's note from the Corrosion Analysis review, when one was given. */
   selectionReason: string | null;
 }
@@ -78,6 +84,164 @@ function numericText(value: number): string {
   return Number(value.toFixed(6)).toString();
 }
 
+function roundedRate(value: number): number {
+  return Number(value.toFixed(6));
+}
+
+function surveyYear(value: unknown): number | null {
+  const parsed = finiteNumber(value);
+  if (parsed === null || !Number.isInteger(parsed) || parsed < 1900 || parsed > 2100) return null;
+  return parsed;
+}
+
+function unavailableComponent(
+  observation: Extract<FfsGrowthObservation, 'unavailable' | 'apparent-decrease'>,
+  rawRateMmPerYear: number | null,
+  fallbackRateMmPerYear: number,
+  formula: string | null,
+  unavailableNote: string,
+): FfsGrowthComponentEvidence {
+  if (fallbackRateMmPerYear > 0) {
+    return {
+      observation,
+      analysisBasis: 'explicit-fallback',
+      rawRateMmPerYear,
+      analysisRateMmPerYear: roundedRate(fallbackRateMmPerYear),
+      formula,
+      note: `${unavailableNote} Projection uses the engineer-entered fallback rate.`,
+    };
+  }
+  return {
+    observation,
+    analysisBasis: 'none',
+    rawRateMmPerYear,
+    analysisRateMmPerYear: null,
+    formula,
+    note: unavailableNote,
+  };
+}
+
+function deriveGrowthEvidence(
+  source: ComparisonRow,
+  depthPct: number,
+  wallMm: number,
+  engineering: AlignmentEngineeringInputs,
+  warnings: string[],
+): FfsGrowthEvidence {
+  const oldSurveyYear = surveyYear(source['Run Year OLD']);
+  const newSurveyYear = surveyYear(source['Run Year NEW']);
+  const intervalYears = oldSurveyYear !== null && newSurveyYear !== null && newSurveyYear > oldSurveyYear
+    ? newSurveyYear - oldSurveyYear
+    : null;
+  const reportedDepthPctPerYear = finiteNumber(source['Depth Growth (%WT/yr)']);
+  const reportedLengthMmPerYear = finiteNumber(source['Length Growth (mm/yr)']);
+  const matchStatus = text(source['Match/Unmatch'], '').toLowerCase();
+  const markedMatched = matchStatus === 'matched' || matchStatus === 'match';
+  const hasOldFeature = present(source['Source Key OLD']) ||
+    present(source['Identif. OLD']) ||
+    present(source['Depth OLD (%WT)']);
+  const isNewOnly = !hasOldFeature && !markedMatched;
+
+  let depth: FfsGrowthComponentEvidence;
+  if (isNewOnly && intervalYears !== null) {
+    const rate = roundedRate(((depthPct / 100) * wallMm) / intervalYears);
+    depth = {
+      observation: 'new-only-zero-baseline-estimate',
+      analysisBasis: 'estimated',
+      rawRateMmPerYear: null,
+      analysisRateMmPerYear: rate,
+      formula: `(${depthPct} / 100 x ${wallMm} mm - 0 mm) / (${newSurveyYear} - ${oldSurveyYear}) y`,
+      note: 'Estimated from an assumed zero-depth baseline at the OLD survey; not a measured run-pair CGR.',
+    };
+    warnings.push('NEW-only depth growth uses a disclosed zero-depth baseline estimate; it is not a measured run-pair CGR.');
+  } else if (isNewOnly) {
+    depth = unavailableComponent(
+      'unavailable',
+      null,
+      engineering.fallbackDepthGrowthMmPerYear,
+      null,
+      'NEW-only depth CGR cannot be estimated because a valid OLD-to-NEW survey interval is unavailable.',
+    );
+    warnings.push(
+      engineering.fallbackDepthGrowthMmPerYear > 0
+        ? 'Depth growth unavailable; explicit fallback rate was used.'
+        : 'Depth growth unavailable; projection cannot be calculated.',
+    );
+  } else if (reportedDepthPctPerYear !== null && reportedDepthPctPerYear >= 0) {
+    const rate = roundedRate((reportedDepthPctPerYear / 100) * wallMm);
+    depth = {
+      observation: 'matched-measured',
+      analysisBasis: 'reported',
+      rawRateMmPerYear: rate,
+      analysisRateMmPerYear: rate,
+      formula: `${reportedDepthPctPerYear} %WT/y x ${wallMm} mm / 100`,
+      note: 'Run-pair depth growth reported by the alignment engine.',
+    };
+  } else if (reportedDepthPctPerYear !== null) {
+    const rawRate = roundedRate((reportedDepthPctPerYear / 100) * wallMm);
+    depth = unavailableComponent(
+      'apparent-decrease',
+      rawRate,
+      engineering.fallbackDepthGrowthMmPerYear,
+      `${reportedDepthPctPerYear} %WT/y x ${wallMm} mm / 100`,
+      'The matched run pair reports an apparent depth decrease; review sizing uncertainty before assigning a projection rate.',
+    );
+    warnings.push(
+      engineering.fallbackDepthGrowthMmPerYear > 0
+        ? 'Matched data reports an apparent depth decrease; explicit fallback depth growth was used for projection.'
+        : 'Matched data reports an apparent depth decrease; depth projection cannot be calculated.',
+    );
+  } else {
+    depth = unavailableComponent(
+      'unavailable',
+      null,
+      engineering.fallbackDepthGrowthMmPerYear,
+      null,
+      'The matched run-pair CGR is unavailable; a zero-depth baseline is not applicable to a matched feature.',
+    );
+    warnings.push(
+      engineering.fallbackDepthGrowthMmPerYear > 0
+        ? 'Depth growth unavailable; explicit fallback rate was used.'
+        : 'Depth growth unavailable; projection cannot be calculated.',
+    );
+  }
+
+  let length: FfsGrowthComponentEvidence;
+  if (!isNewOnly && reportedLengthMmPerYear !== null && reportedLengthMmPerYear >= 0) {
+    const rate = roundedRate(reportedLengthMmPerYear);
+    length = {
+      observation: 'matched-measured',
+      analysisBasis: 'reported',
+      rawRateMmPerYear: rate,
+      analysisRateMmPerYear: rate,
+      formula: null,
+      note: 'Run-pair length growth reported by the alignment engine.',
+    };
+  } else {
+    const observation = !isNewOnly && reportedLengthMmPerYear !== null ? 'apparent-decrease' : 'unavailable';
+    const rawRate = isNewOnly || reportedLengthMmPerYear === null ? null : roundedRate(reportedLengthMmPerYear);
+    const note = isNewOnly
+      ? 'NEW-only length growth is unavailable; no zero-baseline length estimate is applied.'
+      : reportedLengthMmPerYear !== null
+      ? 'The matched run pair reports an apparent length decrease; review feature association and sizing uncertainty.'
+      : 'Length growth is unavailable; no zero-baseline length estimate is applied.';
+    length = unavailableComponent(
+      observation,
+      rawRate,
+      engineering.fallbackLengthGrowthMmPerYear,
+      null,
+      note,
+    );
+    warnings.push(
+      engineering.fallbackLengthGrowthMmPerYear > 0
+        ? 'Length growth unavailable; explicit fallback rate was used.'
+        : 'Length growth unavailable; length projection cannot be calculated.',
+    );
+  }
+
+  return { oldSurveyYear, newSurveyYear, intervalYears, depth, length };
+}
+
 function strictNumber(value: string): number | null {
   if (value.trim() === '') return null;
   const parsed = Number(value);
@@ -103,7 +267,7 @@ export function getAlignmentImportReadiness(input: AlignmentImportReadinessInput
     reasons.push('Design factor must be a number greater than 0 and not more than 1 (example: 0.72).');
   }
   const pressure = strictNumber(input.operatingPressureMpa);
-  if (pressure === null || pressure <= 0) reasons.push('Operating pressure must be greater than 0 MPa.');
+  if (pressure === null || pressure <= 0) reasons.push('Required assessment pressure must be greater than 0 MPa.');
   for (const [label, value] of [
     ['Fallback depth growth', input.fallbackDepthGrowthMmPerYear],
     ['Fallback length growth', input.fallbackLengthGrowthMmPerYear],
@@ -119,7 +283,7 @@ function assertEngineeringInputs(inputs: AlignmentEngineeringInputs): void {
     ['Outer diameter', inputs.outerDiameterMm],
     ['SMYS', inputs.smysMpa],
     ['Design factor', inputs.designFactor],
-    ['Operating pressure', inputs.operatingPressureMpa],
+    ['Required assessment pressure', inputs.operatingPressureMpa],
   ] as const;
   for (const [label, value] of positive) {
     if (!Number.isFinite(value) || value <= 0) {
@@ -187,20 +351,9 @@ export function mapAlignmentRowsToFfs(
     }
 
     const warnings: string[] = [];
-    const depthGrowthPct = finiteNumber(source['Depth Growth (%WT/yr)']);
-    const lengthGrowth = finiteNumber(source['Length Growth (mm/yr)']);
-    const depthGrowthMm = depthGrowthPct !== null && depthGrowthPct >= 0
-      ? (depthGrowthPct / 100) * wall
-      : engineering.fallbackDepthGrowthMmPerYear;
-    const lengthGrowthMm = lengthGrowth !== null && lengthGrowth >= 0
-      ? lengthGrowth
-      : engineering.fallbackLengthGrowthMmPerYear;
-    if (depthGrowthPct === null || depthGrowthPct < 0) {
-      warnings.push('Depth growth unavailable; explicit fallback rate was used.');
-    }
-    if (lengthGrowth === null || lengthGrowth < 0) {
-      warnings.push('Length growth unavailable; explicit fallback rate was used.');
-    }
+    const growthEvidence = deriveGrowthEvidence(source, depth, wall, engineering, warnings);
+    const depthGrowthMm = growthEvidence.depth.analysisRateMmPerYear ?? 0;
+    const lengthGrowthMm = growthEvidence.length.analysisRateMmPerYear ?? 0;
 
     accepted.push({
       row: {
@@ -230,6 +383,7 @@ export function mapAlignmentRowsToFfs(
         alignmentSessionId,
         sourceFeatureKey,
         featureId,
+        growthEvidence,
         selectionReason: selection.reasons?.[sourceFeatureKey]?.trim() || null,
       },
       warnings,

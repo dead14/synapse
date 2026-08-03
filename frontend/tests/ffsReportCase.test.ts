@@ -298,6 +298,30 @@ test('Excel scenarios state why life is unavailable and blocked filenames are vi
   assert.match(resultsWorkbookFilename(config, reportCase.readiness.status), /DRAFT/i);
 });
 
+test('report readiness discloses NEW-only zero-baseline growth as an estimate', () => {
+  const nominal = processRow(row(), config);
+  nominal.growthEvidence = {
+    oldSurveyYear: 2020,
+    newSurveyYear: 2024,
+    intervalYears: 4,
+    depth: {
+      observation: 'new-only-zero-baseline-estimate',
+      analysisBasis: 'estimated',
+      rawRateMmPerYear: null,
+      analysisRateMmPerYear: nominal.crDepth,
+      formula: '(40 / 100 x 9.3 mm - 0 mm) / 4 y',
+      note: 'Zero-baseline estimate.',
+    },
+    length: nominal.growthEvidence!.length,
+  };
+  const items = screenResults([nominal], config, DEFAULT_SCREENING_CONFIG);
+  const reportCase = buildFfsReportCase(items, reportContext);
+
+  const finding = reportCase.readiness.findings.find((item) => item.code === 'NEW_ONLY_ZERO_BASELINE_ESTIMATE');
+  assert.equal(finding?.severity, 'warning');
+  assert.equal(finding?.affectedCount, 1);
+});
+
 test('the Word narrative caps a large repair register and points to the complete Excel appendix', () => {
   const items = assessed(Array.from({ length: 101 }, (_, index) => row({
     'Feature ID': `REP-${String(index + 1).padStart(3, '0')}`,

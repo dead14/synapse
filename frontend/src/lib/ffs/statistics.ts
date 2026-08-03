@@ -170,7 +170,7 @@ export function buildWorstTable(
   const rank = (a: FfsScreenedResult, b: FfsScreenedResult) => {
     if (worstBy === 'depth') return b.nominal.maxDepthPct - a.nominal.maxDepthPct;
     if (worstBy === 'erf') return b.nominal.ERF - a.nominal.ERF;
-    // Rank on the per-feature measured growth, matching the "Life [y]" column
+    // Rank on the per-feature source-evidenced growth, matching the "Life [y]" column
     // and every other life figure in the workspace.
     return lifeSortValue(a.nominal.expectedLife) - lifeSortValue(b.nominal.expectedLife);
   };

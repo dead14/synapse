@@ -81,6 +81,7 @@ export default function FfsSetupPage() {
   const [smysMpa, setSmysMpa] = useState('');
   const [designFactor, setDesignFactor] = useState('0.72');
   const [operatingPressureMpa, setOperatingPressureMpa] = useState('');
+  const [pressureBasis, setPressureBasis] = useState<FfsConfig['pressureBasis']>('current-operating');
   const [pressureUnit, setPressureUnit] = useState<PressureUnit>('MPa');
   const [diameterUnit, setDiameterUnit] = useState<LengthUnit>('mm');
   const [fallbackDepthGrowth, setFallbackDepthGrowth] = useState('0');
@@ -238,6 +239,7 @@ export default function FfsSetupPage() {
         highlightYears,
         analysisHorizonYears,
         inputUnits: { pressure: pressureUnit, diameter: diameterUnit },
+        pressureBasis,
       };
 
       if (sourceMode === 'manual') {
@@ -282,7 +284,11 @@ export default function FfsSetupPage() {
         setErrors(dataErrors);
         return;
       }
-      const ffsResults = await processAllRows(rows, config, setProgress);
+      const calculatedResults = await processAllRows(rows, config, setProgress);
+      const ffsResults = calculatedResults.map((result, index) => ({
+        ...result,
+        growthEvidence: imported.accepted[index].provenance.growthEvidence,
+      }));
       navigate('/ffs/results', {
         state: {
           results: ffsResults,
@@ -566,8 +572,8 @@ export default function FfsSetupPage() {
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
                     A session appears here once its alignment reached the final phase and an engineer released
-                    features for assessment. Measured NEW-run geometry and growth keep their session and feature
-                    provenance.
+                    features for assessment. NEW-run geometry and growth evidence keep their session, feature,
+                    survey interval, formula, and analysis-basis provenance.
                   </p>
                 </div>
               </div>
@@ -682,11 +688,48 @@ export default function FfsSetupPage() {
                 <input type="number" min="0" step="any" value={designFactor} onChange={(event) => setDesignFactor(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
               </label>
               <label className="block text-xs font-semibold text-slate-500">
-                Operating Pressure [{pressureUnit}]
+                Required assessment pressure [{pressureUnit}]
                 <input type="number" min="0" step="any" value={operatingPressureMpa} onChange={(event) => setOperatingPressureMpa(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
               </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                Pressure basis
+                <select
+                  value={pressureBasis}
+                  onChange={(event) => setPressureBasis(event.target.value as FfsConfig['pressureBasis'])}
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                >
+                  <option value="maop">MAOP</option>
+                  <option value="mop">MOP / approved operating limit</option>
+                  <option value="current-operating">Current operating pressure</option>
+                  <option value="other-required">Other required assessment pressure</option>
+                </select>
+              </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                Fallback depth CGR [mm/y]
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={fallbackDepthGrowth}
+                  onChange={(event) => setFallbackDepthGrowth(event.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                />
+                <span className="mt-1 block text-[10px] font-normal leading-snug">Optional explicit assumption; 0 means no fallback.</span>
+              </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                Fallback length growth [mm/y]
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={fallbackLengthGrowth}
+                  onChange={(event) => setFallbackLengthGrowth(event.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                />
+                <span className="mt-1 block text-[10px] font-normal leading-snug">Optional explicit assumption; NEW-only length is not inferred from zero.</span>
+              </label>
             </div>
-            <p className="text-xs text-slate-500">Inputs are converted to MPa and mm before the ASME B31G calculation; changing units preserves the same physical value.</p>
+            <p className="text-xs text-slate-500">Inputs are converted to MPa and mm before the ASME B31G calculation. ERF compares the selected required pressure basis with the calculated safe pressure; current operating pressure is not silently treated as MAOP.</p>
               </>
             ) : (
               <>

@@ -390,7 +390,7 @@ export default function FfsResultsTable({
       </div>
 
       <Callout>
-        Select any row to open the full calculation trace. <strong>ERF cons.</strong> applies the ILI depth and
+        Select any row to open the right-side calculation drawer. <strong>ERF cons.</strong> applies the ILI depth and
         length tolerance; where it crosses {screening.reviewBandErf.toFixed(2)} the disposition depends on
         inspection accuracy rather than the reported dimensions.
       </Callout>

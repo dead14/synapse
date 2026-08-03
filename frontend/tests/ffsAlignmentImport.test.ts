@@ -19,6 +19,8 @@ function released(...keys: string[]) {
 
 test('maps the NEW-run alignment anomaly and converts depth growth from %WT/year to mm/year', () => {
   const mapped = mapAlignmentRowsToFfs([{
+    'Match/Unmatch': 'Matched',
+    'Source Key OLD': 'old:42',
     'Source Key NEW': 'new:42',
     'Identif. NEW': 'A-42',
     'Log Dist NEW (m)': 123.45,
@@ -65,12 +67,35 @@ test('maps the NEW-run alignment anomaly and converts depth growth from %WT/year
     alignmentSessionId: '77',
     sourceFeatureKey: 'new:42',
     featureId: 'A-42',
+    growthEvidence: {
+      oldSurveyYear: null,
+      newSurveyYear: null,
+      intervalYears: null,
+      depth: {
+        observation: 'matched-measured',
+        analysisBasis: 'reported',
+        rawRateMmPerYear: 0.1905,
+        analysisRateMmPerYear: 0.1905,
+        formula: '1.5 %WT/y x 12.7 mm / 100',
+        note: 'Run-pair depth growth reported by the alignment engine.',
+      },
+      length: {
+        observation: 'matched-measured',
+        analysisBasis: 'reported',
+        rawRateMmPerYear: 4,
+        analysisRateMmPerYear: 4,
+        formula: null,
+        note: 'Run-pair length growth reported by the alignment engine.',
+      },
+    },
     selectionReason: 'Active growth at 3 o’clock',
   });
 });
 
 test('the mapped row satisfies the engine input contract', () => {
   const mapped = mapAlignmentRowsToFfs([{
+    'Match/Unmatch': 'Matched',
+    'Source Key OLD': 'old:42',
     'Source Key NEW': 'new:42',
     'Log Dist NEW (m)': 123.45,
     'Depth NEW (%WT)': 35,
@@ -203,4 +228,123 @@ test('a loaded session with no released feature blocks the assessment', () => {
     fallbackDepthGrowthMmPerYear: '0',
     fallbackLengthGrowthMmPerYear: '0',
   }), ['Release at least one feature in Corrosion Analysis for this session.']);
+});
+
+test('estimates NEW-only depth CGR from a disclosed zero baseline and survey interval', () => {
+  const mapped = mapAlignmentRowsToFfs([{
+    'Match/Unmatch': 'Only NEW',
+    'Source Key OLD': '-',
+    'Source Key NEW': 'new:40',
+    'Identif. NEW': 'NEW-40',
+    'Run Year OLD': 2020,
+    'Run Year NEW': 2024,
+    'Log Dist NEW (m)': 3915.603,
+    'Depth NEW (%WT)': 40,
+    'Length NEW (mm)': 161,
+    'Width NEW (mm)': 45,
+    'Wall WT NEW (mm)': 10,
+  }], engineering, 'new-case', released('new:40'));
+
+  assert.equal(mapped.accepted[0].row['CR Depth [mm/y]'], '1');
+  assert.deepEqual(mapped.accepted[0].provenance.growthEvidence.depth, {
+    observation: 'new-only-zero-baseline-estimate',
+    analysisBasis: 'estimated',
+    rawRateMmPerYear: null,
+    analysisRateMmPerYear: 1,
+    formula: '(40 / 100 x 10 mm - 0 mm) / (2024 - 2020) y',
+    note: 'Estimated from an assumed zero-depth baseline at the OLD survey; not a measured run-pair CGR.',
+  });
+  assert.equal(mapped.accepted[0].provenance.growthEvidence.intervalYears, 4);
+  assert.match(mapped.accepted[0].warnings.join(' '), /zero-depth baseline/i);
+});
+
+test('NEW-only classification overrides a stale zero in the pair-growth column', () => {
+  const mapped = mapAlignmentRowsToFfs([{
+    'Match/Unmatch': 'Only NEW',
+    'Source Key OLD': '-',
+    'Source Key NEW': 'new:stale-zero',
+    'Run Year OLD': 2020,
+    'Run Year NEW': 2024,
+    'Log Dist NEW (m)': 12,
+    'Depth NEW (%WT)': 40,
+    'Length NEW (mm)': 80,
+    'Width NEW (mm)': 20,
+    'Wall WT NEW (mm)': 10,
+    'Depth Growth (%WT/yr)': 0,
+  }], engineering, 'stale-zero', released('new:stale-zero'));
+
+  assert.equal(mapped.accepted[0].row['CR Depth [mm/y]'], '1');
+  assert.equal(mapped.accepted[0].provenance.growthEvidence.depth.analysisBasis, 'estimated');
+});
+
+test('does not invent a NEW-only CGR when the survey interval is missing', () => {
+  const mapped = mapAlignmentRowsToFfs([{
+    'Match/Unmatch': 'Only NEW',
+    'Source Key OLD': '-',
+    'Source Key NEW': 'new:no-year',
+    'Log Dist NEW (m)': 10,
+    'Depth NEW (%WT)': 40,
+    'Length NEW (mm)': 80,
+    'Width NEW (mm)': 20,
+    'Wall WT NEW (mm)': 10,
+  }], engineering, 'missing-year', released('new:no-year'));
+
+  assert.equal(mapped.accepted[0].row['CR Depth [mm/y]'], '0');
+  assert.deepEqual(mapped.accepted[0].provenance.growthEvidence.depth, {
+    observation: 'unavailable',
+    analysisBasis: 'none',
+    rawRateMmPerYear: null,
+    analysisRateMmPerYear: null,
+    formula: null,
+    note: 'NEW-only depth CGR cannot be estimated because a valid OLD-to-NEW survey interval is unavailable.',
+  });
+  assert.match(mapped.accepted[0].warnings.join(' '), /cannot be calculated/i);
+});
+
+test('preserves an apparent depth decrease and does not relabel it as zero growth', () => {
+  const mapped = mapAlignmentRowsToFfs([{
+    'Match/Unmatch': 'Matched',
+    'Source Key OLD': 'old:decrease',
+    'Source Key NEW': 'new:decrease',
+    'Run Year OLD': 2020,
+    'Run Year NEW': 2024,
+    'Log Dist NEW (m)': 20,
+    'Depth NEW (%WT)': 30,
+    'Length NEW (mm)': 100,
+    'Width NEW (mm)': 30,
+    'Wall WT NEW (mm)': 10,
+    'Depth Growth (%WT/yr)': -2,
+    'Length Growth (mm/yr)': -1,
+  }], engineering, 'decrease', released('new:decrease'));
+
+  assert.equal(mapped.accepted[0].row['CR Depth [mm/y]'], '0');
+  assert.deepEqual(mapped.accepted[0].provenance.growthEvidence.depth, {
+    observation: 'apparent-decrease',
+    analysisBasis: 'none',
+    rawRateMmPerYear: -0.2,
+    analysisRateMmPerYear: null,
+    formula: '-2 %WT/y x 10 mm / 100',
+    note: 'The matched run pair reports an apparent depth decrease; review sizing uncertainty before assigning a projection rate.',
+  });
+  assert.match(mapped.accepted[0].warnings.join(' '), /apparent depth decrease/i);
+});
+
+test('does not apply the zero baseline to a matched feature whose CGR is missing', () => {
+  const mapped = mapAlignmentRowsToFfs([{
+    'Match/Unmatch': 'Matched',
+    'Source Key OLD': 'old:missing-rate',
+    'Source Key NEW': 'new:missing-rate',
+    'Run Year OLD': 2020,
+    'Run Year NEW': 2024,
+    'Log Dist NEW (m)': 30,
+    'Depth NEW (%WT)': 40,
+    'Length NEW (mm)': 100,
+    'Width NEW (mm)': 30,
+    'Wall WT NEW (mm)': 10,
+  }], engineering, 'matched-missing', released('new:missing-rate'));
+
+  assert.equal(mapped.accepted[0].row['CR Depth [mm/y]'], '0');
+  assert.equal(mapped.accepted[0].provenance.growthEvidence.depth.observation, 'unavailable');
+  assert.equal(mapped.accepted[0].provenance.growthEvidence.depth.analysisBasis, 'none');
+  assert.match(mapped.accepted[0].provenance.growthEvidence.depth.note, /matched run-pair CGR is unavailable/i);
 });

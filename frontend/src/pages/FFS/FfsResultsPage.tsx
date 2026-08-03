@@ -24,6 +24,7 @@ import FfsSummaryCards from '../../components/ffs/FfsSummaryCards';
 import ShareSnapshotButton from '../../components/sharing/ShareSnapshotButton';
 import { Callout, NumberField, Panel } from '../../components/ffs/FfsPrimitives';
 import { exportResultsWorkbook } from '../../lib/ffs/exports';
+import { methodProfileLabel, pressureBasisLabel } from '../../lib/ffs/assessmentProfile.ts';
 import type { AlignmentImportProvenance } from '../../lib/ffs/alignmentImport';
 import { screenResults } from '../../lib/ffs/screening';
 import {
@@ -90,6 +91,7 @@ export default function FfsResultsPage() {
   const handleFiguresCaptured = useCallback((images: Record<string, string>) => {
     setChartImages((previous) => ({ ...previous, ...images }));
   }, []);
+  const closeDetail = useCallback(() => setSelected(null), []);
 
   const results = state?.results ?? NO_RESULTS;
   const config = state?.config;
@@ -126,6 +128,10 @@ export default function FfsResultsPage() {
     () => reportContext ? buildFfsReportCase(screened, reportContext) : null,
     [screened, reportContext],
   );
+  const selectedIndex = selected
+    ? screened.findIndex((item) => item.index === selected.index && item.key === selected.key)
+    : -1;
+  const selectedItem = selectedIndex >= 0 ? screened[selectedIndex] : null;
 
   if (!state || !config || !reportContext || !reportCase) {
     return <Navigate to="/ffs" replace />;
@@ -214,6 +220,14 @@ export default function FfsResultsPage() {
         {/* Summary */}
         <FfsSummaryCards items={screened} config={config} screening={screening} />
 
+        <Panel className="!p-3.5">
+          <div className="grid gap-3 text-[11px] md:grid-cols-3">
+            <div><span className="block font-bold uppercase tracking-wide text-slate-500">Method profile</span><strong className="mt-1 block text-slate-800 dark:text-slate-100">{methodProfileLabel(config)}</strong></div>
+            <div><span className="block font-bold uppercase tracking-wide text-slate-500">Required pressure basis</span><strong className="mt-1 block text-slate-800 dark:text-slate-100">{pressureBasisLabel(config)}</strong></div>
+            <div><span className="block font-bold uppercase tracking-wide text-slate-500">Result boundary</span><strong className="mt-1 block text-slate-800 dark:text-slate-100">Metal-loss screening; disposition remains separate</strong></div>
+          </div>
+        </Panel>
+
         {/* Screening assumptions */}
         <Panel className={assumptionsOpen ? '' : '!py-3.5'}>
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -225,7 +239,7 @@ export default function FfsResultsPage() {
                 ILI tolerance +{screening.depthTolerancePct}% WT and +{screening.lengthToleranceMm} mm/end ·
                 growth{' '}
                 {screening.growthBasis === 'measured'
-                  ? `per-feature measured (fallback ${screening.growthRateMmPerYear.toFixed(2)} mm/y)`
+                  ? `per-feature source evidence${screening.growthRateMmPerYear > 0 ? ` (explicit fallback ${screening.growthRateMmPerYear.toFixed(2)} mm/y)` : ' (no implicit fallback)'}`
                   : `uniform ${screening.growthRateMmPerYear.toFixed(2)} mm/y`}{' '}
                 over {screening.forecastYears} y · review band ERF {screening.reviewBandErf.toFixed(2)} ·
                 interaction {screening.interactionSpacingFactor}t
@@ -256,7 +270,7 @@ export default function FfsResultsPage() {
                 </p>
                 <div role="radiogroup" aria-label="Growth basis" className="ds-segmented w-max">
                   {([
-                    { value: 'measured', label: 'Per-feature measured', hint: 'Uses each anomaly’s own reported corrosion rate — the same basis as the expected life column.' },
+                    { value: 'measured', label: 'Per-feature source evidence', hint: 'Uses each anomaly’s recorded rate and preserves whether it was measured, estimated, assumed, or unavailable.' },
                     { value: 'uniform', label: 'Uniform assumed rate', hint: 'Applies one rate to the whole population, for when the run pair’s growth numbers are not trusted.' },
                   ] as const).map((option) => (
                     <button
@@ -274,7 +288,7 @@ export default function FfsResultsPage() {
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
                   {screening.growthBasis === 'measured'
-                    ? 'The rate below is the fallback for features whose run pair reported no growth.'
+                    ? 'The rate below is used only when source growth is unavailable; a reported zero remains zero.'
                     : 'The rate below is applied to every feature, overriding the reported rates.'}
                 </p>
               </div>
@@ -372,7 +386,7 @@ export default function FfsResultsPage() {
               ` · ${state.alignmentImport.rejected.length.toLocaleString()} rejected`}
             {state.alignmentImport.warningCount > 0 &&
               ` · ${state.alignmentImport.warningCount.toLocaleString()} with warnings`}
-            . Measured NEW-run geometry and corrosion growth carry their session and feature provenance.
+            . NEW-run geometry and each growth observation carry session, feature, formula, and analysis-basis provenance.
           </Callout>
         )}
 
@@ -499,11 +513,15 @@ export default function FfsResultsPage() {
       </div>
 
       <FfsDetailModal
-        item={selected}
+        item={selectedItem}
         config={config}
         screening={screening}
-        repairCreditDecision={selected ? reportCase.repairCreditDecisions.get(selected) ?? null : null}
-        onClose={() => setSelected(null)}
+        repairCreditDecision={selectedItem ? reportCase.repairCreditDecisions.get(selectedItem) ?? null : null}
+        position={selectedIndex + 1}
+        total={screened.length}
+        onPrevious={selectedIndex > 0 ? () => setSelected(screened[selectedIndex - 1]) : undefined}
+        onNext={selectedIndex >= 0 && selectedIndex < screened.length - 1 ? () => setSelected(screened[selectedIndex + 1]) : undefined}
+        onClose={closeDetail}
       />
     </div>
   );

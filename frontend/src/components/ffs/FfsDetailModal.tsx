@@ -1,6 +1,15 @@
-import { useEffect } from 'react';
-import { FiX } from 'react-icons/fi';
+import { useEffect, useRef } from 'react';
+import { FiAlertCircle, FiCheckCircle, FiChevronLeft, FiChevronRight, FiX, FiXCircle } from 'react-icons/fi';
 import { formatLifeProjection, lifeProjectionStatusLabel } from '../../lib/ffs/lifeProjection';
+import {
+  applicabilityChecks,
+  applicabilityStatus,
+  engineeringDisposition,
+  growthAnalysisBasisLabel,
+  growthObservationLabel,
+  methodProfileLabel,
+  pressureBasisLabel,
+} from '../../lib/ffs/assessmentProfile.ts';
 import type { FfsRepairCreditDecision } from '../../lib/ffs/reportCase';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
 import { Callout, PriorityLabel, SeverityBadge, formatErf } from './FfsPrimitives';
@@ -159,22 +168,62 @@ export default function FfsDetailModal({
   config,
   screening,
   repairCreditDecision,
+  position,
+  total,
+  onPrevious,
+  onNext,
   onClose,
 }: {
   item: FfsScreenedResult | null;
   config: FfsConfig;
   screening: FfsScreeningConfig;
   repairCreditDecision: FfsRepairCreditDecision | null;
+  position: number;
+  total: number;
+  onPrevious?: () => void;
+  onNext?: () => void;
   onClose: () => void;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const isOpen = item !== null;
+
   useEffect(() => {
-    if (!item) return;
+    if (!isOpen) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    titleRef.current?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === titleRef.current)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [item, onClose]);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = previousOverflow;
+      returnFocusRef.current?.focus();
+    };
+  }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (item && bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [item]);
 
   if (!item) return null;
 
@@ -182,20 +231,35 @@ export default function FfsDetailModal({
   const isOriginal = config.method === 'original';
   const kLabel = isOriginal ? '2/3' : '0.85';
   const k = isOriginal ? 2 / 3 : 0.85;
-  const methodLabel = isOriginal ? 'Original B31G' : 'Modified B31G';
   const areaLabel = isOriginal ? '⅔dL' : '0.85dL';
   const failed = n.acceptance === 'Un-Acceptable';
   const repairCredited = repairCreditDecision?.credited === true;
+  const methodChecks = applicabilityChecks(item);
+  const methodApplicability = applicabilityStatus(item);
+  const disposition = engineeringDisposition(item);
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Calculation breakdown for the feature at log distance ${n.ld}`}
-      className="ffs-detail__overlay"
-      onClick={onClose}
-    >
-      <div className="ffs-detail__dialog" onClick={(event) => event.stopPropagation()}>
+    <div className="ffs-detail__overlay" onClick={onClose}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ffs-detail-title"
+        className="ffs-detail__dialog"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="ffs-detail__nav">
+          <button type="button" onClick={onPrevious} disabled={!onPrevious} className="ffs-detail__nav-btn">
+            <FiChevronLeft /> Previous
+          </button>
+          <span className="ffs-detail__nav-count">{position} of {total.toLocaleString()}</span>
+          <button type="button" onClick={onNext} disabled={!onNext} className="ffs-detail__nav-btn">
+            Next <FiChevronRight />
+          </button>
+          <button type="button" onClick={onClose} aria-label="Close calculation drawer" className="ffs-detail__close-btn">
+            <FiX />
+          </button>
+        </div>
         {/* Accent bar */}
         <div className={`ffs-detail__accent-bar ${failed ? 'ffs-detail__accent-bar--fail' : 'ffs-detail__accent-bar--pass'}`} />
 
@@ -203,11 +267,11 @@ export default function FfsDetailModal({
         <div className="ffs-detail__header">
           <div className="ffs-detail__header-left">
             <div className="ffs-detail__header-title-row">
-              <h2 className="ffs-detail__title">
+              <h2 id="ffs-detail-title" ref={titleRef} tabIndex={-1} className="ffs-detail__title">
                 DEFECT @ LD {Number(n.ld).toLocaleString()} m
               </h2>
               <span className="ffs-detail__method-badge">
-                {methodLabel} &middot; {areaLabel}
+                {methodProfileLabel(config)} &middot; {areaLabel}
               </span>
             </div>
             <p className="ffs-detail__subtitle">
@@ -216,19 +280,26 @@ export default function FfsDetailModal({
           </div>
           <div className="ffs-detail__header-right">
             <SeverityBadge severity={item.conservative.severity} />
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close calculation breakdown"
-              className="ffs-detail__close-btn"
-            >
-              <FiX />
-            </button>
           </div>
         </div>
 
         {/* Body */}
-        <div className="ffs-detail__body">
+        <div ref={bodyRef} className="ffs-detail__body">
+          <section className="ffs-detail__section">
+            <h3 className="ffs-detail__section-title">Capacity at required pressure</h3>
+            <div className="ffs-detail__metric-grid">
+              <LifeCard label="Failure pressure" value={fmt(n.Pf, 3)} unit="MPa" description="Calculated Pf" />
+              <LifeCard label="Safe pressure" value={fmt(n.safePressure, 3)} unit="MPa" description="Pf × design factor" tone="accent" />
+              <LifeCard label="Required pressure" value={fmt(n.p0, 3)} unit="MPa" description={pressureBasisLabel(config)} />
+              <LifeCard
+                label="ERF"
+                value={formatErf(n.ERF)}
+                description="Required pressure / safe pressure"
+                tone={n.ERF >= 1 ? 'bad' : n.ERF >= screening.reviewBandErf ? 'warn' : 'default'}
+              />
+            </div>
+          </section>
+
           {/* Input Parameters */}
           <section className="ffs-detail__section">
             <h3 className="ffs-detail__section-title">Input parameters</h3>
@@ -261,11 +332,11 @@ export default function FfsDetailModal({
                 description="Specified"
               />
               <InputCard
-                label={'Op. Pressure P₀'}
+                label={'Required Pressure P₀'}
                 symbol={'P₀'}
                 value={n.p0.toFixed(3)}
                 unit="MPa"
-                description="Operating"
+                description={pressureBasisLabel(config)}
               />
               <InputCard
                 label="Design Factor"
@@ -285,15 +356,76 @@ export default function FfsDetailModal({
                 symbol={'ṙᵈ'}
                 value={n.crDepth.toFixed(4)}
                 unit="mm/y"
-                description="Growth rate"
+                description={growthAnalysisBasisLabel(n.growthEvidence?.depth.analysisBasis)}
               />
               <InputCard
                 label="CR Length"
                 symbol={'ṙₗ'}
                 value={n.crLength.toFixed(4)}
                 unit="mm/y"
-                description="Growth rate"
+                description={growthAnalysisBasisLabel(n.growthEvidence?.length.analysisBasis)}
               />
+            </div>
+          </section>
+
+          <section className="ffs-detail__section">
+            <h3 className="ffs-detail__section-title">Growth evidence and projection basis</h3>
+            <div className="ffs-detail__evidence-grid">
+              <div className="ffs-detail__evidence-card">
+                <span className="ffs-detail__evidence-label">Source observation</span>
+                <strong>{growthObservationLabel(n.growthEvidence?.depth.observation)}</strong>
+                <p>{n.growthEvidence?.depth.note ?? 'No structured growth provenance was attached.'}</p>
+              </div>
+              <div className="ffs-detail__evidence-card">
+                <span className="ffs-detail__evidence-label">Rate used by projection</span>
+                <strong>
+                  {n.growthEvidence?.depth.analysisRateMmPerYear === null
+                    ? 'Not calculable'
+                    : `${n.crDepth.toFixed(4)} mm/y`}
+                </strong>
+                <p>{growthAnalysisBasisLabel(n.growthEvidence?.depth.analysisBasis)}</p>
+              </div>
+              <div className="ffs-detail__evidence-card">
+                <span className="ffs-detail__evidence-label">Survey interval / formula</span>
+                <strong>{n.growthEvidence?.intervalYears ? `${n.growthEvidence.intervalYears} years` : 'Not established'}</strong>
+                <p className="font-mono">{n.growthEvidence?.depth.formula ?? 'No calculated formula'}</p>
+              </div>
+            </div>
+            {n.growthEvidence?.depth.observation === 'new-only-zero-baseline-estimate' && (
+              <div className="mt-3">
+                <Callout tone="warn">
+                  This rate assumes zero metal-loss depth at the OLD survey date. It provides a transparent
+                  screening estimate for a NEW-only feature, not a measured corrosion growth rate.
+                </Callout>
+              </div>
+            )}
+          </section>
+
+          <section className="ffs-detail__section">
+            <div className="ffs-detail__section-heading-row">
+              <h3 className="ffs-detail__section-title">Method applicability and disposition</h3>
+              <span className={`ffs-detail__applicability ffs-detail__applicability--${methodApplicability}`}>
+                {methodApplicability === 'outside-domain'
+                  ? 'Outside supported domain'
+                  : methodApplicability === 'limited'
+                    ? 'Applicability evidence incomplete'
+                    : 'Applicable'}
+              </span>
+            </div>
+            <div className="ffs-detail__checks">
+              {methodChecks.map((check) => {
+                const Icon = check.status === 'pass' ? FiCheckCircle : check.status === 'fail' ? FiXCircle : FiAlertCircle;
+                return (
+                  <div key={check.id} className={`ffs-detail__check ffs-detail__check--${check.status}`}>
+                    <Icon aria-hidden="true" />
+                    <div><strong>{check.label}</strong><p>{check.detail}</p></div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="ffs-detail__disposition">
+              <span>Engineering disposition</span>
+              <strong>{disposition}</strong>
             </div>
           </section>
 
@@ -487,7 +619,7 @@ export default function FfsDetailModal({
                 result={fmt(n.So, 4)}
                 unit="MPa"
                 sideBySide={{
-                  name: 'Safe Operating Pressure',
+                  name: 'Calculated Safe Pressure',
                   formula: 'Pₛₐᶠₑ = Pᶠ × DF',
                   substitution: `${fmt(n.Pf, 4)} × ${n.df.toFixed(3)}`,
                   result: fmt(n.safePressure, 4),
@@ -562,7 +694,7 @@ export default function FfsDetailModal({
                       severity: item.conservative.severity,
                     },
                     {
-                      label: `Forecast — ${screening.forecastYears} y at ${item.forecast.growthRateMmPerYear.toFixed(3)} mm/y` + (screening.growthBasis === 'measured' ? ' (measured)' : ' (uniform)'),
+                      label: `Forecast — ${screening.forecastYears} y at ${item.forecast.growthRateMmPerYear.toFixed(3)} mm/y (${growthAnalysisBasisLabel(item.forecast.growthAnalysisBasis)})`,
                       depth: item.forecast.depthPct,
                       length: item.forecast.lengthMm,
                       safe: item.forecast.safePressure,

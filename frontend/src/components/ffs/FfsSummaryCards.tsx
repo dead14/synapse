@@ -1,5 +1,6 @@
 import { FiAlertTriangle, FiCheckCircle, FiClock, FiLayers, FiXCircle } from 'react-icons/fi';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
+import { engineeringDisposition } from '../../lib/ffs/assessmentProfile.ts';
 
 interface SummaryCard {
   label: string;
@@ -46,34 +47,42 @@ export default function FfsSummaryCards({
   screening: FfsScreeningConfig;
 }) {
   const total = items.length;
-  const acceptable = items.filter((item) => item.nominal.acceptance === 'Acceptable').length;
-  const unacceptable = total - acceptable;
+  const strengthFail = items.filter((item) => item.nominal.acceptance === 'Un-Acceptable').length;
   const belowThreshold = items.filter(
     (item) => item.nominal.expectedLife !== null && item.nominal.expectedLife < config.highlightYears,
   ).length;
-  const escalated = items.filter((item) => item.conservative.severity !== 'pass').length;
+  const engineeringReview = items.filter((item) => engineeringDisposition(item) !== 'Screening pass — verify applicability').length;
+  const dataWarnings = items.filter((item) => {
+    const depth = item.nominal.growthEvidence?.depth;
+    return item.conservative.beyondDepthLimit ||
+      depth?.observation === 'new-only-zero-baseline-estimate' ||
+      depth?.observation === 'apparent-decrease' ||
+      depth?.observation === 'unavailable' ||
+      depth?.analysisBasis === 'explicit-fallback' ||
+      depth?.analysisBasis === 'none';
+  }).length;
 
   const cards: SummaryCard[] = [
     {
-      label: 'Total features',
+      label: 'Assessed',
       value: total.toLocaleString(),
       foot: 'ILI metal-loss records',
       icon: FiLayers,
       tone: 'neutral',
     },
     {
-      label: 'Acceptable',
-      value: acceptable.toLocaleString(),
-      foot: `ERF < 1 and depth < ${screening.depthRejectionPct}%`,
+      label: 'Strength fail',
+      value: strengthFail.toLocaleString(),
+      foot: strengthFail > 0 ? 'Required pressure exceeds safe pressure or depth domain' : 'No nominal strength failure',
       icon: FiCheckCircle,
-      tone: 'good',
+      tone: strengthFail > 0 ? 'bad' : 'good',
     },
     {
-      label: 'Not acceptable',
-      value: unacceptable.toLocaleString(),
-      foot: unacceptable > 0 ? 'Pressure control or repair required' : 'None at current pressure',
+      label: 'Engineering review',
+      value: engineeringReview.toLocaleString(),
+      foot: `Conservative ERF ≥ ${screening.reviewBandErf.toFixed(2)}, evidence, or disposition gate`,
       icon: FiXCircle,
-      tone: unacceptable > 0 ? 'bad' : 'good',
+      tone: engineeringReview > 0 ? 'accent' : 'good',
     },
     {
       label: `Life under ${config.highlightYears} y`,
@@ -83,11 +92,11 @@ export default function FfsSummaryCards({
       tone: belowThreshold > 0 ? 'warn' : 'good',
     },
     {
-      label: 'In review band',
-      value: escalated.toLocaleString(),
-      foot: `Conservative ERF ≥ ${screening.reviewBandErf.toFixed(2)}`,
+      label: 'Data / method warnings',
+      value: dataWarnings.toLocaleString(),
+      foot: 'Estimated, assumed, unavailable, decreasing, or outside-domain input',
       icon: FiAlertTriangle,
-      tone: escalated > 0 ? 'accent' : 'good',
+      tone: dataWarnings > 0 ? 'warn' : 'good',
     },
   ];
 

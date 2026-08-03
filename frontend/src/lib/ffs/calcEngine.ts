@@ -1,4 +1,4 @@
-import type { FfsConfig, FfsRepairStatus, FfsResult } from './types';
+import type { FfsConfig, FfsGrowthComponentEvidence, FfsRepairStatus, FfsResult } from './types';
 import { assertValidFfsRow } from './inputValidation.ts';
 import {
   B31G_DEPTH_LIMIT_RATIO,
@@ -66,6 +66,17 @@ function repairStatusOf(value: string | undefined): FfsRepairStatus {
   if (value === 'Temporary repair') return 'temporary-repair';
   if (value === 'Permanent repair verified') return 'permanent-repair-verified';
   return 'unrepaired';
+}
+
+function manualGrowthComponent(rate: number, label: string): FfsGrowthComponentEvidence {
+  return {
+    observation: 'manual-reported',
+    analysisBasis: 'reported',
+    rawRateMmPerYear: rate,
+    analysisRateMmPerYear: rate,
+    formula: null,
+    note: `${label} was supplied by the controlled manual FFS workbook.`,
+  };
 }
 
 // Process a single row
@@ -173,6 +184,13 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
     featureId, ld: parseFloat(ld as string) || ld as any, section, surface, maxDepthPct, length, width, orient, wall,
     crDepth, crLength, df, od, smys, p0, repairStatus, repairMethod, repairDate, repairReference,
     recommendation, actionOwner,
+    growthEvidence: {
+      oldSurveyYear: null,
+      newSurveyYear: null,
+      intervalYears: null,
+      depth: manualGrowthComponent(crDepth, 'Depth growth'),
+      length: manualGrowthComponent(crLength, 'Length growth'),
+    },
     SF: +SF.toFixed(4), d: +dInit.toFixed(4), dt: +init.depthRatio.toFixed(4),
     z: +(init.z || 0).toFixed(4), M: init.foliasFactor !== null ? +init.foliasFactor.toFixed(4) : null,
     sflow: +(init.flowStressMpa || 0).toFixed(4),

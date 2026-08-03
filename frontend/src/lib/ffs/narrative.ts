@@ -199,7 +199,7 @@ export function buildNarrative(
       `ILI depth tolerance of +${screening.depthTolerancePct}% of wall thickness applied as an absolute addition for the conservative screen.`,
       `ILI length tolerance of +${screening.lengthToleranceMm} mm per end, giving a conservative length of reported + ${2 * screening.lengthToleranceMm} mm.`,
       screening.growthBasis === 'measured'
-        ? `Each feature is grown radially at its own measured corrosion rate for the ${screening.forecastYears}-year forecast; features carrying no measured rate use ${screening.growthRateMmPerYear.toFixed(2)} mm/year.`
+        ? `Each feature is grown radially from its own source-evidenced rate for the ${screening.forecastYears}-year forecast. The evidence record distinguishes matched measurements, NEW-only zero-baseline estimates, manual rates, apparent decreases, and unavailable values; ${screening.growthRateMmPerYear > 0 ? `an explicit ${screening.growthRateMmPerYear.toFixed(2)} mm/year fallback applies only where the source rate is unavailable` : 'no implicit fallback is applied where the source rate is unavailable'}.`
         : `A uniform corrosion growth rate of ${screening.growthRateMmPerYear.toFixed(2)} mm/year is applied radially to every feature for the ${screening.forecastYears}-year forecast.`,
       `Remaining-life calculations are bounded to a ${horizonYears}-year analysis horizon. A limit not reached inside that window is not reported as a service-life value or date.`,
       `Engineering review band starts at ERF ${screening.reviewBandErf.toFixed(2)}; ERF above 1.00 is reported as exceeding the calculated safe pressure.`,
