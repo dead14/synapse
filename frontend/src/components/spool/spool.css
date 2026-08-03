@@ -118,19 +118,48 @@
 
 /* ── Body ─────────────────────────────────────────────────────────────── */
 
+/* The column and row tracks are set inline from the drag state — the reviewer
+   owns the split, not this file. */
 .spool-view__body {
   display: grid;
-  grid-template-columns: 15rem minmax(0, 1fr) 21rem;
   min-height: 0;
 }
 
 .spool-view__centre {
   display: grid;
-  grid-template-rows: minmax(13rem, 1fr) minmax(0, 17rem);
   min-width: 0;
   min-height: 0;
-  border-inline: 1px solid var(--ds-line);
 }
+
+/* Placeholder that keeps the grid track occupied when a pane is dragged shut. */
+.spool-view__stub { min-width: 0; }
+
+.spool-resizer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ds-line);
+  touch-action: none;
+  transition: background var(--ds-dur) var(--ds-ease);
+}
+
+.spool-resizer:hover,
+.spool-resizer:focus-visible { background: var(--ds-primary); outline: none; }
+
+.spool-resizer--x { cursor: col-resize; }
+.spool-resizer--y { cursor: row-resize; }
+
+/* The grip: a short bar so the handle reads as draggable rather than as a rule. */
+.spool-resizer span {
+  border-radius: var(--ds-r-pill);
+  background: var(--ds-faint);
+  pointer-events: none;
+}
+
+.spool-resizer--x span { width: 2px; height: 1.75rem; }
+.spool-resizer--y span { width: 1.75rem; height: 2px; }
+.spool-resizer:hover span,
+.spool-resizer:focus-visible span { background: var(--ds-on-primary); }
 
 .spool-view__stage {
   position: relative;
@@ -585,7 +614,6 @@
 .spool-scene__card dd { margin: 0; font-weight: 600; }
 
 @media (width <= 1100px) {
-  .spool-view__body { grid-template-columns: 13rem minmax(0, 1fr) 18rem; }
   .spool-view__lower { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .spool-view__unrolled { border-right: 0; border-bottom: 1px solid var(--ds-line); }
 }
