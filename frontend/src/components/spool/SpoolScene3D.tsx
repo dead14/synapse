@@ -123,11 +123,11 @@ function placeFeatures(
     const axialWorld = data.lengthMm === null
       ? MIN_PATCH * 2
       : Math.max(MIN_PATCH, (data.lengthMm / 1000) * worldPerM * markerScale);
-    const arcDeg = arcWidthDeg(data.widthMm, odMm) ?? NOMINAL_ARC_DEG;
-    const circWorld = Math.max(
-      MIN_PATCH,
-      ((arcDeg * markerScale) * Math.PI / 180) * radius,
-    );
+    // Exaggerate a real arc, never the nominal fallback: multiplying a made-up
+    // width is what smears the patches into circumferential streaks.
+    const trueArc = arcWidthDeg(data.widthMm, odMm);
+    const arcDeg = trueArc === null ? NOMINAL_ARC_DEG : trueArc * markerScale;
+    const circWorld = Math.max(MIN_PATCH, (arcDeg * Math.PI / 180) * radius);
 
     const matrix = patchMatrix(x, angle, axialWorld, circWorld, radius);
     const [r, g, b] = side === 'current'
@@ -365,15 +365,33 @@ function CameraRig({ command, length }: { command: CameraCommand; length: number
 
   useEffect(() => {
     if (!controls) return;
-    const distance = Math.max(length * 0.85, 8);
-    const positions: Record<CameraPreset, [number, number, number]> = {
-      home: [length * 0.42, RADIUS * 2.6, distance * 0.86],
-      top: [0.001, distance, 0.002],
-      bottom: [0.001, -distance, 0.002],
-      right: [0.002, 0.001, distance],
-      left: [0.002, 0.001, -distance],
-      'look-along': [-distance, RADIUS * 0.4, 0.002],
+
+    // Frame the spool from the viewport it actually has: a wide stage needs a
+    // nearer camera than a narrow one for the same pipe, and guessing a fixed
+    // distance is what leaves the pipe either a sliver or clipped at the ends.
+    const perspective = camera as THREE.PerspectiveCamera;
+    const vFov = ((perspective.fov ?? 42) * Math.PI) / 180;
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * (perspective.aspect || 1));
+    const forLength = (length / 2) / Math.tan(hFov / 2);
+    const forGirth = (RADIUS * 1.9) / Math.tan(vFov / 2);
+    const distance = Math.max(forLength, forGirth) * 1.06;
+    // Down the axis only the diameter has to fit, so that view sits far closer.
+    const axialDistance = Math.max(forGirth * 1.5, RADIUS * 4);
+
+    const directions: Record<CameraPreset, [number, number, number, number]> = {
+      home: [0.44, 0.32, 0.84, distance],
+      top: [0.001, 1, 0.002, distance],
+      bottom: [0.001, -1, 0.002, distance],
+      right: [0.002, 0.001, 1, distance],
+      left: [0.002, 0.001, -1, distance],
+      'look-along': [-1, 0.08, 0.002, axialDistance],
     };
+    const positions = Object.fromEntries(
+      Object.entries(directions).map(([preset, [x, y, z, radius]]) => {
+        const direction = new THREE.Vector3(x, y, z).normalize().multiplyScalar(radius);
+        return [preset, [direction.x, direction.y, direction.z] as [number, number, number]];
+      }),
+    ) as Record<CameraPreset, [number, number, number]>;
 
     if (command.zoom) {
       // Dolly along the view ray instead of touching fov, so the axial ruler

@@ -11,6 +11,13 @@ import {
   type SpoolFilters,
 } from '../src/domain/spoolFeatures.ts';
 import { axialTicks, niceStep } from '../src/components/spool/spoolScale.ts';
+import {
+  COLLAPSED_LAYOUT,
+  DEFAULT_LAYOUT,
+  clampPane,
+  isMaximised,
+  readLayout,
+} from '../src/components/spool/spoolLayout.ts';
 
 function anomalyRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -173,4 +180,23 @@ test('both panes take their axial ticks from one ladder', () => {
   assert.equal(niceStep(12.12), 2);
   assert.deepEqual(axialTicks(6.67, 18.79), [8, 10, 12, 14, 16, 18]);
   assert.deepEqual(axialTicks(0, 4), [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4]);
+});
+
+test('a pane held above its minimum, or dragged shut past it', () => {
+  assert.equal(clampPane('railW', 300), 300);
+  assert.equal(clampPane('railW', 900), 420, 'a pane cannot eat the stage');
+  assert.equal(clampPane('railW', 140), 150, 'small drags stop at the minimum');
+  assert.equal(clampPane('railW', 80), 0, 'dragging well past the minimum shuts it');
+  assert.equal(clampPane('lowerH', 60), 0);
+  assert.equal(clampPane('detailW', 221), 221);
+});
+
+test('maximised means every pane is shut, not merely small', () => {
+  assert.equal(isMaximised(COLLAPSED_LAYOUT), true);
+  assert.equal(isMaximised(DEFAULT_LAYOUT), false);
+  assert.equal(isMaximised({ ...COLLAPSED_LAYOUT, lowerH: 130 }), false);
+});
+
+test('layout falls back to the defaults without a browser to store them in', () => {
+  assert.deepEqual(readLayout(), DEFAULT_LAYOUT);
 });
