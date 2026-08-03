@@ -11,7 +11,6 @@ import {
 import { createMatchLinesPlugin } from './matchLinesPlugin';
 
 import {
-  SECTION_RIBBON_PADDING,
   sectionBandsPlugin,
   sectionTooltipLine,
 } from '../../lib/sections/sectionBandsPlugin';
@@ -155,8 +154,6 @@ export default function DepthVsDistanceChart({ data, filters, sectionBands }: De
     animation: heavy ? (false as const) : undefined,
     parsing: false as const,
     interaction: { mode: 'nearest' as const, intersect: true, axis: 'xy' as const },
-    // Reserve the strip the section ribbon is drawn in, so it never covers a point.
-    layout: sectionBands ? { padding: { top: SECTION_RIBBON_PADDING } } : undefined,
     scales: {
       x: {
         type: 'linear' as const,

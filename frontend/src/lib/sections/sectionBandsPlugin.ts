@@ -12,7 +12,7 @@
  * charts at once.
  */
 
-import type { Chart, ChartType, Plugin } from 'chart.js';
+import { layouts, type Chart, type ChartType, type LayoutItem, type Plugin } from 'chart.js';
 
 import { formatBandRange, type SectionBand } from './bands.ts';
 
@@ -45,16 +45,6 @@ const DEFAULT_RIBBON_HEIGHT = 16;
 const RIBBON_GAP = 4;
 /** Segments narrower than this cannot hold a readable label. */
 const MIN_LABEL_WIDTH = 34;
-
-/**
- * Reserve this much layout padding on any chart using the plugin — the ribbon
- * sits above the plot so it can never cover a data point.
- */
-export const SECTION_RIBBON_PADDING = DEFAULT_RIBBON_HEIGHT + RIBBON_GAP + 4;
-
-function ribbonTop(chart: Chart, ribbonHeight: number): number {
-  return chart.chartArea.top - ribbonHeight - RIBBON_GAP;
-}
 
 interface Segment {
   band: SectionBand;
@@ -92,8 +82,126 @@ function readOptions(chart: Chart): SectionBandsPluginOptions | null {
   return Array.isArray(typed.bands) && typed.bands.length > 0 ? typed : null;
 }
 
+/**
+ * The ribbon is a Chart.js layout box, not something drawn into borrowed
+ * padding.
+ *
+ * Reserving space with `layout.padding.top` looked equivalent but was not:
+ * padding is taken from the canvas edge and the legend is then fitted *below*
+ * it, so a ribbon positioned relative to `chartArea.top` landed on top of the
+ * legend text on every chart that had one. As a box the ribbon is placed by the
+ * same layout pass that places the legend and the scales, so nothing can be
+ * laid out over it and no chart has to remember to reserve room for it.
+ */
+class SectionRibbonBox implements LayoutItem {
+  readonly position = 'top' as const;
+  /**
+   * Lower weight sits closer to the plot. The legend's default weight is 1000,
+   * so it keeps its place at the outside and the ribbon hugs the plot — which
+   * is also where it is readable, directly above the axis it describes.
+   */
+  readonly weight = 0;
+  /** Constrained to the plot width so a band's pixels match its data range. */
+  readonly fullSize = false;
+
+  width = 0;
+  height = 0;
+  left = 0;
+  top = 0;
+  right = 0;
+  bottom = 0;
+
+  constructor(private readonly chart: Chart) {}
+
+  isHorizontal(): boolean {
+    return true;
+  }
+
+  /** Zero height when the chart carries no bands, so the layout is unchanged. */
+  update(width: number): void {
+    const options = readOptions(this.chart);
+    this.width = width;
+    this.height = options ? (options.ribbonHeight ?? DEFAULT_RIBBON_HEIGHT) + RIBBON_GAP : 0;
+  }
+
+  draw(): void {
+    drawRibbon(this.chart, this);
+  }
+}
+
+const ribbonBoxes = new WeakMap<Chart, SectionRibbonBox>();
+
+/** Rect the ribbon itself occupies, excluding the gap that separates it from the plot. */
+function ribbonRect(box: SectionRibbonBox, ribbonHeight: number) {
+  return { top: box.top, bottom: box.top + ribbonHeight };
+}
+
+function drawRibbon(chart: Chart, box: SectionRibbonBox): void {
+  const options = readOptions(chart);
+  if (!options) return;
+  const area = chart.chartArea;
+  if (!area) return;
+
+  const segments = layoutSegments(chart, options.bands);
+  if (segments.length === 0) return;
+
+  const { ctx } = chart;
+  const ribbonHeight = options.ribbonHeight ?? DEFAULT_RIBBON_HEIGHT;
+  const { top } = ribbonRect(box, ribbonHeight);
+  const selectedId = options.selectedId ?? null;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(area.left, top, area.right - area.left, ribbonHeight);
+  ctx.clip();
+
+  if (options.ribbonBackground) {
+    ctx.fillStyle = options.ribbonBackground;
+    ctx.fillRect(area.left, top, area.right - area.left, ribbonHeight);
+  }
+
+  ctx.font = '600 10px system-ui, -apple-system, "Segoe UI", sans-serif';
+  ctx.textBaseline = 'middle';
+
+  for (const segment of segments) {
+    const width = segment.right - segment.left;
+    const held = selectedId !== null && segment.band.id === selectedId;
+
+    ctx.fillStyle = segment.band.color;
+    ctx.globalAlpha = held ? 1 : selectedId === null ? 0.75 : 0.3;
+    ctx.fillRect(segment.left, top, Math.max(2, width), ribbonHeight);
+    ctx.globalAlpha = 1;
+
+    if (width < MIN_LABEL_WIDTH) continue;
+    // Truncate rather than overflow into the neighbouring section's chip.
+    let label = segment.band.name;
+    while (label.length > 1 && ctx.measureText(label).width > width - 8) {
+      label = label.slice(0, -1);
+    }
+    if (label !== segment.band.name) label = `${label.slice(0, -1)}…`;
+    ctx.fillStyle = options.labelColor ?? '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, (segment.left + segment.right) / 2, top + ribbonHeight / 2);
+  }
+
+  ctx.restore();
+}
+
 export const sectionBandsPlugin: Plugin<ChartType> = {
   id: SECTION_BANDS_PLUGIN_ID,
+
+  start(chart) {
+    const box = new SectionRibbonBox(chart);
+    ribbonBoxes.set(chart, box);
+    layouts.addBox(chart, box);
+  },
+
+  stop(chart) {
+    const box = ribbonBoxes.get(chart);
+    if (!box) return;
+    layouts.removeBox(chart, box);
+    ribbonBoxes.delete(chart);
+  },
 
   /**
    * Drawn before the datasets so the tint sits behind the markers, and the
@@ -135,77 +243,21 @@ export const sectionBandsPlugin: Plugin<ChartType> = {
   },
 
   /**
-   * The label ribbon is drawn in the layout padding above the plot, so section
-   * names never sit on top of a data point — reserve `SECTION_RIBBON_PADDING`
-   * on any chart that uses it.
-   */
-  afterDatasetsDraw(chart) {
-    const options = readOptions(chart);
-    if (!options) return;
-    const area = chart.chartArea;
-    if (!area) return;
-
-    const segments = layoutSegments(chart, options.bands);
-    if (segments.length === 0) return;
-
-    const { ctx } = chart;
-    const ribbonHeight = options.ribbonHeight ?? DEFAULT_RIBBON_HEIGHT;
-    const top = ribbonTop(chart, ribbonHeight);
-    if (top < 0) return;
-    const selectedId = options.selectedId ?? null;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(area.left, top, area.right - area.left, ribbonHeight);
-    ctx.clip();
-
-    if (options.ribbonBackground) {
-      ctx.fillStyle = options.ribbonBackground;
-      ctx.fillRect(area.left, top, area.right - area.left, ribbonHeight);
-    }
-
-    ctx.font = '600 10px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.textBaseline = 'middle';
-
-    for (const segment of segments) {
-      const width = segment.right - segment.left;
-      const held = selectedId !== null && segment.band.id === selectedId;
-
-      ctx.fillStyle = segment.band.color;
-      ctx.globalAlpha = held ? 1 : selectedId === null ? 0.75 : 0.3;
-      ctx.fillRect(segment.left, top, Math.max(2, width), ribbonHeight);
-      ctx.globalAlpha = 1;
-
-      if (width < MIN_LABEL_WIDTH) continue;
-      // Truncate rather than overflow into the neighbouring section's chip.
-      let label = segment.band.name;
-      while (label.length > 1 && ctx.measureText(label).width > width - 8) {
-        label = label.slice(0, -1);
-      }
-      if (label !== segment.band.name) label = `${label.slice(0, -1)}…`;
-      ctx.fillStyle = options.labelColor ?? '#ffffff';
-      ctx.textAlign = 'center';
-      ctx.fillText(label, (segment.left + segment.right) / 2, top + ribbonHeight / 2);
-    }
-
-    ctx.restore();
-  },
-
-  /**
    * Clicks land on the ribbon only, so selecting a section never competes with
    * the chart's own click-to-open-a-feature behaviour in the plot body.
    */
   afterEvent(chart, args) {
     const options = readOptions(chart);
     if (!options || options.interactive === false || !options.onSelect) return;
+    const box = ribbonBoxes.get(chart);
     const event = args.event;
     const area = chart.chartArea;
-    if (!area || event.x === null || event.y === null) return;
+    if (!box || !area || event.x === null || event.y === null) return;
 
     const ribbonHeight = options.ribbonHeight ?? DEFAULT_RIBBON_HEIGHT;
-    const top = ribbonTop(chart, ribbonHeight);
+    const { top, bottom } = ribbonRect(box, ribbonHeight);
     const inRibbon = event.y >= top
-      && event.y <= top + ribbonHeight
+      && event.y <= bottom
       && event.x >= area.left
       && event.x <= area.right;
 

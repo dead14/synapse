@@ -7,10 +7,34 @@ import {
   type FfsReadinessSeverity,
   type FfsScenarioSummary,
 } from '../../lib/ffs/reportCase';
-import type { FfsRepairDispositionPatch, FfsScreenedResult } from '../../lib/ffs/types';
+import {
+  EMPTY_FEATURE_QUERY,
+  isFeatureQueryActive,
+  parseBound,
+  searchFeatures,
+  type FeatureQuery,
+} from '../../lib/ffs/featureSearch';
+import type { FfsRepairDispositionPatch, FfsRepairStatus, FfsScreenedResult } from '../../lib/ffs/types';
 import { isIsoCalendarDate } from '../../lib/ffs/validation';
 import SynButton from '../ui/SynButton';
-import { Callout, Panel, PanelHeader, Stat } from './FfsPrimitives';
+import { Callout, Panel, PanelHeader, Stat, formatErf } from './FfsPrimitives';
+
+/** How many matches the picker renders before asking for a narrower query. */
+const PICKER_RESULT_LIMIT = 60;
+
+const FILTER_INPUT_CLASS =
+  'w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:border-slate-400 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200';
+
+function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
 
 function featureLabel(item: FfsScreenedResult | null): string {
   if (!item) return '—';
@@ -168,7 +192,8 @@ export default function FfsCaseReviewPanel({
   onResetRepair?: (index: number) => void;
   changedRepairIndexes?: Set<number>;
 }) {
-  const [selectedFeatureIndex, setSelectedFeatureIndex] = useState('');
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [query, setQuery] = useState<FeatureQuery>(EMPTY_FEATURE_QUERY);
   const [repairPage, setRepairPage] = useState(0);
   const [editingItem, setEditingItem] = useState<FfsScreenedResult | null>(null);
   const [draft, setDraft] = useState<FfsRepairDispositionPatch | null>(null);
@@ -186,7 +211,10 @@ export default function FfsCaseReviewPanel({
     (visibleRepairPage + 1) * repairsPerPage,
   );
   const ReadinessIcon = readiness.icon;
-  const selectedFeature = items.find((item) => String(item.index) === selectedFeatureIndex) ?? items[0] ?? null;
+  const matches = useMemo(() => searchFeatures(items, query), [items, query]);
+  // Render a bounded slice: the point of the filters is to narrow the list, and
+  // pushing thousands of rows into the DOM would undo that.
+  const visibleMatches = matches.slice(0, PICKER_RESULT_LIMIT);
   const draftRepairMethod = draft?.repairMethod?.trim() ?? '';
   const draftRepairDate = draft?.repairDate?.trim() ?? '';
   const draftRepairReference = draft?.repairReference?.trim() ?? '';
@@ -295,32 +323,164 @@ export default function FfsCaseReviewPanel({
             title="Repair disposition register"
             subtitle="Capacity credit requires a unique feature ID and permanent-repair evidence completed from the ILI date through the report as-of date."
             actions={onUpdateRepair ? (
-              <>
-                <select
-                  value={selectedFeatureIndex || String(selectedFeature?.index ?? '')}
-                  onChange={(event) => setSelectedFeatureIndex(event.target.value)}
-                  aria-label="Feature to update"
-                  className="max-w-[220px] rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                >
-                  {items.map((item) => (
-                    <option key={`${item.key}-${item.index}`} value={item.index}>
-                      {item.nominal.featureId ?? `Row ${item.index + 1}`} · LD {Number(item.nominal.ld).toLocaleString()} m
-                    </option>
-                  ))}
-                </select>
-                <SynButton
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={!selectedFeature}
-                  onClick={() => selectedFeature && openEditor(selectedFeature)}
-                >
-                  <span className="inline-flex items-center gap-1.5"><FiPlus /> Record / update</span>
-                </SynButton>
-              </>
+              <SynButton
+                type="button"
+                variant="outline"
+                size="sm"
+                aria-expanded={pickerOpen}
+                onClick={() => setPickerOpen((open) => !open)}
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  {pickerOpen ? <FiX /> : <FiPlus />}
+                  {pickerOpen ? 'Close feature search' : 'Record / update'}
+                </span>
+              </SynButton>
             ) : <FiTool aria-hidden="true" className="h-4 w-4 text-slate-400" />}
           />
         </div>
+
+        {onUpdateRepair && pickerOpen && (
+          <div className="border-t border-slate-200 bg-slate-50/70 px-5 py-4 dark:border-slate-700 dark:bg-slate-900/40">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+              <div className="lg:col-span-2">
+                <FilterField label="Feature ID, section, or LD">
+                  <input
+                    type="search"
+                    value={query.text}
+                    placeholder="e.g. 34806, Aerial, 1881.8"
+                    onChange={(event) => setQuery((current) => ({ ...current, text: event.target.value }))}
+                    className={FILTER_INPUT_CLASS}
+                  />
+                </FilterField>
+              </div>
+              <FilterField label="LD from [m]">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={query.ldFromM ?? ''}
+                  onChange={(event) => setQuery((current) => ({ ...current, ldFromM: parseBound(event.target.value) }))}
+                  className={FILTER_INPUT_CLASS}
+                />
+              </FilterField>
+              <FilterField label="LD to [m]">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={query.ldToM ?? ''}
+                  onChange={(event) => setQuery((current) => ({ ...current, ldToM: parseBound(event.target.value) }))}
+                  className={FILTER_INPUT_CLASS}
+                />
+              </FilterField>
+              <FilterField label="Depth from [%WT]">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={query.depthFromPct ?? ''}
+                  onChange={(event) => setQuery((current) => ({ ...current, depthFromPct: parseBound(event.target.value) }))}
+                  className={FILTER_INPUT_CLASS}
+                />
+              </FilterField>
+              <FilterField label="Depth to [%WT]">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={query.depthToPct ?? ''}
+                  onChange={(event) => setQuery((current) => ({ ...current, depthToPct: parseBound(event.target.value) }))}
+                  className={FILTER_INPUT_CLASS}
+                />
+              </FilterField>
+              <div className="lg:col-span-2">
+                <FilterField label="Repair status">
+                  <select
+                    value={query.repairStatus}
+                    onChange={(event) => setQuery((current) => ({
+                      ...current,
+                      repairStatus: event.target.value as FfsRepairStatus | 'any',
+                    }))}
+                    className={FILTER_INPUT_CLASS}
+                  >
+                    <option value="any">Any</option>
+                    <option value="unrepaired">Unrepaired</option>
+                    <option value="temporary-repair">Temporary repair</option>
+                    <option value="permanent-repair-verified">Permanent repair</option>
+                  </select>
+                </FilterField>
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+              <span>
+                <strong className="tabular-nums text-slate-800 dark:text-slate-100">{matches.length.toLocaleString()}</strong>
+                {' '}of {items.length.toLocaleString()} features match
+                {matches.length > PICKER_RESULT_LIMIT && (
+                  <> · showing the first {PICKER_RESULT_LIMIT}, narrow the filters to see the rest</>
+                )}
+              </span>
+              {isFeatureQueryActive(query) && (
+                <button
+                  type="button"
+                  onClick={() => setQuery(EMPTY_FEATURE_QUERY)}
+                  className="font-semibold text-slate-600 underline-offset-2 hover:underline dark:text-slate-300"
+                >
+                  Clear filters
+                </button>
+              )}
+            </div>
+
+            <div className="mt-2 max-h-[320px] overflow-auto rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+              {visibleMatches.length === 0 ? (
+                <p className="px-4 py-8 text-center text-xs text-slate-500 dark:text-slate-400">
+                  No feature matches these filters.
+                </p>
+              ) : (
+                <table className="w-full text-left text-xs">
+                  <thead className="sticky top-0 bg-slate-50 dark:bg-slate-900/95">
+                    <tr className="text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                      <th className="px-3 py-2">Feature</th>
+                      <th className="px-3 py-2 text-right">LD [m]</th>
+                      <th className="px-3 py-2">Section</th>
+                      <th className="px-3 py-2 text-right">Depth [%WT]</th>
+                      <th className="px-3 py-2 text-right">Cons. ERF</th>
+                      <th className="px-3 py-2">Repair</th>
+                      <th className="px-3 py-2 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-700/70">
+                    {visibleMatches.map((item) => (
+                      <tr key={`${item.key}-${item.index}`} className="text-slate-700 dark:text-slate-300">
+                        <td className="px-3 py-1.5 font-mono text-[11px] font-semibold text-slate-900 dark:text-slate-100">
+                          {item.nominal.featureId ?? `Row ${item.index + 1}`}
+                        </td>
+                        <td className="px-3 py-1.5 text-right font-mono tabular-nums">
+                          {Number(item.nominal.ld).toLocaleString()}
+                        </td>
+                        <td className="px-3 py-1.5">{item.nominal.section}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{item.nominal.maxDepthPct.toFixed(1)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{formatErf(item.conservative.ERF)}</td>
+                        <td className="px-3 py-1.5">
+                          {item.nominal.repairStatus === 'unrepaired'
+                            ? 'Unrepaired'
+                            : item.nominal.repairStatus === 'temporary-repair'
+                              ? 'Temporary'
+                              : 'Permanent'}
+                        </td>
+                        <td className="px-3 py-1.5 text-right">
+                          <button
+                            type="button"
+                            onClick={() => openEditor(item)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-600 transition-colors hover:border-slate-400 dark:border-slate-700 dark:text-slate-300"
+                          >
+                            <FiEdit3 aria-hidden="true" /> Record
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        )}
         {repairs.length === 0 ? (
           <div className="border-t border-slate-200 px-5 py-8 text-center text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
             No repair disposition is recorded. All features remain in the as-managed population.

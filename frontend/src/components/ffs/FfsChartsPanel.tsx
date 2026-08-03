@@ -28,7 +28,6 @@ import { DEFAULT_DEPTH_BUCKETS, type DepthBucket } from '../../lib/ffs/statistic
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
 import { buildSectionBands, type SectionBand } from '../../lib/sections/bands';
 import {
-  SECTION_RIBBON_PADDING,
   sectionBandsPlugin,
   sectionTooltipLine,
 } from '../../lib/sections/sectionBandsPlugin';
@@ -426,7 +425,6 @@ export default function FfsChartsPanel({
     // Hit-testing every marker on every mouse move is the other half of the
     // cost; the nearest-point mode with a radius keeps hover cheap.
     interaction: { mode: 'nearest', intersect: true, axis: 'xy' },
-    layout: distanceAxis && sectionBandOptions ? { padding: { top: SECTION_RIBBON_PADDING } } : undefined,
     onClick: (_event, elements) => {
       const first = elements[0];
       if (!first) return;

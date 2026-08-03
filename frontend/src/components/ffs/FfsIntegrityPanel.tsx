@@ -7,7 +7,7 @@ import {
   findInteractions,
   formatLife,
 } from '../../lib/ffs/screening';
-import { isInternal } from '../../lib/ffs/statistics';
+import { buildClockRose, buildDistanceProfile } from '../../lib/ffs/integrityViews';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig, FfsSeverity } from '../../lib/ffs/types';
 import { analysisHorizonYears } from '../../lib/ffs/lifeProjection';
 import { buildFfsReportCase, type FfsReportContext } from '../../lib/ffs/reportCase';
@@ -24,9 +24,22 @@ function numericLd(item: FfsScreenedResult): number {
   return Number.isFinite(value) ? value : 0;
 }
 
+const SCHEMATIC_BIN_COUNT = 140;
+const SCHEMATIC_HEIGHT = 96;
+
+function metres(value: number): string {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
 /**
- * Horizontal pipeline schematic. Each feature is a marker at its log distance,
- * coloured by the conservative severity, so hot spots read at a glance.
+ * Feature density along the line, binned and coloured by the worst conservative
+ * severity in each stretch.
+ *
+ * One marker per feature is unreadable at report scale — seven thousand dots on
+ * a strip of a few hundred pixels overlap into a solid bar and answer nothing.
+ * Bar height carries how many features fall in a stretch, colour carries how bad
+ * the worst of them is, and clicking a bar opens that worst feature, so the
+ * picture still leads somewhere.
  */
 function PipelineSchematic({
   items,
@@ -35,151 +48,222 @@ function PipelineSchematic({
   items: FfsScreenedResult[];
   onSelect: (item: FfsScreenedResult) => void;
 }) {
-  const distances = items.map(numericLd);
-  const min = Math.min(...distances);
-  const max = Math.max(...distances);
-  const span = max - min || 1;
+  const profile = useMemo(() => buildDistanceProfile(items, SCHEMATIC_BIN_COUNT), [items]);
+  if (profile.bins.length === 0) return null;
+
+  const { minM, maxM, peakCount, binWidthM } = profile;
+  const span = maxM - minM || 1;
+  const binPct = (binWidthM / span) * 100;
 
   return (
     <div>
-      <div className="relative h-16 rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/50">
-        {/* Pipe body */}
+      <div
+        className="relative rounded-lg border border-slate-200 bg-slate-50 px-2 pb-4 pt-2 dark:border-slate-700 dark:bg-slate-900/50"
+        style={{ height: SCHEMATIC_HEIGHT }}
+      >
+        {/* The pipe itself sits under the bars as the baseline they grow from. */}
         <div
-          className="absolute left-2 right-2 top-1/2 h-2.5 -translate-y-1/2 rounded-full border border-slate-300 bg-gradient-to-b from-slate-200 via-slate-100 to-slate-300 dark:border-slate-600 dark:from-slate-600 dark:via-slate-700 dark:to-slate-600"
+          className="absolute bottom-3 left-2 right-2 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600"
           aria-hidden="true"
         />
-        {items.map((item) => {
-          const left = 8 + ((numericLd(item) - min) / span) * 100;
-          const severity = item.conservative.severity;
+        {profile.bins.map((bin) => {
+          // Square-root scaling: a stretch with 400 features is denser than one
+          // with 40, but on a linear scale the 40 would be invisible.
+          const height = Math.max(3, Math.sqrt(bin.count / (peakCount || 1)) * (SCHEMATIC_HEIGHT - 26));
           return (
             <button
-              key={item.key}
+              key={bin.index}
               type="button"
-              onClick={() => onSelect(item)}
-              title={`LD ${numericLd(item).toLocaleString()} m · ${item.nominal.section} · conservative ERF ${formatErf(item.conservative.ERF)}`}
-              aria-label={`Feature at log distance ${numericLd(item).toLocaleString()} metres, conservative ERF ${formatErf(item.conservative.ERF)}`}
-              className="absolute top-1/2 h-4 w-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow transition-transform hover:scale-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-800"
+              onClick={() => onSelect(bin.worst)}
+              title={`${metres(bin.startM)}–${metres(bin.endM)} m · ${bin.count.toLocaleString()} feature(s) · worst conservative ERF ${formatErf(bin.worstErf)}`}
+              aria-label={`${bin.count} features between ${metres(bin.startM)} and ${metres(bin.endM)} metres, worst conservative ERF ${formatErf(bin.worstErf)}. Opens the worst feature.`}
+              className="absolute bottom-3 rounded-t-[2px] transition-opacity hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
               style={{
-                left: `calc(${((numericLd(item) - min) / span) * 100}% * 0.96 + 2%)`,
-                background: SEVERITY_FILL[severity],
-                // Escalated features sit above the pass markers so they stay visible.
-                zIndex: severity === 'fail' ? 3 : severity === 'review' ? 2 : 1,
-                ...(left > 100 ? { left: '98%' } : {}),
+                left: `calc(${((bin.startM - minM) / span) * 96}% + 2%)`,
+                width: `max(2px, ${binPct * 0.96}%)`,
+                height,
+                background: SEVERITY_FILL[bin.severity],
+                opacity: bin.severity === 'pass' ? 0.75 : 1,
+                // A single escalated bin must not be hidden by its neighbours.
+                zIndex: bin.severity === 'fail' ? 3 : bin.severity === 'review' ? 2 : 1,
               }}
             />
           );
         })}
       </div>
       <div className="mt-1.5 flex justify-between text-[10px] tabular-nums text-slate-400">
-        <span>{min.toLocaleString()} m</span>
-        <span>{((min + max) / 2).toLocaleString(undefined, { maximumFractionDigits: 0 })} m</span>
-        <span>{max.toLocaleString()} m</span>
+        <span>{metres(minM)} m</span>
+        <span>
+          {Math.round(binWidthM).toLocaleString()} m per bar · peak {peakCount.toLocaleString()} features
+        </span>
+        <span>{metres(maxM)} m</span>
       </div>
     </div>
   );
 }
 
+const INTERNAL_FILL = '#4f46e5';
+const EXTERNAL_FILL = '#ea580c';
+
+/** Wedge covering one clock hour, drawn from `inner` to `outer` radius. */
+function sectorPath(cx: number, cy: number, hour: number, inner: number, outer: number): string {
+  const step = (Math.PI * 2) / 12;
+  // 12 o'clock is the top of the pipe, so the first sector is centred on -90°.
+  const start = hour * step - Math.PI / 2 - step / 2 + 0.012;
+  const end = start + step - 0.024;
+  const p = (radiusValue: number, angle: number) => [
+    cx + Math.cos(angle) * radiusValue,
+    cy + Math.sin(angle) * radiusValue,
+  ];
+  const [x1, y1] = p(outer, start);
+  const [x2, y2] = p(outer, end);
+  const [x3, y3] = p(inner, end);
+  const [x4, y4] = p(inner, start);
+  return [
+    `M ${x1} ${y1}`,
+    `A ${outer} ${outer} 0 0 1 ${x2} ${y2}`,
+    `L ${x3} ${y3}`,
+    `A ${inner} ${inner} 0 0 0 ${x4} ${y4}`,
+    'Z',
+  ].join(' ');
+}
+
 /**
- * Pipe cross-section with features plotted at their clock angle. A concentration
- * in the 4-8 o'clock arc points to water hold-up along the invert.
+ * Clock-hour rose: how many features sit at each hour of the circumference,
+ * counted separately for internal and external corrosion.
+ *
+ * Plotting one dot per feature on a single ring produced a solid band and hid
+ * internal corrosion behind the far more numerous external features. A rose
+ * answers the question the view is actually for — is the metal loss collecting
+ * along the invert, and on which surface — and it answers it with counts an
+ * engineer can quote.
  */
-function ClockPolarChart({
+function ClockRoseChart({
   items,
   onSelect,
 }: {
   items: FfsScreenedResult[];
   onSelect: (item: FfsScreenedResult) => void;
 }) {
-  const size = 300;
+  const rose = useMemo(() => buildClockRose(items), [items]);
+  const size = 320;
   const cx = size / 2;
   const cy = size / 2;
-  const radius = 96;
-  const plotted = items.filter((item) => item.clockHour !== null);
+  const innerRadius = 44;
+  const maxRadius = 132;
+  const span = maxRadius - innerRadius;
+
+  // Square-root scaling keeps a sector holding a handful of features visible
+  // next to one holding a thousand; area then reads roughly with count.
+  const radiusFor = (count: number) => (
+    rose.peakCount > 0 ? innerRadius + Math.sqrt(count / rose.peakCount) * span : innerRadius
+  );
 
   return (
-    <svg
-      viewBox={`0 0 ${size} ${size}`}
-      className="mx-auto block h-auto w-full max-w-[300px]"
-      role="img"
-      aria-label={`Pipe cross-section showing the clock orientation of ${plotted.length} features`}
-    >
-      <title>Feature orientation around the pipe circumference</title>
-      {/* Pipe wall */}
-      <circle cx={cx} cy={cy} r={radius + 16} className="fill-slate-50 dark:fill-slate-900/60" />
-      <circle
-        cx={cx}
-        cy={cy}
-        r={radius}
-        className="fill-white stroke-slate-300 dark:fill-slate-800 dark:stroke-slate-600"
-        strokeWidth="2"
-      />
-      <circle
-        cx={cx}
-        cy={cy}
-        r={radius - 26}
-        className="fill-slate-50/60 stroke-slate-200 dark:fill-slate-900/40 dark:stroke-slate-700"
-      />
+    <div>
+      <svg
+        viewBox={`0 0 ${size} ${size}`}
+        className="mx-auto block h-auto w-full max-w-[340px]"
+        role="img"
+        aria-label={`Feature count at each clock hour: ${rose.internalTotal} internal and ${rose.externalTotal} external across ${rose.plotted} oriented features`}
+      >
+        <title>Feature count by clock hour and surface</title>
 
-      {/* Bottom-quadrant arc highlight */}
-      <path
-        d={`M ${cx - radius - 8} ${cy} A ${radius + 8} ${radius + 8} 0 0 0 ${cx + radius + 8} ${cy}`}
-        fill="none"
-        stroke="#f59e0b"
-        strokeWidth="5"
-        strokeLinecap="round"
-        opacity="0.2"
-      />
+        {/* Invert arc, 4 to 8 o'clock — where water collects. */}
+        {[4, 5, 6, 7, 8].map((hour) => (
+          <path
+            key={`invert-${hour}`}
+            d={sectorPath(cx, cy, hour, maxRadius + 5, maxRadius + 11)}
+            fill="#f59e0b"
+            opacity="0.35"
+          />
+        ))}
 
-      {/* Clock labels */}
-      {[
-        { label: '12', x: cx, y: cy - radius - 22 },
-        { label: '3', x: cx + radius + 24, y: cy + 4 },
-        { label: '6', x: cx, y: cy + radius + 30 },
-        { label: '9', x: cx - radius - 24, y: cy + 4 },
-      ].map((tick) => (
-        <text
-          key={tick.label}
-          x={tick.x}
-          y={tick.y}
-          textAnchor="middle"
-          className="fill-slate-400 text-[11px]"
-        >
-          {tick.label}
-        </text>
-      ))}
-
-      <text x={cx} y={cy - 2} textAnchor="middle" className="fill-slate-500 text-[11px] font-bold">
-        PIPE
-      </text>
-      <text x={cx} y={cy + 12} textAnchor="middle" className="fill-slate-400 text-[8px]">
-        CROSS SECTION
-      </text>
-
-      {/* Features */}
-      {plotted.map((item) => {
-        // 12 o'clock is the top of the pipe, so offset the angle by a quarter turn.
-        const angle = (item.clockHour! / 12) * Math.PI * 2 - Math.PI / 2;
-        const r = radius - 13;
-        return (
+        {/* Count rings, so a sector can be read as a number, not just a shape. */}
+        {[0.25, 0.5, 0.75, 1].map((fraction) => (
           <circle
-            key={item.key}
-            cx={cx + Math.cos(angle) * r}
-            cy={cy + Math.sin(angle) * r}
-            r={4.5}
-            fill={isInternal(item) ? '#6366f1' : '#f97316'}
-            stroke="#fff"
-            strokeWidth="1.5"
-            className="cursor-pointer transition-all hover:brightness-110"
-            onClick={() => onSelect(item)}
-          >
-            <title>
-              LD {numericLd(item).toLocaleString()} m · {item.nominal.orient} · {item.nominal.surface} ·
-              depth {item.nominal.maxDepthPct.toFixed(1)}%
-            </title>
-          </circle>
-        );
-      })}
-    </svg>
+            key={fraction}
+            cx={cx}
+            cy={cy}
+            r={innerRadius + Math.sqrt(fraction) * span}
+            fill="none"
+            className="stroke-slate-200 dark:stroke-slate-700"
+            strokeDasharray="2 3"
+          />
+        ))}
+        <circle cx={cx} cy={cy} r={innerRadius} className="fill-white stroke-slate-300 dark:fill-slate-800 dark:stroke-slate-600" />
+
+        {rose.sectors.map((sector) => {
+          if (sector.total === 0) return null;
+          // External is the outer ring, internal the inner one, so the smaller
+          // population is never painted over by the larger.
+          const outer = radiusFor(sector.total);
+          const boundary = radiusFor(sector.internal);
+          const label = `${sector.label} o'clock · ${sector.total.toLocaleString()} feature(s) · ${sector.internal.toLocaleString()} internal, ${sector.external.toLocaleString()} external`;
+          return (
+            <g
+              key={sector.hour}
+              className={sector.deepest ? 'cursor-pointer' : undefined}
+              onClick={() => sector.deepest && onSelect(sector.deepest)}
+            >
+              <title>{label}{sector.deepest ? ` · deepest ${sector.deepest.nominal.maxDepthPct.toFixed(1)}%` : ''}</title>
+              {sector.internal > 0 && (
+                <path d={sectorPath(cx, cy, sector.hour, innerRadius, boundary)} fill={INTERNAL_FILL} opacity="0.9" />
+              )}
+              {sector.external > 0 && (
+                <path
+                  d={sectorPath(cx, cy, sector.hour, sector.internal > 0 ? boundary : innerRadius, outer)}
+                  fill={EXTERNAL_FILL}
+                  opacity="0.85"
+                />
+              )}
+            </g>
+          );
+        })}
+
+        {/* Hour labels around the outside. */}
+        {rose.sectors.map((sector) => {
+          const angle = (sector.hour / 12) * Math.PI * 2 - Math.PI / 2;
+          const r = maxRadius + 22;
+          return (
+            <text
+              key={`label-${sector.hour}`}
+              x={cx + Math.cos(angle) * r}
+              y={cy + Math.sin(angle) * r + 3.5}
+              textAnchor="middle"
+              className="fill-slate-400 text-[10px] tabular-nums"
+            >
+              {sector.label}
+            </text>
+          );
+        })}
+
+        <text x={cx} y={cy - 2} textAnchor="middle" className="fill-slate-500 text-[10px] font-bold">
+          {rose.plotted.toLocaleString()}
+        </text>
+        <text x={cx} y={cy + 11} textAnchor="middle" className="fill-slate-400 text-[8px]">
+          ORIENTED
+        </text>
+      </svg>
+
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-slate-500 dark:text-slate-400">
+        <span className="inline-flex items-center gap-1.5">
+          <i className="h-2 w-2 rounded-sm" style={{ background: INTERNAL_FILL }} aria-hidden="true" />
+          Internal <strong className="tabular-nums text-slate-700 dark:text-slate-200">{rose.internalTotal.toLocaleString()}</strong>
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <i className="h-2 w-2 rounded-sm" style={{ background: EXTERNAL_FILL }} aria-hidden="true" />
+          External <strong className="tabular-nums text-slate-700 dark:text-slate-200">{rose.externalTotal.toLocaleString()}</strong>
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <i className="h-2 w-2 rounded-sm bg-amber-400/60" aria-hidden="true" />
+          4–8 o'clock <strong className="tabular-nums text-slate-700 dark:text-slate-200">{(rose.bottomShare * 100).toFixed(0)}%</strong>
+        </span>
+        {rose.withoutOrientation > 0 && (
+          <span>{rose.withoutOrientation.toLocaleString()} without a clock value</span>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -498,7 +582,7 @@ export default function FfsIntegrityPanel({
               </span>
             }
           />
-          <ClockPolarChart items={items} onSelect={onSelect} />
+          <ClockRoseChart items={items} onSelect={onSelect} />
           <div className="mt-3 flex justify-center gap-4 text-[10px] text-slate-500 dark:text-slate-400">
             <span className="inline-flex items-center gap-1.5">
               <i className="h-2 w-2 rounded-full bg-indigo-500" aria-hidden="true" /> Internal
