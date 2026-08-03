@@ -1,4 +1,5 @@
 import type { FfsScreenedResult } from './types.ts';
+import { lifeSortValue } from './lifeProjection.ts';
 
 /** A user-editable depth band used by the distribution table and charts. */
 export interface DepthBucket {
@@ -171,7 +172,7 @@ export function buildWorstTable(
     if (worstBy === 'erf') return b.nominal.ERF - a.nominal.ERF;
     // Rank on the per-feature measured growth, matching the "Life [y]" column
     // and every other life figure in the workspace.
-    return a.nominal.expectedLife - b.nominal.expectedLife;
+    return lifeSortValue(a.nominal.expectedLife) - lifeSortValue(b.nominal.expectedLife);
   };
 
   return bins.map((bin, i) => {

@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { FiX } from 'react-icons/fi';
-import { formatLife } from '../../lib/ffs/screening';
+import { formatLifeProjection, lifeProjectionStatusLabel } from '../../lib/ffs/lifeProjection';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
 import { Callout, PriorityLabel, SeverityBadge, formatErf } from './FfsPrimitives';
 
@@ -528,20 +528,19 @@ export default function FfsDetailModal({
             <div className="ffs-detail__life-grid">
               <LifeCard
                 label="Expected Life"
-                value={n.expectedLife >= 200 ? '>200' : n.expectedLife.toFixed(2)}
-                unit="yrs"
-                description={`tₗᶠᶠₑ = min(tₑʀᶠ, t₈₀%)`}
-                tone={n.expectedLife < config.highlightYears ? 'warn' : 'default'}
+                value={formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears)}
+                description={`Bounded to the ${n.analysisHorizonYears}-year analysis horizon`}
+                tone={n.expectedLife !== null && n.expectedLife < config.highlightYears ? 'warn' : 'default'}
               />
               <LifeCard
-                label="Year Service"
-                value={n.yearService}
-                description={`ILI Date + tₗᶠᶠₑ`}
+                label="Service Limit Date"
+                value={n.yearService ?? '—'}
+                description={n.yearService ? 'ILI date + calculated limit time' : 'No finite date established'}
               />
               <LifeCard
-                label="Failure Criteria"
-                value={n.failureCriteria.startsWith('N/A') ? 'N/A' : n.failureCriteria}
-                description="First condition hit"
+                label="Projection Status"
+                value={lifeProjectionStatusLabel(n.lifeStatus, n.failureCriteria, n.analysisHorizonYears)}
+                description={n.failureCriteria ? 'First condition reached' : 'No failure point calculated'}
                 tone={n.failureCriteria === 'ERF = 1' ? 'bad' : 'default'}
               />
               <LifeCard
@@ -551,7 +550,7 @@ export default function FfsDetailModal({
               />
               <LifeCard
                 label="Depth % at Failure"
-                value={`${n.atFailure_depth.toFixed(2)}`}
+                value={n.atFailure_depth === null ? '—' : n.atFailure_depth.toFixed(2)}
                 unit="%"
                 description={`d/t × 100 @ tₗᶠᶠₑ`}
               />
@@ -576,26 +575,28 @@ export default function FfsDetailModal({
           </section>
 
           {/* Final callout */}
-          {n.failureCriteria.startsWith('N/A') ? (
+          {n.lifeStatus !== 'calculated' ? (
             <Callout>
-              Neither the depth limit nor ERF 1.0 is reached within the 200-year search horizon at the
-              supplied growth rates. This is a screening calculation — final disposition requires an
-              approved procedure and independent checking.
+              {n.lifeStatus === 'insufficient-growth-basis'
+                ? 'No service-limit date is calculated because neither depth nor length has a positive growth basis.'
+                : `Neither the 80% depth limit nor ERF 1.0 is reached inside the configured ${n.analysisHorizonYears}-year analysis horizon.`}{' '}
+              This is not a prediction of unlimited service life. Final disposition requires an approved
+              procedure and independent checking.
             </Callout>
           ) : (
             <Callout
               tone={
                 n.acceptance === 'Un-Acceptable'
                   ? 'danger'
-                  : n.expectedLife < config.highlightYears
+                  : n.expectedLife !== null && n.expectedLife < config.highlightYears
                     ? 'warn'
                     : 'info'
               }
             >
               <strong>
                 {n.failureCriteria === 'ERF = 1'
-                  ? `ERF reached 1.0 at ${n.expectedLife.toFixed(2)} years`
-                  : `Depth limit reached at ${n.expectedLife.toFixed(2)} years`}
+                  ? `ERF reached 1.0 at ${n.expectedLife?.toFixed(2)} years`
+                  : `Depth limit reached at ${n.expectedLife?.toFixed(2)} years`}
                 {' — '}
                 Year Service: {n.yearService}
               </strong>

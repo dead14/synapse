@@ -3,6 +3,7 @@ import type { DistributionTable, WorstRow } from './statistics.ts';
 import type { NarrativeBlock } from './narrative.ts';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from './types.ts';
 import type { AlignmentImportProvenance } from './alignmentImport.ts';
+import { analysisHorizonYears, formatLifeProjection, lifeProjectionStatusLabel } from './lifeProjection.ts';
 
 function triggerDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -19,8 +20,8 @@ function safeFilename(name: string): string {
   return (name || 'ffs-assessment').replace(/[^\w.-]+/g, '_').slice(0, 80);
 }
 
-function num(value: number, digits = 4): number | string {
-  return Number.isFinite(value) ? Number(value.toFixed(digits)) : '';
+function num(value: number | null, digits = 4): number | string {
+  return value !== null && Number.isFinite(value) ? Number(value.toFixed(digits)) : '';
 }
 
 /**
@@ -43,6 +44,7 @@ export function exportResultsWorkbook(
     ['Flow stress basis', config.method === 'original' ? '1.1 x SMYS' : config.modifiedSa === 'smys11' ? '1.1 x SMYS' : 'SMYS + 69 MPa'],
     ['ILI inspection date', config.iliDate.toISOString().split('T')[0]],
     ['Highlight threshold [years]', config.highlightYears],
+    ['Life analysis horizon [years]', analysisHorizonYears(config)],
     [],
     ['Screening assumptions'],
     ['ILI depth tolerance [% WT]', screening.depthTolerancePct],
@@ -68,8 +70,8 @@ export function exportResultsWorkbook(
     'Wall [mm]', 'OD [mm]', 'SMYS [MPa]', 'Design factor', 'P0 [MPa]',
     'CR depth [mm/y]', 'CR length [mm/y]',
     'd [mm]', 'd/t', 'z', 'M', 'S_flow [MPa]', 'Sf [MPa]', 'Pf [MPa]', 'S0 [MPa]',
-    'P_safe [MPa]', 'ERF nominal', 'Acceptance', 'Expected life [y]', 'Year of service limit',
-    'Failure criterion',
+    'P_safe [MPa]', 'ERF nominal', 'Acceptance', 'Expected life', 'Service limit date',
+    'Life projection status',
     'Conservative depth [%]', 'Conservative length [mm]', 'ERF conservative', 'P_safe conservative [MPa]',
     'Forecast depth [%]', 'ERF forecast', 'Life to ERF 1 [y]', 'Priority', 'Severity',
     'Clock hour', 'Bottom quadrant',
@@ -83,11 +85,12 @@ export function exportResultsWorkbook(
       num(n.crDepth, 4), num(n.crLength, 4),
       num(n.d), num(n.dt), num(n.z), n.M === null ? 'n/a' : num(n.M), num(n.sflow), num(n.Sf),
       num(n.Pf), num(n.So), num(n.safePressure), num(n.ERF), n.acceptance,
-      num(n.expectedLife, 2), n.yearService, n.failureCriteria,
+      formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears), n.yearService ?? '',
+      lifeProjectionStatusLabel(n.lifeStatus, n.failureCriteria, n.analysisHorizonYears),
       num(item.conservative.depthPct, 2), num(item.conservative.lengthMm, 2),
       num(item.conservative.ERF), num(item.conservative.safePressure),
       num(item.forecast.depthPct, 2), num(item.forecast.ERF),
-      Number.isFinite(item.lifeToErf1) ? num(item.lifeToErf1, 2) : '>200',
+      formatLifeProjection(item.lifeToErf1, item.lifeToErf1Status, n.analysisHorizonYears),
       item.priority, item.conservative.severity,
       item.clockHour === null ? '' : num(item.clockHour, 2),
       item.bottomQuadrant ? 'Yes' : 'No',
@@ -169,8 +172,8 @@ export function exportStatisticsWorkbook(
 
   const worstHeader = [
     'LD bin [m]', 'Features in bin', 'LD [m]', 'Section', 'Surface',
-    'Depth [%]', 'Length [mm]', 'ERF', 'Conservative ERF', 'Expected life [y]',
-    'Life to ERF 1 [y]', 'Priority', 'Acceptance',
+    'Depth [%]', 'Length [mm]', 'ERF', 'Conservative ERF', 'Expected life projection',
+    'Life to ERF 1 projection', 'Priority', 'Acceptance',
   ];
   const worstBody = worstRows
     .filter((row) => row.worst !== null)
@@ -180,8 +183,8 @@ export function exportStatisticsWorkbook(
       return [
         row.bin.label, row.count, n.ld, n.section, n.surface,
         num(n.maxDepthPct, 2), num(n.length, 2), num(n.ERF), num(item.conservative.ERF),
-        num(n.expectedLife, 2),
-        Number.isFinite(item.lifeToErf1) ? num(item.lifeToErf1, 2) : '>200',
+        formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears),
+        formatLifeProjection(item.lifeToErf1, item.lifeToErf1Status, n.analysisHorizonYears),
         item.priority, n.acceptance,
       ];
     });

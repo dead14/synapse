@@ -9,6 +9,7 @@ import {
 } from '../../lib/ffs/screening';
 import { isInternal } from '../../lib/ffs/statistics';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig, FfsSeverity } from '../../lib/ffs/types';
+import { analysisHorizonYears } from '../../lib/ffs/lifeProjection';
 import { Callout, Panel, PanelHeader, PriorityLabel, Stat, formatErf } from './FfsPrimitives';
 
 const SEVERITY_FILL: Record<FfsSeverity, string> = {
@@ -368,6 +369,7 @@ export default function FfsIntegrityPanel({
   const clusters = useMemo(() => buildClusters(items), [items]);
   const interactions = useMemo(() => findInteractions(items, screening), [items, screening]);
   const actions = useMemo(() => buildActionRegister(items, screening), [items, screening]);
+  const horizonYears = analysisHorizonYears(config);
 
   if (!items.length) {
     return <Callout tone="warn">No assessed features are available for the integrity review.</Callout>;
@@ -402,9 +404,13 @@ export default function FfsIntegrityPanel({
         />
         <Stat
           label="Shortest life to ERF 1"
-          value={formatLife(kpis.minLife?.lifeToErf1 ?? Infinity)}
-          foot={kpis.minLife ? ldLabel(kpis.minLife) : ''}
-          tone={(kpis.minLife?.lifeToErf1 ?? Infinity) < 10 ? 'warn' : 'good'}
+          value={formatLife(
+            kpis.minLife?.lifeToErf1 ?? null,
+            kpis.minLife?.lifeToErf1Status ?? 'insufficient-growth-basis',
+            horizonYears,
+          )}
+          foot={kpis.minLife ? ldLabel(kpis.minLife) : 'No finite ERF limit'}
+          tone={kpis.minLife?.lifeToErf1 !== null && (kpis.minLife?.lifeToErf1 ?? Infinity) < 10 ? 'warn' : 'good'}
         />
         <Stat
           label="Escalated features"
@@ -539,7 +545,8 @@ export default function FfsIntegrityPanel({
                     </span>
                     <span className="mt-1 block text-[10px] tabular-nums text-slate-400">
                       Conservative ERF {formatErf(action.target.conservative.ERF)} · forecast{' '}
-                      {formatErf(action.target.forecast.ERF)} · life {formatLife(action.target.lifeToErf1)}
+                      {formatErf(action.target.forecast.ERF)} · life{' '}
+                      {formatLife(action.target.lifeToErf1, action.target.lifeToErf1Status, horizonYears)}
                     </span>
                   </span>
                   <span

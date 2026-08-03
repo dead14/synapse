@@ -109,4 +109,13 @@ test('processRow and processAllRows fail closed for invalid inputs', async () =>
 test('rejects invalid runtime configuration values', () => {
   const invalidConfig = { ...config, iliDate: new Date('invalid') };
   assert.throws(() => processRow(validRow(), invalidConfig), /ILI date/i);
+
+  assert.throws(
+    () => processRow(validRow(), { ...config, analysisHorizonYears: 0 }),
+    /analysis horizon/i,
+  );
+  assert.throws(
+    () => processRow(validRow(), { ...config, analysisHorizonYears: 101 }),
+    /analysis horizon/i,
+  );
 });

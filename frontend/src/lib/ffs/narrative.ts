@@ -1,6 +1,7 @@
 import { formatLife } from './screening.ts';
 import { isInternal } from './statistics.ts';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from './types.ts';
+import { analysisHorizonYears, formatLifeProjection, lifeProjectionStatusLabel, lifeSortValue } from './lifeProjection.ts';
 
 export interface NarrativeTableColumn {
   header: string;
@@ -71,14 +72,19 @@ export function buildNarrative(
 
   const unacceptable = items.filter((item) => item.nominal.acceptance === 'Un-Acceptable');
   const acceptable = total - unacceptable.length;
-  const belowThreshold = items.filter((item) => item.nominal.expectedLife < config.highlightYears);
+  const horizonYears = analysisHorizonYears(config);
+  const belowThreshold = items.filter(
+    (item) => item.nominal.expectedLife !== null && item.nominal.expectedLife < config.highlightYears,
+  );
   const escalated = items.filter((item) => item.conservative.severity !== 'pass');
   const internalCount = items.filter(isInternal).length;
   const externalCount = total - internalCount;
   const bottomCount = items.filter((item) => item.bottomQuadrant).length;
 
   const byErf = [...items].sort((a, b) => b.nominal.ERF - a.nominal.ERF);
-  const byLife = [...items].sort((a, b) => a.nominal.expectedLife - b.nominal.expectedLife);
+  const byLife = [...items].sort(
+    (a, b) => lifeSortValue(a.nominal.expectedLife) - lifeSortValue(b.nominal.expectedLife),
+  );
   const governing = byErf[0];
   const maxDepth = Math.max(...items.map((item) => item.nominal.maxDepthPct));
   const ldValues = items.map((item) => Number(item.nominal.ld)).filter(Number.isFinite);
@@ -148,6 +154,7 @@ export function buildNarrative(
       screening.growthBasis === 'measured'
         ? `Each feature is grown radially at its own measured corrosion rate for the ${screening.forecastYears}-year forecast; features carrying no measured rate use ${screening.growthRateMmPerYear.toFixed(2)} mm/year.`
         : `A uniform corrosion growth rate of ${screening.growthRateMmPerYear.toFixed(2)} mm/year is applied radially to every feature for the ${screening.forecastYears}-year forecast.`,
+      `Remaining-life calculations are bounded to a ${horizonYears}-year analysis horizon. A limit not reached inside that window is not reported as a service-life value or date.`,
       `Engineering review band starts at ERF ${screening.reviewBandErf.toFixed(2)}; ERF above 1.00 is reported as exceeding the calculated safe pressure.`,
       `Axial interaction screened at ${screening.interactionSpacingFactor}t edge-to-edge separation.`,
       'Temperature derating, residual stress, and pressure cycling are not applied.',
@@ -235,14 +242,16 @@ export function buildNarrative(
         item.nominal.section,
         item.nominal.maxDepthPct.toFixed(1),
         item.nominal.crDepth.toFixed(3),
-        item.nominal.expectedLife.toFixed(1),
-        item.nominal.yearService,
-        item.nominal.failureCriteria,
-        formatLife(item.lifeToErf1),
+        formatLifeProjection(item.nominal.expectedLife, item.nominal.lifeStatus, item.nominal.analysisHorizonYears),
+        item.nominal.yearService ?? '—',
+        lifeProjectionStatusLabel(item.nominal.lifeStatus, item.nominal.failureCriteria, item.nominal.analysisHorizonYears),
+        formatLife(item.lifeToErf1, item.lifeToErf1Status, horizonYears),
       ]),
       criticalRows: byLife
         .slice(0, options.lifeTableRows)
-        .map((item, i) => (item.nominal.expectedLife < config.highlightYears ? i : -1))
+        .map((item, i) => (
+          item.nominal.expectedLife !== null && item.nominal.expectedLife < config.highlightYears ? i : -1
+        ))
         .filter((i) => i >= 0),
     },
   });

@@ -7,6 +7,7 @@ import {
   type B31gGeometry,
   type B31gKernelResult,
 } from './b31g.ts';
+import { analysisHorizonYears } from './lifeProjection.ts';
 
 export {
   B31G_DEPTH_LIMIT_RATIO,
@@ -91,6 +92,7 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
   // ERF 1.0 is the safe-pressure limit itself, so it is not acceptable. The
   // depth gate is the code's own applicability limit, not a project setting.
   const acceptance = (init.erf < 1 && maxDepthPct < depthLimitPct) ? 'Acceptable' : 'Un-Acceptable';
+  const horizonYears = analysisHorizonYears(config);
 
   let tDepth = Infinity;
   if (crDepth > 0) {
@@ -104,10 +106,9 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
   if (init.erf >= 1) {
     tErf = 0;
   } else {
-    const MAX = 200;
-    const atMax = calcAtYear(config, geometry, dInit, length, crDepth, crLength, MAX);
+    const atMax = calcAtYear(config, geometry, dInit, length, crDepth, crLength, horizonYears);
     if (atMax.erf >= 1) {
-      let lo = 0, hi = MAX;
+      let lo = 0, hi = horizonYears;
       for (let ii = 0; ii < 60; ii++) {
         const mid = (lo + hi) / 2;
         const rv = calcAtYear(config, geometry, dInit, length, crDepth, crLength, mid);
@@ -117,21 +118,32 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
     }
   }
 
-  let expectedLife: number, failureCriteria: string;
-  const td = tDepth === Infinity ? 999 : Math.round(tDepth * 100) / 100;
-  const te = tErf === Infinity ? 999 : tErf;
-  if (td <= te) {
-    expectedLife = td >= 200 ? 200 : td;
-    failureCriteria = td >= 200 ? 'N/A (≥200yr)' : 'Depth = 80%';
-    if (tDepth === 0 && maxDepthPct < depthLimitPct && tErf === 0) { failureCriteria = 'ERF = 1'; expectedLife = 0; }
-  } else {
-    expectedLife = te >= 200 ? 200 : te;
-    failureCriteria = te >= 200 ? 'N/A (≥200yr)' : 'ERF = 1';
-  }
-  if (tDepth === Infinity && tErf === Infinity) { expectedLife = 200; failureCriteria = 'N/A (≥200yr)'; }
+  const depthLife = tDepth <= horizonYears ? Math.round(tDepth * 100) / 100 : Infinity;
+  const erfLife = tErf <= horizonYears ? tErf : Infinity;
+  const hasPositiveGrowth = crDepth > 0 || crLength > 0;
 
-  const yearService = addYears(config.iliDate, expectedLife);
-  const atFailure = calcAtYear(config, geometry, dInit, length, crDepth, crLength, expectedLife);
+  let expectedLife: number | null = null;
+  let failureCriteria: FfsResult['failureCriteria'] = null;
+  let lifeStatus: FfsResult['lifeStatus'];
+
+  if (depthLife !== Infinity || erfLife !== Infinity) {
+    lifeStatus = 'calculated';
+    if (depthLife <= erfLife) {
+      expectedLife = depthLife;
+      failureCriteria = 'Depth = 80%';
+      if (depthLife === 0 && maxDepthPct < depthLimitPct && erfLife === 0) failureCriteria = 'ERF = 1';
+    } else {
+      expectedLife = erfLife;
+      failureCriteria = 'ERF = 1';
+    }
+  } else {
+    lifeStatus = hasPositiveGrowth ? 'not-reached-within-horizon' : 'insufficient-growth-basis';
+  }
+
+  const yearService = expectedLife === null ? null : addYears(config.iliDate, expectedLife);
+  const atFailure = expectedLife === null
+    ? null
+    : calcAtYear(config, geometry, dInit, length, crDepth, crLength, expectedLife);
 
   // A feature with no remaining capacity carries an infinite ERF. Rounding it
   // would turn it into a finite-looking number that charts and sorts would then
@@ -149,10 +161,10 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
     So: +so.toFixed(4), safePressure: +safePressure.toFixed(4),
     ERF: round4(init.erf), acceptance,
     branch: BRANCH_LABEL[init.branch],
-    expectedLife, yearService, failureCriteria,
-    atFailure_ERF: round4(atFailure.erf),
-    atFailure_depth: +atFailure.depthPct.toFixed(2),
-    atFailure_Sf: +atFailure.failureStressMpa.toFixed(4),
+    expectedLife, yearService, failureCriteria, lifeStatus, analysisHorizonYears: horizonYears,
+    atFailure_ERF: atFailure ? round4(atFailure.erf) : null,
+    atFailure_depth: atFailure ? +atFailure.depthPct.toFixed(2) : null,
+    atFailure_Sf: atFailure ? +atFailure.failureStressMpa.toFixed(4) : null,
     method: config.method,
     saMode: config.modifiedSa,
   };

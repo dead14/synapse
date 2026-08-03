@@ -48,7 +48,9 @@ export default function FfsSummaryCards({
   const total = items.length;
   const acceptable = items.filter((item) => item.nominal.acceptance === 'Acceptable').length;
   const unacceptable = total - acceptable;
-  const belowThreshold = items.filter((item) => item.nominal.expectedLife < config.highlightYears).length;
+  const belowThreshold = items.filter(
+    (item) => item.nominal.expectedLife !== null && item.nominal.expectedLife < config.highlightYears,
+  ).length;
   const escalated = items.filter((item) => item.conservative.severity !== 'pass').length;
 
   const cards: SummaryCard[] = [

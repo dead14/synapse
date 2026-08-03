@@ -138,8 +138,61 @@ test('life to ERF 1 is unbounded when nothing is growing', () => {
   };
   const item = screenOne({ 'Max Depth [%]': '20', 'Length [mm]': '30' }, screening);
 
-  assert.equal(item.lifeToErf1, Number.POSITIVE_INFINITY);
-  assert.equal(formatLife(item.lifeToErf1), '>200 y');
+  assert.equal(item.lifeToErf1, null);
+  assert.equal(item.lifeToErf1Status, 'insufficient-growth-basis');
+  assert.equal(formatLife(item.lifeToErf1, item.lifeToErf1Status, 30), 'Not calculated');
+});
+
+test('nominal life does not turn the numerical search bound into a service-limit date', () => {
+  const result = processRow(
+    row({
+      'Max Depth [%]': '20',
+      'Length [mm]': '30',
+      'CR Depth [mm/y]': '0.001',
+      'CR Length [mm/y]': '0',
+    }),
+    { ...config, analysisHorizonYears: 30 },
+  );
+
+  assert.equal(result.lifeStatus, 'not-reached-within-horizon');
+  assert.equal(result.expectedLife, null);
+  assert.equal(result.yearService, null);
+  assert.equal(result.failureCriteria, null);
+  assert.equal(result.atFailure_ERF, null);
+  assert.equal(result.atFailure_depth, null);
+  assert.equal(result.atFailure_Sf, null);
+});
+
+test('nominal life is not calculated without a positive depth or length growth basis', () => {
+  const result = processRow(
+    row({
+      'CR Depth [mm/y]': '0',
+      'CR Length [mm/y]': '0',
+    }),
+    { ...config, analysisHorizonYears: 30 },
+  );
+
+  assert.equal(result.lifeStatus, 'insufficient-growth-basis');
+  assert.equal(result.expectedLife, null);
+  assert.equal(result.yearService, null);
+  assert.equal(result.failureCriteria, null);
+});
+
+test('a calculated life retains its governing criterion and service-limit date', () => {
+  const result = processRow(
+    row({
+      'Max Depth [%]': '70',
+      'CR Depth [mm/y]': '0.93',
+      'CR Length [mm/y]': '0',
+    }),
+    { ...config, analysisHorizonYears: 30 },
+  );
+
+  assert.equal(result.lifeStatus, 'calculated');
+  assert.ok(result.expectedLife !== null && result.expectedLife > 0 && result.expectedLife < 2);
+  assert.ok(result.failureCriteria === 'Depth = 80%' || result.failureCriteria === 'ERF = 1');
+  assert.match(result.yearService ?? '', /^2024-/);
+  assert.ok(result.atFailure_depth !== null);
 });
 
 test('life to ERF 1 shortens as the assumed growth rate rises', () => {
@@ -147,7 +200,10 @@ test('life to ERF 1 shortens as the assumed growth rate rises', () => {
   const slow = screenOne({ 'Max Depth [%]': '35' }, { ...uniform, growthRateMmPerYear: 0.05 });
   const fast = screenOne({ 'Max Depth [%]': '35' }, { ...uniform, growthRateMmPerYear: 0.3 });
 
-  assert.ok(fast.lifeToErf1 < slow.lifeToErf1);
+  assert.equal(slow.lifeToErf1Status, 'not-reached-within-horizon');
+  assert.equal(slow.lifeToErf1, null);
+  assert.equal(fast.lifeToErf1Status, 'calculated');
+  assert.ok(fast.lifeToErf1 !== null && fast.lifeToErf1 > 0);
 });
 
 test('life to ERF 1 and the nominal expected life share the measured growth rate', () => {
