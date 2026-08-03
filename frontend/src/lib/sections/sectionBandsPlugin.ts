@@ -103,6 +103,13 @@ class SectionRibbonBox implements LayoutItem {
   readonly weight = 0;
   /** Constrained to the plot width so a band's pixels match its data range. */
   readonly fullSize = false;
+  /**
+   * Required at runtime even though `LayoutItem` does not declare it: Chart.js
+   * unconditionally destructures `box.options.stack` while wrapping boxes for
+   * layout, so a box without this throws before anything is drawn. Empty means
+   * "not stacked with any other box", which is what this ribbon wants.
+   */
+  readonly options: { stack?: string; stackWeight?: number; display?: boolean } = {};
 
   width = 0;
   height = 0;
@@ -111,7 +118,14 @@ class SectionRibbonBox implements LayoutItem {
   right = 0;
   bottom = 0;
 
-  constructor(private readonly chart: Chart) {}
+  // Assigned in the body rather than as a parameter property: parameter
+  // properties are not erasable, and the test runner strips types rather than
+  // compiling them.
+  private readonly chart: Chart;
+
+  constructor(chart: Chart) {
+    this.chart = chart;
+  }
 
   isHorizontal(): boolean {
     return true;
@@ -130,6 +144,11 @@ class SectionRibbonBox implements LayoutItem {
 }
 
 const ribbonBoxes = new WeakMap<Chart, SectionRibbonBox>();
+
+/** Exported so the layout contract can be exercised without a canvas. */
+export function createSectionRibbonBox(chart: Chart): LayoutItem {
+  return new SectionRibbonBox(chart);
+}
 
 /** Rect the ribbon itself occupies, excluding the gap that separates it from the plot. */
 function ribbonRect(box: SectionRibbonBox, ribbonHeight: number) {
