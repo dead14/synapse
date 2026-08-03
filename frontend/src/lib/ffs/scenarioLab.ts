@@ -62,29 +62,36 @@ export function scenarioInputsForPreset(
   nominal: FfsResult,
   screening: FfsScreeningConfig,
 ): FfsScenarioInputs {
-  const common = {
+  const reported = {
     requiredPressureMpa: nominal.p0,
-    depthGrowthRateMmPerYear: growthRateFor(nominal, screening),
-    lengthGrowthRateMmPerYear: Math.max(0, nominal.crLength),
+    depthGrowthRateMmPerYear: nominal.crDepth,
+    lengthGrowthRateMmPerYear: nominal.crLength,
   };
 
   if (preset === 'as-reported') {
     return {
-      ...common,
+      ...reported,
       forecastYears: 0,
       applyConfiguredTolerance: false,
     };
   }
+
+  const screened = {
+    requiredPressureMpa: nominal.p0,
+    depthGrowthRateMmPerYear: growthRateFor(nominal, screening),
+    lengthGrowthRateMmPerYear: nominal.crLength,
+  };
+
   if (preset === 'conservative') {
     return {
-      ...common,
+      ...screened,
       forecastYears: 0,
       applyConfiguredTolerance: true,
     };
   }
   return {
-    ...common,
-    forecastYears: screening.forecastYears,
+    ...screened,
+    forecastYears: Math.min(screening.forecastYears, nominal.analysisHorizonYears),
     applyConfiguredTolerance: true,
   };
 }
@@ -167,6 +174,7 @@ export function evaluateFfsScenario(
   }
 
   const result = displayed.result;
+  const outsideDomain = result.beyondDepthLimit || !result.valid;
   return {
     depthPct: result.depthPct,
     lengthMm: displayed.lengthMm,
@@ -174,7 +182,7 @@ export function evaluateFfsScenario(
     safePressureMpa: result.safePressureMpa,
     erf: result.erf,
     capacityMarginMpa: result.safePressureMpa - inputs.requiredPressureMpa,
-    severity: severityOf(result.erf, result.depthPct, screening),
+    severity: outsideDomain ? 'fail' : severityOf(result.erf, result.depthPct, screening),
     beyondDepthLimit: result.beyondDepthLimit,
     valid: result.valid,
     invalidReason: result.invalidReason,

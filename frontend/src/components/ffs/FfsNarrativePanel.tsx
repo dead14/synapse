@@ -83,7 +83,7 @@ export default function FfsNarrativePanel({
           <button
             type="button"
             onClick={() => setOptions(draft)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 px-3 py-1.5 text-xs font-medium text-indigo-600 transition-colors hover:bg-indigo-50 dark:border-indigo-800/60 dark:text-indigo-400 dark:hover:bg-indigo-950/40"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800/60"
           >
             <FiRefreshCw className="h-3 w-3" /> Rebuild text
           </button>
@@ -137,7 +137,7 @@ export default function FfsNarrativePanel({
         <article className="mx-auto max-w-[62rem]">
           {/* Title block */}
           <header className="mb-8 border-b border-slate-200 pb-5 dark:border-slate-700">
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-indigo-600 dark:text-indigo-400">
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
               Fitness-for-service assessment
             </p>
             <h1 className="mt-1.5 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
@@ -171,7 +171,7 @@ function NarrativeBlockView({
     case 'heading': {
       if (block.level === 1) {
         return (
-          <h2 className="mt-8 mb-3 border-b-2 border-indigo-500 pb-1.5 text-lg font-bold text-slate-900 first:mt-0 dark:text-slate-50">
+          <h2 className="mt-8 mb-3 border-b-2 border-slate-300 pb-1.5 text-lg font-bold text-slate-900 first:mt-0 dark:border-slate-600 dark:text-slate-50">
             {block.text}
           </h2>
         );
@@ -184,7 +184,7 @@ function NarrativeBlockView({
         );
       }
       return (
-        <h4 className="mt-5 mb-2 text-sm font-semibold text-indigo-600 dark:text-indigo-400">{block.text}</h4>
+        <h4 className="mt-5 mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">{block.text}</h4>
       );
     }
 

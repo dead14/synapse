@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FiRotateCcw, FiSliders } from 'react-icons/fi';
 import { formatLifeProjection, lifeProjectionStatusLabel } from '../../lib/ffs/lifeProjection.ts';
+import { axisMaximum, pressureRailLayout } from '../../lib/ffs/pressureRail.ts';
 import {
   evaluateFfsScenario,
   scenarioInputsForPreset,
@@ -12,31 +13,12 @@ import { SeverityBadge, formatErf } from './FfsPrimitives.tsx';
 
 type ScenarioSelection = FfsScenarioPreset | 'custom';
 
-function finiteOrZero(value: number): number {
-  return Number.isFinite(value) && value > 0 ? value : 0;
-}
-
-function axisStep(maximum: number): number {
-  if (maximum <= 5) return 1;
-  if (maximum <= 15) return 2.5;
-  if (maximum <= 40) return 5;
-  if (maximum <= 100) return 10;
-  return 25;
-}
-
-function axisMaximum(values: number[]): number {
-  const maximum = Math.max(1, ...values.map(finiteOrZero));
-  const step = axisStep(maximum);
-  return Math.ceil((maximum * 1.08) / step) * step;
-}
-
-function positionOnAxis(value: number, maximum: number): number {
-  if (!Number.isFinite(value) || maximum <= 0) return 0;
-  return Math.max(0, Math.min(100, (value / maximum) * 100));
-}
-
 function pressureValue(value: number): string {
-  return Number.isFinite(value) ? value.toFixed(2) : 'n/a';
+  return Number.isFinite(value) ? value.toFixed(3) : 'n/a';
+}
+
+function tickValue(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
 export function PressureComparisonRail({
@@ -50,40 +32,77 @@ export function PressureComparisonRail({
   safePressureMpa: number;
   failurePressureMpa: number;
 }) {
-  const maximum = axisMaximum([requiredPressureMpa, safePressureMpa, failurePressureMpa]);
-  const requiredPosition = positionOnAxis(requiredPressureMpa, maximum);
-  const safePosition = positionOnAxis(safePressureMpa, maximum);
-  const failurePosition = positionOnAxis(failurePressureMpa, maximum);
-  const ticks = Array.from({ length: 5 }, (_, index) => (maximum * index) / 4);
-  const margin = safePressureMpa - requiredPressureMpa;
-  const trackStyle = {
-    '--ffs-safe-position': `${safePosition}%`,
-    '--ffs-failure-position': `${failurePosition}%`,
-  } as CSSProperties;
+  const layout = pressureRailLayout({ requiredPressureMpa, safePressureMpa, failurePressureMpa });
+  const { acceptable, marginMpa } = layout;
 
   return (
     <figure className="ffs-pressure-rail" aria-label={`${label} pressure comparison in MPa`}>
       <figcaption className="ffs-pressure-rail__heading">
         <span>{label}</span>
-        <strong className={margin >= 0 ? 'is-positive' : 'is-negative'}>
-          {margin >= 0 ? '+' : ''}{margin.toFixed(2)} MPa to safe pressure
-        </strong>
+        <ul className="ffs-pressure-rail__legend">
+          {layout.markers.map((marker) => (
+            <li key={marker.id}>
+              <i className={`is-${marker.id}`} aria-hidden="true" />
+              {marker.label}
+            </li>
+          ))}
+        </ul>
       </figcaption>
+
       <div className="ffs-pressure-rail__plot">
-        <div className="ffs-pressure-rail__ticks" aria-hidden="true">
-          {ticks.map((tick) => <span key={tick}>{Number.isInteger(tick) ? tick : tick.toFixed(1)}</span>)}
+        <div className="ffs-pressure-rail__callouts">
+          {layout.markers.map((marker) => (
+            <i
+              key={`${marker.id}-leader`}
+              className="ffs-pressure-rail__leader"
+              style={{ left: `${marker.positionPct}%` }}
+              aria-hidden="true"
+            />
+          ))}
+          {layout.markers.map((marker) => (
+            <span
+              key={marker.id}
+              className={`ffs-pressure-rail__callout is-${marker.id}`}
+              style={{ left: `${marker.labelPct}%` }}
+            >
+              <b>{marker.symbol}</b>
+              {pressureValue(marker.valueMpa)}
+            </span>
+          ))}
         </div>
-        <div className="ffs-pressure-rail__track" style={trackStyle} aria-hidden="true">
-          <i className="ffs-pressure-rail__marker ffs-pressure-rail__marker--required" style={{ left: `${requiredPosition}%` }} />
-          <i className="ffs-pressure-rail__marker ffs-pressure-rail__marker--safe" style={{ left: `${safePosition}%` }} />
-          <i className="ffs-pressure-rail__marker ffs-pressure-rail__marker--failure" style={{ left: `${failurePosition}%` }} />
+
+        <div className="ffs-pressure-rail__track" aria-hidden="true">
+          {layout.bands.map((band) => (
+            <span
+              key={band.id}
+              className={`ffs-pressure-rail__band is-${band.id}`}
+              style={{ left: `${band.fromPct}%`, width: `${Math.max(0, band.toPct - band.fromPct)}%` }}
+            />
+          ))}
+          {layout.markers.map((marker) => (
+            <i
+              key={marker.id}
+              className={`ffs-pressure-rail__marker is-${marker.id}`}
+              style={{ left: `${marker.positionPct}%` }}
+            />
+          ))}
+        </div>
+
+        <div className="ffs-pressure-rail__axis" aria-hidden="true">
+          {layout.ticksMpa.map((tick) => (
+            <span key={tick}>{tickValue(tick)}</span>
+          ))}
+          <em>MPa</em>
         </div>
       </div>
-      <div className="ffs-pressure-rail__legend">
-        <div><i className="is-required" /><span>Required</span><strong>{pressureValue(requiredPressureMpa)} MPa</strong></div>
-        <div><i className="is-safe" /><span>Safe</span><strong>{pressureValue(safePressureMpa)} MPa</strong></div>
-        <div><i className="is-failure" /><span>Failure</span><strong>{pressureValue(failurePressureMpa)} MPa</strong></div>
-      </div>
+
+      <p className={`ffs-pressure-rail__verdict ${acceptable ? 'is-pass' : 'is-fail'}`}>
+        <span>Pₛₐᶠₑ {acceptable ? '≥' : '<'} P₀</span>
+        <strong>{acceptable ? 'Acceptable' : 'Not acceptable'}</strong>
+        <small>
+          {marginMpa >= 0 ? '+' : ''}{marginMpa.toFixed(3)} MPa margin to required pressure
+        </small>
+      </p>
     </figure>
   );
 }
@@ -118,13 +137,14 @@ function ScenarioControl({
       <input
         id={id}
         type="range"
+        aria-describedby={`${id}-hint`}
         min={min}
         max={max}
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.currentTarget.value))}
       />
-      <p>{hint}</p>
+      <p id={`${id}-hint`}>{hint}</p>
     </div>
   );
 }
@@ -163,7 +183,9 @@ export default function FfsScenarioLab({
   }, [config, inputs, nominal, screening]);
 
   const pressureMaximum = axisMaximum([nominal.p0, nominal.safePressure, nominal.Pf]);
-  const assessedGrowthRate = scenarioInputsForPreset('forecast', nominal, screening).depthGrowthRateMmPerYear;
+  const forecastPreset = scenarioInputsForPreset('forecast', nominal, screening);
+  const assessedGrowthRate = forecastPreset.depthGrowthRateMmPerYear;
+  const forecastWasBounded = forecastPreset.forecastYears < screening.forecastYears;
   const growthMaximum = Math.max(1, Math.ceil(assessedGrowthRate * 4 * 10) / 10);
   const panelId = `ffs-scenario-${featureKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 
@@ -177,6 +199,7 @@ export default function FfsScenarioLab({
   };
 
   const evaluation = evaluationState.value;
+  const outsideDomain = Boolean(evaluation && (evaluation.beyondDepthLimit || !evaluation.valid));
 
   return (
     <section className="ffs-detail__section ffs-scenario">
@@ -205,18 +228,18 @@ export default function FfsScenarioLab({
       />
 
       {open && (
-        <div id={panelId} className="ffs-scenario__panel">
+        <div id={panelId} className="ffs-scenario__panel" role="region" aria-label="Draft what-if scenario">
           <div className="ffs-scenario__notice" role="note">
             <strong>Draft only.</strong> Controls recalculate a separate scenario through the same B31G kernel.
             Imported ILI values and the official assessment above remain unchanged.
           </div>
 
           <div className="ffs-scenario__toolbar">
-            <div className="ffs-scenario__presets" aria-label="Scenario presets">
+            <div className="ffs-scenario__presets" role="group" aria-label="Scenario presets">
               {([
                 ['as-reported', 'As reported'],
                 ['conservative', 'Conservative'],
-                ['forecast', `${screening.forecastYears}-year forecast`],
+                ['forecast', `${forecastPreset.forecastYears}-year forecast`],
               ] as const).map(([preset, label]) => (
                 <button
                   key={preset}
@@ -283,6 +306,9 @@ export default function FfsScenarioLab({
 
           <p className="ffs-scenario__fixed-assumption">
             Axial growth remains {inputs.lengthGrowthRateMmPerYear.toFixed(3)} mm/y from the assessment evidence.
+            {forecastWasBounded && (
+              <> The configured {screening.forecastYears}-year preset is bounded to the {forecastPreset.forecastYears}-year analysis horizon.</>
+            )}
           </p>
 
           {evaluationState.error && (
@@ -296,13 +322,23 @@ export default function FfsScenarioLab({
                   <span>Draft scenario outcome</span>
                   <strong>{selection === 'custom' ? 'Custom assumptions' : selection.replace('-', ' ')}</strong>
                 </div>
-                <SeverityBadge severity={evaluation.severity} />
+                <SeverityBadge
+                  severity={evaluation.severity}
+                  label={outsideDomain ? 'Outside B31G domain' : undefined}
+                />
               </div>
+
+              {outsideDomain && (
+                <div className="ffs-scenario__error" role="status">
+                  {evaluation.invalidReason ?? 'Projected depth is outside the supported B31G depth domain.'}
+                  {' '}The values below are indicators only and must not be treated as an acceptable code result.
+                </div>
+              )}
 
               <div className="ffs-scenario__result-grid">
                 <div><span>Projected depth</span><strong>{evaluation.depthPct.toFixed(2)}%</strong></div>
-                <div><span>Safe pressure</span><strong>{pressureValue(evaluation.safePressureMpa)} MPa</strong></div>
-                <div><span>ERF</span><strong>{formatErf(evaluation.erf)}</strong></div>
+                <div><span>{outsideDomain ? 'Safe-pressure indicator' : 'Safe pressure'}</span><strong>{pressureValue(evaluation.safePressureMpa)} MPa</strong></div>
+                <div><span>{outsideDomain ? 'ERF indicator' : 'ERF'}</span><strong>{formatErf(evaluation.erf)}</strong></div>
                 <div>
                   <span>First projected limit</span>
                   <strong>{formatLifeProjection(evaluation.limitYears, evaluation.limitStatus, evaluation.analysisHorizonYears)}</strong>
@@ -311,18 +347,11 @@ export default function FfsScenarioLab({
               </div>
 
               <PressureComparisonRail
-                label={`Draft at ${inputs.forecastYears.toFixed(1)} years`}
+                label={`${outsideDomain ? 'Draft indicator' : 'Draft'} at ${inputs.forecastYears.toFixed(1)} years`}
                 requiredPressureMpa={inputs.requiredPressureMpa}
                 safePressureMpa={evaluation.safePressureMpa}
                 failurePressureMpa={evaluation.failurePressureMpa}
               />
-
-              {(evaluation.beyondDepthLimit || !evaluation.valid) && (
-                <div className="ffs-scenario__error" role="status">
-                  {evaluation.invalidReason ?? 'Projected depth is outside the supported B31G depth domain.'}
-                  {' '}Treat this scenario as an escalation trigger, not an acceptable code result.
-                </div>
-              )}
             </>
           )}
         </div>

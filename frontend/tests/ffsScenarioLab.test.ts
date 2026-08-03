@@ -6,6 +6,7 @@ import {
   evaluateFfsScenario,
   scenarioInputsForPreset,
 } from '../src/lib/ffs/scenarioLab.ts';
+import { screenResults } from '../src/lib/ffs/screening.ts';
 import {
   DEFAULT_SCREENING_CONFIG,
   type FfsConfig,
@@ -71,8 +72,26 @@ test('as-reported scenario reproduces the locked nominal calculation', () => {
   assertClose(scenario.limitYears ?? -1, result.expectedLife ?? -1, 0.01);
 });
 
+test('as-reported does not inherit a uniform screening growth assumption', () => {
+  const result = nominal();
+  const uniformScreening: FfsScreeningConfig = {
+    ...screening,
+    growthBasis: 'uniform',
+    growthRateMmPerYear: 0.5,
+  };
+  const asReportedInputs = scenarioInputsForPreset('as-reported', result, uniformScreening);
+  const forecastInputs = scenarioInputsForPreset('forecast', result, uniformScreening);
+  const asReported = evaluateFfsScenario(result, config, uniformScreening, asReportedInputs);
+
+  assert.equal(asReportedInputs.depthGrowthRateMmPerYear, result.crDepth);
+  assert.equal(forecastInputs.depthGrowthRateMmPerYear, 0.5);
+  assert.equal(asReported.limitStatus, result.lifeStatus);
+  assertClose(asReported.limitYears ?? -1, result.expectedLife ?? -1, 0.01);
+});
+
 test('conservative and forecast presets apply the configured screening basis', () => {
   const result = nominal();
+  const screened = screenResults([result], config, screening)[0];
   const conservativeInputs = scenarioInputsForPreset('conservative', result, screening);
   const conservative = evaluateFfsScenario(result, config, screening, conservativeInputs);
   const forecastInputs = scenarioInputsForPreset('forecast', result, screening);
@@ -81,9 +100,15 @@ test('conservative and forecast presets apply the configured screening basis', (
   assert.equal(conservativeInputs.applyConfiguredTolerance, true);
   assert.equal(conservative.depthPct, 50);
   assert.equal(conservative.lengthMm, 70);
+  assertClose(conservative.failurePressureMpa, screened.conservative.Pf, 1e-10);
+  assertClose(conservative.safePressureMpa, screened.conservative.safePressure, 1e-10);
+  assertClose(conservative.erf, screened.conservative.ERF, 1e-10);
   assert.equal(forecastInputs.forecastYears, 5);
   assertClose(forecast.depthPct, 50 + (0.1 * 5 / 9.3) * 100);
   assert.equal(forecast.lengthMm, 75);
+  assertClose(forecast.failurePressureMpa, screened.forecast.Pf, 1e-10);
+  assertClose(forecast.safePressureMpa, screened.forecast.safePressure, 1e-10);
+  assertClose(forecast.erf, screened.forecast.ERF, 1e-10);
   assert.ok(forecast.erf > conservative.erf);
 
   assert.equal(result.maxDepthPct, 40, 'scenario evaluation must not mutate the official result');
@@ -122,6 +147,30 @@ test('scenario life remains bounded by the configured analysis horizon', () => {
   assert.equal(stationary.limitYears, null);
   assert.equal(fast.limitStatus, 'calculated');
   assert.ok(fast.limitYears !== null && fast.limitYears <= result.analysisHorizonYears);
+});
+
+test('forecast preset is bounded when the screening forecast exceeds the analysis horizon', () => {
+  const result = nominal();
+  const longForecast = { ...screening, forecastYears: 50 };
+  const inputs = scenarioInputsForPreset('forecast', result, longForecast);
+
+  assert.equal(inputs.forecastYears, result.analysisHorizonYears);
+  assert.doesNotThrow(() => evaluateFfsScenario(result, config, longForecast, inputs));
+});
+
+test('a projection outside the B31G depth domain cannot be presented as pass', () => {
+  const result = nominal();
+  const permissiveScreening = { ...screening, depthRejectionPct: 95 };
+  const inputs = scenarioInputsForPreset('as-reported', result, permissiveScreening);
+  const outsideDomain = evaluateFfsScenario(result, config, permissiveScreening, {
+    ...inputs,
+    forecastYears: 10,
+    depthGrowthRateMmPerYear: 0.4,
+  });
+
+  assert.ok(outsideDomain.depthPct > 80 && outsideDomain.depthPct < 95);
+  assert.equal(outsideDomain.beyondDepthLimit, true);
+  assert.equal(outsideDomain.severity, 'fail');
 });
 
 test('invalid scenario assumptions are rejected instead of silently clamped', () => {
