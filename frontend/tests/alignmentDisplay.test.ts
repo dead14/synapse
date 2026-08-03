@@ -6,6 +6,7 @@ import {
   alignmentDisplayValue,
   depthGrowthMmPerYear,
   isAlignmentDisplayMetadata,
+  isClusteredAlignmentRow,
   sortAlignmentRowsByMasterAxis,
   summarizeConservationAudit,
 } from '../src/utils/alignmentDisplay.ts';
@@ -216,4 +217,48 @@ test('sorting does not invent or renumber identity for equal-distance rows', () 
   // Ties keep input order (stable), and identities ride along untouched.
   assert.deepEqual(sorted.map((row) => row.id), ['first', 'second']);
   assert.deepEqual(sorted.map((row) => row.__origIdx), [0, 1]);
+});
+
+test('a clustered row is recognised whatever the vendor wrote in the identification column', () => {
+  const clustered = [
+    { 'Feature Identification NEW': 'CLUSTER corrosion' },
+    { 'Feature Identification NEW': 'Corrosion CLUSTER' },
+    { 'Feature Identification OLD': 'corrosion clustering' },
+    { 'Feature Identification OLD': 'Clustered metal loss' },
+    { 'Feature Identification NEW': 'METAL LOSS CLUSTERS' },
+    { 'Feature Type NEW': 'Cluster' },
+  ];
+
+  for (const row of clustered) {
+    assert.equal(isClusteredAlignmentRow(row), true, JSON.stringify(row));
+  }
+});
+
+test('an ordinary corrosion row is never mistaken for a cluster', () => {
+  const ordinary = [
+    { 'Feature Identification NEW': 'Corrosion' },
+    { 'Feature Identification NEW': 'External corrosion pitting' },
+    { 'Feature Type OLD': 'Metal loss', 'Feature Type NEW': 'Metal loss' },
+    // A remark is not a classification column.
+    { 'Feature Type NEW': 'Metal loss', Comment: 'reviewed, not a cluster' },
+    {},
+  ];
+
+  for (const row of ordinary) {
+    assert.equal(isClusteredAlignmentRow(row), false, JSON.stringify(row));
+  }
+});
+
+test('a cluster is excluded from the manual reassignment candidates but stays a table row', () => {
+  // Mirrors ResultsPanel's candidate rule: an OLD row with no NEW pair yet.
+  const rows = [
+    { 'Source Key OLD': 'OLD:1', 'Feature Identification OLD': 'Corrosion', 'Log Dist OLD (m)': 12 },
+    { 'Source Key OLD': 'OLD:2', 'Feature Identification OLD': 'CLUSTER corrosion', 'Log Dist OLD (m)': 18 },
+  ];
+
+  const candidates = rows.filter((row) => !isClusteredAlignmentRow(row));
+
+  assert.deepEqual(candidates.map((row) => row['Source Key OLD']), ['OLD:1']);
+  // The cluster is still one of the rows the table renders and FFS reads.
+  assert.equal(rows.length, 2);
 });

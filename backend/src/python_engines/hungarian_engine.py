@@ -26,6 +26,15 @@ class SectionCompilation:
 
 _THOUSANDS_SEPARATED = re.compile(r"^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$")
 
+# Every vendor writes a merged corrosion group differently — "CLUSTER
+# corrosion", "Corrosion CLUSTER", "Clustered metal loss", "Corrosion
+# clustering" — but all of them carry the word itself in one of the
+# classification columns.  Matching on the word, not on a fixed label, is what
+# makes this survive a new vendor export.
+CLUSTER_LABEL_PATTERN = re.compile(r"\b(?:cluster|klaster|kluster)s?(?:ed|ing)?\b", re.IGNORECASE)
+
+CLUSTER_BYPASS_REASON = "Clustered metal loss — excluded from alignment"
+
 
 def _coerce_distance(value):
     """Parse an odometer value, or return None when it is not a real number.
@@ -1022,8 +1031,51 @@ class HungarianAnomalyAlignmentEngine:
         }
 
     @staticmethod
-    def _is_matchable_anomaly(feature: dict) -> bool:
-        """Only anomaly / metal-loss records are eligible for Hungarian."""
+    def _classification_labels(feature: dict) -> tuple[str, ...]:
+        """The columns a vendor uses to classify a feature.
+
+        Free-text columns such as ``comment`` are deliberately excluded: a
+        remark reading "not a cluster" must not reclassify the row.
+        """
+        raw = feature.get("raw", {}) or {}
+        return (
+            str(feature.get("originalType") or ""),
+            str(raw.get("feature_type") or ""),
+            str(raw.get("type") or ""),
+            str(raw.get("feature_identification") or ""),
+            str(raw.get("dim_classification") or ""),
+        )
+
+    @classmethod
+    def _is_cluster_feature(cls, feature: dict) -> bool:
+        """A clustered metal-loss record: a vendor-merged group, not one defect.
+
+        Its reported extent is a bounding box over several pits, and the vendor
+        regroups those pits differently on every run — the same corrosion can
+        be one cluster in the OLD report and three in the NEW one.  Pairing a
+        cluster across runs therefore compares two different populations of
+        metal loss, and any growth rate that comes out of it is an artefact of
+        the grouping, not of corrosion.
+
+        Clusters are conserved as bypass rows instead: they stay in the result
+        table in distance order and still feed ERF / FFS, which read the
+        reported dimensions of a single run.  The exclusion is from *alignment*
+        only, never from the report.
+        """
+        return any(
+            CLUSTER_LABEL_PATTERN.search(label)
+            for label in cls._classification_labels(feature)
+        )
+
+    @classmethod
+    def _is_matchable_anomaly(cls, feature: dict) -> bool:
+        """Only anomaly / metal-loss records are eligible for Hungarian.
+
+        Clustered records are anomalies but are never eligible; see
+        ``_is_cluster_feature`` for why.
+        """
+        if cls._is_cluster_feature(feature):
+            return False
         feature_type = str(feature.get("originalType", "")).strip().lower()
         raw_type = str(feature.get("raw", {}).get("type", "")).strip().lower()
         return feature_type in {"anomaly", "metal loss", "metal_loss"} or raw_type == "anomaly"
@@ -1090,12 +1142,13 @@ class HungarianAnomalyAlignmentEngine:
         # Phase ownership is determined by feature type, not identifier alone.
         # IDs are not guaranteed unique across vendor exports; filtering every
         # row whose ID appears in a GW lock can silently remove an anomaly.
-        remaining = [feature for feature in features if not cls._is_gw_feature(feature)]
-        anomalies = [feature for feature in remaining if cls._is_matchable_anomaly(feature)]
-        bypassed = [
-            feature for feature in remaining
-            if not cls._is_matchable_anomaly(feature) and not cls._is_gw_feature(feature)
-        ]
+        anomalies: list[dict] = []
+        bypassed: list[dict] = []
+        for feature in features:
+            if cls._is_gw_feature(feature):
+                continue
+            # Clusters land here too: _is_matchable_anomaly rejects them.
+            (anomalies if cls._is_matchable_anomaly(feature) else bypassed).append(feature)
         return anomalies, bypassed
 
     def resolve_cost_settings(self, tolerance_overrides: dict | None = None) -> dict:
@@ -1593,6 +1646,13 @@ class HungarianAnomalyAlignmentEngine:
             old_section = section_for(f1, "OLD")
             new_section = section_for(f2, "NEW")
             row_section = new_section or old_section
+            # The bypass bucket holds two very different things — supports and
+            # markers that were never anomalies, and clusters that were held
+            # back on purpose.  Say which, or the engineer cannot tell whether
+            # a missing match is a rule or a defect in the run.
+            bypass_reason = "-"
+            if any(feature and self._is_cluster_feature(feature) for feature in (f1, f2)):
+                bypass_reason = CLUSTER_BYPASS_REASON
             return {
                 "session_id": self.session_id,
                 "feature_old_id": safe_int(old_id_val) if old_id_val else None,
@@ -1600,6 +1660,7 @@ class HungarianAnomalyAlignmentEngine:
                 "match_status": status,
                 "Match/Unmatch": status,
                 "Result Group": result_group,
+                "Bypass Reason": bypass_reason,
                 "Run Year OLD": self.run_1_year,
                 "Run Year NEW": self.run_2_year,
                 "Physics Warning": ", ".join(warning["code"] for warning in physics_warnings) or "-",

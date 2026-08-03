@@ -585,6 +585,75 @@ class HungarianGwLockTests(unittest.TestCase):
         self.assertEqual([feature["id"] for feature in anomalies], ["defect"])
         self.assertEqual([feature["id"] for feature in bypassed], ["support"])
 
+    def test_cluster_label_is_recognised_whatever_the_vendor_wrote(self):
+        cluster_labels = [
+            {"raw": {"feature_identification": "CLUSTER corrosion"}},
+            {"raw": {"feature_identification": "Corrosion CLUSTER"}},
+            {"raw": {"feature_identification": "corrosion clustering"}},
+            {"raw": {"feature_identification": "Clustered metal loss"}},
+            {"raw": {"feature_identification": "METAL LOSS CLUSTERS"}},
+            {"raw": {"feature_type": "Cluster"}},
+            {"raw": {"dim_classification": "General / cluster"}},
+            {"originalType": "corrosion cluster"},
+        ]
+        for feature in cluster_labels:
+            with self.subTest(feature=feature):
+                self.assertTrue(HungarianAnomalyAlignmentEngine._is_cluster_feature(feature))
+
+        non_cluster_labels = [
+            {"raw": {"feature_identification": "Corrosion"}},
+            {"raw": {"feature_identification": "External corrosion pitting"}},
+            {"originalType": "metal loss"},
+            {"originalType": "weld"},
+            {},
+        ]
+        for feature in non_cluster_labels:
+            with self.subTest(feature=feature):
+                self.assertFalse(HungarianAnomalyAlignmentEngine._is_cluster_feature(feature))
+
+    def test_free_text_comment_never_reclassifies_a_feature_as_a_cluster(self):
+        # A remark is evidence for a human, not a classification column.
+        feature = {
+            "originalType": "metal loss",
+            "raw": {"comment": "reviewed, this is not a cluster"},
+        }
+
+        self.assertFalse(HungarianAnomalyAlignmentEngine._is_cluster_feature(feature))
+        self.assertTrue(HungarianAnomalyAlignmentEngine._is_matchable_anomaly(feature))
+
+    def test_clustered_metal_loss_is_conserved_as_bypass_instead_of_matched(self):
+        features = [
+            {
+                "id": "single-defect",
+                "originalType": "metal loss",
+                "raw": {"feature_identification": "Corrosion"},
+            },
+            {
+                "id": "vendor-cluster",
+                "originalType": "metal loss",
+                "raw": {"feature_identification": "CLUSTER corrosion"},
+            },
+            {
+                "id": "vendor-cluster-reversed",
+                "originalType": "anomaly",
+                "raw": {"type": "anomaly", "feature_identification": "Corrosion CLUSTER"},
+            },
+        ]
+
+        self.assertFalse(HungarianAnomalyAlignmentEngine._is_matchable_anomaly(features[1]))
+        self.assertFalse(HungarianAnomalyAlignmentEngine._is_matchable_anomaly(features[2]))
+
+        anomalies, bypassed = HungarianAnomalyAlignmentEngine._partition_hungarian_features(
+            features,
+            locked_ids=set(),
+        )
+
+        self.assertEqual([feature["id"] for feature in anomalies], ["single-defect"])
+        self.assertEqual(
+            [feature["id"] for feature in bypassed],
+            ["vendor-cluster", "vendor-cluster-reversed"],
+        )
+
     def test_scenario_depth_does_not_filter_matching_candidates(self):
         engine = HungarianAnomalyAlignmentEngine.__new__(HungarianAnomalyAlignmentEngine)
         engine.depth_thresh = 10

@@ -127,6 +127,37 @@ export function summarizeConservationAudit(
   };
 }
 
+/**
+ * Same rule as `hungarian_engine._is_cluster_feature`: a vendor-merged
+ * corrosion group is never aligned across runs. Every vendor writes it
+ * differently — "CLUSTER corrosion", "Corrosion CLUSTER", "Clustered metal
+ * loss" — so the word itself is what is matched, not a fixed label.
+ */
+const CLUSTER_LABEL_PATTERN = /\b(?:cluster|klaster|kluster)s?(?:ed|ing)?\b/i;
+
+/** Classification columns only. A free-text comment must not reclassify a row. */
+const CLUSTER_CLASSIFICATION_COLUMNS = [
+  'Feature Identification OLD',
+  'Feature Identification NEW',
+  'Feature Type OLD',
+  'Feature Type NEW',
+] as const;
+
+/**
+ * Whether either side of a comparison row is clustered metal loss.
+ *
+ * The engine already keeps these out of matching; this is the same rule applied
+ * to the manual reassignment path, so an engineer cannot pair by hand what the
+ * algorithm refused to pair. The row stays in the table either way — clusters
+ * are excluded from *alignment*, never from the report or from ERF.
+ */
+export function isClusteredAlignmentRow<T extends Record<string, unknown>>(row: T): boolean {
+  return CLUSTER_CLASSIFICATION_COLUMNS.some((column) => {
+    const value = row[column];
+    return typeof value === 'string' && CLUSTER_LABEL_PATTERN.test(value);
+  });
+}
+
 function mappedDistance(value: unknown): number | null {
   return hasDistance(value) ? Number(value) : null;
 }
