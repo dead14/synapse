@@ -25,7 +25,13 @@ import {
   includedInterventionRows,
   type InterventionEvent,
 } from '../../utils/interventions';
-import { getAlignmentImportReadiness, mapAlignmentRowsToFfs } from '../../lib/ffs/alignmentImport';
+import {
+  alignmentSectionOptions,
+  getAlignmentImportReadiness,
+  mapAlignmentRowsToFfs,
+  normalizedSectionKey,
+  type AlignmentSectionOption,
+} from '../../lib/ffs/alignmentImport';
 import { convertLength, convertPressure, toMegapascals, toMillimetres, type LengthUnit, type PressureUnit } from '../../lib/ffs/units';
 import {
   fetchFfsCandidates,
@@ -86,6 +92,14 @@ export default function FfsSetupPage() {
   const [diameterUnit, setDiameterUnit] = useState<LengthUnit>('mm');
   const [fallbackDepthGrowth, setFallbackDepthGrowth] = useState('0');
   const [fallbackLengthGrowth, setFallbackLengthGrowth] = useState('0');
+  const [designLifeYears, setDesignLifeYears] = useState('');
+  const [commissioningYear, setCommissioningYear] = useState('');
+
+  // Sections come from the released features, and the factor for each is typed
+  // once against a stretch the engineer has already named and reviewed. Keyed
+  // by the normalised section name so a reload keeps the entered values.
+  const [sectionOptions, setSectionOptions] = useState<AlignmentSectionOption[]>([]);
+  const [sectionFactors, setSectionFactors] = useState<Record<string, string>>({});
 
   const normalizeDisplayValue = (
     value: string,
@@ -103,6 +117,34 @@ export default function FfsSetupPage() {
     operatingPressureMpa,
     (value) => toMegapascals(value, pressureUnit),
   );
+
+  /** The overrides as the import layer wants them: named section, numeric factor. */
+  const sectionDesignFactors = sectionOptions
+    .map((option) => ({
+      section: option.section,
+      designFactor: Number(sectionFactors[normalizedSectionKey(option.section)] ?? designFactor),
+    }))
+    .filter((rule) => Number.isFinite(rule.designFactor) && rule.designFactor > 0);
+
+  const invalidSectionFactors = sectionOptions.filter((option) => {
+    const raw = sectionFactors[normalizedSectionKey(option.section)];
+    if (raw === undefined || raw.trim() === '') return true;
+    const value = Number(raw);
+    return !Number.isFinite(value) || value <= 0 || value > 1;
+  });
+
+  const serviceLifeReasons = [
+    ...(designLifeYears.trim() !== '' &&
+      (!Number.isFinite(Number(designLifeYears)) || Number(designLifeYears) <= 0)
+      ? ['Original design life must be greater than 0 years, or left empty.']
+      : []),
+    ...(commissioningYear.trim() !== '' &&
+      (!Number.isInteger(Number(commissioningYear)) ||
+        Number(commissioningYear) < 1900 ||
+        Number(commissioningYear) > 2100)
+      ? ['Commissioning year must be a four-digit year between 1900 and 2100, or left empty.']
+      : []),
+  ];
 
   const alignmentReadinessReasons = getAlignmentImportReadiness({
     lineName,
@@ -123,9 +165,13 @@ export default function FfsSetupPage() {
     ...(!manualFile ? ['Upload the completed FFS template.'] : []),
     ...(manualFile && manualRows.length === 0 ? ['The uploaded workbook has no usable rows.'] : []),
   ];
-  const readinessReasons = sourceMode === 'released'
-    ? alignmentReadinessReasons
-    : manualReadinessReasons;
+  const readinessReasons = [
+    ...(sourceMode === 'released' ? alignmentReadinessReasons : manualReadinessReasons),
+    ...(sourceMode === 'released' && invalidSectionFactors.length > 0
+      ? [`Enter a design factor between 0 and 1 for: ${invalidSectionFactors.map((option) => option.section).join(', ')}.`]
+      : []),
+    ...serviceLifeReasons,
+  ];
 
   useEffect(() => {
     let cancelled = false;
@@ -168,6 +214,8 @@ export default function FfsSetupPage() {
     setAlignmentRows([]);
     setSelectedKeys(new Set());
     setReasons({});
+    setSectionOptions([]);
+    setSectionFactors({});
     try {
       const [result, review, sessionConfig] = await Promise.all([
         fetchAlignmentResult(sessionId, (pct, message) => {
@@ -191,6 +239,14 @@ export default function FfsSetupPage() {
       );
       setAlignmentRows(includedRows);
       setSelectedKeys(keys);
+      const options = alignmentSectionOptions(includedRows, { selectedKeys: keys });
+      setSectionOptions(options);
+      // Seed every section with the line default so the table always shows what
+      // each stretch will actually be assessed with, not a blank the reader has
+      // to interpret.
+      setSectionFactors(Object.fromEntries(
+        options.map((option) => [normalizedSectionKey(option.section), designFactor]),
+      ));
       setReasons(Object.fromEntries(
         review.items.filter((item) => item.reason).map((item) => [item.sourceKey, item.reason as string]),
       ));
@@ -240,6 +296,10 @@ export default function FfsSetupPage() {
         analysisHorizonYears,
         inputUnits: { pressure: pressureUnit, diameter: diameterUnit },
         pressureBasis,
+        serviceLife: {
+          designLifeYears: designLifeYears.trim() === '' ? null : Number(designLifeYears),
+          commissioningYear: commissioningYear.trim() === '' ? null : Number(commissioningYear),
+        },
       };
 
       if (sourceMode === 'manual') {
@@ -267,6 +327,7 @@ export default function FfsSetupPage() {
         outerDiameterMm: Number(outerDiameterMmForCalculation),
         smysMpa: Number(smysMpaForCalculation),
         designFactor: Number(designFactor),
+        sectionDesignFactors,
         operatingPressureMpa: Number(operatingPressureMpaForCalculation),
         fallbackDepthGrowthMmPerYear: Number(fallbackDepthGrowth),
         fallbackLengthGrowthMmPerYear: Number(fallbackLengthGrowth),
@@ -403,10 +464,10 @@ export default function FfsSetupPage() {
 
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                Highlight Threshold
+                Review threshold
               </label>
               <div className="flex overflow-hidden rounded-lg border border-slate-200 focus-within:border-indigo-500 dark:border-slate-700">
-                <span className="border-r border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800/50">Expected Life &lt;</span>
+                <span className="border-r border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800/50">Remnant life &lt;</span>
                 <input
                   type="number"
                   value={highlightYears}
@@ -684,8 +745,29 @@ export default function FfsSetupPage() {
                 <input type="number" min="0" step="any" value={smysMpa} onChange={(event) => setSmysMpa(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
               </label>
               <label className="block text-xs font-semibold text-slate-500">
-                Design Factor
-                <input type="number" min="0" step="any" value={designFactor} onChange={(event) => setDesignFactor(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
+                Design Factor (line default)
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={designFactor}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    // Sections still sitting on the old default follow it; one
+                    // the engineer has deliberately changed does not get reset.
+                    setSectionFactors((previous) => {
+                      const updated = { ...previous };
+                      for (const option of sectionOptions) {
+                        const key = normalizedSectionKey(option.section);
+                        if (updated[key] === designFactor) updated[key] = next;
+                      }
+                      return updated;
+                    });
+                    setDesignFactor(next);
+                  }}
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                />
+                <span className="mt-1 block text-[10px] font-normal leading-snug">Applied to any section without its own value below.</span>
               </label>
               <label className="block text-xs font-semibold text-slate-500">
                 Required assessment pressure [{pressureUnit}]
@@ -729,6 +811,109 @@ export default function FfsSetupPage() {
                 <span className="mt-1 block text-[10px] font-normal leading-snug">Optional explicit assumption; NEW-only length is not inferred from zero.</span>
               </label>
             </div>
+            {sectionOptions.length > 0 && (
+              <div className="rounded-xl border border-slate-200 dark:border-slate-700">
+                <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
+                    Design factor by section
+                  </p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                    {sectionOptions.length} section{sectionOptions.length === 1 ? '' : 's'} carry released
+                    features. Buried line pipe and a river crossing or riser rarely share a factor — assessing
+                    a crossing at the line-pipe factor overstates its safe pressure. Each feature records
+                    which value it was assessed with.
+                  </p>
+                </div>
+                <div className="max-h-64 overflow-y-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="sticky top-0 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-900/70">
+                      <tr>
+                        <th className="px-4 py-2">Section</th>
+                        <th className="px-2 py-2 text-right">Features</th>
+                        <th className="px-2 py-2 text-right">Range [m]</th>
+                        <th className="px-4 py-2 text-right">Design factor</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {sectionOptions.map((option) => {
+                        const key = normalizedSectionKey(option.section);
+                        const value = sectionFactors[key] ?? designFactor;
+                        const numeric = Number(value);
+                        const invalid = value.trim() === '' || !Number.isFinite(numeric) || numeric <= 0 || numeric > 1;
+                        return (
+                          <tr key={key}>
+                            <td className="px-4 py-2 font-medium text-slate-700 dark:text-slate-200">
+                              {option.section}
+                              {value !== designFactor && !invalid && (
+                                <span className="ml-2 rounded border border-indigo-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-indigo-600 dark:border-indigo-800/60 dark:text-indigo-400">
+                                  Override
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-2 py-2 text-right tabular-nums text-slate-500">
+                              {option.featureCount.toLocaleString()}
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-slate-400">
+                              {option.startLd.toFixed(0)} – {option.endLd.toFixed(0)}
+                            </td>
+                            <td className="px-4 py-2 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                max="1"
+                                step="0.01"
+                                value={value}
+                                aria-label={`Design factor for ${option.section}`}
+                                aria-invalid={invalid}
+                                onChange={(event) =>
+                                  setSectionFactors((previous) => ({ ...previous, [key]: event.target.value }))
+                                }
+                                className={`w-24 rounded-lg border bg-slate-50 px-2 py-1.5 text-right text-xs tabular-nums text-slate-800 focus:outline-none dark:bg-slate-900 dark:text-slate-200 ${
+                                  invalid
+                                    ? 'border-rose-400 focus:border-rose-500'
+                                    : 'border-slate-200 focus:border-indigo-500 dark:border-slate-700'
+                                }`}
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block text-xs font-semibold text-slate-500">
+                Original design life [years]
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={designLifeYears}
+                  onChange={(event) => setDesignLifeYears(event.target.value)}
+                  placeholder="e.g. 25"
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                />
+                <span className="mt-1 block text-[10px] font-normal leading-snug">Remnant life is not reported above this. Leave empty for no cap.</span>
+              </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                Commissioning year
+                <input
+                  type="number"
+                  min="1900"
+                  max="2100"
+                  step="1"
+                  value={commissioningYear}
+                  onChange={(event) => setCommissioningYear(event.target.value)}
+                  placeholder="e.g. 1985"
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                />
+                <span className="mt-1 block text-[10px] font-normal leading-snug">Reported as consumed design life; it does not change the calculation.</span>
+              </label>
+            </div>
+
             <p className="text-xs text-slate-500">Inputs are converted to MPa and mm before the ASME B31G calculation. ERF compares the selected required pressure basis with the calculated safe pressure; current operating pressure is not silently treated as MAOP.</p>
               </>
             ) : (

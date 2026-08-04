@@ -1,4 +1,10 @@
-import type { FfsConfig, FfsGrowthComponentEvidence, FfsRepairStatus, FfsResult } from './types';
+import type {
+  FfsConfig,
+  FfsDesignFactorSource,
+  FfsGrowthComponentEvidence,
+  FfsRepairStatus,
+  FfsResult,
+} from './types';
 import { assertValidFfsRow } from './inputValidation.ts';
 import {
   B31G_DEPTH_LIMIT_RATIO,
@@ -8,6 +14,7 @@ import {
   type B31gKernelResult,
 } from './b31g.ts';
 import { analysisHorizonYears } from './lifeProjection.ts';
+import { computeRemnantLife, EMPTY_SERVICE_LIFE } from './remnantLife.ts';
 
 export {
   B31G_DEPTH_LIMIT_RATIO,
@@ -47,19 +54,21 @@ function calcAtYear(
   );
 }
 
-// Add years to date
-function addYears(date: Date, years: number): string {
-  const d = new Date(date);
-  const whole = Math.floor(years);
-  const frac = years - whole;
-  d.setFullYear(d.getFullYear() + whole);
-  d.setDate(d.getDate() + Math.round(frac * 365.25));
-  return d.toISOString().split('T')[0];
-}
-
 function optionalText(value: string | undefined): string | null {
   const normalized = String(value ?? '').trim();
   return normalized || null;
+}
+
+/** Reads a workbook truthiness flag without treating a stray label as true. */
+function parseBooleanFlag(value: string | undefined): boolean {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return ['yes', 'y', 'true', '1', 'cluster', 'clustered'].includes(normalized);
+}
+
+function designFactorSourceOf(value: string | undefined): FfsDesignFactorSource {
+  const normalized = String(value ?? '').trim();
+  if (normalized === 'section-override' || normalized === 'line-default') return normalized;
+  return 'row-supplied';
 }
 
 function repairStatusOf(value: string | undefined): FfsRepairStatus {
@@ -103,6 +112,8 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
   const repairReference = optionalText(row['Repair Reference']);
   const recommendation = optionalText(row.Recommendation);
   const actionOwner = optionalText(row['Action Owner']);
+  const isClusteredMetalLoss = parseBooleanFlag(row['Clustered Metal Loss']);
+  const designFactorSource = designFactorSourceOf(row['Design Factor Source']);
 
   const dInit = (maxDepthPct / 100) * wall;
   const geometry: B31gGeometry = {
@@ -123,56 +134,28 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
   const acceptance = (init.erf < 1 && maxDepthPct < depthLimitPct) ? 'Acceptable' : 'Un-Acceptable';
   const horizonYears = analysisHorizonYears(config);
 
-  let tDepth = Infinity;
-  if (crDepth > 0) {
-    tDepth = (B31G_DEPTH_LIMIT_RATIO * wall - dInit) / crDepth;
-    if (tDepth < 0) tDepth = 0;
-  } else if (dInit / wall >= B31G_DEPTH_LIMIT_RATIO) {
-    tDepth = 0;
-  }
+  // One remnant-life kernel, on the as-reported dimensions. The tolerance
+  // sensitivity is computed by the screening layer from the same function, so
+  // the two figures can no longer drift apart the way the old depth-only ERF
+  // search drifted from this one.
+  const remnantLife = computeRemnantLife({
+    geometry,
+    method: config.method,
+    flowStressMode: config.modifiedSa,
+    basis: 'as-reported',
+    startDepthPct: maxDepthPct,
+    startLengthMm: length,
+    depthRateMmPerYear: crDepth,
+    lengthRateMmPerYear: crLength,
+    lengthRateAvailable: crLength > 0,
+    horizonYears,
+    iliDate: config.iliDate,
+    service: config.serviceLife ?? EMPTY_SERVICE_LIFE,
+  });
 
-  let tErf = Infinity;
-  if (init.erf >= 1) {
-    tErf = 0;
-  } else {
-    const atMax = calcAtYear(config, geometry, dInit, length, crDepth, crLength, horizonYears);
-    if (atMax.erf >= 1) {
-      let lo = 0, hi = horizonYears;
-      for (let ii = 0; ii < 60; ii++) {
-        const mid = (lo + hi) / 2;
-        const rv = calcAtYear(config, geometry, dInit, length, crDepth, crLength, mid);
-        if (rv.erf >= 1) hi = mid; else lo = mid;
-      }
-      tErf = Math.round(hi * 100) / 100;
-    }
-  }
-
-  const depthLife = tDepth <= horizonYears ? Math.round(tDepth * 100) / 100 : Infinity;
-  const erfLife = tErf <= horizonYears ? tErf : Infinity;
-  const hasPositiveGrowth = crDepth > 0 || crLength > 0;
-
-  let expectedLife: number | null = null;
-  let failureCriteria: FfsResult['failureCriteria'] = null;
-  let lifeStatus: FfsResult['lifeStatus'];
-
-  if (depthLife !== Infinity || erfLife !== Infinity) {
-    lifeStatus = 'calculated';
-    if (depthLife <= erfLife) {
-      expectedLife = depthLife;
-      failureCriteria = 'Depth = 80%';
-      if (depthLife === 0 && maxDepthPct < depthLimitPct && erfLife === 0) failureCriteria = 'ERF = 1';
-    } else {
-      expectedLife = erfLife;
-      failureCriteria = 'ERF = 1';
-    }
-  } else {
-    lifeStatus = hasPositiveGrowth ? 'not-reached-within-horizon' : 'insufficient-growth-basis';
-  }
-
-  const yearService = expectedLife === null ? null : addYears(config.iliDate, expectedLife);
-  const atFailure = expectedLife === null
+  const atFailure = remnantLife.years === null
     ? null
-    : calcAtYear(config, geometry, dInit, length, crDepth, crLength, expectedLife);
+    : calcAtYear(config, geometry, dInit, length, crDepth, crLength, remnantLife.years);
 
   // A feature with no remaining capacity carries an infinite ERF. Rounding it
   // would turn it into a finite-looking number that charts and sorts would then
@@ -183,7 +166,7 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
   return {
     featureId, ld: parseFloat(ld as string) || ld as any, section, surface, maxDepthPct, length, width, orient, wall,
     crDepth, crLength, df, od, smys, p0, repairStatus, repairMethod, repairDate, repairReference,
-    recommendation, actionOwner,
+    recommendation, actionOwner, isClusteredMetalLoss, designFactorSource,
     growthEvidence: {
       oldSurveyYear: null,
       newSurveyYear: null,
@@ -198,7 +181,7 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
     So: +so.toFixed(4), safePressure: +safePressure.toFixed(4),
     ERF: round4(init.erf), acceptance,
     branch: BRANCH_LABEL[init.branch],
-    expectedLife, yearService, failureCriteria, lifeStatus, analysisHorizonYears: horizonYears,
+    remnantLife,
     atFailure_ERF: atFailure ? round4(atFailure.erf) : null,
     atFailure_depth: atFailure ? +atFailure.depthPct.toFixed(2) : null,
     atFailure_Sf: atFailure ? +atFailure.failureStressMpa.toFixed(4) : null,

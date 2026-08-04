@@ -45,7 +45,7 @@ test('manual workbook parser preserves optional feature and repair evidence', ()
     [...REQUIRED_COLUMNS, ...OPTIONAL_COLUMNS],
     [
       100.5, 'Joint-1', 'Internal', 25, 45, 30, '06:00', 12.7, 0.1, 0.05, 0.72, 508, 358, 6.5,
-      'F-001', 'Temporary repair', 'Composite wrap', '2025-01-20', 'REP-17', 'Permanent repair', 'Integrity',
+      'F-001', 'Yes', 'Temporary repair', 'Composite wrap', '2025-01-20', 'REP-17', 'Permanent repair', 'Integrity',
     ],
   ]);
 
@@ -54,6 +54,7 @@ test('manual workbook parser preserves optional feature and repair evidence', ()
   assert.equal(parsed.rows[0]['Feature ID'], 'F-001');
   assert.equal(parsed.rows[0]['Repair Status'], 'Temporary repair');
   assert.equal(parsed.rows[0]['Repair Reference'], 'REP-17');
+  assert.equal(parsed.rows[0]['Clustered Metal Loss'], 'Yes');
 });
 
 test('manual workbook parser reports missing columns before assessment', () => {

@@ -284,10 +284,10 @@ export default function FfsScenarioLab({
               label="Projection point"
               value={inputs.forecastYears}
               min={0}
-              max={nominal.analysisHorizonYears}
+              max={nominal.remnantLife.analysisHorizonYears}
               step={0.5}
               unit="years"
-              hint={`Bounded to the configured ${nominal.analysisHorizonYears}-year analysis horizon.`}
+              hint={`Bounded to the configured ${nominal.remnantLife.analysisHorizonYears}-year analysis horizon.`}
               onChange={(forecastYears) => updateInputs({ forecastYears })}
             />
           </div>

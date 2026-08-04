@@ -1,3 +1,9 @@
+// Type-only, so the cycle with remnantLife.ts (which needs FfsLifeStatus) is
+// erased at compile time rather than becoming a runtime import cycle.
+import type { FfsRemnantLife, FfsServiceLifeInputs } from './remnantLife.ts';
+
+export type { FfsRemnantLife, FfsRemnantLifeBasis, FfsRemnantLimit, FfsServiceLifeInputs } from './remnantLife.ts';
+
 export interface FfsConfig {
   lineName: string;
   method: 'original' | 'modified';
@@ -10,6 +16,8 @@ export interface FfsConfig {
   inputUnits?: { pressure: 'MPa' | 'bar' | 'psi'; diameter: 'mm' | 'in' };
   /** What the pressure supplied to the ERF comparison represents. */
   pressureBasis?: FfsPressureBasis;
+  /** Design-dossier figures used by the residual life assessment. */
+  serviceLife?: FfsServiceLifeInputs;
 }
 
 export type FfsPressureBasis = 'maop' | 'mop' | 'current-operating' | 'other-required';
@@ -47,7 +55,27 @@ export type FfsLifeStatus =
   | 'not-reached-within-horizon'
   | 'insufficient-growth-basis';
 
-export type FfsFailureCriterion = 'Depth = 80%' | 'ERF = 1';
+/**
+ * One design factor and the stretch of line it applies to.
+ *
+ * A single line routinely carries more than one: buried line pipe at 0.72 and a
+ * river crossing or riser at 0.60 is the ordinary case, not the exception, and
+ * assessing the crossing at the line-pipe factor overstates its safe pressure.
+ * Sections come from the alignment sectioning that has already been reviewed,
+ * so the engineer assigns a factor to a stretch they have already named rather
+ * than typing distances again.
+ */
+export interface FfsSectionDesignFactor {
+  /** Section name exactly as the alignment sectioning emitted it. */
+  section: string;
+  designFactor: number;
+}
+
+/**
+ * Which rule produced the design factor a feature was assessed with.
+ * `row-supplied` is the manual workbook, where the engineer sets it per row.
+ */
+export type FfsDesignFactorSource = 'section-override' | 'line-default' | 'row-supplied';
 
 export type FfsRepairStatus = 'unrepaired' | 'temporary-repair' | 'permanent-repair-verified';
 
@@ -120,6 +148,15 @@ export interface FfsInput {
   actionOwner: string | null;
   /** Source observation and analysis-use provenance for time projection. */
   growthEvidence?: FfsGrowthEvidence;
+  /**
+   * True when the ILI record is a vendor-merged corrosion group rather than a
+   * single defect. B31G is written for one metal-loss feature, and a cluster box
+   * is never matched across runs, so both the remaining-strength result and the
+   * growth rate mean something different for these rows.
+   */
+  isClusteredMetalLoss: boolean;
+  /** Which rule supplied `df`. */
+  designFactorSource: FfsDesignFactorSource;
 }
 
 export type FfsRepairDispositionPatch = Pick<
@@ -146,12 +183,11 @@ export interface FfsResult extends FfsInput {
   ERF: number;
   acceptance: 'Acceptable' | 'Un-Acceptable';
   branch: string;
-  /** Null unless a limit is reached inside the configured analysis horizon. */
-  expectedLife: number | null;
-  yearService: string | null;
-  failureCriteria: FfsFailureCriterion | null;
-  lifeStatus: FfsLifeStatus;
-  analysisHorizonYears: number;
+  /**
+   * Remnant life on the as-reported dimensions — the figure this assessment
+   * reports. The tolerance-adjusted sensitivity lives on FfsScreenedResult.
+   */
+  remnantLife: FfsRemnantLife;
   atFailure_ERF: number | null;
   atFailure_depth: number | null;
   atFailure_Sf: number | null;
@@ -206,9 +242,11 @@ export interface FfsScreenedResult {
   nominal: FfsResult;
   conservative: FfsTier;
   forecast: FfsTier;
-  /** Years until conservative ERF reaches 1.0; null when no finite limit is established. */
-  lifeToErf1: number | null;
-  lifeToErf1Status: FfsLifeStatus;
+  /**
+   * Remnant life recomputed from the tolerance-adjusted dimensions. Reported as
+   * the sensitivity case beside the as-reported figure, never instead of it.
+   */
+  remnantLifeConservative: FfsRemnantLife;
   priority: FfsPriority;
   /** Clock hour 0–11.99 parsed from the orientation string, or null. */
   clockHour: number | null;
@@ -216,7 +254,15 @@ export interface FfsScreenedResult {
   bottomQuadrant: boolean;
 }
 
-export interface FfsCluster {
+/**
+ * A stretch of line holding several features close together.
+ *
+ * This is a spatial grouping for inspection planning. It is deliberately not
+ * called a cluster: "clustered metal loss" in this workspace means a single ILI
+ * record that the vendor already merged, which is a property of one feature —
+ * see `FfsInput.isClusteredMetalLoss`.
+ */
+export interface FfsLocationZone {
   id: string;
   members: FfsScreenedResult[];
   startLd: number;
@@ -248,6 +294,7 @@ export const REQUIRED_COLUMNS = [
 
 export const OPTIONAL_COLUMNS = [
   'Feature ID',
+  'Clustered Metal Loss',
   'Repair Status',
   'Repair Method',
   'Repair Date',

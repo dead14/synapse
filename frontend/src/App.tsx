@@ -18,6 +18,7 @@ const RegisterPage = lazy(() => import('./pages/RegisterPage'));
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
 const DesignSystemPage = lazy(() => import('./pages/DesignSystemPage'));
 const SpoolPreviewPage = lazy(() => import('./pages/SpoolPreviewPage'));
+const FfsPreviewPage = lazy(() => import('./pages/FfsPreviewPage'));
 const MasterAdminPage = lazy(() => import('./pages/MasterAdmin/MasterAdminPage'));
 const CorrosionAnalysisPage = lazy(() => import('./pages/Corrosion/CorrosionAnalysisPage'));
 const FfsSetupPage = lazy(() => import('./pages/FFS/FfsSetupPage'));
@@ -109,6 +110,7 @@ export default function App() {
             not a product surface, and carries no session data. */}
         {import.meta.env.DEV && <Route path="/ds-preview" element={<DesignSystemPage />} />}
         {import.meta.env.DEV && <Route path="/spool-preview" element={<SpoolPreviewPage />} />}
+        {import.meta.env.DEV && <Route path="/ffs-preview" element={<FfsPreviewPage />} />}
 
         <Route element={<RequireAuth />}>
           <Route element={<AppLayout />}>

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { FiChevronDown, FiChevronUp, FiSearch } from 'react-icons/fi';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
-import { formatLifeProjection, lifeProjectionStatusLabel, lifeSortValue } from '../../lib/ffs/lifeProjection';
+import { formatRemnantLife, lifeSortValue, remnantLimitLabel } from '../../lib/ffs/lifeProjection';
 import { Callout, Panel, PriorityLabel, SeverityBadge, formatErf } from './FfsPrimitives';
 
 const PAGE_SIZE = 100;
@@ -17,9 +17,9 @@ type SortKey =
   | 'conservativeErf'
   | 'safePressure'
   | 'acceptance'
-  | 'expectedLife'
-  | 'yearService'
-  | 'failureCriteria'
+  | 'remnantLife'
+  | 'dueDate'
+  | 'governingLimit'
   | 'repairStatus'
   | 'priority';
 
@@ -43,9 +43,9 @@ const COLUMNS: Column[] = [
   { key: 'conservativeErf', header: 'ERF cons.', align: 'right', value: (i) => i.conservative.ERF },
   { key: 'safePressure', header: 'P_safe [MPa]', align: 'right', value: (i) => i.nominal.safePressure },
   { key: 'acceptance', header: 'Acceptance', align: 'center', value: (i) => i.nominal.acceptance },
-  { key: 'expectedLife', header: 'Life projection', align: 'right', value: (i) => lifeSortValue(i.nominal.expectedLife) },
-  { key: 'yearService', header: 'Service limit', align: 'center', value: (i) => i.nominal.yearService ?? '' },
-  { key: 'failureCriteria', header: 'Projection status', align: 'left', value: (i) => i.nominal.failureCriteria ?? i.nominal.lifeStatus },
+  { key: 'remnantLife', header: 'Remnant life', align: 'right', value: (i) => lifeSortValue(i.nominal.remnantLife.years) },
+  { key: 'dueDate', header: 'Due date', align: 'center', value: (i) => i.nominal.remnantLife.dueDateIso ?? '' },
+  { key: 'governingLimit', header: 'Governing limit', align: 'left', value: (i) => i.nominal.remnantLife.governingLimit ?? i.nominal.remnantLife.status },
   { key: 'repairStatus', header: 'Repair', align: 'center', value: (i) => i.nominal.repairStatus },
   { key: 'priority', header: 'Priority', align: 'center', value: (i) => PRIORITY_RANK[i.priority] },
 ];
@@ -87,8 +87,8 @@ export default function FfsResultsTable({
         if (acceptance !== 'All' && item.nominal.acceptance !== acceptance) return false;
         if (
           criterion !== 'All' &&
-          item.nominal.failureCriteria !== criterion &&
-          item.nominal.lifeStatus !== criterion
+          item.nominal.remnantLife.governingLimit !== criterion &&
+          item.nominal.remnantLife.status !== criterion
         ) return false;
         if (priority !== 'All' && item.priority !== priority) return false;
         return true;
@@ -114,7 +114,8 @@ export default function FfsResultsTable({
   const safePage = Math.min(page, totalPages);
   const pageRows = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
   const highlighted = filtered.filter(
-    (item) => item.nominal.expectedLife !== null && item.nominal.expectedLife < config.highlightYears,
+    (item) => item.nominal.remnantLife.years !== null &&
+      item.nominal.remnantLife.years < config.highlightYears,
   ).length;
 
   const toggleSort = (key: SortKey) => {
@@ -242,7 +243,8 @@ export default function FfsResultsTable({
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700/70">
               {pageRows.map((item) => {
                 const n = item.nominal;
-                const belowThreshold = n.expectedLife !== null && n.expectedLife < config.highlightYears;
+                const life = n.remnantLife;
+                const belowThreshold = life.years !== null && life.years < config.highlightYears;
                 const failed = n.acceptance === 'Un-Acceptable';
 
                 return (
@@ -270,7 +272,17 @@ export default function FfsResultsTable({
                       {Number(n.ld).toLocaleString(undefined, { maximumFractionDigits: 3 })}
                     </td>
                     <td className="max-w-[150px] truncate px-2 py-2 font-mono text-[10px] font-semibold text-slate-700 dark:text-slate-200">
-                      {n.featureId ?? '—'}
+                      <span className="inline-flex items-center gap-1">
+                        {n.featureId ?? '—'}
+                        {n.isClusteredMetalLoss && (
+                          <span
+                            title="Clustered metal loss: a vendor-merged group assessed as one defect, with no run-pair growth rate."
+                            className="rounded border border-violet-200 bg-violet-50 px-1 py-px font-sans text-[8px] font-bold uppercase tracking-wide text-violet-700 dark:border-violet-800/60 dark:bg-violet-950/30 dark:text-violet-300"
+                          >
+                            CL
+                          </span>
+                        )}
+                      </span>
                     </td>
                     <td className="max-w-[160px] truncate px-2 py-2 text-slate-600 dark:text-slate-300">
                       {n.section}
@@ -310,13 +322,23 @@ export default function FfsResultsTable({
                         belowThreshold ? 'text-amber-600 dark:text-amber-400' : 'text-slate-700 dark:text-slate-200'
                       }`}
                     >
-                      {formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears)}
+                      {formatRemnantLife(life)}
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 text-center tabular-nums text-slate-500 dark:text-slate-400">
-                      {n.yearService ?? '—'}
+                      {life.dueDateIso ?? '—'}
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 text-slate-500 dark:text-slate-400">
-                      {lifeProjectionStatusLabel(n.lifeStatus, n.failureCriteria, n.analysisHorizonYears)}
+                      <span className="inline-flex items-center gap-1">
+                        {remnantLimitLabel(life)}
+                        {life.lengthHeldConstant && life.status === 'calculated' && (
+                          <span
+                            title="No axial length growth rate was established, so the projection holds the length constant."
+                            className="rounded border border-slate-200 px-1 py-px text-[8px] font-bold uppercase tracking-wide text-slate-400 dark:border-slate-700"
+                          >
+                            L fixed
+                          </span>
+                        )}
+                      </span>
                     </td>
                     <td className="px-2 py-2 text-center">
                       <span className={`inline-flex rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${

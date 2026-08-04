@@ -60,7 +60,7 @@ test('forecast comparison uses bounded year offsets for reported, conservative, 
   assert.equal(comparison[0].points[0].yearOffset, 0);
   assert.equal(comparison[0].points.at(-1)?.yearOffset, 5);
   assert.ok(comparison.every((series) => series.points.every((point) => (
-    point.yearOffset >= 0 && point.yearOffset <= result.analysisHorizonYears
+    point.yearOffset >= 0 && point.yearOffset <= result.remnantLife.analysisHorizonYears
   ))));
   assert.ok(comparison.every((series) => series.points.every((point) => !('date' in point))));
   assert.ok(comparison[2].points[0].erf > comparison[1].points[0].erf);

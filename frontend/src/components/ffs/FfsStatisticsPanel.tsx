@@ -1,8 +1,7 @@
 import { useMemo, useState } from 'react';
 import { FiDownload, FiPlus, FiRefreshCw, FiSettings, FiX } from 'react-icons/fi';
 import { exportStatisticsWorkbook } from '../../lib/ffs/exports';
-import { formatLife } from '../../lib/ffs/screening';
-import { formatLifeProjection } from '../../lib/ffs/lifeProjection';
+import { formatRemnantLife } from '../../lib/ffs/lifeProjection';
 import {
   DEFAULT_DEPTH_BUCKETS,
   buildDistributionTable,
@@ -485,15 +484,15 @@ export default function FfsStatisticsPanel({
                     </td>
                     <td
                       className={`px-3 py-2 text-right font-semibold tabular-nums ${
-                        n.expectedLife !== null && n.expectedLife < config.highlightYears
+                        n.remnantLife.years !== null && n.remnantLife.years < config.highlightYears
                           ? 'text-amber-600 dark:text-amber-400'
                           : 'text-slate-700 dark:text-slate-200'
                       }`}
                     >
-                      {formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears)}
+                      {formatRemnantLife(n.remnantLife)}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums text-slate-500 dark:text-slate-400">
-                      {formatLife(item.lifeToErf1, item.lifeToErf1Status, n.analysisHorizonYears)}
+                      {formatRemnantLife(item.remnantLifeConservative)}
                     </td>
                     <td className="px-3 py-2 text-center">
                       <PriorityLabel priority={item.priority} />

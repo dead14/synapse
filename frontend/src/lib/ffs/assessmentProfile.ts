@@ -1,5 +1,6 @@
 import type {
   FfsConfig,
+  FfsDesignFactorSource,
   FfsGrowthAnalysisBasis,
   FfsGrowthObservation,
   FfsScreenedResult,
@@ -41,6 +42,14 @@ export function growthAnalysisBasisLabel(
   }
 }
 
+export function designFactorSourceLabel(source: FfsDesignFactorSource): string {
+  switch (source) {
+    case 'section-override': return 'Section override';
+    case 'line-default': return 'Line default';
+    default: return 'Supplied per row';
+  }
+}
+
 export interface FfsApplicabilityCheck {
   id: string;
   label: string;
@@ -62,6 +71,17 @@ export function applicabilityChecks(item: FfsScreenedResult): FfsApplicabilityCh
       label: 'B31G depth domain below 80% WT',
       status: n.maxDepthPct < 80 ? 'pass' : 'fail',
       detail: `${n.maxDepthPct.toFixed(1)}% WT as reported.`,
+    },
+    {
+      id: 'single-feature',
+      label: 'Record describes a single metal-loss feature',
+      // Not a failure: the calculation still runs and is usually conservative.
+      // It is a limitation the reader has to be told about, because B31G is
+      // written for one defect and this row is a vendor-merged group.
+      status: n.isClusteredMetalLoss ? 'review' : 'pass',
+      detail: n.isClusteredMetalLoss
+        ? 'Reported as clustered metal loss. The result treats the merged envelope as one defect, and no run-pair growth rate exists because clusters are never matched across runs.'
+        : 'Reported as an individual metal-loss feature.',
     },
     {
       id: 'morphology',

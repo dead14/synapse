@@ -33,7 +33,7 @@ export function buildScenarioForecastComparison(
   draftInputs: FfsScenarioInputs,
 ): FfsScenarioForecastSeries[] {
   const horizonYears = Math.min(
-    nominal.analysisHorizonYears,
+    nominal.remnantLife.analysisHorizonYears,
     Math.max(1, screening.forecastYears, draftInputs.forecastYears),
   );
   const years = comparisonYears(horizonYears);

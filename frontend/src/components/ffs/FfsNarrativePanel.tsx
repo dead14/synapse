@@ -10,6 +10,7 @@ import {
 import { buildFfsReportCase, type FfsReportContext } from '../../lib/ffs/reportCase';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
 import SynButton from '../ui/SynButton';
+import FfsExecutiveSummary from './FfsExecutiveSummary';
 import { Callout, Panel } from './FfsPrimitives';
 
 /**
@@ -23,6 +24,7 @@ export default function FfsNarrativePanel({
   reportContext,
   chartImages,
   onOpenCharts,
+  onSelect,
 }: {
   items: FfsScreenedResult[];
   config: FfsConfig;
@@ -31,6 +33,8 @@ export default function FfsNarrativePanel({
   chartImages: Record<string, string>;
   /** Switches to the Charts tab, which snapshots the figures. */
   onOpenCharts: () => void;
+  /** Opens a feature's calculation trace from a summary figure. */
+  onSelect?: (item: FfsScreenedResult) => void;
 }) {
   const [options, setOptions] = useState<NarrativeOptions>(DEFAULT_NARRATIVE_OPTIONS);
   const [draft, setDraft] = useState<NarrativeOptions>(DEFAULT_NARRATIVE_OPTIONS);
@@ -132,30 +136,47 @@ export default function FfsNarrativePanel({
         </Callout>
       )}
 
-      {/* Document */}
-      <Panel className="!px-6 !py-8 sm:!px-10">
-        <article className="mx-auto max-w-[62rem]">
-          {/* Title block */}
-          <header className="mb-8 border-b border-slate-200 pb-5 dark:border-slate-700">
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-              Fitness-for-service assessment
-            </p>
-            <h1 className="mt-1.5 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
-              {config.lineName || 'Pipeline assessment'}
-            </h1>
-            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-              {config.method === 'original' ? 'Original' : 'Modified'} ASME B31G ·{' '}
-              {items.length.toLocaleString()} features · ILI{' '}
-              {config.iliDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} ·
-              Generated {new Date().toLocaleDateString('en-GB')}
-            </p>
-          </header>
+      {/* Document, with the headline figures alongside rather than buried in
+          section 3. The rail sticks so it stays in view while the document is
+          read; on a narrow screen it stacks above the prose, where a reader
+          scanning for the verdict expects to find it. */}
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
+        <Panel className="order-2 !px-6 !py-8 sm:!px-10 xl:order-1">
+          <article className="mx-auto max-w-[62rem]">
+            {/* Title block */}
+            <header className="mb-8 border-b border-slate-200 pb-5 dark:border-slate-700">
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                Fitness-for-service assessment
+              </p>
+              <h1 className="mt-1.5 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
+                {config.lineName || 'Pipeline assessment'}
+              </h1>
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                {config.method === 'original' ? 'Original' : 'Modified'} ASME B31G ·{' '}
+                {items.length.toLocaleString()} features · ILI{' '}
+                {config.iliDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} ·
+                Generated {new Date().toLocaleDateString('en-GB')}
+              </p>
+            </header>
 
-          {blocks.map((block, index) => (
-            <NarrativeBlockView key={index} block={block} chartImages={chartImages} />
-          ))}
-        </article>
-      </Panel>
+            {blocks.map((block, index) => (
+              <NarrativeBlockView key={index} block={block} chartImages={chartImages} />
+            ))}
+          </article>
+        </Panel>
+
+        <div className="order-1 xl:order-2">
+          <div className="xl:sticky xl:top-4">
+            <FfsExecutiveSummary
+              items={items}
+              config={config}
+              screening={screening}
+              reportContext={reportContext}
+              onSelect={onSelect}
+            />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
