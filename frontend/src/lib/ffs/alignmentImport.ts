@@ -448,12 +448,24 @@ export function mapAlignmentRowsToFfs(
     const length = required[2][1] as number;
     const width = required[3][1] as number;
     const wall = required[4][1] as number;
-    if (distance < 0 || depth < 0 || depth > 80 || length <= 0 || width <= 0 || wall <= 0) {
+    // Depth is bounded by the wall, not by the 80 %WT project rejection line.
+    // Rejecting deep features here removed the ones most likely to govern the
+    // assessment before it ever ran; they are carried through and disclosed
+    // instead. See the same note in `validation.ts`.
+    if (distance < 0 || depth < 0 || depth > 100 || length <= 0 || width <= 0 || wall <= 0) {
       rejected.push({ featureId, reason: 'Measured NEW-run values are outside the supported FFS domain.' });
       continue;
     }
 
     const warnings: string[] = [];
+    // Carried rather than dropped, but never carried quietly: past 80 %WT the
+    // section 3 tables no longer apply and para. 1.2(f) asks for the sizing
+    // accuracy and the effective corrosion rate to be justified.
+    if (depth > 80) {
+      warnings.push(
+        `Reported at ${depth.toFixed(1)} %WT, past the 80 %WT project rejection line: assessed and reported, but the sizing accuracy and the effective corrosion rate must be justified before the result is relied on.`,
+      );
+    }
     const growthEvidence = deriveGrowthEvidence(source, depth, wall, engineering, warnings);
     const depthGrowthMm = growthEvidence.depth.analysisRateMmPerYear ?? 0;
     // The column has to carry a finite number for the calculation contract, but

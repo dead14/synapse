@@ -63,9 +63,28 @@ export function validateData(rows: Record<string, string>[]): ValidationError[] 
       }
     }
 
+    // Depth is bounded by the wall, not by the 80 %WT line.
+    //
+    // This used to reject anything over 80 %WT, and `assertValidFfsRow` throws
+    // on the first error, so a single deep anomaly aborted the whole assessment
+    // — silently removing from the report exactly the features most likely to
+    // govern it. The 80 % figure is a project rejection threshold, configurable
+    // through `FfsScreeningConfig.depthRejectionPct`; B31G-2023 para. 1.2(f)
+    // admits metal loss of any depth, asking only that the sizing accuracy and
+    // the effective corrosion rate be justified above it. The engine already
+    // handles these rows properly: the kernel flags `beyondDepthLimit`, the
+    // nominal acceptance fails them, the screening severity fails them, and the
+    // applicability check raises them for review. Only the validator disagreed.
+    //
+    // Past 100 %WT there is nothing left to assess — that is a through-wall
+    // penetration or a data error, and it is still refused.
     const depth = Number(String(row[REQUIRED_COLUMNS[3]]).trim());
-    if (Number.isFinite(depth) && (depth < 0 || depth > 80)) {
-      errors.push({ row: rowNumber, col: REQUIRED_COLUMNS[3], msg: `Must be 0-80 (got ${depth})` });
+    if (Number.isFinite(depth) && depth > 100) {
+      errors.push({
+        row: rowNumber,
+        col: REQUIRED_COLUMNS[3],
+        msg: `Must not exceed 100% of wall (got ${depth})`,
+      });
     }
 
     const designFactor = Number(String(row[REQUIRED_COLUMNS[10]]).trim());
