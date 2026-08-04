@@ -32,6 +32,8 @@ const REPORT_FIELD_MAPPINGS = [
   ['Psafe OLD (bar)', ['Psafe OLD (bar)']],
   ['Comment OLD', ['Comment OLD']],
   ['Match/Unmatch', ['Match/Unmatch', 'match_status']],
+  ['Depth Growth (%WT/yr)', ['Depth Growth (%WT/yr)']],
+  ['Length Growth (mm/yr)', ['Length Growth (mm/yr)']],
 ] as const;
 
 function firstReportValue(row: ExportRow, sourceKeys: readonly string[]): unknown {
