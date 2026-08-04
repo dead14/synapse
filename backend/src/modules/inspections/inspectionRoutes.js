@@ -9,5 +9,6 @@ router.get('/:id/features', authMiddleware, inspectionController.listInspectionF
 router.get('/:id/buckets', authMiddleware, inspectionController.listInspectionBuckets);
 router.get('/:id/anchors', authMiddleware, inspectionController.listInspectionAnchors);
 router.get('/:id/profile', authMiddleware, inspectionController.getInspectionProfile);
+router.delete('/:id', authMiddleware, inspectionController.deleteInspectionRun);
 
 module.exports = router;

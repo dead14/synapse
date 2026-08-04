@@ -147,3 +147,23 @@ exports.listInspectionBuckets = async (req, res) => {
         return res.status(500).json({ error: 'Failed to load inspection buckets' });
     }
 };
+
+exports.deleteInspectionRun = async (req, res) => {
+    const runId = parsePositiveId(req.params.id);
+    if (!runId) {
+        return res.status(400).json({
+            error: 'Invalid inspection run id',
+            code: 'INVALID_INSPECTION_RUN_ID',
+        });
+    }
+
+    try {
+        const { deleteOwnedInspectionRun } = require('./inspectionRepository');
+        const deleted = await deleteOwnedInspectionRun(pool, runId, req.user.orgId);
+        if (!deleted) return res.status(404).json({ error: 'Inspection run not found' });
+        return res.status(204).send();
+    } catch (error) {
+        console.error('Delete inspection run error:', error);
+        return res.status(500).json({ error: 'Failed to delete inspection run' });
+    }
+};
