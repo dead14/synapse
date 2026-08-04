@@ -52,7 +52,7 @@ function geometryOf(nominal: FfsResult, requiredPressureMpa: number): B31gGeomet
     wallThickness: nominal.wall,
     outerDiameter: nominal.od,
     smysMpa: nominal.smys,
-    designFactor: nominal.df,
+    safetyFactor: nominal.safetyFactor,
     operatingPressureMpa: requiredPressureMpa,
   };
 }

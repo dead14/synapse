@@ -158,10 +158,15 @@ export function buildNarrative(
   blocks.push({
     kind: 'paragraph',
     text:
-      `The remaining-strength evaluation follows the ${methodName(config)} method. Results are reported as an ` +
-      `estimated repair factor (ERF), defined as the ratio of operating pressure to the calculated safe ` +
-      `operating pressure. A feature is acceptable when ERF is below 1.0 and the reported depth is below ` +
-      `${screening.depthRejectionPct}% of wall thickness.`,
+      `The remaining-strength evaluation follows the ${methodName(config)} method as a Level 1 evaluation ` +
+      `(ASME B31G-2023 para. 1.6). Its acceptance criterion is that the estimated failure stress is at least ` +
+      `the safety factor times the hoop stress at the required pressure. Results are reported here as an ` +
+      `estimated repair factor (ERF) — the ratio of the required pressure to the calculated safe pressure — ` +
+      `which restates the same criterion as ERF below 1.0. ERF is an industry convention and is not a term ` +
+      `defined by B31G. The additional condition that reported depth stay below ` +
+      `${screening.depthRejectionPct}% of wall thickness is a project rejection rule, not a code limit: ` +
+      `B31G para. 1.2(f) permits evaluation at any depth provided the sizing accuracy and the effective ` +
+      `corrosion rate are justified.`,
   });
 
   // ── 2.0 Methodology ───────────────────────────────────────────────
@@ -169,9 +174,11 @@ export function buildNarrative(
   blocks.push({
     kind: 'paragraph',
     text:
-      `The ${methodName(config)} remaining-strength criterion was applied to each reported feature using the ` +
-      `nominal geometry, material properties, and operating pressure supplied with the inspection data. ` +
-      `The flow stress basis is ${flowStressText(config)}.`,
+      `The ${methodName(config)} remaining-strength criterion was applied to each reported feature as a ` +
+      `Level 1 evaluation, using the nominal geometry, material properties, and required pressure supplied ` +
+      `with the inspection data. The flow stress basis is ${flowStressText(config)}. A Level 2 Effective ` +
+      `Area evaluation, which needs a measured corrosion profile rather than a single maximum depth and ` +
+      `axial extent, is reported separately where an interacting group provides one.`,
   });
 
   blocks.push({
@@ -206,7 +213,7 @@ export function buildNarrative(
   blocks.push({
     kind: 'table',
     table: {
-      caption: 'Table 2-1  Design factor applied to each section',
+      caption: 'Table 2-1  Design factor and safety factor applied to each section',
       columns: [
         { header: 'Section', align: 'left' },
         { header: 'From [m]', align: 'right' },
@@ -214,6 +221,7 @@ export function buildNarrative(
         { header: 'Features', align: 'right' },
         { header: 'Design factor', align: 'right' },
         { header: 'Source', align: 'left' },
+        { header: 'Safety factor', align: 'right' },
       ],
       rows: designFactorRows.map((row) => [
         row.section,
@@ -226,6 +234,7 @@ export function buildNarrative(
           : row.source === 'line-default'
             ? 'Line default'
             : 'Supplied per row',
+        `${row.safetyFactor.toFixed(2)}${row.safetyFactorSource === 'explicit' ? '' : ' (1/F)'}`,
       ]),
     },
   });
@@ -241,7 +250,9 @@ export function buildNarrative(
         : `A uniform corrosion growth rate of ${screening.growthRateMmPerYear.toFixed(2)} mm/year is applied radially to every feature for the ${screening.forecastYears}-year forecast.`,
       `Remaining-life calculations are bounded to a ${horizonYears}-year analysis horizon. A limit not reached inside that window is not reported as a service-life value or date.`,
       `Engineering review band starts at ERF ${screening.reviewBandErf.toFixed(2)}; ERF above 1.00 is reported as exceeding the calculated safe pressure.`,
-      `Axial interaction screened at ${screening.interactionSpacingFactor}t edge-to-edge separation.`,
+      `Interaction screened at ${screening.interactionSpacingFactor}t edge-to-edge separation in both the axial and circumferential directions, per B31G para. 1.12(a).`,
+      `Metal loss deeper than ${screening.depthRejectionPct}% of wall is rejected by project rule. B31G itself sets no depth ceiling on evaluation; it requires the sizing accuracy and corrosion rate to be justified above 80 %, and withdraws only the section 3 tables.`,
+      'Remaining life, the ERF term, and the original design life cap are operator conventions layered on the code result. B31G defines none of them.',
       'Temperature derating, residual stress, and pressure cycling are not applied.',
     ],
   });
@@ -454,10 +465,13 @@ export function buildNarrative(
   blocks.push({
     kind: 'paragraph',
     text:
-      'The remnant life of the line is the shortest remnant life among its active features. ' +
-      'Each feature is projected from its as-reported dimensions at its own growth rates, and ' +
-      'the earlier of two limits governs: metal loss reaching 80% of nominal wall, which is the ' +
-      `applicability limit of the method, or ERF reaching 1.0. Results are bounded to a ` +
+      'ASME B31G contains no remaining-life method: it evaluates remaining strength at the dimensions ' +
+      'given to it. The projection below is therefore an operator procedure built on the code result, ' +
+      'not a code calculation, and it is reported as such. The remnant life of the line is the shortest ' +
+      'remnant life among its active features. Each feature is projected from its as-reported dimensions ' +
+      'at its own growth rates, and the earlier of two limits governs: metal loss reaching 80% of nominal ' +
+      'wall, which is the project rejection line, or the safe pressure falling to the required pressure ' +
+      `(ERF 1.0), which is the code acceptance criterion. Results are bounded to a ` +
       `${horizonYears}-year analysis horizon` +
       (service.designLifeYears !== null
         ? ` and are not reported above the ${service.designLifeYears}-year original design life.`

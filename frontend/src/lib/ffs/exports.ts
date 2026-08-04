@@ -9,6 +9,7 @@ import { designLifeUsage, EMPTY_SERVICE_LIFE } from './remnantLife.ts';
 import {
   designFactorSourceLabel,
   engineeringDisposition,
+  safetyFactorSourceLabel,
   growthAnalysisBasisLabel,
   growthObservationLabel,
   methodProfileLabel,
@@ -156,7 +157,8 @@ export function buildResultsWorkbook(
 
   const header = [
     'Feature ID', 'LD [m]', 'Section', 'Surface', 'Orientation', 'Max depth [%]', 'Length [mm]', 'Width [mm]',
-    'Wall [mm]', 'OD [mm]', 'SMYS [MPa]', 'Design factor', 'Design factor source', 'P0 [MPa]',
+    'Wall [mm]', 'OD [mm]', 'SMYS [MPa]', 'Design factor', 'Design factor source',
+    'Safety factor', 'Safety factor source', 'P0 [MPa]',
     'Clustered metal loss',
     'CR depth used [mm/y]', 'Depth growth observation', 'Depth analysis basis',
     'Raw depth growth [mm/y]', 'Growth interval [years]', 'Growth formula', 'Growth evidence note',
@@ -178,6 +180,7 @@ export function buildResultsWorkbook(
     return [
       n.featureId ?? '', n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2), num(n.width, 2),
       num(n.wall, 2), num(n.od, 2), num(n.smys, 2), num(n.df, 4), designFactorSourceLabel(n.designFactorSource),
+      num(n.safetyFactor, 4), safetyFactorSourceLabel(n.safetyFactorSource),
       num(n.p0, 4),
       n.isClusteredMetalLoss ? 'Yes' : 'No',
       num(n.crDepth, 4), growthObservationLabel(n.growthEvidence?.depth.observation),
@@ -241,11 +244,11 @@ export function buildResultsWorkbook(
   // growth that stretch is actually experiencing. Both are read section-first in
   // a report, so they get a sheet rather than being buried in the row export.
   const designFactorHeader = [
-    'Section', 'From [m]', 'To [m]', 'Features', 'Design factor', 'Source',
+    'Section', 'From [m]', 'To [m]', 'Features', 'Design factor', 'Source', 'Safety factor',
   ];
   const designFactorRows = buildSectionDesignFactorSummary(items).map((row) => [
     row.section, num(row.startLd, 3), num(row.endLd, 3), row.featureCount,
-    num(row.designFactor, 4), designFactorSourceLabel(row.source),
+    num(row.designFactor, 4), designFactorSourceLabel(row.source), num(row.safetyFactor, 4),
   ]);
 
   const growthHeader = [

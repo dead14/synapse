@@ -11,7 +11,7 @@
 
 import { isInternal } from './statistics.ts';
 import { lifeSortValue } from './lifeProjection.ts';
-import type { FfsDesignFactorSource, FfsScreenedResult } from './types.ts';
+import type { FfsDesignFactorSource, FfsSafetyFactorSource, FfsScreenedResult } from './types.ts';
 
 function sectionNameOf(item: FfsScreenedResult): string {
   const name = String(item.nominal.section ?? '').trim();
@@ -117,6 +117,9 @@ export interface FfsSectionDesignFactorRow {
   section: string;
   designFactor: number;
   source: FfsDesignFactorSource;
+  /** The divisor actually applied to the failure pressure in this section. */
+  safetyFactor: number;
+  safetyFactorSource: FfsSafetyFactorSource;
   featureCount: number;
   startLd: number;
   endLd: number;
@@ -133,7 +136,7 @@ export function buildSectionDesignFactorSummary(
 ): FfsSectionDesignFactorRow[] {
   const grouped = new Map<string, FfsScreenedResult[]>();
   for (const item of items) {
-    const key = `${sectionNameOf(item)}|${item.nominal.df}`;
+    const key = `${sectionNameOf(item)}|${item.nominal.df}|${item.nominal.safetyFactor}`;
     const bucket = grouped.get(key);
     if (bucket) bucket.push(item);
     else grouped.set(key, [item]);
@@ -148,6 +151,8 @@ export function buildSectionDesignFactorSummary(
         section: sectionNameOf(members[0]),
         designFactor: members[0].nominal.df,
         source: members[0].nominal.designFactorSource,
+        safetyFactor: members[0].nominal.safetyFactor,
+        safetyFactorSource: members[0].nominal.safetyFactorSource,
         featureCount: members.length,
         startLd: distances.length ? Math.min(...distances) : 0,
         endLd: distances.length ? Math.max(...distances) : 0,

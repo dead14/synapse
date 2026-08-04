@@ -168,8 +168,8 @@ export function buildEnvelopeCurves(
     // is mixed rather than silently drawing the first row's pipe.
     const tally = new Map<string, { count: number; geometry: B31gGeometry }>();
     for (const member of members) {
-      const { od, smys, df, p0 } = member.nominal;
-      const key = `${od}|${smys}|${df}|${p0}`;
+      const { od, smys, safetyFactor, p0 } = member.nominal;
+      const key = `${od}|${smys}|${safetyFactor}|${p0}`;
       const entry = tally.get(key);
       if (entry) entry.count += 1;
       else {
@@ -179,7 +179,7 @@ export function buildEnvelopeCurves(
             wallThickness: wall,
             outerDiameter: od,
             smysMpa: smys,
-            designFactor: df,
+            safetyFactor,
             operatingPressureMpa: p0,
           },
         });

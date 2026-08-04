@@ -15,6 +15,12 @@ export interface AlignmentEngineeringInputs {
   designFactor: number;
   /** Per-section overrides, keyed by the section name the alignment emitted. */
   sectionDesignFactors?: FfsSectionDesignFactor[];
+  /**
+   * The ratio B31G para. 1.9 asks for — minimum hydrostatic test pressure over
+   * MAOP or MOP. Null means derive it from the design factor as 1/F, which is
+   * the historic practice and correct only at the design hoop stress.
+   */
+  safetyFactor?: number | null;
   operatingPressureMpa: number;
   fallbackDepthGrowthMmPerYear: number;
   fallbackLengthGrowthMmPerYear: number;
@@ -376,6 +382,11 @@ function assertEngineeringInputs(inputs: AlignmentEngineeringInputs): void {
     }
   }
   if (inputs.designFactor > 1) throw new Error('Design factor must not exceed 1.');
+  if (inputs.safetyFactor !== null && inputs.safetyFactor !== undefined) {
+    if (!Number.isFinite(inputs.safetyFactor) || inputs.safetyFactor <= 0) {
+      throw new Error('Safety factor must be greater than zero.');
+    }
+  }
   for (const rule of inputs.sectionDesignFactors ?? []) {
     if (!Number.isFinite(rule.designFactor) || rule.designFactor <= 0 || rule.designFactor > 1) {
       throw new Error(
@@ -451,6 +462,7 @@ export function mapAlignmentRowsToFfs(
     const lengthGrowthMm = growthEvidence.length.analysisRateMmPerYear ?? 0;
     const section = text(source['Section NEW'], text(source.Section));
     const { designFactor, source: designFactorSource } = resolveDesignFactor(section, engineering);
+    const explicitSafetyFactor = engineering.safetyFactor ?? null;
     // Same rule the alignment engine uses to keep merged groups out of matching,
     // so FFS labels exactly the rows the engine refused to pair.
     const isClusteredMetalLoss = isClusteredAlignmentRow(source);
@@ -475,6 +487,9 @@ export function mapAlignmentRowsToFfs(
         'CR Length [mm/y]': numericText(lengthGrowthMm),
         'Design Factor': numericText(designFactor),
         'Design Factor Source': designFactorSource,
+        // Left blank when derived, so the engine records which of the two the
+        // figure is rather than presenting a derived value as a measured ratio.
+        'Safety Factor': explicitSafetyFactor === null ? '' : numericText(explicitSafetyFactor),
         'Outer Diameter Ds': numericText(engineering.outerDiameterMm),
         'SMYS [MPa]': numericText(engineering.smysMpa),
         'Operating Pressure P₀ [MPa]': numericText(engineering.operatingPressureMpa),

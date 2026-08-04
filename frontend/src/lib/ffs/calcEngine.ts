@@ -4,11 +4,13 @@ import type {
   FfsGrowthComponentEvidence,
   FfsRepairStatus,
   FfsResult,
+  FfsSafetyFactorSource,
 } from './types';
 import { assertValidFfsRow } from './inputValidation.ts';
 import {
   B31G_DEPTH_LIMIT_RATIO,
   evaluateB31g,
+  safetyFactorFromDesignFactor,
   type B31gBranch,
   type B31gGeometry,
   type B31gKernelResult,
@@ -114,17 +116,27 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
   const actionOwner = optionalText(row['Action Owner']);
   const isClusteredMetalLoss = parseBooleanFlag(row['Clustered Metal Loss']);
   const designFactorSource = designFactorSourceOf(row['Design Factor Source']);
+  // B31G para. 1.9 wants the hydrotest-to-MAOP ratio here. Where the source did
+  // not supply one, fall back to the historic 1/F so existing assessments keep
+  // their numbers — and record which of the two the figure actually is.
+  const suppliedSafetyFactor = parseFloat(row['Safety Factor']);
+  const hasSuppliedSafetyFactor = Number.isFinite(suppliedSafetyFactor) && suppliedSafetyFactor > 0;
+  const safetyFactor = hasSuppliedSafetyFactor
+    ? suppliedSafetyFactor
+    : safetyFactorFromDesignFactor(df);
+  const safetyFactorSource: FfsSafetyFactorSource = hasSuppliedSafetyFactor
+    ? 'explicit'
+    : 'derived-from-design-factor';
 
   const dInit = (maxDepthPct / 100) * wall;
   const geometry: B31gGeometry = {
     wallThickness: wall,
     outerDiameter: od,
     smysMpa: smys,
-    designFactor: df,
+    safetyFactor,
     operatingPressureMpa: p0,
   };
   const so = (p0 * od) / (2 * wall);
-  const SF = 1 / df;
 
   const init = calcAtYear(config, geometry, dInit, length, crDepth, crLength, 0);
   const safePressure = init.safePressureMpa;
@@ -167,6 +179,7 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
     featureId, ld: parseFloat(ld as string) || ld as any, section, surface, maxDepthPct, length, width, orient, wall,
     crDepth, crLength, df, od, smys, p0, repairStatus, repairMethod, repairDate, repairReference,
     recommendation, actionOwner, isClusteredMetalLoss, designFactorSource,
+    safetyFactor: +safetyFactor.toFixed(4), safetyFactorSource,
     growthEvidence: {
       oldSurveyYear: null,
       newSurveyYear: null,
@@ -174,7 +187,7 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
       depth: manualGrowthComponent(crDepth, 'Depth growth'),
       length: manualGrowthComponent(crLength, 'Length growth'),
     },
-    SF: +SF.toFixed(4), d: +dInit.toFixed(4), dt: +init.depthRatio.toFixed(4),
+    SF: +safetyFactor.toFixed(4), d: +dInit.toFixed(4), dt: +init.depthRatio.toFixed(4),
     z: +(init.z || 0).toFixed(4), M: init.foliasFactor !== null ? +init.foliasFactor.toFixed(4) : null,
     sflow: +(init.flowStressMpa || 0).toFixed(4),
     Sf: +(init.failureStressMpa || 0).toFixed(4), Pf: +(init.failurePressureMpa || 0).toFixed(4),
