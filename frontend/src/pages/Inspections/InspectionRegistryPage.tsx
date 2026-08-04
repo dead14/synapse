@@ -9,6 +9,7 @@ import {
   FiFileText,
   FiRefreshCw,
   FiSearch,
+  FiTrash2,
   FiUploadCloud,
 } from 'react-icons/fi';
 
@@ -58,16 +59,29 @@ function statusLabel(status: InspectionRun['evidence']['status']) {
 
 function workflowPresentation(run: InspectionRun) {
   const sessionId = run.workflow.alignmentSessionId;
-  if (run.workflow.stage === 'ffs' && sessionId !== null) {
-    return { label: 'FFS review ready', href: `/ffs?sessionId=${sessionId}`, action: 'Open FFS' };
+  const isFfs = run.workflow.stage === 'ffs' && sessionId !== null;
+  const isRuncomp = run.workflow.stage === 'runcomp' && sessionId !== null;
+  const isAlignment = run.workflow.stage === 'alignment' && sessionId !== null;
+  
+  let label = 'Imported';
+  let href = '/alignment';
+  let action = 'Start alignment';
+
+  if (isFfs) {
+    label = 'FFS review ready';
+    href = `/ili-comparison?sessionId=${sessionId}`;
+    action = 'View Runcomp';
+  } else if (isRuncomp) {
+    label = 'Runcomp ready';
+    href = `/ili-comparison?sessionId=${sessionId}`;
+    action = 'Open Runcomp';
+  } else if (isAlignment) {
+    label = 'Alignment in progress';
+    href = `/ili-comparison?sessionId=${sessionId}`;
+    action = 'View progress';
   }
-  if (run.workflow.stage === 'runcomp' && sessionId !== null) {
-    return { label: 'Runcomp ready', href: `/ili-comparison?sessionId=${sessionId}`, action: 'Open Runcomp' };
-  }
-  if (run.workflow.stage === 'alignment' && sessionId !== null) {
-    return { label: 'Alignment in progress', href: `/ili-comparison?sessionId=${sessionId}`, action: 'View progress' };
-  }
-  return { label: 'Imported', href: '/alignment', action: 'Start alignment' };
+
+  return { label, href, action, isFfs, sessionId };
 }
 
 export default function InspectionRegistryPage() {
@@ -155,6 +169,17 @@ export default function InspectionRegistryPage() {
       setProfile(normalizeInspectionProfile(await apiFetch<unknown>(`/api/inspection-runs/${runId}/profile`)));
     } catch {
       setError('Quality profile could not be loaded.');
+    }
+  }
+
+  async function deleteRun(runId: number) {
+    if (!window.confirm('Are you sure you want to delete this inspection run? This action cannot be undone.')) return;
+    setError(null);
+    try {
+      await apiFetch(`/api/inspection-runs/${runId}`, { method: 'DELETE' });
+      await loadRuns();
+    } catch (caughtError) {
+      setError((caughtError as Error).message || 'Failed to delete inspection run.');
     }
   }
 
@@ -267,7 +292,25 @@ export default function InspectionRegistryPage() {
                     <td><strong>{run.vendor || 'Vendor not recorded'}</strong><small>{run.surveyYear ?? 'Year not recorded'} · {run.rowCount.toLocaleString('en-GB')} rows</small></td>
                     <td><span className={statusClass(run.evidence.status)}><span className="syn-dot" />{statusLabel(run.evidence.status)}</span><small>{run.evidence.acceptedRows.toLocaleString('en-GB')} accepted · {run.evidence.rejectedRows} rejected</small></td>
                     <td><strong>{run.provenance.parserVersion || 'Not recorded'}</strong><small>{run.provenance.sourceSha256 ? `${run.provenance.sourceSha256.slice(0, 12)}…` : 'Source fingerprint unavailable'}</small></td>
-                    <td><div className="syn-registry-actions"><strong>{workflow.label}</strong><Link to={workflow.href}>{workflow.action}</Link><SynButton variant="outline" size="sm" type="button" onClick={() => void showProfile(run.id)}>{profileRunId === run.id ? 'Hide profile' : 'Profile'}</SynButton>{run.workflow.downloadAvailable && <SynButton variant="outline" size="sm" type="button" disabled={downloadingSessionId === run.workflow.alignmentSessionId} onClick={() => void downloadRuncomp(run)}><FiDownload aria-hidden="true" />{downloadingSessionId === run.workflow.alignmentSessionId ? 'Preparing...' : 'Download'}</SynButton>}</div></td>
+                    <td>
+                      <div className="syn-registry-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <strong>{workflow.label}</strong>
+                        <Link to={workflow.href} className="syn-button syn-button--outline syn-button--sm">{workflow.action}</Link>
+                        {workflow.isFfs && workflow.sessionId !== null && (
+                          <Link to={`/ffs?sessionId=${workflow.sessionId}`} className="syn-button syn-button--solid syn-button--sm" style={{ backgroundColor: '#10b981', color: 'white' }}>Open FFS</Link>
+                        )}
+                        <SynButton variant="outline" size="sm" type="button" onClick={() => void showProfile(run.id)}>{profileRunId === run.id ? 'Hide profile' : 'Profile'}</SynButton>
+                        {run.workflow.downloadAvailable && (
+                          <SynButton variant="outline" size="sm" type="button" disabled={downloadingSessionId === run.workflow.alignmentSessionId} onClick={() => void downloadRuncomp(run)}>
+                            <FiDownload aria-hidden="true" />
+                            {downloadingSessionId === run.workflow.alignmentSessionId ? 'Preparing...' : 'Download'}
+                          </SynButton>
+                        )}
+                        <SynButton variant="outline" size="sm" type="button" onClick={() => void deleteRun(run.id)} style={{ color: '#ef4444', borderColor: '#ef4444' }}>
+                          <FiTrash2 aria-hidden="true" /> Delete
+                        </SynButton>
+                      </div>
+                    </td>
                   </tr>
                   );
                 })}
