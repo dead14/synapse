@@ -10,6 +10,7 @@ import openpyxl
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "python_engines"))
 
+import excel_common
 import export_excel
 
 
@@ -64,9 +65,9 @@ class ExportExcelLayoutTests(unittest.TestCase):
                 workbook["Runcomp Report"]["C2"].value,
                 '[{"code":"REVIEW"}]',
             )
-            self.assertEqual(workbook["Runcomp Comparison"]["X4"].value, "Only NEW")
+            self.assertEqual(workbook["Runcomp Comparison"]["Z4"].value, "Only NEW")
             self.assertEqual(
-                workbook["Runcomp Comparison"]["X4"].fill.fgColor.rgb,
+                workbook["Runcomp Comparison"]["Z4"].fill.fgColor.rgb,
                 "FFFCE4D6",
             )
             self.assertEqual(
@@ -74,7 +75,7 @@ class ExportExcelLayoutTests(unittest.TestCase):
                     str(cells)
                     for cells in workbook["Runcomp Comparison"].merged_cells.ranges
                 ),
-                ["A1:O1", "P1:Y1", "Z1:AN1"],
+                ["A1:O1", "AB1:AP1", "P1:AA1"],
             )
 
     def test_export_builds_pipeline_report_and_primary_comparison_sheets(self):
@@ -114,7 +115,7 @@ class ExportExcelLayoutTests(unittest.TestCase):
             self.assertEqual(workbook["Data Pipeline"]["A1"].value, "PIPELINE DATA")
             self.assertEqual(workbook["Data Pipeline"]["B3"].value, "North Line")
             self.assertEqual(workbook["Runcomp Report"]["A2"].value, "2021 -> 2026")
-            self.assertEqual(workbook["Runcomp Comparison"]["X3"].value, "Matched")
+            self.assertEqual(workbook["Runcomp Comparison"]["Z3"].value, "Matched")
 
     def test_report_only_payload_reuses_rows_for_the_comparison_sheet(self):
         engine = Path(__file__).parents[1] / "src" / "python_engines" / "export_excel.py"
@@ -134,7 +135,7 @@ class ExportExcelLayoutTests(unittest.TestCase):
             workbook = openpyxl.load_workbook(output_path, data_only=False)
 
             self.assertEqual(workbook["Runcomp Report"]["A2"].value, 10.5)
-            self.assertEqual(workbook["Runcomp Comparison"]["X3"].value, "Matched")
+            self.assertEqual(workbook["Runcomp Comparison"]["Z3"].value, "Matched")
 
     def test_report_body_is_plain_data_for_large_export_throughput(self):
         workbook = openpyxl.Workbook(write_only=True)
@@ -166,7 +167,7 @@ class ExportExcelLayoutTests(unittest.TestCase):
 
             self.assertEqual(sheet["A3"].style_id, 0)
             self.assertNotEqual(sheet.column_dimensions["A"].style_id, 0)
-            self.assertEqual(sheet["X3"].fill.fgColor.rgb, "00C6EFCE")
+            self.assertEqual(sheet["Z3"].fill.fgColor.rgb, "00C6EFCE")
 
     def test_export_uses_new_status_old_layout_and_escapes_formula_text(self):
         engine = Path(__file__).parents[1] / "src" / "python_engines" / "export_excel.py"
@@ -189,18 +190,18 @@ class ExportExcelLayoutTests(unittest.TestCase):
             sheet = openpyxl.load_workbook(output_path, data_only=False).active
             self.assertTrue(str(sheet["A1"].value).startswith("<  NEW DATA"))
             self.assertTrue(str(sheet["P1"].value).startswith("COMPARISON"))
-            self.assertTrue(str(sheet["Z1"].value).startswith("OLD DATA"))
+            self.assertTrue(str(sheet["AB1"].value).startswith("OLD DATA"))
             self.assertEqual(sheet["A3"].value, 10.5)
             self.assertEqual(sheet["C3"].value, "'=HYPERLINK(\"https://example.invalid\")")
             self.assertEqual(sheet["P3"].value, 0.75)
-            self.assertEqual(sheet["X3"].value, "Matched")
-            self.assertEqual(sheet["Z3"].value, 9.75)
+            self.assertEqual(sheet["Z3"].value, "Matched")
+            self.assertEqual(sheet["AB3"].value, 9.75)
             # The status colour rule and the completeness verdict are what an
             # operator reads first; both must survive the shared-style rewrite.
-            self.assertEqual(sheet["X3"].fill.fgColor.rgb, "00C6EFCE")
+            self.assertEqual(sheet["Z3"].fill.fgColor.rgb, "00C6EFCE")
             # Only depth is populated on both sides, so two of the six
             # dimensional readings are present: the verdict is "Both limited".
-            self.assertEqual(sheet["Y3"].value, "Both limited")
+            self.assertEqual(sheet["AA3"].value, "Both limited")
 
 
 class StreamedWorkbookTests(unittest.TestCase):
@@ -236,15 +237,15 @@ class StreamedWorkbookTests(unittest.TestCase):
             self.assertEqual(sheet.title, "Comparison Report")
             self.assertEqual(
                 sorted(str(cells) for cells in sheet.merged_cells.ranges),
-                ["A1:O1", "P1:Y1", "Z1:AN1"],
+                ["A1:O1", "AB1:AP1", "P1:AA1"],
             )
             self.assertEqual(sheet.freeze_panes, "P3")
-            self.assertEqual(sheet.auto_filter.ref, "A2:AN3")
+            self.assertEqual(sheet.auto_filter.ref, "A2:AP3")
             self.assertEqual(sheet.column_dimensions["A"].width, 17)
             self.assertEqual(sheet.row_dimensions[1].height, 24)
             self.assertEqual(sheet.row_dimensions[2].height, 42)
             self.assertFalse(sheet.sheet_view.showGridLines)
-            self.assertEqual(sheet["X3"].fill.fgColor.rgb, "00FCE4D6")
+            self.assertEqual(sheet["Z3"].fill.fgColor.rgb, "00FCE4D6")
 
     def test_status_style_matches_the_legacy_keyword_precedence(self):
         self.assertIs(export_excel.status_style("Matched")[0], export_excel.GREEN_FILL)
@@ -254,8 +255,8 @@ class StreamedWorkbookTests(unittest.TestCase):
         self.assertEqual(export_excel.status_style(None), (None, None))
 
     def test_style_objects_are_module_level_singletons(self):
-        plan = export_excel.column_style_plan(40)
-        self.assertEqual(len(plan), 40)
+        plan = export_excel.column_style_plan(export_excel.LAST_COLUMN)
+        self.assertEqual(len(plan), export_excel.LAST_COLUMN)
         fills = {id(fill) for fill, _alignment, _format in plan}
         alignments = {id(alignment) for _fill, alignment, _format in plan}
         self.assertEqual(len(fills), 3)
@@ -267,20 +268,21 @@ class StreamedWorkbookTests(unittest.TestCase):
 
     def test_column_plan_reproduces_the_legacy_per_cell_decisions(self):
         for column, (fill, alignment, number_format) in enumerate(
-            export_excel.column_style_plan(40), 1
+            export_excel.column_style_plan(export_excel.LAST_COLUMN), 1
         ):
             expected_fill = (
-                export_excel.NEW_FILL if column <= 15
-                else export_excel.OLD_FILL if column >= 26
+                export_excel.NEW_FILL if column < export_excel.FIRST_CENTER_COLUMN
+                else export_excel.OLD_FILL if column >= export_excel.FIRST_OLD_COLUMN
                 else export_excel.CENTER_FILL
             )
             expected_alignment = (
-                export_excel.CENTER_ALIGNMENT if 16 <= column <= 25
+                export_excel.CENTER_ALIGNMENT
+                if export_excel.FIRST_CENTER_COLUMN <= column < export_excel.FIRST_OLD_COLUMN
                 else export_excel.LEFT_ALIGNMENT
             )
             expected_format = (
-                "0.000" if column in {1, 5, 6, 7, 16, 17, 20, 21, 22, 26, 30, 31, 32, 35, 36, 37}
-                else "0.0" if column in {9, 10, 11, 34}
+                "0.000" if column in export_excel.THREE_DECIMAL_COLUMNS
+                else "0.0" if column in export_excel.ONE_DECIMAL_COLUMNS
                 else None
             )
             self.assertIs(fill, expected_fill, f"column {column}")
@@ -292,35 +294,35 @@ class ClockHandlingTests(unittest.TestCase):
     def test_excel_time_serial_is_mapped_onto_the_12_hour_dial(self):
         # An unconverted Excel serial is a fraction of a 24 h day:
         # 0.5 = 12:00 -> 0 deg on the 12-hour dial, not 0.5 * 30 = 15 deg.
-        self.assertAlmostEqual(export_excel.clock_degrees(0.5), 0.0)
-        self.assertAlmostEqual(export_excel.clock_degrees(0.25), 180.0)   # 06:00
-        self.assertAlmostEqual(export_excel.clock_degrees(0.125), 90.0)   # 03:00
-        self.assertAlmostEqual(export_excel.clock_degrees(0.53125), 22.5)  # 12:45
+        self.assertAlmostEqual(excel_common.clock_degrees(0.5), 0.0)
+        self.assertAlmostEqual(excel_common.clock_degrees(0.25), 180.0)   # 06:00
+        self.assertAlmostEqual(excel_common.clock_degrees(0.125), 90.0)   # 03:00
+        self.assertAlmostEqual(excel_common.clock_degrees(0.53125), 22.5)  # 12:45
 
     def test_clock_hours_and_text_forms_are_unchanged(self):
-        self.assertAlmostEqual(export_excel.clock_degrees(6), 180.0)
-        self.assertAlmostEqual(export_excel.clock_degrees(4.5), 135.0)
-        self.assertAlmostEqual(export_excel.clock_degrees("3:00"), 90.0)
-        self.assertAlmostEqual(export_excel.clock_degrees("12:30"), 15.0)
-        self.assertIsNone(export_excel.clock_degrees("N/A"))
-        self.assertIsNone(export_excel.clock_degrees(None))
+        self.assertAlmostEqual(excel_common.clock_degrees(6), 180.0)
+        self.assertAlmostEqual(excel_common.clock_degrees(4.5), 135.0)
+        self.assertAlmostEqual(excel_common.clock_degrees("3:00"), 90.0)
+        self.assertAlmostEqual(excel_common.clock_degrees("12:30"), 15.0)
+        self.assertIsNone(excel_common.clock_degrees("N/A"))
+        self.assertIsNone(excel_common.clock_degrees(None))
 
     def test_verdict_uses_the_wrapped_delta(self):
         # 11:59 vs 12:01 is a 1 degree change across the 12 o'clock wrap;
         # the unwrapped delta (359 deg) used to force a "YES" verdict.
-        changed, delta = export_excel.clock_difference("12:01", "11:59")
+        changed, delta = excel_common.clock_difference("12:01", "11:59")
         self.assertEqual(changed, "no")
         self.assertAlmostEqual(delta, 1.0)
 
-        changed, delta = export_excel.clock_difference("3:00", "9:00")
+        changed, delta = excel_common.clock_difference("3:00", "9:00")
         self.assertEqual(changed, "YES")
         self.assertAlmostEqual(delta, 180.0)
 
-        changed, delta = export_excel.clock_difference("6:00", "6:00")
+        changed, delta = excel_common.clock_difference("6:00", "6:00")
         self.assertEqual(changed, "no")
         self.assertAlmostEqual(delta, 0.0)
 
     def test_serial_and_text_forms_of_the_same_time_agree(self):
-        changed, delta = export_excel.clock_difference(0.5, "12:00")
+        changed, delta = excel_common.clock_difference(0.5, "12:00")
         self.assertEqual(changed, "no")
         self.assertAlmostEqual(delta, 0.0)
