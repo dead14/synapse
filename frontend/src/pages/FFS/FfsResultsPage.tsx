@@ -507,6 +507,7 @@ export default function FfsResultsPage() {
               reportContext={reportContext}
               chartImages={chartImages}
               onOpenCharts={() => setActiveTab('charts')}
+              onSelect={setSelected}
             />
           )}
         </div>

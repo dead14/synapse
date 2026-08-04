@@ -126,7 +126,7 @@ test('report readiness distinguishes unavailable growth from a long service-life
   assert.equal(reportCase.asInspected.governingLife, null);
   assert.equal(reportCase.asInspected.lifeSummaryStatus, 'insufficient-growth-basis');
   assert.ok(reportCase.readiness.findings.some((finding) => finding.code === 'GROWTH_BASIS_UNAVAILABLE'));
-  assert.equal(items[0].nominal.yearService, null);
+  assert.equal(items[0].nominal.remnantLife.dueDateIso, null);
 });
 
 test('duplicate feature identity blocks an auditable report', () => {
@@ -275,8 +275,8 @@ test('the Excel report carries scenarios, repair evidence, and readiness finding
   const workbook = buildResultsWorkbook(items, config, DEFAULT_SCREENING_CONFIG, [], reportContext);
 
   assert.deepEqual(
-    workbook.SheetNames.slice(0, 5),
-    ['Parameters', 'Scenarios', 'Assessment', 'Repair register', 'Readiness'],
+    workbook.SheetNames.slice(0, 6),
+    ['Parameters', 'Scenarios', 'Assessment', 'Repair register', 'Sections', 'Readiness'],
   );
   const scenarioRows = workbook.Sheets.Scenarios;
   assert.equal(scenarioRows.B4?.v, 'As-inspected');

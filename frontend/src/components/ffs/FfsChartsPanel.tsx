@@ -24,7 +24,8 @@ import {
   type FfsPoint,
   type SplitScatter,
 } from '../../lib/ffs/chartData';
-import { DEFAULT_DEPTH_BUCKETS, type DepthBucket } from '../../lib/ffs/statistics';
+import { DEFAULT_DEPTH_BUCKETS, depthBandLabel, type DepthBucket } from '../../lib/ffs/statistics';
+import FfsDepth3dChart from './FfsDepth3dChart';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
 import { buildSectionBands, type SectionBand } from '../../lib/sections/bands';
 import {
@@ -32,7 +33,7 @@ import {
   sectionTooltipLine,
 } from '../../lib/sections/sectionBandsPlugin';
 import SectionBandLegend from '../sections/SectionBandLegend';
-import { formatLifeProjection } from '../../lib/ffs/lifeProjection';
+import { formatRemnantLife } from '../../lib/ffs/lifeProjection';
 import ChartCard, { ColorControl, SettingsSectionLabel, type PointShape } from './ChartCard';
 import { Callout } from './FfsPrimitives';
 
@@ -149,7 +150,7 @@ function BucketSettings({
     if (next[index + 1]) next[index + 1].from = value;
     // Keep the visible band names in step with the edited boundaries.
     for (let i = 0; i < next.length; i++) {
-      next[i].name = Number.isFinite(next[i].to) ? `${next[i].from}-${next[i].to}%` : `${next[i].from}%+`;
+      next[i].name = depthBandLabel(next[i].from, next[i].to);
     }
     onChange(next);
   };
@@ -226,6 +227,8 @@ export default function FfsChartsPanel({
   );
 
   const [depthBin, setDepthBin] = useState(1000);
+  const [depth3dBin, setDepth3dBin] = useState(200);
+  const [depth3dSurface, setDepth3dSurface] = useState<'all' | 'internal' | 'external'>('all');
   const [internalBin, setInternalBin] = useState(1000);
   const [externalBin, setExternalBin] = useState(1000);
 
@@ -244,6 +247,9 @@ export default function FfsChartsPanel({
   const [heldBandId, setHeldBandId] = useState<string | null>(null);
 
   const instances = useRef<Record<string, Chart | null>>({});
+  // The 3D view draws to a WebGL canvas rather than through Chart.js, so it is
+  // registered here and merged into the same figure capture.
+  const rawCanvases = useRef<Record<string, HTMLCanvasElement | null>>({});
 
   /** Binds one chart: records the instance and hands the canvas to ChartCard. */
   const bind =
@@ -272,6 +278,7 @@ export default function FfsChartsPanel({
     screening.growthRateMmPerYear,
     screening.forecastYears,
     depthBin, internalBin, externalBin,
+    depth3dBin, depth3dSurface,
     buckets, internalBuckets, externalBuckets,
     orientStyle, crDepthStyle, crLengthStyle, erfStyle, screenStyle,
     [...hiddenWalls].sort(),
@@ -290,8 +297,13 @@ export default function FfsChartsPanel({
     if (capturedSignature.current === figureSignature) return;
     const timer = setTimeout(() => {
       const images: Record<string, string> = {};
-      for (const [chartId, instance] of Object.entries(instances.current)) {
-        const canvas = instance?.canvas;
+      const sources: [string, HTMLCanvasElement | null | undefined][] = [
+        ...Object.entries(instances.current).map(
+          ([chartId, instance]) => [chartId, instance?.canvas] as [string, HTMLCanvasElement | undefined],
+        ),
+        ...Object.entries(rawCanvases.current),
+      ];
+      for (const [chartId, canvas] of sources) {
         if (!canvas?.isConnected || !canvas.width || !canvas.height) continue;
         // Flatten onto white so the figure reads on a printed page.
         const output = document.createElement('canvas');
@@ -467,7 +479,7 @@ export default function FfsChartsPanel({
             const lines = [
               `LD ${Number(n.ld).toLocaleString()} m · ${n.section}`,
               `${n.surface} · depth ${n.maxDepthPct.toFixed(1)}% · L ${n.length.toFixed(0)} mm`,
-              `ERF ${Number.isFinite(n.ERF) ? n.ERF.toFixed(3) : '∞'} · life ${formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears)}`,
+              `ERF ${Number.isFinite(n.ERF) ? n.ERF.toFixed(3) : '∞'} · remnant ${formatRemnantLife(n.remnantLife)}`,
             ];
             // Name the stretch the point sits in, so the reader does not have to
             // map the metre value back onto the section list themselves.
@@ -604,6 +616,60 @@ export default function FfsChartsPanel({
           )}
         </ChartCard>
       </div>
+
+      {/* The same population as the stacked chart above, with the depth bands
+          separated onto their own axis instead of stacked. Kept alongside it
+          rather than replacing it: reading an exact count off a perspective
+          projection is worse, which is why every bar carries a hover readout
+          and each band prints its own maximum. */}
+      <ChartCard
+        title="Depth category distribution in three dimensions"
+        subtitle={`Feature count by depth band and log distance · bands are lower-inclusive (${depthBandLabel(20, 30)} means 20% up to but not including 30%)`}
+        filename="FFS_depth_category_3D"
+        binSize={depth3dBin}
+        onBinSizeChange={setDepth3dBin}
+        height={460}
+        settings={
+          <div className="space-y-3">
+            <BucketSettings buckets={buckets} onChange={setBuckets} />
+            <div>
+              <SettingsSectionLabel>Surface location</SettingsSectionLabel>
+              <div role="radiogroup" aria-label="Surface location" className="ds-segmented mt-1 w-max">
+                {([
+                  { value: 'all', label: 'All' },
+                  { value: 'internal', label: 'Internal' },
+                  { value: 'external', label: 'External' },
+                ] as const).map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={depth3dSurface === option.value}
+                    className={`ds-segmented__option${depth3dSurface === option.value ? ' is-active' : ''}`}
+                    onClick={() => setDepth3dSurface(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        }
+      >
+        {(registerCanvas) => (
+          <FfsDepth3dChart
+            items={items}
+            binSizeM={depth3dBin}
+            buckets={buckets}
+            surface={depth3dSurface === 'all' ? undefined : depth3dSurface}
+            isDark={theme.isDark}
+            onCanvasReady={(canvas) => {
+              rawCanvases.current['depth-3d'] = canvas;
+              registerCanvas(canvas);
+            }}
+          />
+        )}
+      </ChartCard>
 
       {/* Row 2 — corrosion rates */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">

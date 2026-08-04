@@ -3,8 +3,11 @@ import type { DistributionTable, WorstRow } from './statistics.ts';
 import type { NarrativeBlock } from './narrative.ts';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from './types.ts';
 import type { AlignmentImportProvenance } from './alignmentImport.ts';
-import { analysisHorizonYears, formatLifeProjection, lifeProjectionStatusLabel } from './lifeProjection.ts';
+import { analysisHorizonYears, formatRemnantLife, remnantLimitLabel } from './lifeProjection.ts';
+import { buildSectionDesignFactorSummary, buildSectionGrowthSummary } from './sectionSummary.ts';
+import { designLifeUsage, EMPTY_SERVICE_LIFE } from './remnantLife.ts';
 import {
+  designFactorSourceLabel,
   engineeringDisposition,
   growthAnalysisBasisLabel,
   growthObservationLabel,
@@ -62,7 +65,7 @@ function scenarioRow(id: string, label: string, scenario: FfsScenarioSummary): (
     erf ? num(erf.ERF) : '',
     life?.featureId ?? '',
     life
-      ? formatLifeProjection(life.expectedLife, life.lifeStatus, life.analysisHorizonYears)
+      ? formatRemnantLife(life.remnantLife)
       : scenario.lifeSummaryStatus === 'insufficient-growth-basis'
         ? 'Not calculated - growth basis unavailable'
         : scenario.lifeSummaryStatus === 'not-reached-within-horizon'
@@ -72,7 +75,7 @@ function scenarioRow(id: string, label: string, scenario: FfsScenarioSummary): (
             : scenario.lifeSummaryStatus === 'empty'
               ? 'No active feature'
               : 'Not established',
-    life?.yearService ?? '',
+    life?.remnantLife.dueDateIso ?? '',
     scenario.lifeStatusCounts.calculated,
     scenario.lifeStatusCounts['not-reached-within-horizon'],
     scenario.lifeStatusCounts['insufficient-growth-basis'],
@@ -103,8 +106,10 @@ export function buildResultsWorkbook(
     ['Flow stress basis', config.method === 'original' ? '1.1 x SMYS' : config.modifiedSa === 'smys11' ? '1.1 x SMYS' : 'SMYS + 69 MPa'],
     ['ILI inspection date', config.iliDate.toISOString().split('T')[0]],
     ['Required pressure basis', pressureBasisLabel(config)],
-    ['Highlight threshold [years]', config.highlightYears],
+    ['Remnant life review threshold [years]', config.highlightYears],
     ['Life analysis horizon [years]', analysisHorizonYears(config)],
+    ['Original design life [years]', config.serviceLife?.designLifeYears ?? 'Not supplied'],
+    ['Commissioning year', config.serviceLife?.commissioningYear ?? 'Not supplied'],
     [],
     ['Screening assumptions'],
     ['ILI depth tolerance [% WT]', screening.depthTolerancePct],
@@ -151,37 +156,53 @@ export function buildResultsWorkbook(
 
   const header = [
     'Feature ID', 'LD [m]', 'Section', 'Surface', 'Orientation', 'Max depth [%]', 'Length [mm]', 'Width [mm]',
-    'Wall [mm]', 'OD [mm]', 'SMYS [MPa]', 'Design factor', 'P0 [MPa]',
+    'Wall [mm]', 'OD [mm]', 'SMYS [MPa]', 'Design factor', 'Design factor source', 'P0 [MPa]',
+    'Clustered metal loss',
     'CR depth used [mm/y]', 'Depth growth observation', 'Depth analysis basis',
     'Raw depth growth [mm/y]', 'Growth interval [years]', 'Growth formula', 'Growth evidence note',
-    'CR length used [mm/y]',
+    'CR length used [mm/y]', 'Length growth observation', 'Length analysis basis', 'Length growth evidence note',
     'd [mm]', 'd/t', 'z', 'M', 'S_flow [MPa]', 'Sf [MPa]', 'Pf [MPa]', 'S0 [MPa]',
-    'P_safe [MPa]', 'ERF nominal', 'Acceptance', 'Expected life', 'Service limit date',
-    'Life projection status',
+    'P_safe [MPa]', 'ERF nominal', 'Acceptance',
+    'Remnant life [y]', 'Due date', 'Governing limit',
+    'Years to 80% depth', 'Years to ERF 1', 'Length held constant', 'Capped at design life',
     'Conservative depth [%]', 'Conservative length [mm]', 'ERF conservative', 'P_safe conservative [MPa]',
-    'Forecast depth [%]', 'ERF forecast', 'Life to ERF 1 [y]', 'Priority', 'Severity', 'Engineering disposition',
+    'Forecast depth [%]', 'ERF forecast',
+    'Remnant life tolerance-adjusted [y]', 'Priority', 'Severity', 'Engineering disposition',
     'Clock hour', 'Bottom quadrant',
     'Repair status', 'Repair method', 'Repair date', 'Repair reference', 'Recommendation', 'Action owner',
   ];
 
   const rows = items.map((item) => {
     const n = item.nominal;
+    const life = n.remnantLife;
     return [
       n.featureId ?? '', n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2), num(n.width, 2),
-      num(n.wall, 2), num(n.od, 2), num(n.smys, 2), num(n.df, 4), num(n.p0, 4),
+      num(n.wall, 2), num(n.od, 2), num(n.smys, 2), num(n.df, 4), designFactorSourceLabel(n.designFactorSource),
+      num(n.p0, 4),
+      n.isClusteredMetalLoss ? 'Yes' : 'No',
       num(n.crDepth, 4), growthObservationLabel(n.growthEvidence?.depth.observation),
       growthAnalysisBasisLabel(n.growthEvidence?.depth.analysisBasis),
       num(n.growthEvidence?.depth.rawRateMmPerYear ?? null, 4),
       n.growthEvidence?.intervalYears ?? '', n.growthEvidence?.depth.formula ?? '',
-      n.growthEvidence?.depth.note ?? '', num(n.crLength, 4),
+      n.growthEvidence?.depth.note ?? '',
+      // A length rate that was never established is written as text, not as a
+      // zero. A zero in this column reads as "this defect is not lengthening",
+      // which is a measurement nobody made.
+      life.lengthHeldConstant ? 'Not calculated' : num(life.lengthRateMmPerYear, 4),
+      growthObservationLabel(n.growthEvidence?.length.observation),
+      growthAnalysisBasisLabel(n.growthEvidence?.length.analysisBasis),
+      n.growthEvidence?.length.note ?? '',
       num(n.d), num(n.dt), num(n.z), n.M === null ? 'n/a' : num(n.M), num(n.sflow), num(n.Sf),
       num(n.Pf), num(n.So), num(n.safePressure), num(n.ERF), n.acceptance,
-      formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears), n.yearService ?? '',
-      lifeProjectionStatusLabel(n.lifeStatus, n.failureCriteria, n.analysisHorizonYears),
+      formatRemnantLife(life), life.dueDateIso ?? '', remnantLimitLabel(life),
+      life.depthLimitYears === null ? '' : num(life.depthLimitYears, 2),
+      life.erfLimitYears === null ? '' : num(life.erfLimitYears, 2),
+      life.lengthHeldConstant ? 'Yes' : 'No',
+      life.designLifeCapApplied ? 'Yes' : 'No',
       num(item.conservative.depthPct, 2), num(item.conservative.lengthMm, 2),
       num(item.conservative.ERF), num(item.conservative.safePressure),
       num(item.forecast.depthPct, 2), num(item.forecast.ERF),
-      formatLifeProjection(item.lifeToErf1, item.lifeToErf1Status, n.analysisHorizonYears),
+      formatRemnantLife(item.remnantLifeConservative),
       item.priority, item.conservative.severity, engineeringDisposition(item),
       item.clockHour === null ? '' : num(item.clockHour, 2),
       item.bottomQuadrant ? 'Yes' : 'No',
@@ -215,6 +236,61 @@ export function buildResultsWorkbook(
   repairSheet['!cols'] = repairHeader.map((label) => ({ wch: Math.min(34, Math.max(12, label.length + 2)) }));
   repairSheet['!freeze'] = { xSplit: 0, ySplit: 1 };
   XLSX.utils.book_append_sheet(workbook, repairSheet, 'Repair register');
+
+  // Section roll-ups: the design factor each stretch was assessed with, and the
+  // growth that stretch is actually experiencing. Both are read section-first in
+  // a report, so they get a sheet rather than being buried in the row export.
+  const designFactorHeader = [
+    'Section', 'From [m]', 'To [m]', 'Features', 'Design factor', 'Source',
+  ];
+  const designFactorRows = buildSectionDesignFactorSummary(items).map((row) => [
+    row.section, num(row.startLd, 3), num(row.endLd, 3), row.featureCount,
+    num(row.designFactor, 4), designFactorSourceLabel(row.source),
+  ]);
+
+  const growthHeader = [
+    'Section', 'Features', 'Internal', 'External',
+    'Max INT depth CGR [mm/y]', 'Max EXT depth CGR [mm/y]',
+    'Max INT length CGR [mm/y]', 'Max EXT length CGR [mm/y]',
+    'Length CGR not established', 'Max depth [%WT]', 'Min P_safe [MPa]',
+    'Shortest remnant life [y]', 'Shortest remnant life feature',
+  ];
+  const growthRows = buildSectionGrowthSummary(items).map((row) => [
+    row.section, row.featureCount, row.internalCount, row.externalCount,
+    num(row.internalDepthRateMmPerYear, 4), num(row.externalDepthRateMmPerYear, 4),
+    num(row.internalLengthRateMmPerYear, 4), num(row.externalLengthRateMmPerYear, 4),
+    row.lengthRateUnavailableCount, num(row.maxDepthPct, 2), num(row.minSafePressureMpa, 3),
+    num(row.shortestRemnantLifeYears, 2),
+    row.shortestRemnantLifeFeature?.nominal.featureId ?? '',
+  ]);
+
+  const usage = designLifeUsage(config.serviceLife ?? EMPTY_SERVICE_LIFE, config.iliDate);
+  const sectionSheet = XLSX.utils.aoa_to_sheet([
+    ['Design factor by section'],
+    designFactorHeader,
+    ...designFactorRows,
+    [],
+    ['Maximum corrosion growth by section'],
+    ['Reported as the section maximum, not a mean: an average hides the local rate this table exists to expose.'],
+    ['A length rate that was never established is counted as unavailable, never as a zero.'],
+    growthHeader,
+    ...growthRows,
+    [],
+    ['Line remnant life'],
+    ['As-managed remnant life [y]', num(reportCase.remnantLife.years, 2)],
+    ['As-managed due date', reportCase.remnantLife.dueDateIso ?? ''],
+    ['Governing feature', reportCase.remnantLife.governing?.nominal.featureId ?? ''],
+    ['Governing feature LD [m]', reportCase.remnantLife.governing?.nominal.ld ?? ''],
+    ['Features recommended for permanent repair', reportCase.repairProgrammeTargets.length],
+    ['Remnant life after that repair programme [y]', num(reportCase.remnantLifeAfterRepairProgramme.years, 2)],
+    ['Due date after that repair programme', reportCase.remnantLifeAfterRepairProgramme.dueDateIso ?? ''],
+    ['Original design life [years]', config.serviceLife?.designLifeYears ?? 'Not supplied'],
+    ['Commissioning year', config.serviceLife?.commissioningYear ?? 'Not supplied'],
+    ['Age at inspection [years]', usage ? num(usage.ageAtInspectionYears, 2) : 'Not calculable'],
+    ['Design life remaining at inspection [years]', usage ? num(usage.designLifeRemainingYears, 2) : 'Not calculable'],
+  ]);
+  sectionSheet['!cols'] = growthHeader.map((label) => ({ wch: Math.min(30, Math.max(14, label.length + 2)) }));
+  XLSX.utils.book_append_sheet(workbook, sectionSheet, 'Sections');
 
   const readinessHeader = ['Severity', 'Code', 'Affected features', 'Finding'];
   const readinessRows = reportCase.readiness.findings.map((finding) => [
@@ -328,8 +404,8 @@ export function exportStatisticsWorkbook(
 
   const worstHeader = [
     'LD bin [m]', 'Features in bin', 'LD [m]', 'Section', 'Surface',
-    'Depth [%]', 'Length [mm]', 'ERF', 'Conservative ERF', 'Expected life projection',
-    'Life to ERF 1 projection', 'Priority', 'Acceptance',
+    'Depth [%]', 'Length [mm]', 'ERF', 'Conservative ERF', 'Remnant life',
+    'Remnant life tolerance-adjusted', 'Priority', 'Acceptance',
   ];
   const worstBody = worstRows
     .filter((row) => row.worst !== null)
@@ -339,8 +415,8 @@ export function exportStatisticsWorkbook(
       return [
         row.bin.label, row.count, n.ld, n.section, n.surface,
         num(n.maxDepthPct, 2), num(n.length, 2), num(n.ERF), num(item.conservative.ERF),
-        formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears),
-        formatLifeProjection(item.lifeToErf1, item.lifeToErf1Status, n.analysisHorizonYears),
+        formatRemnantLife(n.remnantLife),
+        formatRemnantLife(item.remnantLifeConservative),
         item.priority, n.acceptance,
       ];
     });

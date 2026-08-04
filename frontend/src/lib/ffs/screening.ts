@@ -1,11 +1,12 @@
 import { evaluateB31g, type B31gGeometry } from './b31g.ts';
 import type {
   FfsAction,
-  FfsCluster,
   FfsConfig,
   FfsGrowthAnalysisBasis,
   FfsGrowthObservation,
   FfsInteractionPair,
+  FfsLifeStatus,
+  FfsLocationZone,
   FfsPriority,
   FfsResult,
   FfsScreenedResult,
@@ -15,9 +16,10 @@ import type {
 } from './types.ts';
 import { buildFfsReportCase, type FfsReportContext } from './reportCase.ts';
 import { analysisHorizonYears, formatLifeProjection, lifeSortValue } from './lifeProjection.ts';
+import { computeRemnantLife, EMPTY_SERVICE_LIFE, type FfsRemnantLife } from './remnantLife.ts';
 
 /** Features closer together than this along the pipeline form one location zone. */
-const CLUSTER_GAP_M = 10;
+const ZONE_GAP_M = 10;
 /** Depth at or above which a feature is treated as severe regardless of ERF. */
 const SEVERE_DEPTH_PCT = 70;
 function clamp(value: number, min: number, max: number): number {
@@ -97,6 +99,74 @@ export function growthApplicationFor(
 }
 
 /**
+ * The axial length growth rate a tier should be projected with.
+ *
+ * This is the counterpart the depth resolver never had, and its absence is what
+ * made the length column untrustworthy in two separate ways. The forecast tier
+ * read `nominal.crLength` directly, so switching the growth basis to a uniform
+ * assumed rate overrode depth and silently left length on the measured value;
+ * and the remaining-life search ignored length entirely, so a defect that was
+ * lengthening rather than deepening projected as if it were static.
+ *
+ * `available` is false when the source established no usable rate. The caller
+ * must not read that as a measured zero — it is the difference between "this
+ * defect is not getting longer" and "nobody knows whether it is".
+ */
+export interface FfsLengthApplication {
+  rateMmPerYear: number;
+  available: boolean;
+  observation: FfsGrowthObservation;
+  analysisBasis: FfsGrowthAnalysisBasis | 'uniform-assumption';
+}
+
+export function lengthApplicationFor(
+  nominal: FfsResult,
+  screening: FfsScreeningConfig,
+): FfsLengthApplication {
+  const evidence = nominal.growthEvidence?.length;
+
+  // The uniform basis exists for when the run pair's growth numbers are not
+  // trusted. Keeping the measured axial rate while overriding the depth rate
+  // would honour that decision in one dimension and quietly ignore it in the
+  // other — the exact leak that made the forecast tier inconsistent. The
+  // uniform rate is radial and cannot be turned into an axial rate, so length
+  // is held constant and the result says so rather than implying a measurement.
+  if (screening.growthBasis === 'uniform') {
+    return {
+      rateMmPerYear: 0,
+      available: false,
+      observation: evidence?.observation ?? 'unavailable',
+      analysisBasis: 'uniform-assumption',
+    };
+  }
+
+  if (evidence && evidence.analysisRateMmPerYear !== null) {
+    return {
+      rateMmPerYear: evidence.analysisRateMmPerYear,
+      available: true,
+      observation: evidence.observation,
+      analysisBasis: evidence.analysisBasis,
+    };
+  }
+  // The manual workbook has no evidence record; its column is the engineer's
+  // own entry, so a positive value there is a supplied rate.
+  if (!evidence && nominal.crLength > 0) {
+    return {
+      rateMmPerYear: nominal.crLength,
+      available: true,
+      observation: 'manual-reported',
+      analysisBasis: 'reported',
+    };
+  }
+  return {
+    rateMmPerYear: 0,
+    available: false,
+    observation: evidence?.observation ?? 'unavailable',
+    analysisBasis: 'none',
+  };
+}
+
+/**
  * Evaluates B31G at an arbitrary depth and length through the shared kernel, so
  * every screening tier is the same maths as the nominal code result.
  */
@@ -162,52 +232,46 @@ export function parseClockHour(orient: string | undefined): number | null {
 }
 
 /**
- * Years until the tolerance-adjusted feature reaches ERF 1.0, found by
- * bisection on the forecast depth. The numerical search is bounded by the
- * assessment horizon and never becomes a service-life claim.
+ * Remnant life recomputed from the tolerance-adjusted dimensions.
+ *
+ * Same kernel as the as-reported figure — only the starting geometry differs —
+ * so the pair reads as one calculation under two assumptions rather than as two
+ * unrelated numbers.
  */
-function findLifeToErf1(
+function conservativeRemnantLife(
   nominal: FfsResult,
   config: FfsConfig,
   screening: FfsScreeningConfig,
-  growth: number,
-): Pick<FfsScreenedResult, 'lifeToErf1' | 'lifeToErf1Status'> {
-  const horizonYears = analysisHorizonYears(config);
-  const baseDepth = nominal.maxDepthPct + screening.depthTolerancePct;
-  const length = nominal.length + 2 * screening.lengthToleranceMm;
-
-  const erfAtYear = (years: number) => {
-    const depthPct = baseDepth + ((growth * years) / nominal.wall) * 100;
-    return evaluateTier(depthPct, length, nominal, config, screening, growth).ERF;
-  };
-
-  if (erfAtYear(0) >= 1) return { lifeToErf1: 0, lifeToErf1Status: 'calculated' };
-  if (growth <= 0) return { lifeToErf1: null, lifeToErf1Status: 'insufficient-growth-basis' };
-  if (erfAtYear(horizonYears) < 1) {
-    return { lifeToErf1: null, lifeToErf1Status: 'not-reached-within-horizon' };
-  }
-
-  let lo = 0;
-  let hi = horizonYears;
-  for (let i = 0; i < 60; i++) {
-    const mid = (lo + hi) / 2;
-    if (erfAtYear(mid) >= 1) hi = mid;
-    else lo = mid;
-  }
-  return { lifeToErf1: Math.round(hi * 100) / 100, lifeToErf1Status: 'calculated' };
+  depthRateMmPerYear: number,
+  length: FfsLengthApplication,
+): FfsRemnantLife {
+  return computeRemnantLife({
+    geometry: geometryOf(nominal),
+    method: config.method,
+    flowStressMode: config.modifiedSa,
+    basis: 'tolerance-adjusted',
+    startDepthPct: nominal.maxDepthPct + screening.depthTolerancePct,
+    startLengthMm: nominal.length + 2 * screening.lengthToleranceMm,
+    depthRateMmPerYear,
+    lengthRateMmPerYear: length.rateMmPerYear,
+    lengthRateAvailable: length.available,
+    horizonYears: analysisHorizonYears(config),
+    iliDate: config.iliDate,
+    service: config.serviceLife ?? EMPTY_SERVICE_LIFE,
+  });
 }
 
 function derivePriority(
   nominal: FfsResult,
   conservative: FfsTier,
   forecast: FfsTier,
-  lifeToErf1: number | null,
+  remnantYears: number | null,
   screening: FfsScreeningConfig,
 ): FfsPriority {
   if (conservative.ERF >= 1 || forecast.ERF >= 1) return 'High';
   if (nominal.maxDepthPct >= SEVERE_DEPTH_PCT) return 'High';
   if (conservative.ERF >= screening.reviewBandErf) return 'High';
-  if (nominal.maxDepthPct >= 50 || (lifeToErf1 !== null && lifeToErf1 < 10)) return 'Medium';
+  if (nominal.maxDepthPct >= 50 || (remnantYears !== null && remnantYears < 10)) return 'Medium';
   return 'Routine';
 }
 
@@ -223,6 +287,7 @@ export function screenResults(
   return results.map((nominal, index) => {
     const growthApplication = growthApplicationFor(nominal, screening);
     const growth = growthApplication.rateMmPerYear;
+    const lengthApplication = lengthApplicationFor(nominal, screening);
     const conservativeDepth = nominal.maxDepthPct + screening.depthTolerancePct;
     const conservativeLength = nominal.length + 2 * screening.lengthToleranceMm;
     const conservative = evaluateTier(
@@ -236,7 +301,9 @@ export function screenResults(
     );
 
     const grownDepth = conservativeDepth + ((growth * screening.forecastYears) / nominal.wall) * 100;
-    const grownLength = conservativeLength + nominal.crLength * screening.forecastYears;
+    // Resolved through the same layer as depth, so the growth basis governs
+    // both dimensions instead of overriding one and leaking the other.
+    const grownLength = conservativeLength + lengthApplication.rateMmPerYear * screening.forecastYears;
     const forecast = evaluateTier(
       grownDepth,
       grownLength,
@@ -247,7 +314,13 @@ export function screenResults(
       growthApplication,
     );
 
-    const lifeProjection = findLifeToErf1(nominal, config, screening, growth);
+    const remnantLifeConservative = conservativeRemnantLife(
+      nominal,
+      config,
+      screening,
+      growth,
+      lengthApplication,
+    );
     const clockHour = parseClockHour(nominal.orient);
 
     return {
@@ -256,8 +329,14 @@ export function screenResults(
       nominal,
       conservative,
       forecast,
-      ...lifeProjection,
-      priority: derivePriority(nominal, conservative, forecast, lifeProjection.lifeToErf1, screening),
+      remnantLifeConservative,
+      priority: derivePriority(
+        nominal,
+        conservative,
+        forecast,
+        remnantLifeConservative.years,
+        screening,
+      ),
       clockHour,
       bottomQuadrant: clockHour !== null && clockHour >= 4 && clockHour <= 8,
     };
@@ -270,19 +349,21 @@ function numericLd(item: FfsScreenedResult): number {
 }
 
 /**
- * Groups features whose adjacent log-distance gaps are within CLUSTER_GAP_M.
- * This is a spatial grouping for inspection planning, not a defect-interaction
- * calculation.
+ * Groups features whose adjacent log-distance gaps are within ZONE_GAP_M.
+ *
+ * A spatial grouping for inspection planning, not a defect-interaction
+ * calculation — and deliberately not called clustering, which in this workspace
+ * means a single vendor-merged ILI record. See `FfsInput.isClusteredMetalLoss`.
  */
-export function buildClusters(items: FfsScreenedResult[]): FfsCluster[] {
+export function buildLocationZones(items: FfsScreenedResult[]): FfsLocationZone[] {
   const sorted = [...items].sort((a, b) => numericLd(a) - numericLd(b));
-  const clusters: FfsCluster[] = [];
+  const zones: FfsLocationZone[] = [];
   let current: FfsScreenedResult[] = [];
 
   const flush = () => {
     if (current.length > 1) {
-      clusters.push({
-        id: `zone-${clusters.length + 1}`,
+      zones.push({
+        id: `zone-${zones.length + 1}`,
         members: current,
         startLd: numericLd(current[0]),
         endLd: numericLd(current[current.length - 1]),
@@ -293,7 +374,7 @@ export function buildClusters(items: FfsScreenedResult[]): FfsCluster[] {
   };
 
   for (const item of sorted) {
-    if (!current.length || numericLd(item) - numericLd(current[current.length - 1]) <= CLUSTER_GAP_M) {
+    if (!current.length || numericLd(item) - numericLd(current[current.length - 1]) <= ZONE_GAP_M) {
       current.push(item);
     } else {
       flush();
@@ -301,7 +382,7 @@ export function buildClusters(items: FfsScreenedResult[]): FfsCluster[] {
     }
   }
   flush();
-  return clusters;
+  return zones;
 }
 
 /**
@@ -364,7 +445,7 @@ export function buildActionRegister(
       recommendation =
         'Apply operating-pressure control and raise an approved repair or detailed FFS assessment.';
       due = 'Immediate';
-    } else if (target.lifeToErf1 === 0) {
+    } else if (target.remnantLifeConservative.years === 0) {
       recommendation =
         'Treat the projected capacity limit as reached now; confirm operating-pressure control and escalate the engineering disposition.';
       due = 'Immediate';
@@ -372,7 +453,10 @@ export function buildActionRegister(
       recommendation =
         'Validate depth and morphology by excavation or NDE; confirm coating, CP, and local environment.';
       due = '0-3 months';
-    } else if (target.lifeToErf1 !== null && target.lifeToErf1 < 10) {
+    } else if (
+      target.remnantLifeConservative.years !== null &&
+      target.remnantLifeConservative.years < 10
+    ) {
       recommendation =
         'Confirm the corrosion growth rate and set a reassessment date before the capacity limit is reached.';
       due = 'Under 6 months';
@@ -392,6 +476,9 @@ export function buildActionRegister(
     const supplementalNotes = [
       target.nominal.repairStatus === 'temporary-repair'
         ? 'Temporary repair remains active and receives no capacity credit.'
+        : '',
+      target.nominal.isClusteredMetalLoss
+        ? 'Reported as clustered metal loss: the B31G result covers a merged group, not a single defect, and no run-pair growth rate exists for it.'
         : '',
       target.nominal.recommendation?.trim()
         ? `Recorded disposition: ${target.nominal.recommendation.trim()}`
@@ -435,8 +522,9 @@ export function buildKpis(items: FfsScreenedResult[]): FfsKpiSet {
   const byConservative = [...items].sort((a, b) => b.conservative.ERF - a.conservative.ERF);
   const byForecast = [...items].sort((a, b) => b.forecast.ERF - a.forecast.ERF);
   const byLife = items
-    .filter((item) => item.lifeToErf1Status === 'calculated')
-    .sort((a, b) => lifeSortValue(a.lifeToErf1) - lifeSortValue(b.lifeToErf1));
+    .filter((item) => item.remnantLifeConservative.status === 'calculated')
+    .sort((a, b) =>
+      lifeSortValue(a.remnantLifeConservative.years) - lifeSortValue(b.remnantLifeConservative.years));
 
   return {
     maxNominalErf: byNominal[0],
@@ -451,7 +539,7 @@ export function buildKpis(items: FfsScreenedResult[]): FfsKpiSet {
 
 export function formatLife(
   years: number | null,
-  status: FfsScreenedResult['lifeToErf1Status'],
+  status: FfsLifeStatus,
   horizonYears: number,
 ): string {
   return formatLifeProjection(years, status, horizonYears);

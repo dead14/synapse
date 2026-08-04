@@ -1,7 +1,13 @@
-import { formatLife } from './screening.ts';
 import { isInternal } from './statistics.ts';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from './types.ts';
-import { analysisHorizonYears, formatLifeProjection, lifeProjectionStatusLabel, lifeSortValue } from './lifeProjection.ts';
+import {
+  analysisHorizonYears,
+  formatRemnantLife,
+  lifeSortValue,
+  remnantLimitLabel,
+} from './lifeProjection.ts';
+import { designLifeUsage, EMPTY_SERVICE_LIFE } from './remnantLife.ts';
+import { buildSectionDesignFactorSummary, buildSectionGrowthSummary } from './sectionSummary.ts';
 import {
   buildFfsReportCase,
   createFfsReportContext,
@@ -86,16 +92,15 @@ export function buildNarrative(
   const repairItems = items.filter((item) => item.nominal.repairStatus !== 'unrepaired');
   const narrativeRepairItems = repairItems.slice(0, NARRATIVE_REPAIR_REGISTER_LIMIT);
   const activeUnacceptable = activeItems.filter((item) => item.nominal.acceptance === 'Un-Acceptable');
-  const activeBelowThreshold = activeItems.filter(
-    (item) => item.nominal.expectedLife !== null && item.nominal.expectedLife < config.highlightYears,
-  );
+  const belowReviewThreshold = (item: FfsScreenedResult) =>
+    item.nominal.remnantLife.years !== null &&
+    item.nominal.remnantLife.years < config.highlightYears;
+  const activeBelowThreshold = activeItems.filter(belowReviewThreshold);
   const activeEscalated = activeItems.filter((item) => item.conservative.severity !== 'pass');
   const activeMaxDepth = activeItems.length > 0
     ? Math.max(...activeItems.map((item) => item.nominal.maxDepthPct))
     : null;
-  const belowThreshold = items.filter(
-    (item) => item.nominal.expectedLife !== null && item.nominal.expectedLife < config.highlightYears,
-  );
+  const belowThreshold = items.filter(belowReviewThreshold);
   const escalated = items.filter((item) => item.conservative.severity !== 'pass');
   const internalCount = items.filter(isInternal).length;
   const externalCount = total - internalCount;
@@ -103,7 +108,8 @@ export function buildNarrative(
 
   const byErf = [...items].sort((a, b) => b.nominal.ERF - a.nominal.ERF);
   const byLife = [...items].sort(
-    (a, b) => lifeSortValue(a.nominal.expectedLife) - lifeSortValue(b.nominal.expectedLife),
+    (a, b) =>
+      lifeSortValue(a.nominal.remnantLife.years) - lifeSortValue(b.nominal.remnantLife.years),
   );
   const governing = byErf[0];
   const maxDepth = Math.max(...items.map((item) => item.nominal.maxDepthPct));
@@ -192,7 +198,39 @@ export function buildNarrative(
           ],
   });
 
-  blocks.push({ kind: 'heading', level: 2, text: '2.1  Screening assumptions' });
+  // A line does not have one design factor. Stating which factor each stretch
+  // was assessed against is the difference between a reviewable result and a
+  // number the reader has to take on trust.
+  const designFactorRows = buildSectionDesignFactorSummary(items);
+  blocks.push({ kind: 'heading', level: 2, text: '2.1  Design factor by section' });
+  blocks.push({
+    kind: 'table',
+    table: {
+      caption: 'Table 2-1  Design factor applied to each section',
+      columns: [
+        { header: 'Section', align: 'left' },
+        { header: 'From [m]', align: 'right' },
+        { header: 'To [m]', align: 'right' },
+        { header: 'Features', align: 'right' },
+        { header: 'Design factor', align: 'right' },
+        { header: 'Source', align: 'left' },
+      ],
+      rows: designFactorRows.map((row) => [
+        row.section,
+        row.startLd.toLocaleString(undefined, { maximumFractionDigits: 1 }),
+        row.endLd.toLocaleString(undefined, { maximumFractionDigits: 1 }),
+        row.featureCount.toLocaleString(),
+        row.designFactor.toFixed(2),
+        row.source === 'section-override'
+          ? 'Section override'
+          : row.source === 'line-default'
+            ? 'Line default'
+            : 'Supplied per row',
+      ]),
+    },
+  });
+
+  blocks.push({ kind: 'heading', level: 2, text: '2.2  Screening assumptions' });
   blocks.push({
     kind: 'list',
     items: [
@@ -217,7 +255,7 @@ export function buildNarrative(
       `(${((acceptable / total) * 100).toFixed(1)}%) satisfy the acceptance criteria at the current operating ` +
       `pressure, and ${unacceptable.length.toLocaleString()} ` +
       `(${((unacceptable.length / total) * 100).toFixed(1)}%) do not. ` +
-      `${belowThreshold.length.toLocaleString()} feature(s) have an expected remaining life below the ` +
+      `${belowThreshold.length.toLocaleString()} feature(s) have a remnant life below the ` +
       `${config.highlightYears}-year review threshold. Applying the ILI tolerance screen, ` +
       `${escalated.length.toLocaleString()} feature(s) fall at or above the ERF ` +
       `${screening.reviewBandErf.toFixed(2)} review band.`,
@@ -269,45 +307,105 @@ export function buildNarrative(
     },
   });
 
-  blocks.push({ kind: 'heading', level: 2, text: '3.2  Features ranked by expected remaining life' });
+  blocks.push({ kind: 'heading', level: 2, text: '3.2  Features ranked by remnant life' });
   blocks.push({
     kind: 'table',
     table: {
-      caption: `Table 3-2  Shortest ${Math.min(options.lifeTableRows, total)} features by expected remaining life`,
+      caption: `Table 3-2  Shortest ${Math.min(options.lifeTableRows, total)} features by remnant life`,
       columns: [
         { header: 'LD [m]', align: 'right' },
         { header: 'Section', align: 'left' },
+        { header: 'Surface', align: 'left' },
         { header: 'Depth [%]', align: 'right' },
+        { header: 'Length [mm]', align: 'right' },
+        { header: 'Orient.', align: 'center' },
         { header: 'CR depth [mm/y]', align: 'right' },
-        { header: 'Expected life [y]', align: 'right' },
-        { header: 'Year of service limit', align: 'center' },
-        { header: 'Failure criterion', align: 'left' },
-        { header: 'Life to ERF 1', align: 'right' },
+        { header: 'CR length [mm/y]', align: 'right' },
+        { header: 'Remnant life [y]', align: 'right' },
+        { header: 'Due date', align: 'center' },
+        { header: 'Governing limit', align: 'left' },
+        { header: 'Remarks', align: 'left' },
       ],
-      rows: byLife.slice(0, options.lifeTableRows).map((item) => [
-        Number(item.nominal.ld).toLocaleString(),
-        item.nominal.section,
-        item.nominal.maxDepthPct.toFixed(1),
-        item.nominal.crDepth.toFixed(3),
-        formatLifeProjection(item.nominal.expectedLife, item.nominal.lifeStatus, item.nominal.analysisHorizonYears),
-        item.nominal.yearService ?? '—',
-        lifeProjectionStatusLabel(item.nominal.lifeStatus, item.nominal.failureCriteria, item.nominal.analysisHorizonYears),
-        formatLife(item.lifeToErf1, item.lifeToErf1Status, horizonYears),
-      ]),
+      rows: byLife.slice(0, options.lifeTableRows).map((item) => {
+        const n = item.nominal;
+        const remarks = [
+          n.repairStatus === 'temporary-repair' ? 'Temporary repair' : '',
+          n.repairStatus === 'permanent-repair-verified' ? 'Permanent repair' : '',
+          n.isClusteredMetalLoss ? 'Clustered metal loss' : '',
+          n.remnantLife.lengthHeldConstant && n.remnantLife.status === 'calculated'
+            ? 'Length held constant'
+            : '',
+          n.remnantLife.designLifeCapApplied ? 'Capped at design life' : '',
+        ].filter(Boolean);
+        return [
+          Number(n.ld).toLocaleString(),
+          n.section,
+          n.surface,
+          n.maxDepthPct.toFixed(1),
+          n.length.toFixed(0),
+          n.orient || '—',
+          n.crDepth.toFixed(3),
+          n.remnantLife.lengthHeldConstant ? 'Not calculated' : n.remnantLife.lengthRateMmPerYear.toFixed(3),
+          formatRemnantLife(n.remnantLife),
+          n.remnantLife.dueDateIso ?? '—',
+          remnantLimitLabel(n.remnantLife),
+          remarks.join('; ') || '—',
+        ];
+      }),
       criticalRows: byLife
         .slice(0, options.lifeTableRows)
-        .map((item, i) => (
-          item.nominal.expectedLife !== null && item.nominal.expectedLife < config.highlightYears ? i : -1
-        ))
+        .map((item, i) => (belowReviewThreshold(item) ? i : -1))
         .filter((i) => i >= 0),
     },
   });
 
-  blocks.push({ kind: 'heading', level: 2, text: '3.3  Repair disposition' });
+  // ── 3.3 Corrosion growth by section ───────────────────────────────
+  blocks.push({ kind: 'heading', level: 2, text: '3.3  Corrosion growth by section' });
+  const sectionGrowth = buildSectionGrowthSummary(items);
+  const rate = (value: number | null) => (value === null ? 'None' : value.toFixed(3));
+  blocks.push({
+    kind: 'paragraph',
+    text:
+      'Growth is reported as the maximum rate observed in each section rather than a mean. ' +
+      'A section average dilutes a severe local rate against a long quiet stretch, which is ' +
+      'precisely the signal this table exists to show. Axial rates count only features where a ' +
+      'rate was established; where none was, the feature is counted as unavailable and never ' +
+      'as a zero.',
+  });
   blocks.push({
     kind: 'table',
     table: {
-      caption: 'Table 3-3  Repair disposition register',
+      caption: 'Table 3-3  Maximum corrosion growth by section and surface location',
+      columns: [
+        { header: 'Section', align: 'left' },
+        { header: 'Features', align: 'right' },
+        { header: 'INT depth [mm/y]', align: 'right' },
+        { header: 'EXT depth [mm/y]', align: 'right' },
+        { header: 'INT length [mm/y]', align: 'right' },
+        { header: 'EXT length [mm/y]', align: 'right' },
+        { header: 'Length rate n/a', align: 'right' },
+        { header: 'Max depth [%]', align: 'right' },
+        { header: 'Shortest remnant [y]', align: 'right' },
+      ],
+      rows: sectionGrowth.map((row) => [
+        row.section,
+        `${row.featureCount.toLocaleString()} (${row.internalCount}/${row.externalCount})`,
+        rate(row.internalDepthRateMmPerYear),
+        rate(row.externalDepthRateMmPerYear),
+        rate(row.internalLengthRateMmPerYear),
+        rate(row.externalLengthRateMmPerYear),
+        row.lengthRateUnavailableCount.toLocaleString(),
+        row.maxDepthPct.toFixed(1),
+        row.shortestRemnantLifeYears === null ? '—' : row.shortestRemnantLifeYears.toFixed(2),
+      ]),
+    },
+  });
+
+  blocks.push({ kind: 'heading', level: 2, text: '3.4  Repair disposition' });
+  blocks.push({
+    kind: 'table',
+    table: {
+      caption: 'Table 3-4  Repair disposition register',
       columns: [
         { header: 'Feature ID', align: 'left' },
         { header: 'LD [m]', align: 'right' },
@@ -349,12 +447,91 @@ export function buildNarrative(
     });
   }
 
+  // ── 3.5 Residual life assessment ──────────────────────────────────
+  blocks.push({ kind: 'heading', level: 2, text: '3.5  Residual life assessment' });
+  const service = config.serviceLife ?? EMPTY_SERVICE_LIFE;
+  const usage = designLifeUsage(service, config.iliDate);
+  blocks.push({
+    kind: 'paragraph',
+    text:
+      'The remnant life of the line is the shortest remnant life among its active features. ' +
+      'Each feature is projected from its as-reported dimensions at its own growth rates, and ' +
+      'the earlier of two limits governs: metal loss reaching 80% of nominal wall, which is the ' +
+      `applicability limit of the method, or ERF reaching 1.0. Results are bounded to a ` +
+      `${horizonYears}-year analysis horizon` +
+      (service.designLifeYears !== null
+        ? ` and are not reported above the ${service.designLifeYears}-year original design life.`
+        : '. No original design life was supplied, so no design-life limit is applied.'),
+  });
+
+  const lifeGoverning = reportCase.remnantLife.governing;
+  if (lifeGoverning) {
+    const remnant = lifeGoverning.nominal.remnantLife;
+    blocks.push({
+      kind: 'formula',
+      lines: [
+        `Governing feature   LD ${Number(governing.nominal.ld).toLocaleString()} m, ${lifeGoverning.nominal.section}, ${lifeGoverning.nominal.surface}`,
+        `Nominal wall t      ${lifeGoverning.nominal.wall.toFixed(2)} mm`,
+        `Reported depth      ${lifeGoverning.nominal.maxDepthPct.toFixed(1)} %WT over ${lifeGoverning.nominal.length.toFixed(0)} mm`,
+        `Depth CGR           ${remnant.depthRateMmPerYear.toFixed(3)} mm/y`,
+        `Length CGR          ${remnant.lengthHeldConstant ? 'not established — length held constant' : `${remnant.lengthRateMmPerYear.toFixed(3)} mm/y`}`,
+        '',
+        `80 %WT limit        (0.80 - ${(governing.nominal.maxDepthPct / 100).toFixed(2)}) x ${lifeGoverning.nominal.wall.toFixed(2)} mm / ${remnant.depthRateMmPerYear.toFixed(3)} mm/y = ${remnant.depthLimitYears === null ? `not reached in ${horizonYears} y` : `${remnant.depthLimitYears.toFixed(2)} y`}`,
+        `ERF 1.0 limit       ${remnant.erfLimitYears === null ? `not reached in ${horizonYears} y` : `${remnant.erfLimitYears.toFixed(2)} y`}`,
+        service.designLifeYears !== null ? `Design life limit   ${service.designLifeYears.toFixed(2)} y` : '',
+        '',
+        `Remnant life        ${formatRemnantLife(remnant)}  (${remnantLimitLabel(remnant)})`,
+        `Due date            ${remnant.dueDateIso ?? '—'}`,
+      ].filter((line) => line !== ''),
+    });
+  } else {
+    blocks.push({
+      kind: 'paragraph',
+      text:
+        'No active feature establishes a limit inside the analysis horizon, so no remnant life ' +
+        'or due date is reported for the line.',
+    });
+  }
+
+  if (usage) {
+    blocks.push({
+      kind: 'paragraph',
+      text:
+        `For context, the line was commissioned in ${usage.commissioningYear} and was ` +
+        `${usage.ageAtInspectionYears.toFixed(1)} years old at inspection against an original design ` +
+        `life of ${usage.designLifeYears} years` +
+        (usage.designLifeRemainingYears < 0
+          ? `, so it is already ${Math.abs(usage.designLifeRemainingYears).toFixed(1)} years beyond it. ` +
+            'Continued service past the original design life is a management decision that this ' +
+            'calculation supports but does not make.'
+          : `, leaving ${usage.designLifeRemainingYears.toFixed(1)} years of design life.`),
+    });
+  }
+
+  const afterRepairs = reportCase.remnantLifeAfterRepairProgramme;
+  if (reportCase.repairProgrammeTargets.length > 0) {
+    blocks.push({
+      kind: 'paragraph',
+      text:
+        `${reportCase.repairProgrammeTargets.length.toLocaleString()} active feature(s) are ` +
+        `recommended for permanent repair — those with a remnant life below ` +
+        `${config.highlightYears} years, together with every temporary repair still in place. ` +
+        (afterRepairs.years !== null
+          ? `If all of them are cut out and replaced, the remnant life of the line extends to ` +
+            `${afterRepairs.years.toFixed(2)} years, or ${afterRepairs.dueDateIso}, set by the ` +
+            `feature at LD ${Number(afterRepairs.governing?.nominal.ld).toLocaleString()} m.`
+          : 'With those features removed, no remaining active feature establishes a limit inside ' +
+            'the analysis horizon.'),
+    });
+  }
+
   // ── 4.0 Figures ───────────────────────────────────────────────────
   blocks.push({ kind: 'heading', level: 1, text: '4.0  Figures' });
   blocks.push({ kind: 'figure', caption: 'Figure 4-1  Depth category distribution by log distance', chartId: 'depth-by-ld' });
-  blocks.push({ kind: 'figure', caption: 'Figure 4-2  Feature orientation by log distance', chartId: 'orientation' });
-  blocks.push({ kind: 'figure', caption: 'Figure 4-3  Anomaly screening against the B31G Level 0 envelope', chartId: 'screening' });
-  blocks.push({ kind: 'figure', caption: 'Figure 4-4  ERF against log distance', chartId: 'erf-ld' });
+  blocks.push({ kind: 'figure', caption: 'Figure 4-2  Depth category distribution in three dimensions', chartId: 'depth-3d' });
+  blocks.push({ kind: 'figure', caption: 'Figure 4-3  Feature orientation by log distance', chartId: 'orientation' });
+  blocks.push({ kind: 'figure', caption: 'Figure 4-4  Anomaly screening against the B31G Level 0 envelope', chartId: 'screening' });
+  blocks.push({ kind: 'figure', caption: 'Figure 4-5  ERF against log distance', chartId: 'erf-ld' });
 
   // ── 5.0 Discussion ────────────────────────────────────────────────
   blocks.push({ kind: 'heading', level: 1, text: '5.0  Discussion' });
@@ -414,7 +591,7 @@ export function buildNarrative(
   }
   if (activeBelowThreshold.length > 0) {
     recommendations.push(
-      `${activeBelowThreshold.length.toLocaleString()} active feature(s) have an expected remaining life below ` +
+      `${activeBelowThreshold.length.toLocaleString()} active feature(s) have a remnant life below ` +
         `${config.highlightYears} years. Confirm the corrosion growth basis against matched prior ILI data and ` +
         `set reassessment or intervention dates accordingly.`,
     );

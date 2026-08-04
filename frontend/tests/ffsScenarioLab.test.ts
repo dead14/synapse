@@ -67,9 +67,9 @@ test('as-reported scenario reproduces the locked nominal calculation', () => {
   assertClose(scenario.failurePressureMpa, result.Pf);
   assertClose(scenario.safePressureMpa, result.safePressure);
   assertClose(scenario.erf, result.ERF);
-  assert.equal(scenario.limitStatus, result.lifeStatus);
-  assert.equal(scenario.limitCriterion, result.failureCriteria);
-  assertClose(scenario.limitYears ?? -1, result.expectedLife ?? -1, 0.01);
+  assert.equal(scenario.limitStatus, result.remnantLife.status);
+  assert.equal(scenario.limitCriterion, result.remnantLife.governingLimit);
+  assertClose(scenario.limitYears ?? -1, result.remnantLife.years ?? -1, 0.01);
 });
 
 test('as-reported does not inherit a uniform screening growth assumption', () => {
@@ -85,8 +85,8 @@ test('as-reported does not inherit a uniform screening growth assumption', () =>
 
   assert.equal(asReportedInputs.depthGrowthRateMmPerYear, result.crDepth);
   assert.equal(forecastInputs.depthGrowthRateMmPerYear, 0.5);
-  assert.equal(asReported.limitStatus, result.lifeStatus);
-  assertClose(asReported.limitYears ?? -1, result.expectedLife ?? -1, 0.01);
+  assert.equal(asReported.limitStatus, result.remnantLife.status);
+  assertClose(asReported.limitYears ?? -1, result.remnantLife.years ?? -1, 0.01);
 });
 
 test('conservative and forecast presets apply the configured screening basis', () => {
@@ -146,7 +146,9 @@ test('scenario life remains bounded by the configured analysis horizon', () => {
   assert.equal(stationary.limitStatus, 'insufficient-growth-basis');
   assert.equal(stationary.limitYears, null);
   assert.equal(fast.limitStatus, 'calculated');
-  assert.ok(fast.limitYears !== null && fast.limitYears <= result.analysisHorizonYears);
+  assert.ok(
+    fast.limitYears !== null && fast.limitYears <= result.remnantLife.analysisHorizonYears,
+  );
 });
 
 test('forecast preset is bounded when the screening forecast exceeds the analysis horizon', () => {
@@ -154,7 +156,7 @@ test('forecast preset is bounded when the screening forecast exceeds the analysi
   const longForecast = { ...screening, forecastYears: 50 };
   const inputs = scenarioInputsForPreset('forecast', result, longForecast);
 
-  assert.equal(inputs.forecastYears, result.analysisHorizonYears);
+  assert.equal(inputs.forecastYears, result.remnantLife.analysisHorizonYears);
   assert.doesNotThrow(() => evaluateFfsScenario(result, config, longForecast, inputs));
 });
 

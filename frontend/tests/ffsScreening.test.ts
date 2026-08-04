@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { processRow } from '../src/lib/ffs/calcEngine.ts';
 import {
   buildActionRegister,
-  buildClusters,
+  buildLocationZones,
   buildKpis,
   findInteractions,
   formatLife,
@@ -158,7 +158,7 @@ test('a tier past the 80 %WT applicability limit is flagged rather than presente
 test('a feature already past ERF 1 reports no remaining life', () => {
   const item = screenOne({ 'Max Depth [%]': '78', 'Length [mm]': '400' });
   assert.ok(item.conservative.ERF >= 1);
-  assert.equal(item.lifeToErf1, 0);
+  assert.equal(item.remnantLifeConservative.years, 0);
 });
 
 test('life to ERF 1 is unbounded when nothing is growing', () => {
@@ -169,9 +169,12 @@ test('life to ERF 1 is unbounded when nothing is growing', () => {
   };
   const item = screenOne({ 'Max Depth [%]': '20', 'Length [mm]': '30' }, screening);
 
-  assert.equal(item.lifeToErf1, null);
-  assert.equal(item.lifeToErf1Status, 'insufficient-growth-basis');
-  assert.equal(formatLife(item.lifeToErf1, item.lifeToErf1Status, 30), 'Not calculated');
+  assert.equal(item.remnantLifeConservative.years, null);
+  assert.equal(item.remnantLifeConservative.status, 'insufficient-growth-basis');
+  assert.equal(
+    formatLife(item.remnantLifeConservative.years, item.remnantLifeConservative.status, 30),
+    'Not calculated',
+  );
 });
 
 test('nominal life does not turn the numerical search bound into a service-limit date', () => {
@@ -185,10 +188,10 @@ test('nominal life does not turn the numerical search bound into a service-limit
     { ...config, analysisHorizonYears: 30 },
   );
 
-  assert.equal(result.lifeStatus, 'not-reached-within-horizon');
-  assert.equal(result.expectedLife, null);
-  assert.equal(result.yearService, null);
-  assert.equal(result.failureCriteria, null);
+  assert.equal(result.remnantLife.status, 'not-reached-within-horizon');
+  assert.equal(result.remnantLife.years, null);
+  assert.equal(result.remnantLife.dueDateIso, null);
+  assert.equal(result.remnantLife.governingLimit, null);
   assert.equal(result.atFailure_ERF, null);
   assert.equal(result.atFailure_depth, null);
   assert.equal(result.atFailure_Sf, null);
@@ -203,10 +206,10 @@ test('nominal life is not calculated without a positive depth or length growth b
     { ...config, analysisHorizonYears: 30 },
   );
 
-  assert.equal(result.lifeStatus, 'insufficient-growth-basis');
-  assert.equal(result.expectedLife, null);
-  assert.equal(result.yearService, null);
-  assert.equal(result.failureCriteria, null);
+  assert.equal(result.remnantLife.status, 'insufficient-growth-basis');
+  assert.equal(result.remnantLife.years, null);
+  assert.equal(result.remnantLife.dueDateIso, null);
+  assert.equal(result.remnantLife.governingLimit, null);
 });
 
 test('a calculated life retains its governing criterion and service-limit date', () => {
@@ -219,10 +222,15 @@ test('a calculated life retains its governing criterion and service-limit date',
     { ...config, analysisHorizonYears: 30 },
   );
 
-  assert.equal(result.lifeStatus, 'calculated');
-  assert.ok(result.expectedLife !== null && result.expectedLife > 0 && result.expectedLife < 2);
-  assert.ok(result.failureCriteria === 'Depth = 80%' || result.failureCriteria === 'ERF = 1');
-  assert.match(result.yearService ?? '', /^2024-/);
+  assert.equal(result.remnantLife.status, 'calculated');
+  assert.ok(
+    result.remnantLife.years !== null && result.remnantLife.years > 0 && result.remnantLife.years < 2,
+  );
+  assert.ok(
+    result.remnantLife.governingLimit === 'Depth = 80%' ||
+    result.remnantLife.governingLimit === 'ERF = 1',
+  );
+  assert.match(result.remnantLife.dueDateIso ?? '', /^2024-/);
   assert.ok(result.atFailure_depth !== null);
 });
 
@@ -231,13 +239,13 @@ test('life to ERF 1 shortens as the assumed growth rate rises', () => {
   const slow = screenOne({ 'Max Depth [%]': '35' }, { ...uniform, growthRateMmPerYear: 0.05 });
   const fast = screenOne({ 'Max Depth [%]': '35' }, { ...uniform, growthRateMmPerYear: 0.3 });
 
-  assert.equal(slow.lifeToErf1Status, 'not-reached-within-horizon');
-  assert.equal(slow.lifeToErf1, null);
-  assert.equal(fast.lifeToErf1Status, 'calculated');
-  assert.ok(fast.lifeToErf1 !== null && fast.lifeToErf1 > 0);
+  assert.equal(slow.remnantLifeConservative.status, 'not-reached-within-horizon');
+  assert.equal(slow.remnantLifeConservative.years, null);
+  assert.equal(fast.remnantLifeConservative.status, 'calculated');
+  assert.ok(fast.remnantLifeConservative.years !== null && fast.remnantLifeConservative.years > 0);
 });
 
-test('life to ERF 1 and the nominal expected life share the measured growth rate', () => {
+test('the tolerance-adjusted and as-reported remnant lives share the measured growth rate', () => {
   // The two figures answer different questions — one includes ILI tolerance, the
   // other is the code result — but under the measured basis they must at least
   // be projected from the same rate, which is what used to differ silently.
@@ -245,7 +253,9 @@ test('life to ERF 1 and the nominal expected life share the measured growth rate
 
   assert.equal(item.forecast.growthRateMmPerYear, 0.2);
   assert.ok(
-    item.lifeToErf1 <= item.nominal.expectedLife,
+    item.remnantLifeConservative.years !== null &&
+    item.nominal.remnantLife.years !== null &&
+    item.remnantLifeConservative.years <= item.nominal.remnantLife.years,
     'the tolerance-adjusted life cannot outlast the as-reported life on the same rate',
   );
 });
@@ -272,21 +282,21 @@ test('clock strings parse to decimal hours and flag the bottom quadrant', () => 
   assert.equal(screenOne({ 'Orient. (hrs:mins)': '1:00' }).bottomQuadrant, false);
 });
 
-test('clusters group only features within the grouping distance', () => {
+test('location zones group only features within the grouping distance', () => {
   const items = screenResults(
     ['10', '15', '19', '400', '404', '900'].map((ld) => processRow(row({ 'LD [m]': ld }), config)),
     config,
     DEFAULT_SCREENING_CONFIG,
   );
-  const clusters = buildClusters(items);
+  const zones = buildLocationZones(items);
 
-  assert.equal(clusters.length, 2, 'the lone feature at 900 m forms no zone');
+  assert.equal(zones.length, 2, 'the lone feature at 900 m forms no zone');
   assert.deepEqual(
-    clusters.map((cluster) => cluster.members.length),
+    zones.map((zone) => zone.members.length),
     [3, 2],
   );
-  assert.equal(clusters[0].startLd, 10);
-  assert.equal(clusters[0].endLd, 19);
+  assert.equal(zones[0].startLd, 10);
+  assert.equal(zones[0].endLd, 19);
 });
 
 test('the axial interaction screen flags only pairs inside the t-multiple', () => {
@@ -397,8 +407,7 @@ test('an exact ERF limit and a rounded zero life both require an immediate actio
 
   const roundedNow = screenOne({ 'Feature ID': 'ROUNDED-NOW', 'Max Depth [%]': '35' });
   roundedNow.conservative.ERF = 0.999;
-  roundedNow.lifeToErf1 = 0;
-  roundedNow.lifeToErf1Status = 'calculated';
+  roundedNow.remnantLifeConservative = { ...roundedNow.remnantLifeConservative, years: 0, status: 'calculated' };
   const roundedAction = buildActionRegister([roundedNow], DEFAULT_SCREENING_CONFIG, reportContext)[0];
   assert.equal(roundedAction.due, 'Immediate');
   assert.match(roundedAction.recommendation, /capacity limit/i);

@@ -1,9 +1,9 @@
-import { B31G_DEPTH_LIMIT_RATIO, evaluateB31g, type B31gGeometry } from './b31g.ts';
+import { evaluateB31g, type B31gGeometry } from './b31g.ts';
 import { analysisHorizonYears } from './lifeProjection.ts';
-import { growthRateFor, severityOf } from './screening.ts';
+import { computeRemnantLife, EMPTY_SERVICE_LIFE, type FfsRemnantLimit } from './remnantLife.ts';
+import { growthRateFor, lengthApplicationFor, severityOf } from './screening.ts';
 import type {
   FfsConfig,
-  FfsFailureCriterion,
   FfsLifeStatus,
   FfsResult,
   FfsScreeningConfig,
@@ -37,7 +37,7 @@ export interface FfsScenarioEvaluation {
   invalidReason: string | null;
   limitYears: number | null;
   limitStatus: FfsLifeStatus;
-  limitCriterion: FfsFailureCriterion | null;
+  limitCriterion: FfsRemnantLimit | null;
   analysisHorizonYears: number;
 }
 
@@ -79,7 +79,9 @@ export function scenarioInputsForPreset(
   const screened = {
     requiredPressureMpa: nominal.p0,
     depthGrowthRateMmPerYear: growthRateFor(nominal, screening),
-    lengthGrowthRateMmPerYear: nominal.crLength,
+    // Resolved the same way as depth, so a preset cannot seed the drawer with a
+    // length rate the screening basis would never have used.
+    lengthGrowthRateMmPerYear: lengthApplicationFor(nominal, screening).rateMmPerYear,
   };
 
   if (preset === 'conservative') {
@@ -91,7 +93,7 @@ export function scenarioInputsForPreset(
   }
   return {
     ...screened,
-    forecastYears: Math.min(screening.forecastYears, nominal.analysisHorizonYears),
+    forecastYears: Math.min(screening.forecastYears, nominal.remnantLife.analysisHorizonYears),
     applyConfiguredTolerance: true,
   };
 }
@@ -132,46 +134,24 @@ export function evaluateFfsScenario(
   };
 
   const displayed = evaluateAtYear(inputs.forecastYears);
-  const atStart = evaluateAtYear(0).result;
-  const hasPositiveGrowth = inputs.depthGrowthRateMmPerYear > 0 || inputs.lengthGrowthRateMmPerYear > 0;
 
-  let depthLimitYears = Number.POSITIVE_INFINITY;
-  if (baseDepthMm >= B31G_DEPTH_LIMIT_RATIO * nominal.wall) {
-    depthLimitYears = 0;
-  } else if (inputs.depthGrowthRateMmPerYear > 0) {
-    depthLimitYears = (
-      B31G_DEPTH_LIMIT_RATIO * nominal.wall - baseDepthMm
-    ) / inputs.depthGrowthRateMmPerYear;
-  }
-
-  let erfLimitYears = Number.POSITIVE_INFINITY;
-  if (atStart.erf >= 1) {
-    erfLimitYears = 0;
-  } else if (hasPositiveGrowth && evaluateAtYear(horizonYears).result.erf >= 1) {
-    let lo = 0;
-    let hi = horizonYears;
-    for (let iteration = 0; iteration < 60; iteration += 1) {
-      const mid = (lo + hi) / 2;
-      if (evaluateAtYear(mid).result.erf >= 1) hi = mid;
-      else lo = mid;
-    }
-    erfLimitYears = hi;
-  }
-
-  const firstLimitYears = Math.min(depthLimitYears, erfLimitYears);
-  let limitYears: number | null = null;
-  let limitStatus: FfsLifeStatus;
-  let limitCriterion: FfsFailureCriterion | null = null;
-
-  if (firstLimitYears <= horizonYears) {
-    limitYears = Math.round(firstLimitYears * 100) / 100;
-    limitStatus = 'calculated';
-    limitCriterion = depthLimitYears <= erfLimitYears ? 'Depth = 80%' : 'ERF = 1';
-  } else if (!hasPositiveGrowth) {
-    limitStatus = 'insufficient-growth-basis';
-  } else {
-    limitStatus = 'not-reached-within-horizon';
-  }
+  // The drawer used to run its own depth-limit arithmetic and its own ERF
+  // bisection, which is how a scenario could disagree with the table it was
+  // opened from. Same kernel now; only the draft inputs differ.
+  const remnant = computeRemnantLife({
+    geometry,
+    method: config.method,
+    flowStressMode: config.modifiedSa,
+    basis: inputs.applyConfiguredTolerance ? 'tolerance-adjusted' : 'as-reported',
+    startDepthPct: (baseDepthMm / nominal.wall) * 100,
+    startLengthMm: baseLengthMm,
+    depthRateMmPerYear: inputs.depthGrowthRateMmPerYear,
+    lengthRateMmPerYear: inputs.lengthGrowthRateMmPerYear,
+    lengthRateAvailable: inputs.lengthGrowthRateMmPerYear > 0,
+    horizonYears,
+    iliDate: config.iliDate,
+    service: config.serviceLife ?? EMPTY_SERVICE_LIFE,
+  });
 
   const result = displayed.result;
   const outsideDomain = result.beyondDepthLimit || !result.valid;
@@ -186,9 +166,9 @@ export function evaluateFfsScenario(
     beyondDepthLimit: result.beyondDepthLimit,
     valid: result.valid,
     invalidReason: result.invalidReason,
-    limitYears,
-    limitStatus,
-    limitCriterion,
+    limitYears: remnant.years,
+    limitStatus: remnant.status,
+    limitCriterion: remnant.governingLimit,
     analysisHorizonYears: horizonYears,
   };
 }

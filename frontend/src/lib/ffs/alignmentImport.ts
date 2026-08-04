@@ -1,17 +1,49 @@
 import type { ComparisonRow } from '../../utils/alignment.ts';
+import { isClusteredAlignmentRow } from '../../utils/alignmentDisplay.ts';
 import type {
+  FfsDesignFactorSource,
   FfsGrowthComponentEvidence,
   FfsGrowthEvidence,
   FfsGrowthObservation,
+  FfsSectionDesignFactor,
 } from './types.ts';
 
 export interface AlignmentEngineeringInputs {
   outerDiameterMm: number;
   smysMpa: number;
+  /** Applied to any section without its own override. */
   designFactor: number;
+  /** Per-section overrides, keyed by the section name the alignment emitted. */
+  sectionDesignFactors?: FfsSectionDesignFactor[];
   operatingPressureMpa: number;
   fallbackDepthGrowthMmPerYear: number;
   fallbackLengthGrowthMmPerYear: number;
+}
+
+/**
+ * Resolves the design factor for one feature.
+ *
+ * A line is not uniform: line pipe at 0.72 with a river crossing or riser at
+ * 0.60 is the ordinary case. Matching is on the reviewed section name and is
+ * case- and whitespace-insensitive, because the same crossing is written
+ * "RC#86" in one run and "RC #86" in another often enough to matter.
+ */
+export function resolveDesignFactor(
+  section: string,
+  engineering: AlignmentEngineeringInputs,
+): { designFactor: number; source: FfsDesignFactorSource } {
+  const key = normalizedSectionKey(section);
+  const override = key
+    ? engineering.sectionDesignFactors?.find((rule) => normalizedSectionKey(rule.section) === key)
+    : undefined;
+  if (override && Number.isFinite(override.designFactor) && override.designFactor > 0) {
+    return { designFactor: override.designFactor, source: 'section-override' };
+  }
+  return { designFactor: engineering.designFactor, source: 'line-default' };
+}
+
+export function normalizedSectionKey(section: string): string {
+  return String(section ?? '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US');
 }
 
 export interface AlignmentImportProvenance {
@@ -21,6 +53,11 @@ export interface AlignmentImportProvenance {
   growthEvidence: FfsGrowthEvidence;
   /** Engineer's note from the Corrosion Analysis review, when one was given. */
   selectionReason: string | null;
+  /** The section this feature was assessed under, and the factor it received. */
+  section: string;
+  designFactor: number;
+  designFactorSource: FfsDesignFactorSource;
+  isClusteredMetalLoss: boolean;
 }
 
 /**
@@ -242,6 +279,54 @@ function deriveGrowthEvidence(
   return { oldSurveyYear, newSurveyYear, intervalYears, depth, length };
 }
 
+export interface AlignmentSectionOption {
+  /** Section name exactly as the alignment emitted it. */
+  section: string;
+  /** Released features falling in this section. */
+  featureCount: number;
+  startLd: number;
+  endLd: number;
+}
+
+/**
+ * The sections an engineer can assign a design factor to.
+ *
+ * Derived from the released features themselves rather than from the session's
+ * section definitions, so the list is exactly the stretches that will appear in
+ * the assessment — a section holding nothing released is not something anyone
+ * needs to enter a factor for.
+ */
+export function alignmentSectionOptions(
+  comparison: ComparisonRow[],
+  selection: AlignmentSelection,
+): AlignmentSectionOption[] {
+  const grouped = new Map<string, { section: string; featureCount: number; distances: number[] }>();
+
+  for (const source of comparison) {
+    const sourceFeatureKey = text(source['Source Key NEW'], '');
+    if (!sourceFeatureKey || !selection.selectedKeys.has(sourceFeatureKey)) continue;
+    const section = text(source['Section NEW'], text(source.Section));
+    const key = normalizedSectionKey(section);
+    const distance = finiteNumber(source['Log Dist NEW (m)']);
+    let entry = grouped.get(key);
+    if (!entry) {
+      entry = { section, featureCount: 0, distances: [] };
+      grouped.set(key, entry);
+    }
+    entry.featureCount += 1;
+    if (distance !== null) entry.distances.push(distance);
+  }
+
+  return [...grouped.values()]
+    .map(({ section, featureCount, distances }) => ({
+      section,
+      featureCount,
+      startLd: distances.length ? Math.min(...distances) : 0,
+      endLd: distances.length ? Math.max(...distances) : 0,
+    }))
+    .sort((a, b) => a.startLd - b.startLd || a.section.localeCompare(b.section));
+}
+
 function strictNumber(value: string): number | null {
   if (value.trim() === '') return null;
   const parsed = Number(value);
@@ -291,6 +376,13 @@ function assertEngineeringInputs(inputs: AlignmentEngineeringInputs): void {
     }
   }
   if (inputs.designFactor > 1) throw new Error('Design factor must not exceed 1.');
+  for (const rule of inputs.sectionDesignFactors ?? []) {
+    if (!Number.isFinite(rule.designFactor) || rule.designFactor <= 0 || rule.designFactor > 1) {
+      throw new Error(
+        `Design factor for section "${rule.section}" must be greater than 0 and not more than 1.`,
+      );
+    }
+  }
   for (const [label, value] of [
     ['Fallback depth growth', inputs.fallbackDepthGrowthMmPerYear],
     ['Fallback length growth', inputs.fallbackLengthGrowthMmPerYear],
@@ -353,13 +445,26 @@ export function mapAlignmentRowsToFfs(
     const warnings: string[] = [];
     const growthEvidence = deriveGrowthEvidence(source, depth, wall, engineering, warnings);
     const depthGrowthMm = growthEvidence.depth.analysisRateMmPerYear ?? 0;
+    // The column has to carry a finite number for the calculation contract, but
+    // the evidence record is what downstream consumers read to decide whether
+    // this zero is a measurement or the absence of one.
     const lengthGrowthMm = growthEvidence.length.analysisRateMmPerYear ?? 0;
+    const section = text(source['Section NEW'], text(source.Section));
+    const { designFactor, source: designFactorSource } = resolveDesignFactor(section, engineering);
+    // Same rule the alignment engine uses to keep merged groups out of matching,
+    // so FFS labels exactly the rows the engine refused to pair.
+    const isClusteredMetalLoss = isClusteredAlignmentRow(source);
+    if (isClusteredMetalLoss) {
+      warnings.push(
+        'Reported as clustered metal loss: assessed as one merged defect and carrying no run-pair growth rate.',
+      );
+    }
 
     accepted.push({
       row: {
         'Feature ID': featureId,
         'LD [m]': numericText(distance),
-        Section: text(source['Section NEW'], text(source.Section)),
+        Section: section,
         Surface: text(source['Surface NEW']),
         'Max Depth [%]': numericText(depth),
         'Length [mm]': numericText(length),
@@ -368,10 +473,12 @@ export function mapAlignmentRowsToFfs(
         'Nominal Wall Thickness [mm]': numericText(wall),
         'CR Depth [mm/y]': numericText(depthGrowthMm),
         'CR Length [mm/y]': numericText(lengthGrowthMm),
-        'Design Factor': numericText(engineering.designFactor),
+        'Design Factor': numericText(designFactor),
+        'Design Factor Source': designFactorSource,
         'Outer Diameter Ds': numericText(engineering.outerDiameterMm),
         'SMYS [MPa]': numericText(engineering.smysMpa),
         'Operating Pressure P₀ [MPa]': numericText(engineering.operatingPressureMpa),
+        'Clustered Metal Loss': isClusteredMetalLoss ? 'Yes' : 'No',
         'Repair Status': 'Unrepaired',
         'Repair Method': '',
         'Repair Date': '',
@@ -385,6 +492,10 @@ export function mapAlignmentRowsToFfs(
         featureId,
         growthEvidence,
         selectionReason: selection.reasons?.[sourceFeatureKey]?.trim() || null,
+        section,
+        designFactor,
+        designFactorSource,
+        isClusteredMetalLoss,
       },
       warnings,
     });

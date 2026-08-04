@@ -94,8 +94,8 @@ test('allows the 80% method boundary but never marks it acceptable', () => {
 
   const result = processRow(row, config);
   assert.equal(result.acceptance, 'Un-Acceptable');
-  assert.equal(result.expectedLife, 0);
-  assert.equal(result.failureCriteria, 'Depth = 80%');
+  assert.equal(result.remnantLife.years, 0);
+  assert.equal(result.remnantLife.governingLimit, 'Depth = 80%');
   assert.ok(Number.isFinite(result.ERF));
 });
 

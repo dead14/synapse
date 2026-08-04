@@ -1,6 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { FiAlertCircle, FiCheckCircle, FiChevronLeft, FiChevronRight, FiX, FiXCircle } from 'react-icons/fi';
-import { formatLifeProjection, lifeProjectionStatusLabel } from '../../lib/ffs/lifeProjection';
+import {
+  formatRemnantLife,
+  remnantLifeCaveats,
+  remnantLimitLabel,
+} from '../../lib/ffs/lifeProjection';
 import {
   applicabilityChecks,
   applicabilityStatus,
@@ -237,6 +241,8 @@ export default function FfsDetailModal({
   if (!item) return null;
 
   const n = item.nominal;
+  const life = n.remnantLife;
+  const caveats = remnantLifeCaveats(life);
   const isOriginal = config.method === 'original';
   const kLabel = isOriginal ? '2/3' : '0.85';
   const k = isOriginal ? 2 / 3 : 0.85;
@@ -755,45 +761,95 @@ export default function FfsDetailModal({
             </div>
           </section>
 
-          {/* Expected Life Projection */}
+          {/* Remnant life */}
           <section className="ffs-detail__section">
-            <h3 className="ffs-detail__section-title">Expected life projection</h3>
+            <h3 className="ffs-detail__section-title">Remnant life</h3>
             <div className="ffs-detail__life-grid">
               <LifeCard
-                label="Expected Life"
-                value={formatLifeProjection(n.expectedLife, n.lifeStatus, n.analysisHorizonYears)}
-                description={`Bounded to the ${n.analysisHorizonYears}-year analysis horizon`}
-                tone={n.expectedLife !== null && n.expectedLife < config.highlightYears ? 'warn' : 'default'}
+                label="Remnant Life"
+                value={formatRemnantLife(life)}
+                description={`As reported, bounded to the ${life.analysisHorizonYears}-year analysis horizon`}
+                tone={life.years !== null && life.years < config.highlightYears ? 'warn' : 'default'}
               />
               <LifeCard
-                label="Service Limit Date"
-                value={n.yearService ?? '—'}
-                description={n.yearService ? 'ILI date + calculated limit time' : 'No finite date established'}
+                label="Due Date"
+                value={life.dueDateIso ?? '—'}
+                description={life.dueDateIso ? 'ILI date + calculated limit time' : 'No finite date established'}
               />
               <LifeCard
-                label="Projection Status"
-                value={lifeProjectionStatusLabel(n.lifeStatus, n.failureCriteria, n.analysisHorizonYears)}
-                description={n.failureCriteria ? 'First condition reached' : 'No failure point calculated'}
-                tone={n.failureCriteria === 'ERF = 1' ? 'bad' : 'default'}
+                label="Governing Limit"
+                value={remnantLimitLabel(life)}
+                description={life.governingLimit ? 'First condition reached' : 'No limit reached'}
+                tone={life.governingLimit === 'ERF = 1' ? 'bad' : 'default'}
+              />
+              {/* Both criteria, always. The governing figure alone hides how
+                  close the other limit is, which is what decides whether a
+                  repair buys years or months. */}
+              <LifeCard
+                label="Years to 80% Depth"
+                value={life.depthLimitYears === null ? '—' : life.depthLimitYears.toFixed(2)}
+                unit={life.depthLimitYears === null ? undefined : 'y'}
+                description={`(0.80 − d/t) × t / CR depth`}
               />
               <LifeCard
-                label="ERF at Failure"
+                label="Years to ERF 1.0"
+                value={life.erfLimitYears === null ? '—' : life.erfLimitYears.toFixed(2)}
+                unit={life.erfLimitYears === null ? undefined : 'y'}
+                description="Depth and length both projected"
+              />
+              <LifeCard
+                label="Tolerance-adjusted"
+                value={formatRemnantLife(item.remnantLifeConservative)}
+                description={`+${screening.depthTolerancePct}% WT and +${2 * screening.lengthToleranceMm} mm`}
+                tone={
+                  item.remnantLifeConservative.years !== null &&
+                  item.remnantLifeConservative.years < config.highlightYears
+                    ? 'warn'
+                    : 'default'
+                }
+              />
+              <LifeCard
+                label="CR Depth"
+                value={life.depthRateMmPerYear.toFixed(3)}
+                unit="mm/y"
+                description={growthObservationLabel(n.growthEvidence?.depth.observation)}
+              />
+              <LifeCard
+                label="CR Length"
+                value={life.lengthHeldConstant ? 'Not calculated' : life.lengthRateMmPerYear.toFixed(3)}
+                unit={life.lengthHeldConstant ? undefined : 'mm/y'}
+                description={
+                  n.growthEvidence?.length.note
+                  ?? growthObservationLabel(n.growthEvidence?.length.observation)
+                }
+                tone={life.lengthHeldConstant ? 'warn' : 'default'}
+              />
+              <LifeCard
+                label="ERF at Limit"
                 value={fmt(n.atFailure_ERF, 4)}
-                description={`ERF @ tₗᶠᶠₑ`}
+                description={`ERF @ remnant life`}
               />
               <LifeCard
-                label="Depth % at Failure"
+                label="Depth % at Limit"
                 value={n.atFailure_depth === null ? '—' : n.atFailure_depth.toFixed(2)}
                 unit="%"
-                description={`d/t × 100 @ tₗᶠᶠₑ`}
+                description={`d/t × 100 @ remnant life`}
               />
               <LifeCard
-                label={'Sᶠ at Failure'}
+                label={'Sᶠ at Limit'}
                 value={fmt(n.atFailure_Sf, 4)}
                 unit="MPa"
-                description={`Sᶠ @ tₗᶠᶠₑ`}
+                description={`Sᶠ @ remnant life`}
               />
             </div>
+
+            {caveats.length > 0 && (
+              <ul className="ffs-detail__caveats">
+                {caveats.map((caveat) => (
+                  <li key={caveat}>{caveat}</li>
+                ))}
+              </ul>
+            )}
 
             {item.clockHour !== null && (
               <div className="ffs-detail__priority-row">
@@ -806,11 +862,11 @@ export default function FfsDetailModal({
           </section>
 
           {/* Final callout */}
-          {n.lifeStatus !== 'calculated' ? (
+          {life.status !== 'calculated' ? (
             <Callout tone="neutral">
-              {n.lifeStatus === 'insufficient-growth-basis'
-                ? 'No service-limit date is calculated because neither depth nor length has a positive growth basis.'
-                : `Neither the 80% depth limit nor ERF 1.0 is reached inside the configured ${n.analysisHorizonYears}-year analysis horizon.`}{' '}
+              {life.status === 'insufficient-growth-basis'
+                ? 'No due date is calculated because neither depth nor length has a positive growth basis.'
+                : `Neither the 80% depth limit nor ERF 1.0 is reached inside the configured ${life.analysisHorizonYears}-year analysis horizon.`}{' '}
               This is not a prediction of unlimited service life. Final disposition requires an approved
               procedure and independent checking.
             </Callout>
@@ -819,17 +875,19 @@ export default function FfsDetailModal({
               tone={
                 n.acceptance === 'Un-Acceptable'
                   ? 'danger'
-                  : n.expectedLife !== null && n.expectedLife < config.highlightYears
+                  : life.years !== null && life.years < config.highlightYears
                     ? 'warn'
                     : 'neutral'
               }
             >
               <strong>
-                {n.failureCriteria === 'ERF = 1'
-                  ? `ERF reached 1.0 at ${n.expectedLife?.toFixed(2)} years`
-                  : `Depth limit reached at ${n.expectedLife?.toFixed(2)} years`}
+                {life.governingLimit === 'ERF = 1'
+                  ? `ERF reaches 1.0 at ${life.years?.toFixed(2)} years`
+                  : life.governingLimit === 'Original design life'
+                    ? `Reported at the ${life.designLifeYears}-year original design life`
+                    : `Depth limit reached at ${life.years?.toFixed(2)} years`}
                 {' — '}
-                Year Service: {n.yearService}
+                due {life.dueDateIso}
               </strong>
             </Callout>
           )}

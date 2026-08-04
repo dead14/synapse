@@ -12,11 +12,26 @@ export interface DepthBucket {
   color: string;
 }
 
+/**
+ * Names a band the way ILI reports name it.
+ *
+ * Bands are lower-inclusive and upper-exclusive, so [20, 30) is written
+ * "20-29%" — the convention every vendor report uses, and the one the reader is
+ * expecting. When the bounds are not whole numbers the exact interval is shown
+ * instead, because rounding a 22.5% boundary into a tidy label would misstate
+ * where the band actually cuts.
+ */
+export function depthBandLabel(from: number, to: number): string {
+  if (!Number.isFinite(to)) return `${from}%+`;
+  if (Number.isInteger(from) && Number.isInteger(to)) return `${from}-${to - 1}%`;
+  return `${from}-${to}%`;
+}
+
 export const DEFAULT_DEPTH_BUCKETS: DepthBucket[] = [
-  { id: 'b1', name: '0-20%', from: 0, to: 20, color: '#3b82f6' },
-  { id: 'b2', name: '20-30%', from: 20, to: 30, color: '#eab308' },
-  { id: 'b3', name: '30-40%', from: 30, to: 40, color: '#f97316' },
-  { id: 'b4', name: '40%+', from: 40, to: Number.POSITIVE_INFINITY, color: '#ef4444' },
+  { id: 'b1', name: depthBandLabel(0, 20), from: 0, to: 20, color: '#3b82f6' },
+  { id: 'b2', name: depthBandLabel(20, 30), from: 20, to: 30, color: '#eab308' },
+  { id: 'b3', name: depthBandLabel(30, 40), from: 30, to: 40, color: '#f97316' },
+  { id: 'b4', name: depthBandLabel(40, Number.POSITIVE_INFINITY), from: 40, to: Number.POSITIVE_INFINITY, color: '#ef4444' },
 ];
 
 export interface LdBin {
@@ -170,9 +185,9 @@ export function buildWorstTable(
   const rank = (a: FfsScreenedResult, b: FfsScreenedResult) => {
     if (worstBy === 'depth') return b.nominal.maxDepthPct - a.nominal.maxDepthPct;
     if (worstBy === 'erf') return b.nominal.ERF - a.nominal.ERF;
-    // Rank on the per-feature source-evidenced growth, matching the "Life [y]" column
-    // and every other life figure in the workspace.
-    return lifeSortValue(a.nominal.expectedLife) - lifeSortValue(b.nominal.expectedLife);
+    // Rank on the per-feature source-evidenced growth, matching the remnant-life
+    // column and every other life figure in the workspace.
+    return lifeSortValue(a.nominal.remnantLife.years) - lifeSortValue(b.nominal.remnantLife.years);
   };
 
   return bins.map((bin, i) => {

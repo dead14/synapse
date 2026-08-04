@@ -2,6 +2,76 @@ import { lifeSortValue } from './lifeProjection.ts';
 import type { FfsConfig, FfsLifeStatus, FfsScreenedResult } from './types.ts';
 import { isIsoCalendarDate } from './validation.ts';
 
+/**
+ * The remnant life of the line, as opposed to of one anomaly.
+ *
+ * A fitness-for-service report leads with two of these: the figure as the line
+ * stands today, and the figure that would be obtained if the features already
+ * recommended for permanent repair were replaced. The second is what makes the
+ * repair recommendation quantitative instead of an assertion.
+ */
+export interface FfsPipelineRemnantLife {
+  populationCount: number;
+  /** The feature that sets the figure, or null when none establishes a limit. */
+  governing: FfsScreenedResult | null;
+  years: number | null;
+  status: FfsScenarioLifeSummaryStatus;
+  dueDateIso: string | null;
+  calculatedCount: number;
+  notReachedCount: number;
+  insufficientBasisCount: number;
+}
+
+function pipelineRemnantLife(items: FfsScreenedResult[]): FfsPipelineRemnantLife {
+  const calculated = items
+    .filter((item) => item.nominal.remnantLife.status === 'calculated')
+    .sort((a, b) =>
+      lifeSortValue(a.nominal.remnantLife.years) - lifeSortValue(b.nominal.remnantLife.years));
+  const governing = calculated[0] ?? null;
+
+  const notReachedCount = items.filter(
+    (item) => item.nominal.remnantLife.status === 'not-reached-within-horizon',
+  ).length;
+  const insufficientBasisCount = items.filter(
+    (item) => item.nominal.remnantLife.status === 'insufficient-growth-basis',
+  ).length;
+
+  let status: FfsScenarioLifeSummaryStatus;
+  if (items.length === 0) status = 'empty';
+  else if (governing) status = 'calculated';
+  else if (notReachedCount > 0 && insufficientBasisCount > 0) status = 'mixed-unbounded';
+  else if (insufficientBasisCount > 0) status = 'insufficient-growth-basis';
+  else status = 'not-reached-within-horizon';
+
+  return {
+    populationCount: items.length,
+    governing,
+    years: governing?.nominal.remnantLife.years ?? null,
+    status,
+    dueDateIso: governing?.nominal.remnantLife.dueDateIso ?? null,
+    calculatedCount: calculated.length,
+    notReachedCount,
+    insufficientBasisCount,
+  };
+}
+
+/**
+ * The features a permanent-repair programme would remove from the line: those
+ * whose remnant life falls below the review threshold, plus every temporary
+ * repair still holding. Both are the ordinary contents of a cut-and-replace
+ * recommendation, and both are what the "after repair" figure assumes gone.
+ */
+export function repairProgrammeTargets(
+  items: FfsScreenedResult[],
+  reviewThresholdYears: number,
+): FfsScreenedResult[] {
+  return items.filter((item) => {
+    if (item.nominal.repairStatus === 'temporary-repair') return true;
+    const { years, status } = item.nominal.remnantLife;
+    return status === 'calculated' && years !== null && years < reviewThresholdYears;
+  });
+}
+
 export type FfsReadinessSeverity = 'error' | 'warning' | 'info';
 
 export interface FfsReadinessFinding {
@@ -14,6 +84,8 @@ export interface FfsReadinessFinding {
 export interface FfsReportContext {
   inspectionDateIso: string;
   asOfDateIso: string;
+  /** Remnant life below which a feature enters the repair programme. */
+  reviewThresholdYears: number;
 }
 
 export type FfsScenarioLifeSummaryStatus =
@@ -51,6 +123,12 @@ export interface FfsReportCase {
   asManaged: FfsScenarioSummary;
   /** Exact active population used by every managed-scenario consumer. */
   asManagedItems: FfsScreenedResult[];
+  /** Line-level remnant life as the line stands, over the active population. */
+  remnantLife: FfsPipelineRemnantLife;
+  /** The same figure assuming the recommended permanent repairs are done. */
+  remnantLifeAfterRepairProgramme: FfsPipelineRemnantLife;
+  /** Features the "after repair" figure assumes are cut out and replaced. */
+  repairProgrammeTargets: FfsScreenedResult[];
   /** One centralized, fail-closed credit decision per assessed feature. */
   repairCreditDecisions: ReadonlyMap<FfsScreenedResult, FfsRepairCreditDecision>;
   repairCounts: {
@@ -89,21 +167,23 @@ export function createFfsReportContext(
   return {
     inspectionDateIso: config.iliDate.toISOString().slice(0, 10),
     asOfDateIso: formatLocalCalendarDate(asOfDate),
+    reviewThresholdYears: config.highlightYears,
   };
 }
 
 function scenarioSummary(items: FfsScreenedResult[]): FfsScenarioSummary {
   const byErf = [...items].sort((a, b) => b.nominal.ERF - a.nominal.ERF);
   const byLife = items
-    .filter((item) => item.nominal.lifeStatus === 'calculated')
-    .sort((a, b) => lifeSortValue(a.nominal.expectedLife) - lifeSortValue(b.nominal.expectedLife));
+    .filter((item) => item.nominal.remnantLife.status === 'calculated')
+    .sort((a, b) =>
+      lifeSortValue(a.nominal.remnantLife.years) - lifeSortValue(b.nominal.remnantLife.years));
   const acceptableCount = items.filter((item) => item.nominal.acceptance === 'Acceptable').length;
   const lifeStatusCounts: Record<FfsLifeStatus, number> = {
     calculated: 0,
     'not-reached-within-horizon': 0,
     'insufficient-growth-basis': 0,
   };
-  for (const item of items) lifeStatusCounts[item.nominal.lifeStatus] += 1;
+  for (const item of items) lifeStatusCounts[item.nominal.remnantLife.status] += 1;
 
   let lifeSummaryStatus: FfsScenarioLifeSummaryStatus;
   if (items.length === 0) lifeSummaryStatus = 'empty';
@@ -327,7 +407,7 @@ export function buildFfsReportCase(
   }
 
   const noGrowthBasisCount = activeItems.filter(
-    (item) => item.nominal.lifeStatus === 'insufficient-growth-basis',
+    (item) => item.nominal.remnantLife.status === 'insufficient-growth-basis',
   ).length;
   if (noGrowthBasisCount > 0) {
     findings.push(finding(
@@ -335,6 +415,44 @@ export function buildFfsReportCase(
       'warning',
       'Remaining life is not calculated where no positive depth or length growth basis is available.',
       noGrowthBasisCount,
+    ));
+  }
+
+  // The axial dimension is the half of the projection nobody notices is
+  // missing: the ERF search still returns a date, it is just a date computed as
+  // though the defect never gets any longer.
+  const lengthHeldConstantCount = activeItems.filter(
+    (item) => item.nominal.remnantLife.lengthHeldConstant &&
+      item.nominal.remnantLife.status === 'calculated',
+  ).length;
+  if (lengthHeldConstantCount > 0) {
+    findings.push(finding(
+      'LENGTH_GROWTH_UNAVAILABLE',
+      'warning',
+      'No axial length growth rate was established, so the projection holds the length constant. The ERF limit is non-conservative in the length direction for these features.',
+      lengthHeldConstantCount,
+    ));
+  }
+
+  const clusteredCount = items.filter((item) => item.nominal.isClusteredMetalLoss).length;
+  if (clusteredCount > 0) {
+    findings.push(finding(
+      'CLUSTERED_METAL_LOSS_ASSESSED',
+      'warning',
+      'Clustered metal loss is assessed as a single rectangular defect. B31G is written for one feature, and a merged group is never matched across runs, so neither the remaining strength nor the growth rate carries the usual meaning.',
+      clusteredCount,
+    ));
+  }
+
+  const designLifeCappedCount = activeItems.filter(
+    (item) => item.nominal.remnantLife.designLifeCapApplied,
+  ).length;
+  if (designLifeCappedCount > 0) {
+    findings.push(finding(
+      'REMNANT_LIFE_CAPPED_AT_DESIGN_LIFE',
+      'info',
+      'The calculated limit falls beyond the original design life, so the reported remnant life is the design life instead.',
+      designLifeCappedCount,
     ));
   }
 
@@ -375,7 +493,7 @@ export function buildFfsReportCase(
   }
 
   const beyondHorizonCount = activeItems.filter(
-    (item) => item.nominal.lifeStatus === 'not-reached-within-horizon',
+    (item) => item.nominal.remnantLife.status === 'not-reached-within-horizon',
   ).length;
   if (beyondHorizonCount > 0) {
     findings.push(finding(
@@ -398,10 +516,18 @@ export function buildFfsReportCase(
   const hasErrors = findings.some((item) => item.severity === 'error');
   const hasWarnings = findings.some((item) => item.severity === 'warning');
 
+  const programmeTargets = repairProgrammeTargets(activeItems, context.reviewThresholdYears);
+  const programmeTargetSet = new Set(programmeTargets);
+
   return {
     asInspected: scenarioSummary(items),
     asManaged: scenarioSummary(activeItems),
     asManagedItems: activeItems,
+    remnantLife: pipelineRemnantLife(activeItems),
+    remnantLifeAfterRepairProgramme: pipelineRemnantLife(
+      activeItems.filter((item) => !programmeTargetSet.has(item)),
+    ),
+    repairProgrammeTargets: programmeTargets,
     repairCreditDecisions,
     repairCounts: {
       unrepaired: items.filter((item) => item.nominal.repairStatus === 'unrepaired').length,

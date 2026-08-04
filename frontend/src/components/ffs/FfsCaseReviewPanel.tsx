@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { FiAlertTriangle, FiCheckCircle, FiEdit3, FiPlus, FiShield, FiTool, FiX } from 'react-icons/fi';
-import { formatLifeProjection } from '../../lib/ffs/lifeProjection';
+import { formatRemnantLife } from '../../lib/ffs/lifeProjection';
 import {
   buildFfsReportCase,
   type FfsReportContext,
@@ -156,18 +156,14 @@ function ScenarioCard({
           className="text-left disabled:cursor-default"
         >
           <Stat
-            label="Governing life"
+            label="Governing remnant life"
             value={
               governingLife
-                ? formatLifeProjection(
-                    governingLife.nominal.expectedLife,
-                    governingLife.nominal.lifeStatus,
-                    governingLife.nominal.analysisHorizonYears,
-                  )
+                ? formatRemnantLife(governingLife.nominal.remnantLife)
                 : 'Not established'
             }
             foot={governingLife
-              ? `${featureLabel(governingLife)} · ${governingLife.nominal.yearService ?? 'no date'}`
+              ? `${featureLabel(governingLife)} · ${governingLife.nominal.remnantLife.dueDateIso ?? 'no date'}`
               : scenarioLifeFoot(scenario)}
             tone="warn"
           />

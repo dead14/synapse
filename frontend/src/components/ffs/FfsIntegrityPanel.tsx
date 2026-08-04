@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { buildErfProfile } from '../../lib/ffs/chartData';
 import {
   buildActionRegister,
-  buildClusters,
+  buildLocationZones,
   buildKpis,
   findInteractions,
   formatLife,
@@ -453,7 +453,7 @@ export default function FfsIntegrityPanel({
   onSelect: (item: FfsScreenedResult) => void;
 }) {
   const kpis = useMemo(() => buildKpis(items), [items]);
-  const clusters = useMemo(() => buildClusters(items), [items]);
+  const locationZones = useMemo(() => buildLocationZones(items), [items]);
   const interactions = useMemo(() => findInteractions(items, screening), [items, screening]);
   const reportCase = useMemo(
     () => buildFfsReportCase(items, reportContext),
@@ -497,14 +497,14 @@ export default function FfsIntegrityPanel({
           tone={(kpis.maxForecastErf?.forecast.ERF ?? 0) > 1 ? 'bad' : 'accent'}
         />
         <Stat
-          label="Shortest life to ERF 1"
+          label="Shortest remnant life (tolerance-adj.)"
           value={formatLife(
-            kpis.minLife?.lifeToErf1 ?? null,
-            kpis.minLife?.lifeToErf1Status ?? 'insufficient-growth-basis',
+            kpis.minLife?.remnantLifeConservative.years ?? null,
+            kpis.minLife?.remnantLifeConservative.status ?? 'insufficient-growth-basis',
             horizonYears,
           )}
-          foot={kpis.minLife ? ldLabel(kpis.minLife) : 'No finite ERF limit'}
-          tone={kpis.minLife?.lifeToErf1 !== null && (kpis.minLife?.lifeToErf1 ?? Infinity) < 10 ? 'warn' : 'good'}
+          foot={kpis.minLife ? ldLabel(kpis.minLife) : 'No limit reached'}
+          tone={(kpis.minLife?.remnantLifeConservative.years ?? Infinity) < 10 ? 'warn' : 'good'}
         />
         <Stat
           label="Escalated features"
@@ -601,7 +601,7 @@ export default function FfsIntegrityPanel({
         </Panel>
       </div>
 
-      {/* Action register + clusters */}
+      {/* Action register + location zones */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.5fr_1fr]">
         <Panel>
           <PanelHeader
@@ -640,7 +640,11 @@ export default function FfsIntegrityPanel({
                     <span className="mt-1 block text-[10px] tabular-nums text-slate-400">
                       Conservative ERF {formatErf(action.target.conservative.ERF)} · forecast{' '}
                       {formatErf(action.target.forecast.ERF)} · life{' '}
-                      {formatLife(action.target.lifeToErf1, action.target.lifeToErf1Status, horizonYears)}
+                      {formatLife(
+                        action.target.remnantLifeConservative.years,
+                        action.target.remnantLifeConservative.status,
+                        horizonYears,
+                      )}
                     </span>
                   </span>
                   <span
@@ -663,19 +667,19 @@ export default function FfsIntegrityPanel({
         <div className="space-y-5">
           <Panel>
             <PanelHeader
-              title="Location clusters"
+              title="Location zones"
               subtitle="Features grouped where adjacent gaps are 10 m or less"
               actions={
                 <span className="rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-500 dark:border-slate-600 dark:text-slate-400">
-                  {clusters.length} zone{clusters.length === 1 ? '' : 's'}
+                  {locationZones.length} zone{locationZones.length === 1 ? '' : 's'}
                 </span>
               }
             />
-            {clusters.length ? (
+            {locationZones.length ? (
               <ul className="space-y-2">
-                {clusters.slice(0, 10).map((cluster, i) => (
+                {locationZones.slice(0, 10).map((zone, i) => (
                   <li
-                    key={cluster.id}
+                    key={zone.id}
                     className="rounded-lg border border-slate-200 p-2.5 dark:border-slate-700"
                   >
                     <div className="flex items-start justify-between gap-2">
@@ -684,15 +688,15 @@ export default function FfsIntegrityPanel({
                           Zone {String(i + 1).padStart(2, '0')}
                         </p>
                         <p className="mt-0.5 text-[10px] tabular-nums text-slate-400">
-                          {cluster.startLd.toFixed(1)} – {cluster.endLd.toFixed(1)} m
+                          {zone.startLd.toFixed(1)} – {zone.endLd.toFixed(1)} m
                         </p>
                       </div>
                       <span className="shrink-0 text-right">
                         <span className="block text-[11px] font-bold tabular-nums text-slate-700 dark:text-slate-200">
-                          {formatErf(cluster.worstErf)}
+                          {formatErf(zone.worstErf)}
                         </span>
                         <span className="block text-[10px] text-slate-400">
-                          {cluster.members.length} features
+                          {zone.members.length} features
                         </span>
                       </span>
                     </div>
@@ -700,16 +704,16 @@ export default function FfsIntegrityPanel({
                       <div
                         className="h-full rounded-full"
                         style={{
-                          width: `${Math.min(100, cluster.worstErf * 100)}%`,
-                          background: cluster.worstErf > 1 ? '#ef4444' : cluster.worstErf >= screening.reviewBandErf ? '#f59e0b' : '#6366f1',
+                          width: `${Math.min(100, zone.worstErf * 100)}%`,
+                          background: zone.worstErf > 1 ? '#ef4444' : zone.worstErf >= screening.reviewBandErf ? '#f59e0b' : '#6366f1',
                         }}
                       />
                     </div>
                   </li>
                 ))}
-                {clusters.length > 10 && (
+                {locationZones.length > 10 && (
                   <li className="pt-1 text-center text-[10px] italic text-slate-400">
-                    and {clusters.length - 10} further zone{clusters.length - 10 === 1 ? '' : 's'}
+                    and {locationZones.length - 10} further zone{locationZones.length - 10 === 1 ? '' : 's'}
                   </li>
                 )}
               </ul>

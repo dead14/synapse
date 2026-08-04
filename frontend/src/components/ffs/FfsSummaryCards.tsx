@@ -49,7 +49,8 @@ export default function FfsSummaryCards({
   const total = items.length;
   const strengthFail = items.filter((item) => item.nominal.acceptance === 'Un-Acceptable').length;
   const belowThreshold = items.filter(
-    (item) => item.nominal.expectedLife !== null && item.nominal.expectedLife < config.highlightYears,
+    (item) => item.nominal.remnantLife.years !== null &&
+      item.nominal.remnantLife.years < config.highlightYears,
   ).length;
   const engineeringReview = items.filter((item) => engineeringDisposition(item) !== 'Screening pass — verify applicability').length;
   const dataWarnings = items.filter((item) => {
@@ -85,7 +86,7 @@ export default function FfsSummaryCards({
       tone: engineeringReview > 0 ? 'accent' : 'good',
     },
     {
-      label: `Life under ${config.highlightYears} y`,
+      label: `Remnant life under ${config.highlightYears} y`,
       value: belowThreshold.toLocaleString(),
       foot: 'Below the review threshold',
       icon: FiClock,
