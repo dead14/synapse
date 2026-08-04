@@ -15,6 +15,12 @@ export interface AlignmentEngineeringInputs {
   designFactor: number;
   /** Per-section overrides, keyed by the section name the alignment emitted. */
   sectionDesignFactors?: FfsSectionDesignFactor[];
+  /**
+   * The ratio B31G para. 1.9 asks for — minimum hydrostatic test pressure over
+   * MAOP or MOP. Null means derive it from the design factor as 1/F, which is
+   * the historic practice and correct only at the design hoop stress.
+   */
+  safetyFactor?: number | null;
   operatingPressureMpa: number;
   fallbackDepthGrowthMmPerYear: number;
   fallbackLengthGrowthMmPerYear: number;
@@ -376,6 +382,11 @@ function assertEngineeringInputs(inputs: AlignmentEngineeringInputs): void {
     }
   }
   if (inputs.designFactor > 1) throw new Error('Design factor must not exceed 1.');
+  if (inputs.safetyFactor !== null && inputs.safetyFactor !== undefined) {
+    if (!Number.isFinite(inputs.safetyFactor) || inputs.safetyFactor <= 0) {
+      throw new Error('Safety factor must be greater than zero.');
+    }
+  }
   for (const rule of inputs.sectionDesignFactors ?? []) {
     if (!Number.isFinite(rule.designFactor) || rule.designFactor <= 0 || rule.designFactor > 1) {
       throw new Error(
@@ -437,12 +448,24 @@ export function mapAlignmentRowsToFfs(
     const length = required[2][1] as number;
     const width = required[3][1] as number;
     const wall = required[4][1] as number;
-    if (distance < 0 || depth < 0 || depth > 80 || length <= 0 || width <= 0 || wall <= 0) {
+    // Depth is bounded by the wall, not by the 80 %WT project rejection line.
+    // Rejecting deep features here removed the ones most likely to govern the
+    // assessment before it ever ran; they are carried through and disclosed
+    // instead. See the same note in `validation.ts`.
+    if (distance < 0 || depth < 0 || depth > 100 || length <= 0 || width <= 0 || wall <= 0) {
       rejected.push({ featureId, reason: 'Measured NEW-run values are outside the supported FFS domain.' });
       continue;
     }
 
     const warnings: string[] = [];
+    // Carried rather than dropped, but never carried quietly: past 80 %WT the
+    // section 3 tables no longer apply and para. 1.2(f) asks for the sizing
+    // accuracy and the effective corrosion rate to be justified.
+    if (depth > 80) {
+      warnings.push(
+        `Reported at ${depth.toFixed(1)} %WT, past the 80 %WT project rejection line: assessed and reported, but the sizing accuracy and the effective corrosion rate must be justified before the result is relied on.`,
+      );
+    }
     const growthEvidence = deriveGrowthEvidence(source, depth, wall, engineering, warnings);
     const depthGrowthMm = growthEvidence.depth.analysisRateMmPerYear ?? 0;
     // The column has to carry a finite number for the calculation contract, but
@@ -451,6 +474,7 @@ export function mapAlignmentRowsToFfs(
     const lengthGrowthMm = growthEvidence.length.analysisRateMmPerYear ?? 0;
     const section = text(source['Section NEW'], text(source.Section));
     const { designFactor, source: designFactorSource } = resolveDesignFactor(section, engineering);
+    const explicitSafetyFactor = engineering.safetyFactor ?? null;
     // Same rule the alignment engine uses to keep merged groups out of matching,
     // so FFS labels exactly the rows the engine refused to pair.
     const isClusteredMetalLoss = isClusteredAlignmentRow(source);
@@ -475,6 +499,9 @@ export function mapAlignmentRowsToFfs(
         'CR Length [mm/y]': numericText(lengthGrowthMm),
         'Design Factor': numericText(designFactor),
         'Design Factor Source': designFactorSource,
+        // Left blank when derived, so the engine records which of the two the
+        // figure is rather than presenting a derived value as a measured ratio.
+        'Safety Factor': explicitSafetyFactor === null ? '' : numericText(explicitSafetyFactor),
         'Outer Diameter Ds': numericText(engineering.outerDiameterMm),
         'SMYS [MPa]': numericText(engineering.smysMpa),
         'Operating Pressure P₀ [MPa]': numericText(engineering.operatingPressureMpa),

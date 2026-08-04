@@ -183,7 +183,7 @@ test('the ERF search is bounded by the horizon rather than extrapolated past it'
       wallThickness: 9.3,
       outerDiameter: 219.1,
       smysMpa: 290,
-      designFactor: 0.72,
+      safetyFactor: 1 / 0.72,
       operatingPressureMpa: 9.35,
     },
     method: 'modified',

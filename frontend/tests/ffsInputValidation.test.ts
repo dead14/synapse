@@ -66,7 +66,8 @@ test('rejects partial numbers, NaN, and Infinity instead of parseFloat coercion'
 test('rejects zero, negative, and out-of-domain engineering inputs', () => {
   const row = validRow({
     [REQUIRED_COLUMNS[0]]: '-1',
-    [REQUIRED_COLUMNS[3]]: '80.01',
+    // Past full wall — the depth bound is the wall, not the 80 %WT line.
+    [REQUIRED_COLUMNS[3]]: '100.01',
     [REQUIRED_COLUMNS[4]]: '0',
     [REQUIRED_COLUMNS[5]]: '0',
     [REQUIRED_COLUMNS[7]]: '10',

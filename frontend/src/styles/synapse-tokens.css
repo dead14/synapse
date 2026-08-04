@@ -1251,6 +1251,43 @@
   color: var(--syn-muted);
 }
 
+/* Where a figure comes from: clause, project rule, or input column. Set in the
+   reading face rather than the data face — it is prose, not a number. */
+.ffs-detail__basis {
+  margin: 0.35rem 0 0;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--syn-line);
+  font-size: 0.6rem;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--syn-muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Collapses the derivation down to the answers. */
+.ffs-detail__working-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+  border: 1px solid var(--syn-line-strong);
+  border-radius: var(--syn-radius-control);
+  padding: 0.2rem 0.5rem;
+  background: transparent;
+  font: 600 0.6rem var(--syn-font-data);
+  color: var(--syn-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.ffs-detail__working-toggle:hover {
+  color: var(--syn-ink);
+  border-color: var(--syn-ink-soft);
+}
+.ffs-detail__working-toggle[aria-pressed='true'] {
+  color: var(--syn-ink-soft);
+}
+
 /* Acceptance block */
 .ffs-detail__acceptance {
   border-radius: var(--syn-radius-control);

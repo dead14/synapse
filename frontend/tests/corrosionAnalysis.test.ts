@@ -64,9 +64,17 @@ test('a feature missing a dimension the engine needs is not assessable', () => {
   assert.equal(noLength?.ffsReady, false);
   assert.deepEqual(noLength?.blockers, ['No reported length']);
 
-  const tooDeep = toCorrosionFeature(metalLoss({ 'Depth NEW (%WT)': 92 }));
-  assert.equal(tooDeep?.ffsReady, false);
-  assert.match(tooDeep!.blockers[0], /0–80 %WT/);
+  // Depth past the 80 %WT project rejection line is not a reason to withhold a
+  // feature from FFS. It is assessed, fails there, and is disclosed — whereas
+  // blocking the handoff removed the deepest metal loss on the line from the
+  // report entirely. Only metal loss leaving no wall to assess is refused.
+  const deep = toCorrosionFeature(metalLoss({ 'Depth NEW (%WT)': 92 }));
+  assert.equal(deep?.ffsReady, true);
+  assert.deepEqual(deep?.blockers, []);
+
+  const throughWall = toCorrosionFeature(metalLoss({ 'Depth NEW (%WT)': 101 }));
+  assert.equal(throughWall?.ffsReady, false);
+  assert.match(throughWall!.blockers[0], /0–100 %WT/);
 
   const bare = toCorrosionFeature({ 'Source Key NEW': 'new:9' });
   assert.equal(bare?.ffsReady, false);

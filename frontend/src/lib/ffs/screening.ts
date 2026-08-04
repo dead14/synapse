@@ -31,7 +31,7 @@ function geometryOf(nominal: FfsResult): B31gGeometry {
     wallThickness: nominal.wall,
     outerDiameter: nominal.od,
     smysMpa: nominal.smys,
-    designFactor: nominal.df,
+    safetyFactor: nominal.safetyFactor,
     operatingPressureMpa: nominal.p0,
   };
 }
@@ -386,8 +386,33 @@ export function buildLocationZones(items: FfsScreenedResult[]): FfsLocationZone[
 }
 
 /**
- * Pairwise axial edge-to-edge gap screen against the configured t-multiple.
- * A simplified screen — it does not replace a full colony assessment.
+ * Circumferential centre-to-centre separation, the short way round the pipe.
+ *
+ * A clock face is 12 h to the circumference, so one hour is πD/12 of arc. The
+ * short way matters: 11:00 and 1:00 are two hours apart, not ten.
+ */
+export function circumferentialCentreGapMm(
+  clockHourA: number,
+  clockHourB: number,
+  outerDiameterMm: number,
+): number {
+  const hourGap = Math.abs(clockHourA - clockHourB) % 12;
+  const shortest = Math.min(hourGap, 12 - hourGap);
+  return (shortest / 12) * Math.PI * outerDiameterMm;
+}
+
+/**
+ * Pairwise interaction screen against the configured t-multiple.
+ *
+ * B31G para. 1.12(a) measures the separation of two metal-loss areas both
+ * longitudinally and circumferentially; the previous screen only ever looked at
+ * the axial gap, so two pits at the same log distance on opposite sides of the
+ * pipe were reported as interacting. Both gaps are computed and reported now,
+ * and the pair says which of the two brought it into the list.
+ *
+ * The scan window is still axial, because the ILI record is ordered by distance
+ * and two features metres apart are not a colony whatever their clock positions.
+ * This remains a screen, not a colony assessment.
  */
 export function findInteractions(
   items: FfsScreenedResult[],
@@ -409,9 +434,43 @@ export function findInteractions(
       const centerGapMm = (numericLd(b) - numericLd(a)) * 1000;
       if (centerGapMm > scanLimitMm) break;
       const edgeGapMm = centerGapMm - (a.nominal.length + b.nominal.length) / 2;
-      if (edgeGapMm <= thresholdMm) {
-        pairs.push({ a, b, edgeGapMm, thresholdMm });
+      if (edgeGapMm > thresholdMm) continue;
+
+      // Width is the circumferential extent of the box; clock is its centre.
+      // Either can be missing from an ILI tally, and a guessed clock position
+      // would silently turn a screened pair into an unscreened one.
+      const canMeasureCircumference =
+        a.clockHour !== null && b.clockHour !== null &&
+        a.nominal.width > 0 && b.nominal.width > 0 && a.nominal.od > 0;
+
+      let circumferentialGapMm: number | null = null;
+      let orientationAngleDeg: number | null = null;
+      if (canMeasureCircumference) {
+        const centreArcMm = circumferentialCentreGapMm(a.clockHour!, b.clockHour!, a.nominal.od);
+        circumferentialGapMm = centreArcMm - (a.nominal.width + b.nominal.width) / 2;
+        // Angle of the line joining the two centres, measured from the axis.
+        orientationAngleDeg = (Math.atan2(centreArcMm, Math.abs(centerGapMm)) * 180) / Math.PI;
       }
+
+      pairs.push({
+        a,
+        b,
+        edgeGapMm,
+        circumferentialGapMm,
+        thresholdMm,
+        axialInteracting: edgeGapMm <= thresholdMm,
+        circumferentialInteracting:
+          circumferentialGapMm !== null && circumferentialGapMm <= thresholdMm,
+        orientationAngleDeg,
+        // Para. 1.13: below 45° the overall length of the pattern governs; at or
+        // above it the most severe longitudinal section is sufficient, so
+        // merging the pair into one long flaw would over-state the extent.
+        combineRule: orientationAngleDeg === null
+          ? 'undetermined'
+          : orientationAngleDeg < 45
+            ? 'overall-length'
+            : 'worst-longitudinal-section',
+      });
     }
   }
   return pairs;

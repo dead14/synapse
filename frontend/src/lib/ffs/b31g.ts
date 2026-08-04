@@ -1,5 +1,13 @@
 /**
- * The single B31G remaining-strength kernel.
+ * The single B31G remaining-strength kernel — a Level 1 evaluation.
+ *
+ * ASME B31G-2023 para. 1.6 recognises four analysis levels. This is Level 1:
+ * a calculation from a single maximum depth and axial extent. Level 0 is the
+ * table lookup in section 3, Level 2 is the Effective Area Method over a
+ * measured corrosion profile, and Level 3 is a user-defined detailed analysis.
+ * Neither the ERF term nor any remaining-life method appears in B31G at all;
+ * both are operator conventions layered on top of the acceptance criterion in
+ * para. 2.2 Step 8, S_F ≥ SF × S_O.
  *
  * The same equations used to live in three places — `calcEngine` for the nominal
  * result, `screening.evaluateTier` for the tolerance and forecast tiers, and
@@ -21,12 +29,33 @@
 
 import { ksiToMegapascals } from './units.ts';
 
-/** Original B31G switches to the rectangular area form above this normalised length. */
-export const ORIGINAL_B31G_NORMALIZED_LENGTH_CUTOFF = 4.479;
-export const ORIGINAL_B31G_Z_CUTOFF = ORIGINAL_B31G_NORMALIZED_LENGTH_CUTOFF ** 2;
+/**
+ * Original B31G switches to the rectangular area form above this normalised
+ * length. ASME B31G-2023 para. 2.2(a) states the branch as z ≤ 20 and z > 20.
+ *
+ * This used to be 4.479² = 20.0614, taken from the √(L²/Dt) ≤ 4.479 form some
+ * secondary sources quote. In the sliver between 20 and 20.0614 that kept the
+ * parabolic branch alive where the code has already moved to the rectangular
+ * one, overstating the failure stress by about 68 % — non-conservatively.
+ */
+export const ORIGINAL_B31G_Z_CUTOFF = 20;
 /** Modified B31G switches from the polynomial to the linear Folias factor here. */
 export const MODIFIED_B31G_Z_CUTOFF = 50;
-/** B31G is not applicable to metal loss deeper than this fraction of the wall. */
+/**
+ * The 80 %WT line.
+ *
+ * This is *not* an applicability limit of B31G, which is how this constant used
+ * to be described. ASME B31G-2023 para. 1.2(f) admits metal loss of any depth,
+ * requiring only that due consideration be given to measurement accuracy and to
+ * effective corrosion rates once the depth passes 80 % of the actual wall.
+ * Where 80 % is a hard limit is section 3(b): the Level 0 tables of allowable
+ * length must not be used above it.
+ *
+ * Synapse keeps 80 % as a *project* rejection threshold, because that is the
+ * ordinary operator rule and the one the reference reports apply — but it is an
+ * operator decision layered on the code, not a statement the code makes. The
+ * threshold itself is configurable through `FfsScreeningConfig.depthRejectionPct`.
+ */
 export const B31G_DEPTH_LIMIT_RATIO = 0.8;
 /** The Modified B31G flow-stress uplift, defined in the source as SMYS + 10 ksi. */
 export const MODIFIED_FLOW_STRESS_UPLIFT_MPA = ksiToMegapascals(10);
@@ -44,8 +73,33 @@ export interface B31gGeometry {
   wallThickness: number;
   outerDiameter: number;
   smysMpa: number;
-  designFactor: number;
+  /**
+   * The divisor between the estimated failure pressure and the safe operating
+   * pressure: P_S = P_F / SF.
+   *
+   * ASME B31G-2023 para. 1.9 defines this as the ratio of the minimum
+   * hydrostatic test pressure required for the construction type to the MAOP or
+   * MOP, usually not less than 1.25 — it is not the B31.8 design factor. The two
+   * coincide only when the line operates at exactly its design hoop stress,
+   * which is why the Level 0 tables carry a safety factor of 1.39 for a line at
+   * 72 % SMYS. The caller resolves which it is; this kernel only divides.
+   */
+  safetyFactor: number;
   operatingPressureMpa: number;
+}
+
+/** The minimum safety factor B31G para. 1.9 recommends. */
+export const MINIMUM_RECOMMENDED_SAFETY_FACTOR = 1.25;
+
+/**
+ * The safety factor implied by a B31.8 design factor.
+ *
+ * Historic B31G practice, and the basis of the Level 0 tables: a line designed
+ * to F = 0.72 and hydrotested to 100 % SMYS carries SF = 1/0.72 = 1.39. It is
+ * only correct while the line actually operates at its design hoop stress.
+ */
+export function safetyFactorFromDesignFactor(designFactor: number): number {
+  return designFactor > 0 ? 1 / designFactor : Number.POSITIVE_INFINITY;
 }
 
 export interface B31gKernelResult {
@@ -65,7 +119,7 @@ export interface B31gKernelResult {
   valid: boolean;
   /** Why `valid` is false, for display next to the number. */
   invalidReason: string | null;
-  /** True when the feature is deeper than the 80 %WT limit B31G is written for. */
+  /** True when the feature is deeper than the 80 %WT project rejection line. */
   beyondDepthLimit: boolean;
 }
 
@@ -150,15 +204,15 @@ export function evaluateB31g(
   method: B31gMethod,
   flowStressMode: FlowStressMode = 'smys69',
 ): B31gKernelResult {
-  const { wallThickness, outerDiameter, smysMpa, designFactor, operatingPressureMpa } = geometry;
+  const { wallThickness, outerDiameter, smysMpa, safetyFactor, operatingPressureMpa } = geometry;
   const flow = flowStress(smysMpa, method, flowStressMode);
   const hoop = hoopStress(operatingPressureMpa, outerDiameter, wallThickness);
   const depthRatio = depthMm / wallThickness;
   const beyondDepthLimit = depthRatio > B31G_DEPTH_LIMIT_RATIO;
 
-  const geometryFinite = [wallThickness, outerDiameter, smysMpa, designFactor, operatingPressureMpa, depthMm, lengthMm]
+  const geometryFinite = [wallThickness, outerDiameter, smysMpa, safetyFactor, operatingPressureMpa, depthMm, lengthMm]
     .every((value) => Number.isFinite(value));
-  if (!geometryFinite || wallThickness <= 0 || outerDiameter <= 0 || lengthMm <= 0) {
+  if (!geometryFinite || wallThickness <= 0 || outerDiameter <= 0 || lengthMm <= 0 || safetyFactor <= 0) {
     return collapsed('MODIFIED_SHORT_POLYNOMIAL', depthRatio, 0, null, flow, hoop, 'Geometry is missing or not usable', beyondDepthLimit);
   }
 
@@ -182,7 +236,7 @@ export function evaluateB31g(
 
   const failureStressMpa = (flow * numerator) / denominator;
   const failurePressureMpa = (2 * failureStressMpa * wallThickness) / outerDiameter;
-  const safePressureMpa = failurePressureMpa * designFactor;
+  const safePressureMpa = failurePressureMpa / safetyFactor;
   const erf = safePressureMpa > 0 ? operatingPressureMpa / safePressureMpa : Number.POSITIVE_INFINITY;
 
   if (![failureStressMpa, failurePressureMpa, safePressureMpa, erf].every(Number.isFinite) || safePressureMpa <= 0) {
@@ -208,9 +262,13 @@ export function evaluateB31g(
 }
 
 /**
- * The greatest depth, as a fraction of wall, that still keeps ERF at 1.0 for a
- * given anomaly length — the B31G Level 0 acceptance envelope, solved in closed
- * form rather than searched.
+ * The greatest depth, as a fraction of wall, that still keeps the safe pressure
+ * at the required pressure for a given anomaly length — the acceptance envelope
+ * of the Level 1 criterion, solved in closed form rather than searched.
+ *
+ * This is the same boundary the section 3 tables tabulate, but computed from the
+ * Level 1 equations at the line's own safety factor rather than read off the
+ * published tables, which are fixed at their own basis.
  *
  * Returns null when no depth on the curve satisfies the equation, which happens
  * when the operating stress already exceeds the flow stress of sound pipe.
@@ -221,12 +279,12 @@ export function acceptableDepthRatio(
   method: B31gMethod,
   flowStressMode: FlowStressMode = 'smys69',
 ): number | null {
-  const { wallThickness, outerDiameter, smysMpa, designFactor, operatingPressureMpa } = geometry;
-  if (!(wallThickness > 0) || !(outerDiameter > 0) || !(designFactor > 0)) return null;
+  const { wallThickness, outerDiameter, smysMpa, safetyFactor, operatingPressureMpa } = geometry;
+  if (!(wallThickness > 0) || !(outerDiameter > 0) || !(safetyFactor > 0)) return null;
 
   const flow = flowStress(smysMpa, method, flowStressMode);
   // Target failure stress: the value at which the safe pressure equals P₀.
-  const target = hoopStress(operatingPressureMpa, outerDiameter, wallThickness) / designFactor;
+  const target = hoopStress(operatingPressureMpa, outerDiameter, wallThickness) * safetyFactor;
   const z = normalizedLength(lengthMm, outerDiameter, wallThickness);
   const folias = foliasFactor(z, method);
   const shape = areaShapeFactor(method, z);

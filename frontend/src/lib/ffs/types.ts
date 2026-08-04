@@ -77,6 +77,16 @@ export interface FfsSectionDesignFactor {
  */
 export type FfsDesignFactorSource = 'section-override' | 'line-default' | 'row-supplied';
 
+/**
+ * Where the safety factor dividing the failure pressure came from.
+ *
+ * `derived-from-design-factor` is the historic B31G practice — SF = 1/F, the
+ * basis of the Level 0 tables — and is only correct while the line operates at
+ * its design hoop stress. `explicit` is the ratio B31G para. 1.9 actually asks
+ * for: minimum hydrostatic test pressure over MAOP or MOP.
+ */
+export type FfsSafetyFactorSource = 'derived-from-design-factor' | 'explicit';
+
 export type FfsRepairStatus = 'unrepaired' | 'temporary-repair' | 'permanent-repair-verified';
 
 /**
@@ -157,6 +167,9 @@ export interface FfsInput {
   isClusteredMetalLoss: boolean;
   /** Which rule supplied `df`. */
   designFactorSource: FfsDesignFactorSource;
+  /** The divisor between failure pressure and safe pressure: P_S = P_F / SF. */
+  safetyFactor: number;
+  safetyFactorSource: FfsSafetyFactorSource;
 }
 
 export type FfsRepairDispositionPatch = Pick<
@@ -270,11 +283,37 @@ export interface FfsLocationZone {
   worstErf: number;
 }
 
+/**
+ * Two features screened against the 3t interaction rule of B31G para. 1.12(a),
+ * which measures the separation both longitudinally and circumferentially.
+ */
 export interface FfsInteractionPair {
   a: FfsScreenedResult;
   b: FfsScreenedResult;
+  /** Axial edge-to-edge separation in mm; negative when the boxes overlap. */
   edgeGapMm: number;
+  /**
+   * Circumferential edge-to-edge separation in mm, measured the short way round
+   * the pipe. Null when either feature has no usable clock position or width.
+   */
+  circumferentialGapMm: number | null;
   thresholdMm: number;
+  /** True when the axial separation is inside the threshold. */
+  axialInteracting: boolean;
+  /** True when the circumferential separation is inside the threshold. */
+  circumferentialInteracting: boolean;
+  /**
+   * Angle of the line joining the two features, in degrees from the pipe axis.
+   * Null when the circumferential offset could not be established.
+   */
+  orientationAngleDeg: number | null;
+  /**
+   * How B31G para. 1.13 says the pair's extent should be taken. Below 45° the
+   * overall length of the pattern governs; at or above it, the most severe
+   * longitudinal section is sufficient, so combining the two into one long flaw
+   * would be over-conservative rather than correct.
+   */
+  combineRule: 'overall-length' | 'worst-longitudinal-section' | 'undetermined';
 }
 
 export interface FfsAction {
@@ -294,6 +333,7 @@ export const REQUIRED_COLUMNS = [
 
 export const OPTIONAL_COLUMNS = [
   'Feature ID',
+  'Safety Factor',
   'Clustered Metal Loss',
   'Repair Status',
   'Repair Method',

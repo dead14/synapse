@@ -115,7 +115,12 @@ export function toCorrosionFeature(
   const blockers: string[] = [];
   if (distanceM === null || distanceM < 0) blockers.push('No valid log distance');
   if (depthPct === null) blockers.push('No reported depth');
-  else if (depthPct <= 0 || depthPct > 80) blockers.push('Depth outside the 0–80 %WT B31G domain');
+  // The 80 %WT line is a project rejection threshold applied inside the
+  // assessment, not a gate on reaching it. Blocking the handoff here withheld
+  // the deepest features on the line from FFS altogether, which is the opposite
+  // of what a rejection threshold is for. Only metal loss that leaves no wall
+  // to assess is refused. See the matching note in `ffs/validation.ts`.
+  else if (depthPct <= 0 || depthPct > 100) blockers.push('Depth outside the 0–100 %WT range');
   if (lengthMm === null || lengthMm <= 0) blockers.push('No reported length');
   if (widthMm === null || widthMm <= 0) blockers.push('No reported width');
   if (wallMm === null || wallMm <= 0) blockers.push('No wall thickness');
