@@ -91,7 +91,7 @@ function classifyGrowth(
 
 /** Metal-loss features are the only ones B31G has anything to say about. */
 export function isMetalLoss(feature: CorrosionFeature): boolean {
-  return METAL_LOSS_PATTERN.test(feature.featureType);
+  return METAL_LOSS_PATTERN.test(feature.featureType) || feature.depthPct !== null;
 }
 
 /**
@@ -111,13 +111,16 @@ export function toCorrosionFeature(
   const widthMm = num(row['Width NEW (mm)']);
   const wallMm = num(row['Wall WT NEW (mm)']);
   const distanceM = num(row['Log Dist NEW (m)']);
-  const featureType = text(row['Feature Type NEW']);
 
   const blockers: string[] = [];
-  if (!METAL_LOSS_PATTERN.test(featureType)) blockers.push('Not a metal-loss feature');
   if (distanceM === null || distanceM < 0) blockers.push('No valid log distance');
   if (depthPct === null) blockers.push('No reported depth');
-  else if (depthPct <= 0 || depthPct >= 100) blockers.push('Depth must be greater than 0 and below 100 %WT');
+  // The 80 %WT line is a project rejection threshold applied inside the
+  // assessment, not a gate on reaching it. Blocking the handoff here withheld
+  // the deepest features on the line from FFS altogether, which is the opposite
+  // of what a rejection threshold is for. Only metal loss that leaves no wall
+  // to assess is refused. See the matching note in `ffs/validation.ts`.
+  else if (depthPct <= 0 || depthPct > 100) blockers.push('Depth outside the 0–100 %WT range');
   if (lengthMm === null || lengthMm <= 0) blockers.push('No reported length');
   if (widthMm === null || widthMm <= 0) blockers.push('No reported width');
   if (wallMm === null || wallMm <= 0) blockers.push('No wall thickness');
@@ -128,7 +131,7 @@ export function toCorrosionFeature(
     sourceKey,
     featureId: text(row['Identif. NEW'], text(row['Feature ID NEW'], sourceKey)),
     section: text(row['Section NEW'], text(row.Section)),
-    featureType,
+    featureType: text(row['Feature Type NEW']),
     distanceM,
     clock: text(row["O'Clock NEW"]),
     surface: text(row['Surface NEW']),
@@ -180,7 +183,7 @@ export function summariseCorrosion(features: CorrosionFeature[]): CorrosionSumma
   };
   for (const feature of features) {
     if (isMetalLoss(feature)) summary.metalLoss += 1;
-    if (isMetalLoss(feature) && feature.ffsReady) summary.ffsReady += 1;
+    if (feature.ffsReady) summary.ffsReady += 1;
     if (feature.growthClass === 'active') summary.activeGrowth += 1;
     if (feature.growthClass === 'unknown') summary.unknownGrowth += 1;
     if (feature.physicsWarning !== '-') summary.withWarnings += 1;

@@ -59,7 +59,12 @@ export function findInteractionPairs(items: FfsScreenedResult[]): FfsInteraction
         edgeGapMm: axialEdgeGapMm,
         axialEdgeGapMm,
         circumferentialEdgeGapMm: circumGap,
+        circumferentialGapMm: circumGap,
         thresholdMm,
+        axialInteracting: true,
+        circumferentialInteracting: circumGap !== null && circumGap <= thresholdMm,
+        orientationAngleDeg: null,
+        combineRule: circumGap === null ? 'undetermined' : 'overall-length',
         resolved: circumGap !== null,
       });
     }
@@ -162,7 +167,7 @@ export function buildInteractionAssessments(items: FfsScreenedResult[]): FfsInte
         wallThickness: first.wall,
         outerDiameter: first.od,
         smysMpa: first.smys,
-        designFactor: first.df,
+        safetyFactor: first.safetyFactor,
         operatingPressureMpa: first.p0,
       },
       first.method,

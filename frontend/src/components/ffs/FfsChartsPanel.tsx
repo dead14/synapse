@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Bar, Chart as ReactChart, Scatter } from 'react-chartjs-2';
+import { Bar, Scatter } from 'react-chartjs-2';
 import type { Chart } from 'chart.js';
 import {
   BarElement,
   CategoryScale,
   Chart as ChartJS,
   Legend,
-  LineController,
   LineElement,
   LinearScale,
   PointElement,
@@ -22,11 +21,13 @@ import {
   buildLengthCrScatter,
   buildOrientationScatter,
   buildScreeningScatter,
+  envelopeDomainMm,
+  measureUniformity,
   type FfsPoint,
   type SplitScatter,
 } from '../../lib/ffs/chartData';
-import { DEFAULT_DEPTH_BUCKETS, depthBandLabel, type DepthBucket } from '../../lib/ffs/statistics';
-import FfsDepth3dChart from './FfsDepth3dChart';
+import { DEFAULT_DEPTH_BUCKETS, depthBandLabel, isInternal, type DepthBucket } from '../../lib/ffs/statistics';
+import FfsPerspectiveBars from './FfsPerspectiveBars';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
 import { buildSectionBands, type SectionBand } from '../../lib/sections/bands';
 import {
@@ -43,7 +44,6 @@ ChartJS.register(
   CategoryScale,
   LinearScale,
   PointElement,
-  LineController,
   LineElement,
   Tooltip,
   Legend,
@@ -325,8 +325,18 @@ export default function FfsChartsPanel({
     return () => clearTimeout(timer);
   }, [figureSignature, onFiguresCaptured]);
 
-  const maxLength = useMemo(
-    () => Math.max(50, ...items.map((item) => item.nominal.length)) * 1.1,
+  // The screening chart's x domain is not the data's own range. See
+  // `envelopeDomainMm`: a tally of uniformly short boxes would otherwise keep
+  // the axis short enough that no envelope ever bends inside it.
+  const maxLength = useMemo(() => envelopeDomainMm(items, config), [items, config]);
+
+  /**
+   * Whether the axial length column carries any information at all. All-equal
+   * lengths plot as a single vertical stripe with the envelopes beside it
+   * meaning nothing, and that is worth saying out loud rather than rendering.
+   */
+  const lengthUniformity = useMemo(
+    () => measureUniformity(items.map((item) => item.nominal.length)),
     [items],
   );
 
@@ -372,9 +382,49 @@ export default function FfsChartsPanel({
   const erfScatter = useMemo(() => buildErfScatter(items), [items]);
   const screeningScatter = useMemo(() => buildScreeningScatter(items), [items]);
   const envelopes = useMemo(
-    () => buildEnvelopeCurves(items, config, maxLength),
-    [items, config, maxLength],
+    () => buildEnvelopeCurves(items, config, maxLength, screening.depthRejectionPct),
+    [items, config, maxLength, screening.depthRejectionPct],
   );
+
+  /** Counts per distance bin split by surface — the reference Figure 2.3(b). */
+  const surfaceByLd = useMemo(() => {
+    const bins = buildDepthByLd(items, depth3dBin, buckets).bins;
+    const internal = new Array(bins.length).fill(0);
+    const external = new Array(bins.length).fill(0);
+    for (const item of items) {
+      const index = bins.findIndex(
+        (bin) => Number(item.nominal.ld) >= bin.start && Number(item.nominal.ld) < bin.end,
+      );
+      if (index < 0) continue;
+      if (isInternal(item)) internal[index] += 1;
+      else external[index] += 1;
+    }
+    return {
+      labels: bins.map((bin) => bin.label),
+      series: [
+        { label: 'Internal', color: '#dc2626', data: internal },
+        { label: 'External', color: '#2563eb', data: external },
+      ],
+    };
+  }, [items, depth3dBin, buckets]);
+
+  /** Counts per distance bin split by depth band — the reference Figure 2.3(c). */
+  const bandByLd = useMemo(() => {
+    const built = buildDepthByLd(
+      depth3dSurface === 'all'
+        ? items
+        : items.filter((item) => (depth3dSurface === 'internal' ? isInternal(item) : !isInternal(item))),
+      depth3dBin,
+      buckets,
+    );
+    return {
+      labels: built.labels,
+      // Deepest band nearest the reader: it is the row that decides the
+      // disposition, and the back rows are the ones that can afford to be
+      // partially occluded.
+      series: [...built.series].reverse().map((s) => ({ label: s.label, color: s.color, data: s.data })),
+    };
+  }, [items, depth3dBin, buckets, depth3dSurface]);
 
   // An ILI run pair routinely carries tens of thousands of anomalies. Animating
   // every marker on every update is what makes these charts crawl, so past this
@@ -561,6 +611,25 @@ export default function FfsChartsPanel({
         <SectionBandLegend bands={bands} selectedId={heldBandId} onSelect={setHeldBandId} />
       )}
 
+      {/* A measured column that holds one value is a data fault, not a plotting
+          problem. Saying so here is the difference between a reader distrusting
+          the chart and a reader distrusting the tally. */}
+      {lengthUniformity.degenerate && (
+        <Callout tone="danger">
+          <strong>Axial length is not populated.</strong> All{' '}
+          {lengthUniformity.count.toLocaleString()} of {lengthUniformity.total.toLocaleString()} assessed
+          features report a length of {lengthUniformity.value} mm
+          {lengthUniformity.distinctCount > 1
+            ? ` (only ${lengthUniformity.distinctCount} distinct values in the whole population)`
+            : ''}
+          . Every anomaly therefore plots on one vertical line, and the normalised length z = L²/(D·t)
+          — which selects the branch of the method and drives the Folias term — is the same for every
+          feature on a given wall. The screening view, the remaining-strength result, and the
+          remnant-life projection are all reading a column the tally did not fill. Check the length
+          column mapping in the ILI import before relying on any of them.
+        </Callout>
+      )}
+
       {/* Row 1 — depth distribution and orientation */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <ChartCard
@@ -619,59 +688,85 @@ export default function FfsChartsPanel({
         </ChartCard>
       </div>
 
-      {/* The same population as the stacked chart above, with the depth bands
-          separated onto their own axis instead of stacked. Kept alongside it
+      {/* The same population as the stacked chart above, with the series
+          separated onto their own row instead of stacked. Kept alongside it
           rather than replacing it: reading an exact count off a perspective
-          projection is worse, which is why every bar carries a hover readout
-          and each band prints its own maximum. */}
-      <ChartCard
-        title="Depth category distribution in three dimensions"
-        subtitle={`Feature count by depth band and log distance · bands are lower-inclusive (${depthBandLabel(20, 30)} means 20% up to but not including 30%)`}
-        filename="FFS_depth_category_3D"
-        binSize={depth3dBin}
-        onBinSizeChange={setDepth3dBin}
-        height={460}
-        settings={
-          <div className="space-y-3">
-            <BucketSettings buckets={buckets} onChange={setBuckets} />
-            <div>
-              <SettingsSectionLabel>Surface location</SettingsSectionLabel>
-              <div role="radiogroup" aria-label="Surface location" className="ds-segmented mt-1 w-max">
-                {([
-                  { value: 'all', label: 'All' },
-                  { value: 'internal', label: 'Internal' },
-                  { value: 'external', label: 'External' },
-                ] as const).map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={depth3dSurface === option.value}
-                    className={`ds-segmented__option${depth3dSurface === option.value ? ' is-active' : ''}`}
-                    onClick={() => setDepth3dSurface(option.value)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
+          projection is worse, which is why every bar prints its own count. */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+        <ChartCard
+          title="Corrosion features by surface location"
+          subtitle="Feature count per log-distance bin, internal against external"
+          filename="FFS_features_by_surface"
+          binSize={depth3dBin}
+          onBinSizeChange={setDepth3dBin}
+          height={430}
+        >
+          {(registerCanvas) => (
+            <FfsPerspectiveBars
+              labels={surfaceByLd.labels}
+              series={surfaceByLd.series}
+              xAxisLabel="Log distance [m]"
+              yAxisLabel="Number of metal-loss anomalies"
+              isDark={theme.isDark}
+              height={430}
+              onCanvasReady={(canvas) => {
+                rawCanvases.current['surface-perspective'] = canvas;
+                registerCanvas(canvas);
+              }}
+            />
+          )}
+        </ChartCard>
+
+        <ChartCard
+          title="Corrosion features by depth of metal loss"
+          subtitle={`Feature count per log-distance bin and depth band · bands are lower-inclusive (${depthBandLabel(20, 30)} means 20% up to but not including 30%)`}
+          filename="FFS_features_by_depth_band"
+          binSize={depth3dBin}
+          onBinSizeChange={setDepth3dBin}
+          height={430}
+          settings={
+            <div className="space-y-3">
+              <BucketSettings buckets={buckets} onChange={setBuckets} />
+              <div>
+                <SettingsSectionLabel>Surface location</SettingsSectionLabel>
+                <div role="radiogroup" aria-label="Surface location" className="ds-segmented mt-1 w-max">
+                  {([
+                    { value: 'all', label: 'All' },
+                    { value: 'internal', label: 'Internal' },
+                    { value: 'external', label: 'External' },
+                  ] as const).map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={depth3dSurface === option.value}
+                      className={`ds-segmented__option${depth3dSurface === option.value ? ' is-active' : ''}`}
+                      onClick={() => setDepth3dSurface(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
-        }
-      >
-        {(registerCanvas) => (
-          <FfsDepth3dChart
-            items={items}
-            binSizeM={depth3dBin}
-            buckets={buckets}
-            surface={depth3dSurface === 'all' ? undefined : depth3dSurface}
-            isDark={theme.isDark}
-            onCanvasReady={(canvas) => {
-              rawCanvases.current['depth-3d'] = canvas;
-              registerCanvas(canvas);
-            }}
-          />
-        )}
-      </ChartCard>
+          }
+        >
+          {(registerCanvas) => (
+            <FfsPerspectiveBars
+              labels={bandByLd.labels}
+              series={bandByLd.series}
+              xAxisLabel="Log distance [m]"
+              yAxisLabel="Number of defects"
+              isDark={theme.isDark}
+              height={430}
+              onCanvasReady={(canvas) => {
+                rawCanvases.current['band-perspective'] = canvas;
+                registerCanvas(canvas);
+              }}
+            />
+          )}
+        </ChartCard>
+      </div>
 
       {/* Row 2 — corrosion rates */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
@@ -746,8 +841,12 @@ export default function FfsChartsPanel({
       {/* Row 4 — screening envelope and ERF profile */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <ChartCard
-          title="Anomaly screening — ASME B31G Level 0 / Level 1"
-          subtitle="Solid orange: conservative Level 0 basis · dashed: configured Level 1 ERF = 1 limit"
+          title="Anomaly screening — B31G Level 0"
+          subtitle={
+            lengthUniformity.degenerate
+              ? `Depth against axial length — every feature reports ${lengthUniformity.value} mm, so the length axis carries no information`
+              : 'Depth against axial length, with the acceptance envelope per wall thickness'
+          }
           filename="FFS_anomaly_screening"
           height={360}
           settings={
@@ -755,7 +854,7 @@ export default function FfsChartsPanel({
               <div>
                 <SettingsSectionLabel>Envelope curves — wall thickness</SettingsSectionLabel>
                 <div className="flex flex-wrap gap-1.5">
-                  {envelopes.filter((curve) => curve.basis === 'level0').map((curve) => {
+                  {envelopes.map((curve) => {
                     const hidden = hiddenWalls.has(curve.wall);
                     return (
                       <button
@@ -792,22 +891,19 @@ export default function FfsChartsPanel({
           }
         >
           {(registerCanvas) => (
-            <ReactChart<'scatter' | 'line', { x: number; y: number }[]>
-              type="scatter"
-              ref={(instance) => bind('screening', registerCanvas)(instance as Chart | null)}
+            <Scatter
+              ref={bind('screening', registerCanvas)}
               data={{
                 datasets: [
                   ...envelopes
                     .filter((curve) => !hiddenWalls.has(curve.wall))
                     .map((curve) => ({
-                      type: 'line' as const,
-                      label: curve.label,
+                      label: `Envelope t=${curve.wall.toFixed(2)} mm`,
                       data: curve.points,
                       showLine: true,
                       borderColor: curve.color,
                       backgroundColor: curve.color,
                       borderWidth: 1.75,
-                      borderDash: curve.borderDash,
                       pointRadius: 0,
                       tension: 0.25,
                     })),
@@ -837,7 +933,7 @@ export default function FfsChartsPanel({
                     grid: { color: theme.grid },
                   },
                 },
-              }) as ChartOptions<'scatter' | 'line'>}
+              })}
             />
           )}
         </ChartCard>

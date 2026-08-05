@@ -28,6 +28,7 @@ const SAMPLE_ROW = [
   358,
   6.5,
   'F-001',
+  '',
   'No',
   'Unrepaired',
   '',

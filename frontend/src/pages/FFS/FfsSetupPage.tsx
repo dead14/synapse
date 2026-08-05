@@ -97,6 +97,8 @@ export default function FfsSetupPage() {
   const [diameterUnit, setDiameterUnit] = useState<LengthUnit>('mm');
   const [fallbackDepthGrowth, setFallbackDepthGrowth] = useState('0');
   const [fallbackLengthGrowth, setFallbackLengthGrowth] = useState('0');
+  const [safetyFactorMode, setSafetyFactorMode] = useState<'derived' | 'explicit'>('derived');
+  const [safetyFactor, setSafetyFactor] = useState('1.39');
   const [designLifeYears, setDesignLifeYears] = useState('');
   const [commissioningYear, setCommissioningYear] = useState('');
   const [materialClass, setMaterialClass] = useState<FfsMaterialClass>('unknown');
@@ -147,6 +149,12 @@ export default function FfsSetupPage() {
     return !Number.isFinite(value) || value <= 0 || value > 1;
   });
 
+  const explicitSafetyFactor = safetyFactorMode === 'explicit' ? Number(safetyFactor) : null;
+  const safetyFactorReasons = safetyFactorMode === 'explicit' &&
+    (!Number.isFinite(explicitSafetyFactor) || (explicitSafetyFactor ?? 0) <= 0)
+    ? ['Safety factor must be a number greater than zero.']
+    : [];
+
   const serviceLifeReasons = [
     ...(designLifeYears.trim() !== '' &&
       (!Number.isFinite(Number(designLifeYears)) || Number(designLifeYears) <= 0)
@@ -184,6 +192,7 @@ export default function FfsSetupPage() {
     ...(sourceMode === 'released' && invalidSectionFactors.length > 0
       ? [`Enter an assessment pressure factor between 0 and 1 for: ${invalidSectionFactors.map((option) => option.section).join(', ')}.`]
       : []),
+    ...safetyFactorReasons,
     ...serviceLifeReasons,
     ...(materialClass === 'unknown' ? ['Select and confirm the assessed material class.'] : []),
     ...(modifiedSa === 'smys69' && materialClass !== 'plain-carbon-low-alloy'
@@ -375,6 +384,7 @@ export default function FfsSetupPage() {
         smysMpa: Number(smysMpaForCalculation),
         designFactor: Number(designFactor),
         sectionDesignFactors,
+        safetyFactor: explicitSafetyFactor,
         operatingPressureMpa: Number(operatingPressureMpaForCalculation),
         fallbackDepthGrowthMmPerYear: Number(fallbackDepthGrowth),
         fallbackLengthGrowthMmPerYear: Number(fallbackLengthGrowth),
@@ -927,6 +937,67 @@ export default function FfsSetupPage() {
                 </div>
               </div>
             )}
+
+            {/* B31G para. 1.9 divides the failure pressure by a safety factor —
+                the hydrotest-to-MAOP ratio, usually not below 1.25 — not by the
+                B31.8 design factor. The two only coincide while the line runs at
+                its design hoop stress, so the choice is made explicitly here. */}
+            <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
+                Safety factor
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                Divides the estimated failure pressure to give the safe operating pressure:
+                P<sub>S</sub> = P<sub>F</sub> / SF.
+              </p>
+              <div role="radiogroup" aria-label="Safety factor basis" className="ds-segmented mt-2.5 w-max">
+                {([
+                  { value: 'derived', label: 'Derive from design factor', hint: 'SF = 1/F per section. Historic B31G practice and the basis of the Level 0 tables; correct only at the design hoop stress.' },
+                  { value: 'explicit', label: 'Explicit safety factor', hint: 'The ratio B31G para. 1.9 asks for: minimum hydrostatic test pressure over MAOP or MOP.' },
+                ] as const).map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={safetyFactorMode === option.value}
+                    title={option.hint}
+                    className={`ds-segmented__option${safetyFactorMode === option.value ? ' is-active' : ''}`}
+                    onClick={() => setSafetyFactorMode(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              {safetyFactorMode === 'explicit' ? (
+                <label className="mt-3 block text-xs font-semibold text-slate-500">
+                  Safety factor
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={safetyFactor}
+                    onChange={(event) => setSafetyFactor(event.target.value)}
+                    className="mt-1.5 w-32 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm tabular-nums text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  />
+                  {Number(safetyFactor) > 0 && Number(safetyFactor) < 1.25 && (
+                    <span className="mt-1 block text-[10px] font-normal leading-snug text-amber-600">
+                      Below the 1.25 minimum B31G para. 1.9 recommends. The report will carry a blocking finding.
+                    </span>
+                  )}
+                </label>
+              ) : (
+                <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400">
+                  Each section is assessed at SF = 1 / its design factor
+                  {sectionDesignFactors.length > 0 && (
+                    <> — {[...new Set(sectionDesignFactors.map((rule) => rule.designFactor))]
+                      .sort((a, b) => a - b)
+                      .map((factor) => `${factor} → ${(1 / factor).toFixed(2)}`)
+                      .join(', ')}</>
+                  )}
+                  .
+                </p>
+              )}
+            </div>
 
             <div className="grid grid-cols-2 gap-3">
               <label className="block text-xs font-semibold text-slate-500">

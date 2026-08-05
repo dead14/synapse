@@ -9,6 +9,7 @@ import { designLifeUsage, EMPTY_SERVICE_LIFE } from './remnantLife.ts';
 import {
   designFactorSourceLabel,
   engineeringDisposition,
+  safetyFactorSourceLabel,
   growthAnalysisBasisLabel,
   growthObservationLabel,
   methodProfileLabel,
@@ -111,17 +112,6 @@ export function buildResultsWorkbook(
     ['Original design life [years]', config.serviceLife?.designLifeYears ?? 'Not supplied'],
     ['Commissioning year', config.serviceLife?.commissioningYear ?? 'Not supplied'],
     [],
-    ['ASME applicability declaration'],
-    ['Material class', config.applicability?.materialClass ?? 'Not confirmed'],
-    ['Maximum operating temperature [C]', config.applicability?.operatingTemperatureC ?? 'Not confirmed'],
-    ['Ductile fracture behavior confirmed', config.applicability?.ductileFractureBehaviorConfirmed ? 'Yes' : 'No'],
-    ['Pressure-dominated loading confirmed', config.applicability?.pressureDominatedLoadingConfirmed ? 'Yes' : 'No'],
-    ['Code exclusions reviewed', config.applicability?.codeExclusionsReviewed ? 'Yes' : 'No'],
-    ['Deep metal-loss sizing review confirmed', config.applicability?.deepMetalLossMeasurementAccuracyConfirmed ? 'Yes' : 'No'],
-    ['Effective corrosion-rate review confirmed', config.applicability?.effectiveCorrosionRateConfirmed ? 'Yes' : 'No'],
-    ['Assessment safety-factor basis', config.applicability?.assessmentSafetyFactorBasis || 'Not supplied'],
-    ['Low safety-factor justification', config.applicability?.lowSafetyFactorJustification || 'Not required / not supplied'],
-    [],
     ['Screening assumptions'],
     ['ILI depth tolerance [% WT]', screening.depthTolerancePct],
     ['ILI length tolerance [mm/end]', screening.lengthToleranceMm],
@@ -131,7 +121,7 @@ export function buildResultsWorkbook(
     ['Corrosion growth rate [mm/y]', screening.growthRateMmPerYear],
     ['Forecast horizon [years]', screening.forecastYears],
     ['Review band ERF', screening.reviewBandErf],
-    ['Interaction spacing factor [x t]', '3 (ASME fixed criterion)'],
+    ['Interaction spacing factor [x t]', screening.interactionSpacingFactor],
     ['Depth rejection limit [% WT]', screening.depthRejectionPct],
     [],
     ['Total features assessed', items.length],
@@ -167,7 +157,8 @@ export function buildResultsWorkbook(
 
   const header = [
     'Feature ID', 'LD [m]', 'Section', 'Surface', 'Orientation', 'Max depth [%]', 'Length [mm]', 'Width [mm]',
-    'Wall [mm]', 'OD [mm]', 'SMYS [MPa]', 'Assessment pressure factor (1/SF)', 'Effective safety factor', 'Factor source', 'P0 [MPa]',
+    'Wall [mm]', 'OD [mm]', 'SMYS [MPa]', 'Design factor', 'Design factor source',
+    'Safety factor', 'Safety factor source', 'P0 [MPa]',
     'Clustered metal loss',
     'CR depth used [mm/y]', 'Depth growth observation', 'Depth analysis basis',
     'Raw depth growth [mm/y]', 'Growth interval [years]', 'Growth formula', 'Growth evidence note',
@@ -175,7 +166,7 @@ export function buildResultsWorkbook(
     'd [mm]', 'd/t', 'z', 'M', 'S_flow [MPa]', 'Sf [MPa]', 'Pf [MPa]', 'S0 [MPa]',
     'P_safe [MPa]', 'ERF nominal', 'Acceptance',
     'Remnant life [y]', 'Due date', 'Governing limit',
-    'Years to wall penetration', 'Years to ERF 1', 'Length held constant', 'Capped at design life',
+    'Years to 80% depth', 'Years to ERF 1', 'Length held constant', 'Capped at design life',
     'Conservative depth [%]', 'Conservative length [mm]', 'ERF conservative', 'P_safe conservative [MPa]',
     'Forecast depth [%]', 'ERF forecast',
     'Remnant life tolerance-adjusted [y]', 'Priority', 'Severity', 'Engineering disposition',
@@ -188,8 +179,9 @@ export function buildResultsWorkbook(
     const life = n.remnantLife;
     return [
       n.featureId ?? '', n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2), num(n.width, 2),
-      num(n.wall, 2), num(n.od, 2), num(n.smys, 2), num(n.df, 4), num(n.SF, 4),
-      designFactorSourceLabel(n.designFactorSource), num(n.p0, 4),
+      num(n.wall, 2), num(n.od, 2), num(n.smys, 2), num(n.df, 4), designFactorSourceLabel(n.designFactorSource),
+      num(n.safetyFactor, 4), safetyFactorSourceLabel(n.safetyFactorSource),
+      num(n.p0, 4),
       n.isClusteredMetalLoss ? 'Yes' : 'No',
       num(n.crDepth, 4), growthObservationLabel(n.growthEvidence?.depth.observation),
       growthAnalysisBasisLabel(n.growthEvidence?.depth.analysisBasis),
@@ -252,11 +244,11 @@ export function buildResultsWorkbook(
   // growth that stretch is actually experiencing. Both are read section-first in
   // a report, so they get a sheet rather than being buried in the row export.
   const designFactorHeader = [
-    'Section', 'From [m]', 'To [m]', 'Features', 'Pressure factor (1/SF)', 'Effective SF', 'Source',
+    'Section', 'From [m]', 'To [m]', 'Features', 'Design factor', 'Source', 'Safety factor',
   ];
   const designFactorRows = buildSectionDesignFactorSummary(items).map((row) => [
     row.section, num(row.startLd, 3), num(row.endLd, 3), row.featureCount,
-    num(row.designFactor, 4), num(1 / row.designFactor, 4), designFactorSourceLabel(row.source),
+    num(row.designFactor, 4), designFactorSourceLabel(row.source), num(row.safetyFactor, 4),
   ]);
 
   const growthHeader = [
@@ -277,7 +269,7 @@ export function buildResultsWorkbook(
 
   const usage = designLifeUsage(config.serviceLife ?? EMPTY_SERVICE_LIFE, config.iliDate);
   const sectionSheet = XLSX.utils.aoa_to_sheet([
-    ['Assessment safety factor by section'],
+    ['Design factor by section'],
     designFactorHeader,
     ...designFactorRows,
     [],
@@ -315,41 +307,6 @@ export function buildResultsWorkbook(
   readinessSheet['!cols'] = [{ wch: 18 }, { wch: 38 }, { wch: 20 }, { wch: 90 }];
   readinessSheet['!freeze'] = { xSplit: 0, ySplit: 2 };
   XLSX.utils.book_append_sheet(workbook, readinessSheet, 'Readiness');
-
-  const interactionHeader = [
-    'Assessment ID', 'Status', 'Resolved', 'Member feature IDs', 'Member LDs [m]',
-    'Axial edge gaps [mm]', 'Circumferential edge gaps [mm]', '3t thresholds [mm]',
-    'Combined depth [%WT]', 'Combined length [mm]', 'Failure pressure [MPa]',
-    'Safe pressure [MPa]', 'Combined ERF', 'Disposition',
-  ];
-  const interactionRows = reportCase.interactionAssessments.map((assessment) => [
-    assessment.id,
-    assessment.status.toUpperCase(),
-    assessment.resolved ? 'Yes' : 'No',
-    assessment.members.map((member) => member.nominal.featureId ?? member.key).join(' + '),
-    assessment.members.map((member) => num(Number(member.nominal.ld), 3)).join(' + '),
-    assessment.pairs.map((pair) => num(pair.axialEdgeGapMm, 3)).join(' + '),
-    assessment.pairs.map((pair) => pair.circumferentialEdgeGapMm === null
-      ? 'DATA MISSING'
-      : num(pair.circumferentialEdgeGapMm, 3)).join(' + '),
-    assessment.pairs.map((pair) => num(pair.thresholdMm, 3)).join(' + '),
-    num(assessment.combinedDepthPct, 3),
-    num(assessment.combinedLengthMm, 3),
-    num(assessment.evaluation?.failurePressureMpa ?? null, 4),
-    num(assessment.evaluation?.safePressureMpa ?? null, 4),
-    num(assessment.evaluation?.erf ?? null, 4),
-    assessment.reason,
-  ]);
-  const interactionSheet = XLSX.utils.aoa_to_sheet([
-    ['ASME B31G para. 1.12 combined-flaw assessment'],
-    interactionHeader,
-    ...interactionRows,
-  ]);
-  interactionSheet['!cols'] = interactionHeader.map((label) => ({
-    wch: label === 'Disposition' ? 70 : Math.min(32, Math.max(14, label.length + 2)),
-  }));
-  interactionSheet['!freeze'] = { xSplit: 0, ySplit: 2 };
-  XLSX.utils.book_append_sheet(workbook, interactionSheet, 'Interactions');
 
   // The dataset the engine actually consumed, with the Corrosion Analysis
   // decision that released each feature. This is the auditable record of what

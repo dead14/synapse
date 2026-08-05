@@ -2,7 +2,7 @@
  * Remnant life — the single place the number is computed.
  *
  * "Expected life" used to mean three different things in this codebase: the
- * nominal engine grew depth *and* length and reported the earlier capacity
+ * nominal engine grew depth *and* length and reported the earlier of the 80 %WT
  * and ERF 1.0 limits; the screening layer grew depth only, on tolerance-adjusted
  * dimensions, and called its answer `lifeToErf1`; and neither honoured the
  * original design life. Two of those numbers sat in the same table under
@@ -14,7 +14,7 @@
  * held constant, and whether the design-life rule capped the answer.
  *
  * Two limits come from the remaining-strength code itself:
- *   • projected depth reaches full-wall penetration
+ *   • depth reaches 80 % of nominal wall — the applicability limit of B31G
  *   • ERF reaches 1.0 — the safe pressure falls to the required pressure
  * The third is a project rule, not a code rule: the residual life assessment is
  * not reported above the original design life of the line.
@@ -32,7 +32,7 @@ import type { FfsLifeStatus } from './types.ts';
 /** Which set of dimensions the projection started from. */
 export type FfsRemnantLifeBasis = 'as-reported' | 'tolerance-adjusted';
 
-export type FfsRemnantLimit = 'Wall penetration' | 'ERF = 1' | 'Original design life';
+export type FfsRemnantLimit = 'Depth = 80%' | 'ERF = 1' | 'Original design life';
 
 /** Design-dossier figures. Both are optional; neither is inferred. */
 export interface FfsServiceLifeInputs {
@@ -56,7 +56,7 @@ export interface FfsRemnantLife {
   governingLimit: FfsRemnantLimit | null;
   /** Calendar date the governing limit is reached, or null. */
   dueDateIso: string | null;
-  /** Years to projected full-wall penetration; null when it is not reached. */
+  /** Years to the 80 %WT limit; null when depth growth never reaches it. */
   depthLimitYears: number | null;
   /** Years to ERF 1.0; null when the ratio never reaches it inside the horizon. */
   erfLimitYears: number | null;
@@ -116,7 +116,7 @@ export function addYearsIso(date: Date, years: number): string {
 }
 
 /**
- * Years until projected metal loss reaches the full nominal wall.
+ * Years until metal loss reaches 80 % of the nominal wall.
  *
  * Infinity when there is no positive depth growth, because a feature that is
  * not deepening never reaches the limit — that is a real answer, not a missing
@@ -204,12 +204,13 @@ export function computeRemnantLife(request: FfsRemnantLifeRequest): FfsRemnantLi
 
   if (depthLimitYears !== null || erfLimitYears !== null) {
     status = 'calculated';
-    // A tie goes to wall penetration: a pressure-capacity date cannot be
-    // reported after the projected wall has already been consumed.
+    // A tie goes to the depth limit: it is the applicability boundary of the
+    // method, so reporting an ERF date past it would quote a number the code
+    // does not stand behind.
     const depthGoverns = depthLimitYears !== null &&
       (erfLimitYears === null || depthLimitYears <= erfLimitYears);
     years = depthGoverns ? depthLimitYears : erfLimitYears;
-    governingLimit = depthGoverns ? 'Wall penetration' : 'ERF = 1';
+    governingLimit = depthGoverns ? 'Depth = 80%' : 'ERF = 1';
   } else {
     status = hasGrowthBasis ? 'not-reached-within-horizon' : 'insufficient-growth-basis';
   }

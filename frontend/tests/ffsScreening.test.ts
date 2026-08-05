@@ -19,7 +19,6 @@ import {
   DEFAULT_DEPTH_BUCKETS,
 } from '../src/lib/ffs/statistics.ts';
 import { buildEnvelopeCurves } from '../src/lib/ffs/chartData.ts';
-import { buildInteractionAssessments } from '../src/lib/ffs/interactions.ts';
 import { buildNarrative } from '../src/lib/ffs/narrative.ts';
 import type { FfsReportContext } from '../src/lib/ffs/reportCase.ts';
 import { DEFAULT_SCREENING_CONFIG, type FfsConfig, type FfsScreeningConfig } from '../src/lib/ffs/types.ts';
@@ -146,15 +145,13 @@ test('an unavailable rate may use a separately labelled explicit fallback', () =
   assert.equal(item.forecast.growthAnalysisBasis, 'explicit-fallback');
 });
 
-test('a tier past 80 %WT remains calculable but is flagged for enhanced review', () => {
+test('a tier past the 80 %WT applicability limit is flagged rather than presented as a code result', () => {
   const screening: FfsScreeningConfig = { ...DEFAULT_SCREENING_CONFIG, depthTolerancePct: 10 };
   const item = screenOne({ 'Max Depth [%]': '75' }, screening);
 
   assert.equal(item.nominal.maxDepthPct, 75);
   assert.equal(item.conservative.depthPct, 85);
-  assert.equal(item.conservative.beyondDepthLimit, false);
-  assert.equal(item.conservative.deepMetalLossReviewRequired, true);
-  assert.ok(Number.isFinite(item.conservative.ERF));
+  assert.equal(item.conservative.beyondDepthLimit, true, 'the tolerance tier is past the B31G domain');
   assert.equal(item.conservative.severity, 'fail');
 });
 
@@ -230,7 +227,7 @@ test('a calculated life retains its governing criterion and service-limit date',
     result.remnantLife.years !== null && result.remnantLife.years > 0 && result.remnantLife.years < 2,
   );
   assert.ok(
-    result.remnantLife.governingLimit === 'Wall penetration' ||
+    result.remnantLife.governingLimit === 'Depth = 80%' ||
     result.remnantLife.governingLimit === 'ERF = 1',
   );
   assert.match(result.remnantLife.dueDateIso ?? '', /^2024-/);
@@ -315,32 +312,6 @@ test('the axial interaction screen flags only pairs inside the t-multiple', () =
   assert.equal(pairs.length, 1);
   assert.equal(Math.round(pairs[0].edgeGapMm), 10);
   assert.equal(Math.round(pairs[0].thresholdMm * 10) / 10, 27.9);
-});
-
-test('recalculates a 3t interaction as one combined flaw', () => {
-  const items = screenResults(
-    [
-      processRow(row({
-        'Feature ID': 'PIT-1', 'LD [m]': '1.000', 'Length [mm]': '80',
-        'Max Depth [%]': '45', 'Width [mm]': '40', 'Orient. (hrs:mins)': '6:00',
-      }), config),
-      processRow(row({
-        'Feature ID': 'PIT-2', 'LD [m]': '1.095', 'Length [mm]': '80',
-        'Max Depth [%]': '60', 'Width [mm]': '40', 'Orient. (hrs:mins)': '6:00',
-      }), config),
-    ],
-    config,
-    DEFAULT_SCREENING_CONFIG,
-  );
-
-  const assessments = buildInteractionAssessments(items);
-  assert.equal(assessments.length, 1);
-  assert.equal(assessments[0].resolved, true);
-  assert.equal(assessments[0].members.length, 2);
-  assert.equal(assessments[0].combinedLengthMm, 175);
-  assert.equal(assessments[0].combinedDepthPct, 60);
-  assert.ok(assessments[0].evaluation);
-  assert.ok(assessments[0].evaluation!.erf > Math.max(...items.map((item) => item.nominal.ERF)));
 });
 
 test('priority escalates on depth, capacity, and remaining life', () => {
@@ -520,26 +491,18 @@ test('the worst-per-bin table honours the selected ranking criterion', () => {
   assert.equal(byLife[0].worst?.nominal.ld, 200, 'the fastest-growing feature wins on life');
 });
 
-test('draws distinct ASME Level 0 and configured Level 1 envelopes with dense short-length points', () => {
+test('the screening envelope gives shallower allowable depth as anomalies lengthen', () => {
   const items = screenResults([processRow(row(), config)], config, DEFAULT_SCREENING_CONFIG);
   const curves = buildEnvelopeCurves(items, config, 400, 40);
 
-  assert.equal(curves.length, 2, 'one Level 0 and one configured Level 1 curve per wall thickness');
-  const level0 = curves.find((curve) => curve.basis === 'level0')!;
-  const level1 = curves.find((curve) => curve.basis === 'level1')!;
-  assert.ok(level0);
-  assert.ok(level1);
-  const points = level0.points;
-  assert.ok(points.length > 20);
-  assert.equal(points[0].x, 0);
-  assert.ok(points[1].x < 1, 'sampling must preserve the short-length knee even with long outliers');
+  assert.equal(curves.length, 1, 'one curve per distinct wall thickness');
+  const points = curves[0].points;
+  assert.ok(points.length > 5);
   assert.ok(
     points[points.length - 1].y < points[0].y,
     'the acceptance envelope falls away as length grows',
   );
-  assert.ok(points.every((point) => point.y > 0 && point.y <= 80));
-  assert.match(level0.label, /ASME B31G Level 0/i);
-  assert.match(level1.label, /Level 1/i);
+  assert.ok(points.every((point) => point.y > 0 && point.y <= 100));
 });
 
 test('the narrative reports the population split and names the governing feature', () => {

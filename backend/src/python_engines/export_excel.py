@@ -7,6 +7,19 @@ from openpyxl.cell import WriteOnlyCell
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+# The stateless value helpers are shared with the corrosion assessment report,
+# which reads the same alignment rows. Only the pure functions move: the style
+# objects below are deliberately module-level singletons (see the note on them),
+# and a shared factory returning fresh Font/Fill/Border objects per call would
+# undo that.
+from excel_common import (
+    as_number,
+    clock_difference,
+    difference,
+    first_value,
+    safe_cell_value,
+)
+
 
 NEW_HEADERS = [
     "Abs. Dist NEW (m)", "Feature Type NEW", "Identif. NEW", "Joint No. NEW",
@@ -17,8 +30,8 @@ NEW_HEADERS = [
 CENTER_HEADERS = [
     "Odo Diff (m)\nNEW-OLD", "Dist GW Δ\nNEW-OLD", "O'Clock\nChanged?",
     "Clock Δ\n(deg)", "Depth Δ (%)\nNEW-OLD", "Length Δ(mm)\nNEW-OLD",
-    "Width Δ(mm)\nNEW-OLD", "Surface\nChanged?", "Match\nStatus",
-    "Data\nCompleteness",
+    "Width Δ(mm)\nNEW-OLD", "Depth Growth\n(%WT/yr)", "Length Growth\n(mm/yr)",
+    "Surface\nChanged?", "Match\nStatus", "Data\nCompleteness",
 ]
 OLD_HEADERS = [
     "Abs. Dist OLD (m)", "Feature Type OLD", "Identif. OLD", "Joint No. OLD",
@@ -55,13 +68,44 @@ LEFT_ALIGNMENT = Alignment(horizontal="left", vertical="center")
 RIGHT_ALIGNMENT = Alignment(horizontal="right", vertical="center")
 THIN_BORDER = Border(bottom=Side(style="thin", color="D9E2F3"))
 
-FIRST_CENTER_COLUMN = 16
-FIRST_OLD_COLUMN = 26
-STATUS_COLUMN = 24
+# Derived from the header lists rather than written out. These were literals —
+# 16, 26, 24 — which silently encoded "there are exactly ten comparison
+# columns"; adding one shifted the OLD block and the status styling onto the
+# wrong cells with nothing to catch it.
+FIRST_CENTER_COLUMN = len(NEW_HEADERS) + 1
+FIRST_OLD_COLUMN = FIRST_CENTER_COLUMN + len(CENTER_HEADERS)
+STATUS_COLUMN = FIRST_CENTER_COLUMN + CENTER_HEADERS.index("Match\nStatus")
+LAST_COLUMN = len(NEW_HEADERS) + len(CENTER_HEADERS) + len(OLD_HEADERS)
+
+
+def _new(*offsets):
+    """Absolute column numbers from 1-based offsets inside the NEW block."""
+    return {offset for offset in offsets}
+
+
+def _center(*offsets):
+    return {FIRST_CENTER_COLUMN + offset - 1 for offset in offsets}
+
+
+def _old(*offsets):
+    return {FIRST_OLD_COLUMN + offset - 1 for offset in offsets}
+
+
+# Number formats are addressed by block offset, not by absolute column. Written
+# out as absolute indices they had to be renumbered by hand whenever the layout
+# grew, and a missed entry formats a neighbouring column instead of failing.
+#
+# The OLD block's offsets deliberately mirror what the export already produced
+# rather than what symmetry would suggest — OLD Width/Depth carry three
+# decimals where their NEW counterparts carry one. That asymmetry predates this
+# change and is left alone here so the refactor does not quietly restyle a
+# report that people already reconcile against.
 THREE_DECIMAL_COLUMNS = frozenset(
-    {1, 5, 6, 7, 16, 17, 20, 21, 22, 26, 30, 31, 32, 35, 36, 37}
+    _new(1, 5, 6, 7)
+    | _center(1, 2, 5, 6, 7, 8, 9)
+    | _old(1, 5, 6, 7, 10, 11, 12)
 )
-ONE_DECIMAL_COLUMNS = frozenset({9, 10, 11, 34})
+ONE_DECIMAL_COLUMNS = frozenset(_new(9, 10, 11) | _old(9))
 STATUS_STYLES = (
     ("matched", GREEN_FILL, MATCHED_FONT),
     ("bypassed", YELLOW_FILL, BYPASSED_FONT),
@@ -110,77 +154,6 @@ def column_style_plan(column_count):
     return plan
 
 
-def first_value(row, *keys):
-    for key in keys:
-        value = row.get(key)
-        if value not in (None, "", "-"):
-            return value
-    return None
-
-
-def as_number(value):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def safe_cell_value(value):
-    """Prevent spreadsheet applications from evaluating untrusted text as a formula."""
-    if isinstance(value, (dict, list)):
-        value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
-        return "'" + value
-    return value
-
-
-def difference(left, right):
-    left_number = as_number(left)
-    right_number = as_number(right)
-    if left_number is None or right_number is None:
-        return None
-    return left_number - right_number
-
-
-# Two clock readings within this many degrees count as unchanged (one clock
-# minute is 0.5 degrees, so this tolerates vendor rounding of +/- 2 minutes).
-CLOCK_UNCHANGED_TOLERANCE_DEG = 1.0
-
-
-def clock_degrees(value):
-    if value in (None, "", "-", "N/A"):
-        return None
-    try:
-        if isinstance(value, (int, float)):
-            numeric = float(value)
-            if 0 < numeric < 1:
-                # An unconverted Excel time serial (fraction of a 24 h day):
-                # 0.5 means 12:00, not half past midnight. Convert to hours,
-                # then onto the 12-hour pipeline dial at 30 degrees per hour
-                # so it agrees with the hour-based conversions below
-                # (12:00 -> 0/360 degrees).
-                return ((numeric * 24.0) % 12.0) * 30.0
-            return numeric * 30
-        text = str(value)
-        hour, minute = text.split(":", 1)
-        return (int(hour) % 12) * 30 + int(minute[:2]) * 0.5
-    except (TypeError, ValueError):
-        return None
-
-
-def clock_difference(new_clock, old_clock):
-    new_degrees = clock_degrees(new_clock)
-    old_degrees = clock_degrees(old_clock)
-    if new_degrees is None or old_degrees is None:
-        return None, None
-    delta = abs(new_degrees - old_degrees)
-    wrapped_delta = min(delta, 360 - delta)
-    # The verdict must agree with the reported (wrapped) magnitude:
-    # 11:59 vs 12:01 is a 1 degree change, not a 359 degree "YES".
-    changed = "no" if wrapped_delta <= CLOCK_UNCHANGED_TOLERANCE_DEG else "YES"
-    return changed, wrapped_delta
-
-
 def side_values(row, side):
     return [
         first_value(row, f"Log Dist {side} (m)", f"Abs. Dist {side} (m)"),
@@ -224,6 +197,13 @@ def comparison_values(row, new_values, old_values):
         difference(new_values[10], old_values[10]),
         difference(new_values[8], old_values[8]),
         difference(new_values[9], old_values[9]),
+        # The run-pair growth rates the alignment engine already derived. They
+        # are carried rather than recomputed here: the engine knows the survey
+        # interval and whether the pair was matched at all, and a rate divided
+        # out of two raw depths in this file would disagree with the one the
+        # FFS assessment projects from.
+        as_number(first_value(row, "Depth Growth (%WT/yr)")),
+        as_number(first_value(row, "Length Growth (mm/yr)")),
         surface_changed,
         first_value(row, "Match/Unmatch", "match_status") or "-",
         completeness(new_values, old_values),
@@ -232,8 +212,10 @@ def comparison_values(row, new_values, old_values):
 
 def set_column_widths(ws):
     widths = [17, 20, 24, 14, 17, 17, 18, 15, 18, 18, 18, 18, 16, 16, 30,
-              16, 16, 14, 14, 16, 17, 17, 14, 20, 19,
+              16, 16, 14, 14, 16, 17, 17, 17, 17, 14, 20, 19,
               17, 20, 24, 14, 17, 17, 18, 15, 18, 18, 18, 18, 16, 16, 30]
+    # One width per column, or the fills and formats land on the wrong ones.
+    assert len(widths) == LAST_COLUMN, f"{len(widths)} widths for {LAST_COLUMN} columns"
     plan = column_style_plan(len(widths))
     for index, (width, (fill, alignment, number_format)) in enumerate(zip(widths, plan), 1):
         dimension = ws.column_dimensions[get_column_letter(index)]
@@ -416,12 +398,17 @@ def build_report_sheet(workbook, rows):
 def initialize_comparison_sheet(workbook, title, row_count):
     worksheet = workbook.create_sheet(title)
     worksheet.sheet_view.showGridLines = False
-    worksheet.freeze_panes = "P3"
+    worksheet.freeze_panes = f"{get_column_letter(FIRST_CENTER_COLUMN)}3"
     worksheet.row_dimensions[1].height = 24
     worksheet.row_dimensions[2].height = 42
     set_column_widths(worksheet)
-    worksheet.auto_filter.ref = f"A2:AN{max(2, row_count + 2)}"
-    for span in ("A1:O1", "P1:Y1", "Z1:AN1"):
+    last_letter = get_column_letter(LAST_COLUMN)
+    worksheet.auto_filter.ref = f"A2:{last_letter}{max(2, row_count + 2)}"
+    for span in (
+        f"A1:{get_column_letter(FIRST_CENTER_COLUMN - 1)}1",
+        f"{get_column_letter(FIRST_CENTER_COLUMN)}1:{get_column_letter(FIRST_OLD_COLUMN - 1)}1",
+        f"{get_column_letter(FIRST_OLD_COLUMN)}1:{last_letter}1",
+    ):
         worksheet.merged_cells.add(span)
 
     headers = NEW_HEADERS + CENTER_HEADERS + OLD_HEADERS
@@ -545,7 +532,7 @@ def xlsxwriter_formats(workbook):
 def xlsxwriter_column_formats(workbook):
     formats = []
     for column, (_fill, _alignment, number_format) in enumerate(
-        column_style_plan(40), 1
+        column_style_plan(LAST_COLUMN), 1
     ):
         if column < FIRST_CENTER_COLUMN:
             fill_color = XLSX_FILL_COLORS["new"]
@@ -619,20 +606,33 @@ def initialize_xlsxwriter_report_sheet(workbook, headers, row_count, formats):
 def initialize_xlsxwriter_comparison_sheet(workbook, row_count, formats):
     worksheet = workbook.add_worksheet("Runcomp Comparison")
     worksheet.hide_gridlines(2)
-    worksheet.freeze_panes(2, 15)
+    worksheet.freeze_panes(2, FIRST_CENTER_COLUMN - 1)
     worksheet.set_row(0, 24)
     worksheet.set_row(1, 42)
-    worksheet.autofilter(1, 0, max(1, row_count + 1), 39)
+    worksheet.autofilter(1, 0, max(1, row_count + 1), LAST_COLUMN - 1)
     widths = [17, 20, 24, 14, 17, 17, 18, 15, 18, 18, 18, 18, 16, 16, 30,
-              16, 16, 14, 14, 16, 17, 17, 14, 20, 19,
+              16, 16, 14, 14, 16, 17, 17, 17, 17, 14, 20, 19,
               17, 20, 24, 14, 17, 17, 18, 15, 18, 18, 18, 18, 16, 16, 30]
+    assert len(widths) == LAST_COLUMN, f"{len(widths)} widths for {LAST_COLUMN} columns"
     column_formats = xlsxwriter_column_formats(workbook)
     for index, (width, column_format) in enumerate(zip(widths, column_formats)):
         worksheet.set_column(index, index, width, column_format)
 
-    worksheet.merge_range(0, 0, 0, 14, "<  NEW DATA — ALIGNMENT RESULT", formats["title_blue"])
-    worksheet.merge_range(0, 15, 0, 24, "COMPARISON (NEW − OLD)", formats["title_gold"])
-    worksheet.merge_range(0, 25, 0, 39, "OLD DATA — ALIGNMENT RESULT  >", formats["title_blue"])
+    # xlsxwriter is 0-based, so each bound is one less than its column number.
+    # These were literal 14/15/24/25/39 and did not move with the header lists,
+    # which left the OLD title merged across the wrong span — and unwritten.
+    worksheet.merge_range(
+        0, 0, 0, FIRST_CENTER_COLUMN - 2,
+        "<  NEW DATA — ALIGNMENT RESULT", formats["title_blue"],
+    )
+    worksheet.merge_range(
+        0, FIRST_CENTER_COLUMN - 1, 0, FIRST_OLD_COLUMN - 2,
+        "COMPARISON (NEW − OLD)", formats["title_gold"],
+    )
+    worksheet.merge_range(
+        0, FIRST_OLD_COLUMN - 1, 0, LAST_COLUMN - 1,
+        "OLD DATA — ALIGNMENT RESULT  >", formats["title_blue"],
+    )
     headers = NEW_HEADERS + CENTER_HEADERS + OLD_HEADERS
     for column, header in enumerate(headers):
         header_format = (
@@ -772,12 +772,21 @@ def main():
     workbook = openpyxl.Workbook(write_only=True)
     worksheet = workbook.create_sheet("Comparison Report")
     worksheet.sheet_view.showGridLines = False
-    worksheet.freeze_panes = "P3"
+    worksheet.freeze_panes = f"{get_column_letter(FIRST_CENTER_COLUMN)}3"
     worksheet.row_dimensions[1].height = 24
     worksheet.row_dimensions[2].height = 42
     set_column_widths(worksheet)
-    worksheet.auto_filter.ref = f"A2:AN{max(2, len(data) + 2)}"
-    for span in ("A1:O1", "P1:Y1", "Z1:AN1"):
+    last_letter = get_column_letter(LAST_COLUMN)
+    worksheet.auto_filter.ref = f"A2:{last_letter}{max(2, len(data) + 2)}"
+    # Spelled as letters these were "A1:O1", "P1:Y1", "Z1:AN1" — a banner that
+    # silently stopped tracking the header lists. A merge whose top-left lands
+    # one column short of the title swallows it, so the OLD banner disappeared
+    # rather than moved.
+    for span in (
+        f"A1:{get_column_letter(FIRST_CENTER_COLUMN - 1)}1",
+        f"{get_column_letter(FIRST_CENTER_COLUMN)}1:{get_column_letter(FIRST_OLD_COLUMN - 1)}1",
+        f"{get_column_letter(FIRST_OLD_COLUMN)}1:{last_letter}1",
+    ):
         worksheet.merged_cells.add(span)
 
     headers = NEW_HEADERS + CENTER_HEADERS + OLD_HEADERS

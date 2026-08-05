@@ -1,6 +1,7 @@
 import type {
   FfsConfig,
   FfsDesignFactorSource,
+  FfsSafetyFactorSource,
   FfsGrowthAnalysisBasis,
   FfsGrowthObservation,
   FfsScreenedResult,
@@ -50,6 +51,12 @@ export function designFactorSourceLabel(source: FfsDesignFactorSource): string {
   }
 }
 
+export function safetyFactorSourceLabel(source: FfsSafetyFactorSource): string {
+  return source === 'explicit'
+    ? 'Explicit hydrotest / MAOP ratio'
+    : 'Derived from design factor (1/F)';
+}
+
 export interface FfsApplicabilityCheck {
   id: string;
   label: string;
@@ -68,11 +75,15 @@ export function applicabilityChecks(item: FfsScreenedResult): FfsApplicabilityCh
     },
     {
       id: 'depth-domain',
-      label: 'Deep metal-loss measurement review',
-      status: n.maxDepthPct >= 100 ? 'fail' : n.maxDepthPct > 80 ? 'review' : 'pass',
-      detail: n.maxDepthPct > 80
-        ? `${n.maxDepthPct.toFixed(1)}% WT; enhanced sizing accuracy and effective corrosion-rate review are required.`
-        : `${n.maxDepthPct.toFixed(1)}% WT as reported.`,
+      label: 'Depth below the 80 %WT project rejection line',
+      // B31G para. 1.2(f) admits any depth; 80 % is where it asks for extra
+      // consideration of sizing accuracy and growth rate, and where the Level 0
+      // tables stop. Treating it as an outright method failure overstates what
+      // the code says, so it is a review gate, not a rejection.
+      status: n.maxDepthPct < 80 ? 'pass' : 'review',
+      detail: n.maxDepthPct < 80
+        ? `${n.maxDepthPct.toFixed(1)} %WT as reported.`
+        : `${n.maxDepthPct.toFixed(1)} %WT as reported. B31G para. 1.2(f) permits evaluation at this depth but requires the sizing accuracy and the effective corrosion rate to be justified; the section 3 tables do not apply above 80 %.`,
     },
     {
       id: 'single-feature',

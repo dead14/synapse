@@ -4,9 +4,11 @@ import {
   buildActionRegister,
   buildLocationZones,
   buildKpis,
+  findInteractions,
   formatLife,
 } from '../../lib/ffs/screening';
 import { buildClockRose, buildDistanceProfile } from '../../lib/ffs/integrityViews';
+import { buildColonyLevel2Assessments } from '../../lib/ffs/colonyAssessment';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig, FfsSeverity } from '../../lib/ffs/types';
 import { analysisHorizonYears } from '../../lib/ffs/lifeProjection';
 import { buildFfsReportCase, type FfsReportContext } from '../../lib/ffs/reportCase';
@@ -453,11 +455,18 @@ export default function FfsIntegrityPanel({
 }) {
   const kpis = useMemo(() => buildKpis(items), [items]);
   const locationZones = useMemo(() => buildLocationZones(items), [items]);
+  const interactions = useMemo(() => findInteractions(items, screening), [items, screening]);
+  // Level 2 needs a corrosion profile, which one ILI box cannot provide but a
+  // colony of them can. Only colonies whose merged Level 1 result is worth
+  // challenging are evaluated; the rest would be arithmetic nobody reads.
+  const colonyAssessments = useMemo(
+    () => buildColonyLevel2Assessments(items, screening, config),
+    [items, screening, config],
+  );
   const reportCase = useMemo(
     () => buildFfsReportCase(items, reportContext),
     [items, reportContext],
   );
-  const interactions = reportCase.interactionAssessments;
   const actions = useMemo(
     () => buildActionRegister(items, screening, reportContext),
     [items, screening, reportContext],
@@ -723,8 +732,8 @@ export default function FfsIntegrityPanel({
 
           <Panel>
             <PanelHeader
-              title="ASME 3t combined-flaw assessment"
-              subtitle="Axial and circumferential separation checked; resolved colonies are recalculated as one flaw"
+              title="Axial interaction screen"
+              subtitle={`Edge-to-edge separation against ${screening.interactionSpacingFactor}t`}
               actions={
                 <span
                   className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
@@ -739,30 +748,34 @@ export default function FfsIntegrityPanel({
             />
             {interactions.length ? (
               <ul className="space-y-1.5">
-                {interactions.slice(0, 12).map((assessment) => (
+                {interactions.slice(0, 12).map((pair, i) => (
                   <li
-                    key={assessment.id}
-                    className="rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] dark:border-slate-700"
+                    key={`${pair.a.key}-${pair.b.key}-${i}`}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] dark:border-slate-700"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="min-w-0 truncate font-medium text-slate-600 dark:text-slate-300">
-                        {assessment.members.map((member) => member.nominal.featureId || member.key).join(' + ')}
-                      </span>
-                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${
-                        assessment.status === 'fail'
-                          ? 'bg-rose-50 text-rose-600 dark:bg-rose-950/30 dark:text-rose-400'
-                          : assessment.status === 'pass'
-                            ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-400'
-                            : 'bg-amber-50 text-amber-600 dark:bg-amber-950/30 dark:text-amber-400'
-                      }`}>
-                        {assessment.status}
-                      </span>
-                    </div>
-                    <p className="mt-1 tabular-nums text-slate-400">
-                      {assessment.resolved && assessment.evaluation
-                        ? `Combined L ${assessment.combinedLengthMm!.toFixed(1)} mm · depth ${assessment.combinedDepthPct!.toFixed(1)}% WT · ERF ${formatErf(assessment.evaluation.erf)}`
-                        : assessment.reason}
-                    </p>
+                    <span className="min-w-0 truncate text-slate-600 dark:text-slate-300">
+                      {numericLd(pair.a).toFixed(1)} m ↔ {numericLd(pair.b).toFixed(1)} m
+                      {/* Below 45 degrees the pattern's overall length governs;
+                          at or above it B31G para. 1.13 accepts the worst
+                          longitudinal section instead, so merging the pair
+                          would overstate the extent rather than protect. */}
+                      {pair.combineRule === 'worst-longitudinal-section' && (
+                        <span
+                          title="The pair lies at 45 degrees or more to the pipe axis. B31G para. 1.13 accepts the most severe longitudinal section rather than the combined length."
+                          className="ml-1.5 rounded border border-slate-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-slate-400 dark:border-slate-700"
+                        >
+                          circumferential
+                        </span>
+                      )}
+                    </span>
+                    <span className="shrink-0 tabular-nums text-slate-400">
+                      axial {pair.edgeGapMm.toFixed(1)}
+                      {' · circ '}
+                      {pair.circumferentialGapMm === null
+                        ? 'n/a'
+                        : `${pair.circumferentialGapMm.toFixed(1)}`}
+                      {' / '}{pair.thresholdMm.toFixed(1)} mm
+                    </span>
                   </li>
                 ))}
                 {interactions.length > 12 && (
@@ -773,12 +786,92 @@ export default function FfsIntegrityPanel({
               </ul>
             ) : (
               <Callout>
-                No feature pair meets the ASME 3t interaction criteria in both axial and circumferential directions.
+                No pair has a calculated axial edge-to-edge separation within{' '}
+                {screening.interactionSpacingFactor}t. Both the axial and circumferential separations are
+                measured, per B31G para. 1.12(a), but the scan window is axial: two features metres apart
+                are not a colony whatever their clock positions. This screen does not replace a full
+                interaction or colony assessment.
               </Callout>
             )}
           </Panel>
         </div>
       </div>
+
+      {/* Level 2 beside Level 1 for every colony that can supply a profile. */}
+      {colonyAssessments.length > 0 && (
+        <Panel>
+          <PanelHeader
+            title="Level 2 Effective Area, where a colony provides a profile"
+            subtitle="ASME B31G para. 2.3"
+            actions={
+              <span className="rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:border-slate-700">
+                {colonyAssessments.length} colon{colonyAssessments.length === 1 ? 'y' : 'ies'}
+              </span>
+            }
+          />
+          <Callout>
+            Interacting features must be assessed as one flaw. At Level 1 that means the deepest depth over
+            the whole colony extent, which counts the sound metal between the boxes as gone. Level 2
+            evaluates the profile instead. A single feature cannot support this — one box carries no profile —
+            so only colonies appear here.
+          </Callout>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left text-[11px]">
+              <thead>
+                <tr className="text-[9px] font-bold uppercase tracking-wide text-slate-400">
+                  <th className="pb-1.5">Location</th>
+                  <th className="pb-1.5 text-right">Boxes</th>
+                  <th className="pb-1.5 text-right">Merged extent</th>
+                  <th className="pb-1.5 text-right">Max depth</th>
+                  <th className="pb-1.5 text-right">Level 1 ERF</th>
+                  <th className="pb-1.5 text-right">Level 2 ERF</th>
+                  <th className="pb-1.5 text-right">P_safe recovered</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {colonyAssessments.map((colony) => (
+                  <tr key={colony.id}>
+                    <td className="py-1.5 pr-2 tabular-nums text-slate-600 dark:text-slate-300">
+                      {colony.startLd.toFixed(1)} – {colony.endLd.toFixed(1)} m
+                      {colony.changesDisposition && (
+                        <span
+                          title="The merged Level 1 flaw reaches the review band; the profile does not."
+                          className="ml-1.5 rounded border border-emerald-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-emerald-600 dark:border-emerald-800/60 dark:text-emerald-400"
+                        >
+                          changes disposition
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-1.5 text-right tabular-nums text-slate-500">{colony.members.length}</td>
+                    <td className="py-1.5 text-right tabular-nums text-slate-500">
+                      {colony.mergedLengthMm.toFixed(0)} mm
+                    </td>
+                    <td className="py-1.5 text-right tabular-nums text-slate-500">
+                      {colony.maxDepthPct.toFixed(1)} %
+                    </td>
+                    <td className="py-1.5 text-right tabular-nums text-amber-600 dark:text-amber-400">
+                      {formatErf(colony.level1Erf)}
+                    </td>
+                    <td className="py-1.5 text-right tabular-nums text-slate-700 dark:text-slate-200">
+                      {colony.level2Erf === null ? '—' : formatErf(colony.level2Erf)}
+                    </td>
+                    <td className="py-1.5 text-right tabular-nums text-slate-500">
+                      {colony.recoveredSafePressureMpa === null
+                        ? '—'
+                        : `${colony.recoveredSafePressureMpa >= 0 ? '+' : ''}${colony.recoveredSafePressureMpa.toFixed(2)} MPa`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-2 text-[10px] leading-snug text-slate-400 dark:text-slate-500">
+            Level 2 uses the measured area rather than Level 1's assumed pit shape, so a recovery is not
+            guaranteed: a colony of square-shouldered boxes can be worse than the 0.85 shape factor assumes.
+            Both results carry the same safety factor and required pressure.
+          </p>
+        </Panel>
+      )}
 
       <Callout tone="warn">
         <strong>Use limitation.</strong> This workspace is a transparent screening tool. Final fitness-for-service

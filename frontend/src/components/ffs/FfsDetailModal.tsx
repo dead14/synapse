@@ -1,18 +1,21 @@
-import { useEffect, useRef } from 'react';
-import { FiAlertCircle, FiCheckCircle, FiChevronLeft, FiChevronRight, FiX, FiXCircle } from 'react-icons/fi';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { FiAlertCircle, FiCheckCircle, FiChevronLeft, FiChevronRight, FiEye, FiEyeOff, FiX, FiXCircle } from 'react-icons/fi';
 import {
   formatRemnantLife,
   remnantLifeCaveats,
   remnantLimitLabel,
 } from '../../lib/ffs/lifeProjection';
+import { buildCalcTrace, verifyCalcTrace, type FfsCalcStep } from '../../lib/ffs/calcTrace.ts';
 import {
   applicabilityChecks,
   applicabilityStatus,
   engineeringDisposition,
   growthAnalysisBasisLabel,
   growthObservationLabel,
+  designFactorSourceLabel,
   methodProfileLabel,
   pressureBasisLabel,
+  safetyFactorSourceLabel,
 } from '../../lib/ffs/assessmentProfile.ts';
 import type { FfsRepairCreditDecision } from '../../lib/ffs/reportCase';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
@@ -38,12 +41,17 @@ function InputCard({
   value,
   unit,
   description,
+  basis,
+  showWorking = true,
 }: {
   label: string;
   symbol: string;
   value: string;
   unit?: string;
   description: string;
+  /** Where the figure came from, for the reader who has to defend it. */
+  basis?: string;
+  showWorking?: boolean;
 }) {
   return (
     <div className="ffs-detail__input-card">
@@ -57,94 +65,50 @@ function InputCard({
         {' = '}
         {description}
       </p>
+      {basis && showWorking && <p className="ffs-detail__basis">{basis}</p>}
     </div>
   );
 }
 
-function CalcStep({
-  name,
-  formula,
-  substitution,
-  result,
-  unit,
-  note,
-  step,
-  tone = 'default',
-  sideBySide,
-}: {
-  name: string;
-  formula: string;
-  substitution: string;
-  result: string;
-  unit?: string;
-  note?: string;
-  step?: number;
-  tone?: 'default' | 'accent' | 'good' | 'warn' | 'bad';
-  sideBySide?: {
-    name: string;
-    formula: string;
-    substitution: string;
-    result: string;
-    unit?: string;
-  };
-}) {
-  const toneClass = `ffs-detail__calc-step--${tone}`;
-
-  if (sideBySide) {
-    return (
-      <div className="ffs-detail__calc-pair">
-        <div className={`ffs-detail__calc-step ${toneClass}`}>
-          <div className="ffs-detail__calc-body">
-            <div className="ffs-detail__calc-info">
-              {step && <span className="ffs-detail__calc-num">{step}</span>}
-              <div>
-                <p className="ffs-detail__calc-name">{name}</p>
-                <p className="ffs-detail__calc-formula">{formula}</p>
-                <p className="ffs-detail__calc-sub">= {substitution}</p>
-              </div>
-            </div>
-            <p className="ffs-detail__calc-result">
-              {result}
-              {unit && <span className="ffs-detail__calc-unit">{unit}</span>}
-            </p>
-          </div>
-        </div>
-        <div className="ffs-detail__calc-step ffs-detail__calc-step--accent">
-          <div className="ffs-detail__calc-body">
-            <div className="ffs-detail__calc-info">
-              <div>
-                <p className="ffs-detail__calc-name">{sideBySide.name}</p>
-                <p className="ffs-detail__calc-formula">{sideBySide.formula}</p>
-                <p className="ffs-detail__calc-sub">= {sideBySide.substitution}</p>
-              </div>
-            </div>
-            <p className="ffs-detail__calc-result ffs-detail__calc-result--accent">
-              {sideBySide.result}
-              {sideBySide.unit && <span className="ffs-detail__calc-unit">{sideBySide.unit}</span>}
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
+/**
+ * One step of the verified trace.
+ *
+ * `showWorking` is the reader's choice between the answer and the derivation.
+ * Collapsed, a step is a name and a number; expanded, it carries the formula,
+ * this feature's numbers substituted into it, and the clause or project rule
+ * the figure rests on.
+ */
+function CalcStep({ step, showWorking }: { step: FfsCalcStep; showWorking: boolean }) {
+  const result = step.display ?? fmt(step.value, step.id === 'z' || step.id === 'depth-ratio' ? 4 : 4);
+  const resultClass =
+    step.tone === 'bad'
+      ? ' ffs-detail__calc-result--bad'
+      : step.tone === 'good'
+        ? ' ffs-detail__calc-result--good'
+        : '';
 
   return (
-    <div className={`ffs-detail__calc-step ${toneClass}`}>
+    <div className={`ffs-detail__calc-step ffs-detail__calc-step--${step.tone}`}>
       <div className="ffs-detail__calc-body">
         <div className="ffs-detail__calc-info">
-          {step && <span className="ffs-detail__calc-num">{step}</span>}
+          <span className="ffs-detail__calc-num">{step.index}</span>
           <div>
             <p className="ffs-detail__calc-name">
-              {name}
-              {note && <span className="ffs-detail__calc-note">{note}</span>}
+              {step.name}
+              {step.note && <span className="ffs-detail__calc-note">{step.note}</span>}
             </p>
-            <p className="ffs-detail__calc-formula">{formula}</p>
-            <p className="ffs-detail__calc-sub">= {substitution}</p>
+            {showWorking && (
+              <>
+                <p className="ffs-detail__calc-formula">{step.formula}</p>
+                <p className="ffs-detail__calc-sub">= {step.substitution}</p>
+                <p className="ffs-detail__basis">{step.basis}</p>
+              </>
+            )}
           </div>
         </div>
-        <p className="ffs-detail__calc-result">
+        <p className={`ffs-detail__calc-result${resultClass}`}>
           {result}
-          {unit && <span className="ffs-detail__calc-unit">{unit}</span>}
+          {step.unit && <span className="ffs-detail__calc-unit">{step.unit}</span>}
         </p>
       </div>
     </div>
@@ -156,12 +120,17 @@ function LifeCard({
   value,
   unit,
   description,
+  basis,
+  showWorking = true,
   tone = 'default',
 }: {
   label: string;
   value: string;
   unit?: string;
   description: string;
+  /** The rule or formula behind the figure, shown when working is on. */
+  basis?: string;
+  showWorking?: boolean;
   tone?: 'default' | 'accent' | 'good' | 'warn' | 'bad';
 }) {
   return (
@@ -172,6 +141,7 @@ function LifeCard({
         {unit && <span className="ffs-detail__life-unit">{unit}</span>}
       </p>
       <p className="ffs-detail__life-desc">{description}</p>
+      {basis && showWorking && <p className="ffs-detail__basis">{basis}</p>}
     </div>
   );
 }
@@ -238,16 +208,34 @@ export default function FfsDetailModal({
     if (item && bodyRef.current) bodyRef.current.scrollTop = 0;
   }, [item]);
 
+  /**
+   * Whether the derivation is on screen alongside the answers.
+   *
+   * Both readings are legitimate and neither is a default for everybody: an
+   * engineer checking a disposition wants the four numbers that carry it, and
+   * the same engineer defending the assessment in a report review wants every
+   * formula, every substitution, and the clause behind each one. Working stays
+   * on, because a calculation you cannot see is the thing this drawer exists to
+   * prevent — but it collapses in one click.
+   */
+  const [showWorking, setShowWorking] = useState(true);
+
+  const trace = useMemo(
+    () => (item ? buildCalcTrace(item.nominal, config, screening) : []),
+    [item, config, screening],
+  );
+  // A step whose printed working no longer reproduces its printed result is a
+  // defect in this drawer, not in the assessment. It is surfaced rather than
+  // swallowed: a trace that silently disagrees with itself is worse than none.
+  const traceDefects = useMemo(() => verifyCalcTrace(trace), [trace]);
+
   if (!item) return null;
 
   const n = item.nominal;
   const life = n.remnantLife;
   const caveats = remnantLifeCaveats(life);
   const isOriginal = config.method === 'original';
-  const kLabel = isOriginal ? '2/3' : '0.85';
-  const k = isOriginal ? 2 / 3 : 0.85;
   const areaLabel = isOriginal ? '⅔dL' : '0.85dL';
-  const failed = n.acceptance === 'Un-Acceptable';
   const repairCredited = repairCreditDecision?.credited === true;
   const methodChecks = applicabilityChecks(item);
   const methodApplicability = applicabilityStatus(item);
@@ -317,19 +305,32 @@ export default function FfsDetailModal({
                 value={fmt(n.Pf, 3)}
                 unit="MPa"
                 description={timesRequired(n.Pf, n.p0)}
+                basis="P_F = 2·S_F·t/D — step 8. An estimate of the pressure at which the corroded wall would fail, carrying no margin. It is never an operating limit."
+                showWorking={showWorking}
               />
               <LifeCard
                 label="Safe pressure"
                 value={fmt(n.safePressure, 3)}
                 unit="MPa"
                 description={timesRequired(n.safePressure, n.p0)}
+                basis={`P_S = P_F / SF — step 10, at SF = ${fmt(n.SF, 4)} (${safetyFactorSourceLabel(n.safetyFactorSource).toLowerCase()}). This is the pressure the assessment stands behind for this feature.`}
+                showWorking={showWorking}
                 tone="good"
               />
-              <LifeCard label="Required pressure" value={fmt(n.p0, 3)} unit="MPa" description={pressureBasisLabel(config)} />
+              <LifeCard
+                label="Required pressure"
+                value={fmt(n.p0, 3)}
+                unit="MPa"
+                description={pressureBasisLabel(config)}
+                basis="The pressure the feature is assessed against, taken from the assessment setup. Every ERF on this screen is measured against it."
+                showWorking={showWorking}
+              />
               <LifeCard
                 label="ERF"
                 value={formatErf(n.ERF)}
                 description={Number.isFinite(n.ERF) ? `${(n.ERF * 100).toFixed(1)}% of safe pressure used` : 'No safe-pressure basis'}
+                basis="ERF = P₀ / P_S — step 11. An operator convention, not a B31G term: the code criterion is that the safe pressure equals or exceeds the required pressure."
+                showWorking={showWorking}
                 tone={n.ERF >= 1 ? 'bad' : n.ERF >= screening.reviewBandErf ? 'warn' : 'default'}
               />
             </div>
@@ -352,6 +353,8 @@ export default function FfsDetailModal({
                 symbol={'dₘₑₐₛ'}
                 value={`${n.maxDepthPct.toFixed(2)}%`}
                 description={`${n.maxDepthPct.toFixed(0)}% of wall`}
+                basis="ILI-reported maximum depth. No sizing tolerance is applied here — that is the conservative tier below."
+                showWorking={showWorking}
               />
               <InputCard
                 label="Wall Thickness (t)"
@@ -359,6 +362,8 @@ export default function FfsDetailModal({
                 value={n.wall.toFixed(2)}
                 unit="mm"
                 description="Nominal"
+                basis="Nominal wall for this joint. Depth %, the area term, and both Barlow pressures are all taken against it, so an incorrect wall moves every number in this drawer."
+                showWorking={showWorking}
               />
               <InputCard
                 label="Outer Diameter (D)"
@@ -366,6 +371,8 @@ export default function FfsDetailModal({
                 value={n.od.toFixed(1)}
                 unit="mm"
                 description="Nominal"
+                basis="Nominal outside diameter. Used for both the normalised length and the Barlow relation, which is why the two are consistent."
+                showWorking={showWorking}
               />
               <InputCard
                 label="SMYS"
@@ -373,6 +380,8 @@ export default function FfsDetailModal({
                 value={n.smys.toFixed(1)}
                 unit="MPa"
                 description="Specified"
+                basis="Specified minimum yield strength of the grade — a specification floor, not a measured or certified property of this joint."
+                showWorking={showWorking}
               />
               <InputCard
                 label={'Required Pressure P₀'}
@@ -380,12 +389,20 @@ export default function FfsDetailModal({
                 value={n.p0.toFixed(3)}
                 unit="MPa"
                 description={pressureBasisLabel(config)}
+                basis="The pressure the acceptance criterion is applied at, set once for the assessment."
+                showWorking={showWorking}
               />
               <InputCard
-                label="Assessment pressure factor (1/SF)"
-                symbol="1/SF"
+                label="Design Factor"
+                symbol="DF"
                 value={n.df.toFixed(3)}
-                description={`Effective SF ${n.SF.toFixed(3)}`}
+                description={designFactorSourceLabel(n.designFactorSource)}
+                basis={
+                  n.safetyFactorSource === 'explicit'
+                    ? 'The B31.8 design factor for this section. Recorded for traceability only: this assessment divides by the explicit safety factor from step 1, so the design factor does not enter the pressures.'
+                    : 'The B31.8 design factor for this section. With no hydrotest ratio supplied it also sets the safety factor, as SF = 1/DF.'
+                }
+                showWorking={showWorking}
               />
               <InputCard
                 label="Defect Length"
@@ -393,6 +410,8 @@ export default function FfsDetailModal({
                 value={n.length.toFixed(0)}
                 unit="mm"
                 description="ILI measured"
+                basis="Axial extent of the metal-loss box as reported. It sets the normalised length and therefore which branch of the method applies."
+                showWorking={showWorking}
               />
               <InputCard
                 label="CR Depth"
@@ -400,12 +419,16 @@ export default function FfsDetailModal({
                 value={n.crDepth.toFixed(4)}
                 unit="mm/y"
                 description={growthAnalysisBasisLabel(n.growthEvidence?.depth.analysisBasis)}
+                basis={n.growthEvidence?.depth.note ?? 'No structured growth provenance was attached to this row.'}
+                showWorking={showWorking}
               />
               <InputCard
                 label="CR Length"
                 symbol={'ṙₗ'}
                 value={n.crLength.toFixed(4)}
                 unit="mm/y"
+                basis={n.growthEvidence?.length.note ?? 'No structured growth provenance was attached to this row.'}
+                showWorking={showWorking}
                 description={growthAnalysisBasisLabel(n.growthEvidence?.length.analysisBasis)}
               />
             </div>
@@ -532,174 +555,38 @@ export default function FfsDetailModal({
             )}
           </section>
 
-          {/* Step-by-step Calculation */}
+          {/* Step-by-step calculation, built from the same result the engine
+              produced and self-checked against it. */}
           <section className="ffs-detail__section">
-            <h3 className="ffs-detail__section-title">Step-by-step calculation (at ILI date)</h3>
-            <div className="ffs-detail__calc-list">
-              <CalcStep
-                step={1}
-                name="Safety Factor (SF)"
-                formula="SF = 1 / assessment pressure factor"
-                substitution={`1 / ${n.df.toFixed(3)}`}
-                result={fmt(n.SF)}
-              />
+            <div className="ffs-detail__section-heading-row">
+              <h3 className="ffs-detail__section-title">Step-by-step calculation (at ILI date)</h3>
+              <button
+                type="button"
+                onClick={() => setShowWorking((open) => !open)}
+                aria-pressed={showWorking}
+                className="ffs-detail__working-toggle"
+              >
+                {showWorking ? <FiEyeOff aria-hidden="true" /> : <FiEye aria-hidden="true" />}
+                {showWorking ? 'Results only' : 'Show working'}
+              </button>
+            </div>
 
-              <CalcStep
-                step={2}
-                name="Defect Depth (d)"
-                formula="d = (Depth% / 100) × t"
-                substitution={`(${n.maxDepthPct.toFixed(2)} / 100) × ${n.wall.toFixed(2)}`}
-                result={fmt(n.d, 4)}
-                unit="mm"
-              />
-
-              <CalcStep
-                step={3}
-                name="D/T Ratio"
-                formula="d/t = d / t"
-                substitution={`${fmt(n.d, 4)} / ${n.wall.toFixed(2)}`}
-                result={fmt(n.dt)}
-              />
-
-              <CalcStep
-                step={4}
-                name="Z Factor"
-                formula={'z = L² / (D × t)'}
-                substitution={`${n.length.toFixed(0)}² / (${n.od.toFixed(1)} × ${n.wall.toFixed(2)})`}
-                result={fmt(n.z)}
-              />
-
-              {isOriginal ? (
-                n.M !== null ? (
-                  <CalcStep
-                    step={5}
-                    name="M Factor (Folias)"
-                    formula={'√(1 + 0.8z)'}
-                    substitution={`√(1 + 0.8 × ${fmt(n.z)})`}
-                    result={fmt(n.M)}
-                    note={`z≤20`}
-                    tone="accent"
-                  />
-                ) : (
-                  <CalcStep
-                    step={5}
-                    name="M Factor (Folias)"
-                    formula="M not used for z > 20"
-                    substitution="Long-anomaly branch selected"
-                    result="n/a"
-                    note="z>20"
-                  />
-                )
-              ) : (
-                <CalcStep
-                  step={5}
-                  name="M Factor (Folias)"
-                  formula={
-                    n.z <= 50
-                      ? 'M = √(1 + 0.6275z − 0.003375z²)'
-                      : 'M = 0.032z + 3.3'
-                  }
-                  substitution={
-                    n.z <= 50
-                      ? `√(1 + 0.6275×${fmt(n.z)} − 0.003375×${fmt(n.z)}²)`
-                      : `0.032×${fmt(n.z)} + 3.3`
-                  }
-                  result={fmt(n.M)}
-                  note={n.z <= 50 ? 'z≤50' : 'z>50'}
-                  tone="accent"
-                />
-              )}
-
-              <CalcStep
-                step={6}
-                name={'Flow Stress (Sᶠₗₒᵂ)'}
-                formula={
-                  isOriginal || config.modifiedSa === 'smys11'
-                    ? 'Sᶠₗₒᵂ = 1.1 × SMYS'
-                    : 'Sᶠₗₒᵂ = SMYS + 69'
-                }
-                substitution={
-                  isOriginal || config.modifiedSa === 'smys11'
-                    ? `1.1 × ${n.smys.toFixed(1)}`
-                    : `${n.smys.toFixed(1)} + 69`
-                }
-                result={fmt(n.sflow, 4)}
-                unit="MPa"
-              />
-
-              <CalcStep
-                step={7}
-                name={'Flow Stress Sᶠ'}
-                formula={
-                  isOriginal && n.M === null
-                    ? 'Sᶠ = Sᶠₗₒᵂ × (1 − d/t)'
-                    : `Sᶠ = Sᶠₗₒᵂ × (1 − ${kLabel}·d/t) / (1 − ${kLabel}·d/t/M)`
-                }
-                substitution={
-                  isOriginal && n.M === null
-                    ? `${fmt(n.sflow, 4)} × (1 − ${fmt(n.dt)})`
-                    : `${fmt(n.sflow, 4)} × (1 − ${k.toFixed(2)}×${fmt(n.dt)}) / (1 − ${k.toFixed(2)}×${fmt(n.dt)}/${fmt(n.M)})`
-                }
-                result={fmt(n.Sf, 4)}
-                unit="MPa"
-                tone="accent"
-              />
-
-              <CalcStep
-                step={8}
-                name={'Failure Pressure Pᶠ'}
-                formula={'Pᶠ = 2 × Sᶠ × t / D'}
-                substitution={`2 × ${fmt(n.Sf, 4)} × ${n.wall.toFixed(2)} / ${n.od.toFixed(1)}`}
-                result={fmt(n.Pf, 4)}
-                unit="MPa"
-              />
-
-              <CalcStep
-                step={9}
-                name={'Hoop Stress S₀'}
-                formula={'S₀ = P₀ × D / (2t)'}
-                substitution={`${n.p0.toFixed(3)} × ${n.od.toFixed(1)} / (2 × ${n.wall.toFixed(2)})`}
-                result={fmt(n.So, 4)}
-                unit="MPa"
-                sideBySide={{
-                  name: 'Calculated Safe Pressure',
-                  formula: 'Pₛₐᶠₑ = Pᶠ / SF',
-                  substitution: `${fmt(n.Pf, 4)} / ${fmt(n.SF, 4)}`,
-                  result: fmt(n.safePressure, 4),
-                  unit: 'MPa',
-                }}
-              />
-
-              <CalcStep
-                step={10}
-                name={'ERF — Estimated Repair Factor'}
-                formula={'ERF = P₀ / Pₛₐᶠₑ'}
-                substitution={`${n.p0.toFixed(3)} / ${fmt(n.safePressure, 4)}`}
-                result={formatErf(n.ERF)}
-                tone={n.ERF > 1 ? 'bad' : n.ERF >= screening.reviewBandErf ? 'warn' : 'good'}
-              />
-
-              {/* Acceptance Level */}
-              <div className={`ffs-detail__acceptance ${failed ? 'ffs-detail__acceptance--fail' : 'ffs-detail__acceptance--pass'}`}>
-                <div className="ffs-detail__calc-body">
-                  <div className="ffs-detail__calc-info">
-                    <span className="ffs-detail__calc-num">11</span>
-                    <div>
-                      <p className="ffs-detail__calc-name">Acceptance Level</p>
-                      <p className="ffs-detail__calc-formula">
-                        Level 1 acceptance: ERF {'<'} 1
-                      </p>
-                      <p className="ffs-detail__calc-sub">
-                        = ERF={formatErf(n.ERF)} {n.ERF < 1 ? '✓' : '✗'} · Depth=
-                        {n.maxDepthPct.toFixed(2)}% {n.deepMetalLossReviewRequired ? '(enhanced review required)' : ''}
-                      </p>
-                    </div>
-                  </div>
-                  <p className={`ffs-detail__calc-result ${failed ? 'ffs-detail__calc-result--bad' : 'ffs-detail__calc-result--good'}`}>
-                    {failed ? 'Not Acceptable' : 'Acceptable'}
-                  </p>
-                </div>
+            {traceDefects.length > 0 && (
+              <div className="mb-3">
+                <Callout tone="danger">
+                  <strong>Do not sign this trace.</strong> {traceDefects.length}{' '}
+                  {traceDefects.length === 1 ? 'step does' : 'steps do'} not reproduce the result printed
+                  beside {traceDefects.length === 1 ? 'it' : 'them'} (
+                  {traceDefects.map((step) => step.name).join(', ')}). The assessment numbers come from the
+                  engine and are unaffected, but this working cannot be used as evidence until it is corrected.
+                </Callout>
               </div>
+            )}
+
+            <div className="ffs-detail__calc-list">
+              {trace.map((step) => (
+                <CalcStep key={step.id} step={step} showWorking={showWorking} />
+              ))}
             </div>
           </section>
 
@@ -768,39 +655,55 @@ export default function FfsDetailModal({
               <LifeCard
                 label="Remnant Life"
                 value={formatRemnantLife(life)}
-                description={`As reported, bounded to the ${life.analysisHorizonYears}-year analysis horizon`}
+                description={`As reported, from the ILI date of ${config.iliDate.toISOString().slice(0, 10)}`}
+                basis="The earlier of the two limits below, projected from the as-reported dimensions at the growth rates on this row. It is a projection under a stated growth assumption, not a service-life guarantee."
+                showWorking={showWorking}
                 tone={life.years !== null && life.years < config.highlightYears ? 'warn' : 'default'}
               />
               <LifeCard
                 label="Due Date"
                 value={life.dueDateIso ?? '—'}
                 description={life.dueDateIso ? 'ILI date + calculated limit time' : 'No finite date established'}
+                basis="Counted from the inspection date, not from today. Time elapsed since the run has already been consumed and is not added back."
+                showWorking={showWorking}
               />
               <LifeCard
                 label="Governing Limit"
                 value={remnantLimitLabel(life)}
                 description={life.governingLimit ? 'First condition reached' : 'No limit reached'}
+                basis="Whichever limit is reached first. A tie goes to the depth limit, because quoting an ERF date past the depth line would report a number outside the range the method is written for."
+                showWorking={showWorking}
                 tone={life.governingLimit === 'ERF = 1' ? 'bad' : 'default'}
               />
               {/* Both criteria, always. The governing figure alone hides how
                   close the other limit is, which is what decides whether a
                   repair buys years or months. */}
               <LifeCard
-                label="Years to Wall Penetration"
+                label="Years to 80% Depth"
                 value={life.depthLimitYears === null ? '—' : life.depthLimitYears.toFixed(2)}
                 unit={life.depthLimitYears === null ? undefined : 'y'}
                 description={`(0.80 − d/t) × t / CR depth`}
+                basis={`Closed-form: (0.80 − ${fmt(n.dt, 4)}) × ${n.wall.toFixed(2)} / ${life.depthRateMmPerYear.toFixed(4)}. The 80 %WT line is a project rejection threshold, not a B31G applicability limit.`}
+                showWorking={showWorking}
               />
               <LifeCard
                 label="Years to ERF 1.0"
                 value={life.erfLimitYears === null ? '—' : life.erfLimitYears.toFixed(2)}
                 unit={life.erfLimitYears === null ? undefined : 'y'}
                 description="Depth and length both projected"
+                basis={
+                  life.lengthHeldConstant
+                    ? 'Found by bisection on the projected geometry. No length growth rate was established, so the axial extent is held constant and this figure is non-conservative in the length direction.'
+                    : 'Found by bisection on the projected geometry, growing depth and length together. A flaw that lengthens loses capacity through the bulging term even at constant depth.'
+                }
+                showWorking={showWorking}
               />
               <LifeCard
                 label="Tolerance-adjusted"
                 value={formatRemnantLife(item.remnantLifeConservative)}
                 description={`+${screening.depthTolerancePct}% WT and +${2 * screening.lengthToleranceMm} mm`}
+                basis="The same calculation from tolerance-adjusted dimensions — the sensitivity case, reported beside the as-reported figure rather than instead of it."
+                showWorking={showWorking}
                 tone={
                   item.remnantLifeConservative.years !== null &&
                   item.remnantLifeConservative.years < config.highlightYears
@@ -813,33 +716,44 @@ export default function FfsDetailModal({
                 value={life.depthRateMmPerYear.toFixed(3)}
                 unit="mm/y"
                 description={growthObservationLabel(n.growthEvidence?.depth.observation)}
+                basis={n.growthEvidence?.depth.note ?? 'No structured growth provenance was attached to this row.'}
+                showWorking={showWorking}
               />
               <LifeCard
                 label="CR Length"
                 value={life.lengthHeldConstant ? 'Not calculated' : life.lengthRateMmPerYear.toFixed(3)}
                 unit={life.lengthHeldConstant ? undefined : 'mm/y'}
-                description={
-                  n.growthEvidence?.length.note
-                  ?? growthObservationLabel(n.growthEvidence?.length.observation)
+                description={growthObservationLabel(n.growthEvidence?.length.observation)}
+                basis={
+                  life.lengthHeldConstant
+                    ? 'No usable axial rate. This is not a measured zero — it is the difference between "this flaw is not lengthening" and "nobody established whether it is".'
+                    : (n.growthEvidence?.length.note ?? 'Supplied on the assessment row.')
                 }
+                showWorking={showWorking}
                 tone={life.lengthHeldConstant ? 'warn' : 'default'}
               />
               <LifeCard
                 label="ERF at Limit"
                 value={fmt(n.atFailure_ERF, 4)}
                 description={`ERF @ remnant life`}
+                basis="The feature re-evaluated at the remnant-life date. It reads 1.0 when ERF governs, and below 1.0 when the depth limit or the design-life cap got there first."
+                showWorking={showWorking}
               />
               <LifeCard
                 label="Depth % at Limit"
                 value={n.atFailure_depth === null ? '—' : n.atFailure_depth.toFixed(2)}
                 unit="%"
                 description={`d/t × 100 @ remnant life`}
+                basis="Projected depth at the remnant-life date, at the depth growth rate above."
+                showWorking={showWorking}
               />
               <LifeCard
                 label={'Sᶠ at Limit'}
                 value={fmt(n.atFailure_Sf, 4)}
                 unit="MPa"
                 description={`Sᶠ @ remnant life`}
+                basis="Failure stress recomputed at the projected depth and length, through the same equation as step 7."
+                showWorking={showWorking}
               />
             </div>
 
@@ -866,7 +780,7 @@ export default function FfsDetailModal({
             <Callout tone="neutral">
               {life.status === 'insufficient-growth-basis'
                 ? 'No due date is calculated because neither depth nor length has a positive growth basis.'
-                : `Neither projected wall penetration nor ERF 1.0 is reached inside the configured ${life.analysisHorizonYears}-year analysis horizon.`}{' '}
+                : `Neither the 80% depth limit nor ERF 1.0 is reached inside the configured ${life.analysisHorizonYears}-year analysis horizon.`}{' '}
               This is not a prediction of unlimited service life. Final disposition requires an approved
               procedure and independent checking.
             </Callout>

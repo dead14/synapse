@@ -26,18 +26,13 @@ export type FfsMaterialClass = 'plain-carbon-low-alloy' | 'other' | 'unknown';
 
 export interface FfsApplicabilityDeclaration {
   materialClass: FfsMaterialClass;
-  /** Maximum metal temperature during the assessed operating condition. */
   operatingTemperatureC: number | null;
   ductileFractureBehaviorConfirmed: boolean;
   pressureDominatedLoadingConfirmed: boolean;
   codeExclusionsReviewed: boolean;
-  /** Required when any assessed metal loss exceeds 80% WT. */
   deepMetalLossMeasurementAccuracyConfirmed: boolean;
-  /** Required when any assessed metal loss exceeds 80% WT. */
   effectiveCorrosionRateConfirmed: boolean;
-  /** Hydrotest, MAOP/MOP, code, or approved engineering basis for the assessment SF. */
   assessmentSafetyFactorBasis: string;
-  /** Required only when effective SF is below 1.25. */
   lowSafetyFactorJustification: string;
 }
 
@@ -98,6 +93,16 @@ export interface FfsSectionDesignFactor {
  */
 export type FfsDesignFactorSource = 'section-override' | 'line-default' | 'row-supplied';
 
+/**
+ * Where the safety factor dividing the failure pressure came from.
+ *
+ * `derived-from-design-factor` is the historic B31G practice — SF = 1/F, the
+ * basis of the Level 0 tables — and is only correct while the line operates at
+ * its design hoop stress. `explicit` is the ratio B31G para. 1.9 actually asks
+ * for: minimum hydrostatic test pressure over MAOP or MOP.
+ */
+export type FfsSafetyFactorSource = 'derived-from-design-factor' | 'explicit';
+
 export type FfsRepairStatus = 'unrepaired' | 'temporary-repair' | 'permanent-repair-verified';
 
 /**
@@ -128,7 +133,7 @@ export interface FfsScreeningConfig {
   forecastYears: number;
   /** ERF at which a feature enters the engineering-review band. */
   reviewBandErf: number;
-  /** Legacy persisted field. The ASME interaction engine always applies fixed 3t. */
+  /** Multiple of wall thickness used for the axial interaction screen. */
   interactionSpacingFactor: number;
   /** Depth at which a feature is rejected regardless of ERF, as % of wall. */
   depthRejectionPct: number;
@@ -144,6 +149,47 @@ export const DEFAULT_SCREENING_CONFIG: FfsScreeningConfig = {
   interactionSpacingFactor: 3,
   depthRejectionPct: 80,
 };
+
+/**
+ * Fills in a screening config that arrived missing fields.
+ *
+ * The results workspace receives its config through router navigation state,
+ * which the browser keeps in its history entry — so it survives a reload, a
+ * back navigation, and a deploy. An entry written by an earlier build comes
+ * back shaped the way that build wrote it, and the type says nothing about it
+ * because the value never passed through a parser.
+ *
+ * That is not hypothetical. A restored config without `reviewBandErf` took the
+ * whole Narrative tab down with "Cannot read properties of undefined (reading
+ * 'toFixed')", because the prose quotes the review band directly. Every panel
+ * reads these fields, so the repair belongs here rather than in each caller: a
+ * missing or non-finite value falls back to its default instead of reaching a
+ * template as `undefined`.
+ */
+export function normaliseScreeningConfig(value: Partial<FfsScreeningConfig> | null | undefined): FfsScreeningConfig {
+  const source = value ?? {};
+  const numeric = (
+    key: Exclude<keyof FfsScreeningConfig, 'growthBasis'>,
+  ): number => {
+    const candidate = source[key];
+    return typeof candidate === 'number' && Number.isFinite(candidate)
+      ? candidate
+      : DEFAULT_SCREENING_CONFIG[key];
+  };
+
+  return {
+    depthTolerancePct: numeric('depthTolerancePct'),
+    lengthToleranceMm: numeric('lengthToleranceMm'),
+    growthBasis: source.growthBasis === 'uniform' || source.growthBasis === 'measured'
+      ? source.growthBasis
+      : DEFAULT_SCREENING_CONFIG.growthBasis,
+    growthRateMmPerYear: numeric('growthRateMmPerYear'),
+    forecastYears: numeric('forecastYears'),
+    reviewBandErf: numeric('reviewBandErf'),
+    interactionSpacingFactor: numeric('interactionSpacingFactor'),
+    depthRejectionPct: numeric('depthRejectionPct'),
+  };
+}
 
 export interface FfsInput {
   featureId: string | null;
@@ -178,6 +224,9 @@ export interface FfsInput {
   isClusteredMetalLoss: boolean;
   /** Which rule supplied `df`. */
   designFactorSource: FfsDesignFactorSource;
+  /** The divisor between failure pressure and safe pressure: P_S = P_F / SF. */
+  safetyFactor: number;
+  safetyFactorSource: FfsSafetyFactorSource;
 }
 
 export type FfsRepairDispositionPatch = Pick<
@@ -203,7 +252,7 @@ export interface FfsResult extends FfsInput {
   safePressure: number;
   ERF: number;
   acceptance: 'Acceptable' | 'Un-Acceptable';
-  /** Para. 1.2(f): >80% WT remains Level 1 calculable but needs enhanced review. */
+  /** Para. 1.2(f): >80% WT remains calculable but requires enhanced review. */
   deepMetalLossReviewRequired: boolean;
   branch: string;
   /**
@@ -240,10 +289,13 @@ export interface FfsTier {
   safePressure: number;
   ERF: number;
   severity: FfsSeverity;
-  /** True only when projected metal loss reaches full-wall penetration. */
+  /**
+   * True when this tier's depth is past the 80 %WT limit B31G is written for.
+   * The tier is still evaluated — the tolerance and forecast tiers are meant to
+   * push features past the limit — but the ERF is no longer a code result and
+   * must be presented as an indicator, not an assessment.
+   */
   beyondDepthLimit: boolean;
-  /** Para. 1.2(f) enhanced-review flag above 80% WT. */
-  deepMetalLossReviewRequired: boolean;
   /** The growth rate this tier was projected with, in mm/year. */
   growthRateMmPerYear: number;
   /** Evidence behind the rate used by this tier. */
@@ -290,16 +342,43 @@ export interface FfsLocationZone {
   worstErf: number;
 }
 
+/**
+ * Two features screened against the 3t interaction rule of B31G para. 1.12(a),
+ * which measures the separation both longitudinally and circumferentially.
+ */
 export interface FfsInteractionPair {
   a: FfsScreenedResult;
   b: FfsScreenedResult;
-  /** Axial edge-to-edge separation. Kept as `edgeGapMm` for existing consumers. */
+  /** Axial edge-to-edge separation in mm; negative when the boxes overlap. */
   edgeGapMm: number;
-  axialEdgeGapMm: number;
-  /** Arc-distance edge gap; null when either clock position is unavailable. */
-  circumferentialEdgeGapMm: number | null;
+  /** Alias retained for the combined-flaw assessment evidence. */
+  axialEdgeGapMm?: number;
+  /**
+   * Circumferential edge-to-edge separation in mm, measured the short way round
+   * the pipe. Null when either feature has no usable clock position or width.
+   */
+  circumferentialGapMm: number | null;
+  /** Alias retained for the combined-flaw assessment evidence. */
+  circumferentialEdgeGapMm?: number | null;
   thresholdMm: number;
-  resolved: boolean;
+  /** True when the axial separation is inside the threshold. */
+  axialInteracting: boolean;
+  /** True when the circumferential separation is inside the threshold. */
+  circumferentialInteracting: boolean;
+  /** False when the circumferential relation cannot be resolved from ILI data. */
+  resolved?: boolean;
+  /**
+   * Angle of the line joining the two features, in degrees from the pipe axis.
+   * Null when the circumferential offset could not be established.
+   */
+  orientationAngleDeg: number | null;
+  /**
+   * How B31G para. 1.13 says the pair's extent should be taken. Below 45° the
+   * overall length of the pattern governs; at or above it, the most severe
+   * longitudinal section is sufficient, so combining the two into one long flaw
+   * would be over-conservative rather than correct.
+   */
+  combineRule: 'overall-length' | 'worst-longitudinal-section' | 'undetermined';
 }
 
 export interface FfsAction {
@@ -319,6 +398,7 @@ export const REQUIRED_COLUMNS = [
 
 export const OPTIONAL_COLUMNS = [
   'Feature ID',
+  'Safety Factor',
   'Clustered Metal Loss',
   'Repair Status',
   'Repair Method',

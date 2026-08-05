@@ -54,6 +54,7 @@ test('maps the NEW-run alignment anomaly and converts depth growth from %WT/year
     'CR Length [mm/y]': '4',
     'Design Factor': '0.72',
     'Design Factor Source': 'line-default',
+    'Safety Factor': '',
     'Outer Diameter Ds': '508',
     'SMYS [MPa]': '359',
     'Operating Pressure P₀ [MPa]': '7.2',

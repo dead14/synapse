@@ -2,16 +2,15 @@ import type { FfsConfig } from './types';
 import {
   B31G_DEPTH_LIMIT_RATIO,
   MODIFIED_B31G_Z_CUTOFF,
-  ORIGINAL_B31G_NORMALIZED_LENGTH_CUTOFF,
   ORIGINAL_B31G_Z_CUTOFF,
   evaluateB31g,
+  safetyFactorFromDesignFactor,
   type B31gBranch,
 } from './b31g.ts';
 
 export {
   B31G_DEPTH_LIMIT_RATIO,
   MODIFIED_B31G_Z_CUTOFF,
-  ORIGINAL_B31G_NORMALIZED_LENGTH_CUTOFF,
   ORIGINAL_B31G_Z_CUTOFF,
 };
 export type { B31gBranch };
@@ -84,7 +83,7 @@ function strictEvaluate(
     wallThickness: input.wallThickness,
     outerDiameter: input.outerDiameter,
     smysMpa: input.smysMpa,
-    designFactor: input.designFactor,
+    safetyFactor: safetyFactorFromDesignFactor(input.designFactor),
     operatingPressureMpa: input.operatingPressureMpa,
   }, method, flowStressMode);
 

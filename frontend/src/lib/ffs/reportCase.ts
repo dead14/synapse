@@ -1,3 +1,4 @@
+import { MINIMUM_RECOMMENDED_SAFETY_FACTOR } from './b31g.ts';
 import { lifeSortValue } from './lifeProjection.ts';
 import type {
   FfsApplicabilityDeclaration,
@@ -533,6 +534,33 @@ export function buildFfsReportCase(
       'warning',
       'Remaining life is not calculated where no positive depth or length growth basis is available.',
       noGrowthBasisCount,
+    ));
+  }
+
+  // B31G para. 1.9 recommends the hydrotest-to-MAOP ratio, usually not below
+  // 1.25. A design factor of 1.0 derives a safety factor of exactly 1.0, which
+  // leaves the safe pressure equal to the failure pressure.
+  const thinSafetyFactorCount = items.filter(
+    (item) => item.nominal.safetyFactor < MINIMUM_RECOMMENDED_SAFETY_FACTOR,
+  ).length;
+  if (thinSafetyFactorCount > 0) {
+    findings.push(finding(
+      'SAFETY_FACTOR_BELOW_RECOMMENDED',
+      'error',
+      `The safety factor dividing the failure pressure is below the ${MINIMUM_RECOMMENDED_SAFETY_FACTOR} minimum recommended by ASME B31G para. 1.9.`,
+      thinSafetyFactorCount,
+    ));
+  }
+
+  const derivedSafetyFactorCount = items.filter(
+    (item) => item.nominal.safetyFactorSource === 'derived-from-design-factor',
+  ).length;
+  if (derivedSafetyFactorCount > 0) {
+    findings.push(finding(
+      'SAFETY_FACTOR_DERIVED_FROM_DESIGN_FACTOR',
+      'info',
+      'The safety factor was derived from the design factor as 1/F. That is the historic B31G basis and holds only while the line operates at its design hoop stress; B31G para. 1.9 asks for the hydrostatic-test-to-MAOP ratio.',
+      derivedSafetyFactorCount,
     ));
   }
 

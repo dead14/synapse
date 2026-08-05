@@ -158,11 +158,15 @@ export function buildNarrative(
   blocks.push({
     kind: 'paragraph',
     text:
-      `The remaining-strength evaluation follows the ${methodName(config)} method. Results are reported as an ` +
-      `estimated repair factor (ERF), defined as the ratio of operating pressure to the calculated safe ` +
-      `operating pressure. Level 1 numerical acceptance requires ERF below 1.0. The project screen escalates ` +
-      `depth at ${screening.depthRejectionPct}% WT, while ASME B31G-2023 requires enhanced sizing-accuracy and ` +
-      `effective-corrosion-rate review above 80% WT rather than automatic equation rejection.`,
+      `The remaining-strength evaluation follows the ${methodName(config)} method as a Level 1 evaluation ` +
+      `(ASME B31G-2023 para. 1.6). Its acceptance criterion is that the estimated failure stress is at least ` +
+      `the safety factor times the hoop stress at the required pressure. Results are reported here as an ` +
+      `estimated repair factor (ERF) — the ratio of the required pressure to the calculated safe pressure — ` +
+      `which restates the same criterion as ERF below 1.0. ERF is an industry convention and is not a term ` +
+      `defined by B31G. The additional condition that reported depth stay below ` +
+      `${screening.depthRejectionPct}% of wall thickness is a project rejection rule, not a code limit: ` +
+      `B31G para. 1.2(f) permits evaluation at any depth provided the sizing accuracy and the effective ` +
+      `corrosion rate are justified.`,
   });
 
   // ── 2.0 Methodology ───────────────────────────────────────────────
@@ -170,20 +174,11 @@ export function buildNarrative(
   blocks.push({
     kind: 'paragraph',
     text:
-      `The ${methodName(config)} remaining-strength criterion was applied to each reported feature using the ` +
-      `nominal geometry, material properties, and operating pressure supplied with the inspection data. ` +
-      `The flow stress basis is ${flowStressText(config)}.`,
-  });
-  blocks.push({
-    kind: 'paragraph',
-    text: config.applicability
-      ? `Applicability declaration: material ${config.applicability.materialClass}; maximum operating temperature ` +
-        `${config.applicability.operatingTemperatureC ?? 'not supplied'} °C; ductile fracture behavior ` +
-        `${config.applicability.ductileFractureBehaviorConfirmed ? 'confirmed' : 'not confirmed'}; pressure-dominated loading ` +
-        `${config.applicability.pressureDominatedLoadingConfirmed ? 'confirmed' : 'not confirmed'}; exclusions review ` +
-        `${config.applicability.codeExclusionsReviewed ? 'confirmed' : 'not confirmed'}. Safety-factor basis: ` +
-        `${config.applicability.assessmentSafetyFactorBasis || 'not supplied'}.`
-      : 'ASME applicability declarations were not supplied; report readiness is blocked.',
+      `The ${methodName(config)} remaining-strength criterion was applied to each reported feature as a ` +
+      `Level 1 evaluation, using the nominal geometry, material properties, and required pressure supplied ` +
+      `with the inspection data. The flow stress basis is ${flowStressText(config)}. A Level 2 Effective ` +
+      `Area evaluation, which needs a measured corrosion profile rather than a single maximum depth and ` +
+      `axial extent, is reported separately where an interacting group provides one.`,
   });
 
   blocks.push({
@@ -196,8 +191,8 @@ export function buildNarrative(
             'Sf = S_flow · (1 − ⅔ d/t) / (1 − ⅔ (d/t)/M)   for z ≤ 20',
             'Sf = S_flow · (1 − d/t)                  for z > 20',
             'S_flow = 1.1 × SMYS',
-            'P_f = 2 · Sf · t / D          P_safe = P_f / SF',
-            'ERF = P₀ / P_safe             S₀ = P₀ · D / (2t)',
+            'P_f = 2 · Sf · t / D          P_safe = P_f × F',
+            'ERF = S₀ / (Sf × F)           S₀ = P₀ · D / (2t)',
           ]
         : [
             'z  = L² / (D · t)',
@@ -205,8 +200,8 @@ export function buildNarrative(
             'M  = 0.032 z + 3.3                       for z > 50',
             `S_flow = ${flowStressText(config)}`,
             'Sf = S_flow · (1 − 0.85 d/t) / (1 − 0.85 (d/t)/M)',
-            'P_f = 2 · Sf · t / D          P_safe = P_f / SF',
-            'ERF = P₀ / P_safe             S₀ = P₀ · D / (2t)',
+            'P_f = 2 · Sf · t / D          P_safe = P_f × F',
+            'ERF = S₀ / (Sf × F)           S₀ = P₀ · D / (2t)',
           ],
   });
 
@@ -214,19 +209,19 @@ export function buildNarrative(
   // was assessed against is the difference between a reviewable result and a
   // number the reader has to take on trust.
   const designFactorRows = buildSectionDesignFactorSummary(items);
-  blocks.push({ kind: 'heading', level: 2, text: '2.1  Assessment safety factor by section' });
+  blocks.push({ kind: 'heading', level: 2, text: '2.1  Design factor by section' });
   blocks.push({
     kind: 'table',
     table: {
-      caption: 'Table 2-1  Assessment pressure factor and effective safety factor by section',
+      caption: 'Table 2-1  Design factor and safety factor applied to each section',
       columns: [
         { header: 'Section', align: 'left' },
         { header: 'From [m]', align: 'right' },
         { header: 'To [m]', align: 'right' },
         { header: 'Features', align: 'right' },
-        { header: 'Pressure factor (1/SF)', align: 'right' },
-        { header: 'Effective SF', align: 'right' },
+        { header: 'Design factor', align: 'right' },
         { header: 'Source', align: 'left' },
+        { header: 'Safety factor', align: 'right' },
       ],
       rows: designFactorRows.map((row) => [
         row.section,
@@ -234,12 +229,12 @@ export function buildNarrative(
         row.endLd.toLocaleString(undefined, { maximumFractionDigits: 1 }),
         row.featureCount.toLocaleString(),
         row.designFactor.toFixed(2),
-        (1 / row.designFactor).toFixed(3),
         row.source === 'section-override'
           ? 'Section override'
           : row.source === 'line-default'
             ? 'Line default'
             : 'Supplied per row',
+        `${row.safetyFactor.toFixed(2)}${row.safetyFactorSource === 'explicit' ? '' : ' (1/F)'}`,
       ]),
     },
   });
@@ -255,7 +250,9 @@ export function buildNarrative(
         : `A uniform corrosion growth rate of ${screening.growthRateMmPerYear.toFixed(2)} mm/year is applied radially to every feature for the ${screening.forecastYears}-year forecast.`,
       `Remaining-life calculations are bounded to a ${horizonYears}-year analysis horizon. A limit not reached inside that window is not reported as a service-life value or date.`,
       `Engineering review band starts at ERF ${screening.reviewBandErf.toFixed(2)}; ERF above 1.00 is reported as exceeding the calculated safe pressure.`,
-      'Axial and circumferential interaction screened at the fixed ASME 3t edge-to-edge criterion; resolved colonies are recalculated as combined flaws.',
+      `Interaction screened at ${screening.interactionSpacingFactor}t edge-to-edge separation in both the axial and circumferential directions, per B31G para. 1.12(a).`,
+      `Metal loss deeper than ${screening.depthRejectionPct}% of wall is rejected by project rule. B31G itself sets no depth ceiling on evaluation; it requires the sizing accuracy and corrosion rate to be justified above 80 %, and withdraws only the section 3 tables.`,
+      'Remaining life, the ERF term, and the original design life cap are operator conventions layered on the code result. B31G defines none of them.',
       'Temperature derating, residual stress, and pressure cycling are not applied.',
     ],
   });
@@ -468,10 +465,13 @@ export function buildNarrative(
   blocks.push({
     kind: 'paragraph',
     text:
-      'The remnant life of the line is the shortest remnant life among its active features. ' +
-      'Each feature is projected from its as-reported dimensions at its own growth rates, and ' +
-      'the earlier of two limits governs: projected metal loss reaching full-wall penetration, or ERF reaching 1.0. ' +
-      `Metal loss above 80% WT remains a Level 1 result only after enhanced sizing and rate review. Results are bounded to a ` +
+      'ASME B31G contains no remaining-life method: it evaluates remaining strength at the dimensions ' +
+      'given to it. The projection below is therefore an operator procedure built on the code result, ' +
+      'not a code calculation, and it is reported as such. The remnant life of the line is the shortest ' +
+      'remnant life among its active features. Each feature is projected from its as-reported dimensions ' +
+      'at its own growth rates, and the earlier of two limits governs: metal loss reaching 80% of nominal ' +
+      'wall, which is the project rejection line, or the safe pressure falling to the required pressure ' +
+      `(ERF 1.0), which is the code acceptance criterion. Results are bounded to a ` +
       `${horizonYears}-year analysis horizon` +
       (service.designLifeYears !== null
         ? ` and are not reported above the ${service.designLifeYears}-year original design life.`
@@ -490,7 +490,7 @@ export function buildNarrative(
         `Depth CGR           ${remnant.depthRateMmPerYear.toFixed(3)} mm/y`,
         `Length CGR          ${remnant.lengthHeldConstant ? 'not established — length held constant' : `${remnant.lengthRateMmPerYear.toFixed(3)} mm/y`}`,
         '',
-        `Wall penetration    (1.00 - ${(governing.nominal.maxDepthPct / 100).toFixed(2)}) x ${lifeGoverning.nominal.wall.toFixed(2)} mm / ${remnant.depthRateMmPerYear.toFixed(3)} mm/y = ${remnant.depthLimitYears === null ? `not reached in ${horizonYears} y` : `${remnant.depthLimitYears.toFixed(2)} y`}`,
+        `80 %WT limit        (0.80 - ${(governing.nominal.maxDepthPct / 100).toFixed(2)}) x ${lifeGoverning.nominal.wall.toFixed(2)} mm / ${remnant.depthRateMmPerYear.toFixed(3)} mm/y = ${remnant.depthLimitYears === null ? `not reached in ${horizonYears} y` : `${remnant.depthLimitYears.toFixed(2)} y`}`,
         `ERF 1.0 limit       ${remnant.erfLimitYears === null ? `not reached in ${horizonYears} y` : `${remnant.erfLimitYears.toFixed(2)} y`}`,
         service.designLifeYears !== null ? `Design life limit   ${service.designLifeYears.toFixed(2)} y` : '',
         '',
@@ -544,7 +544,7 @@ export function buildNarrative(
   blocks.push({ kind: 'figure', caption: 'Figure 4-1  Depth category distribution by log distance', chartId: 'depth-by-ld' });
   blocks.push({ kind: 'figure', caption: 'Figure 4-2  Depth category distribution in three dimensions', chartId: 'depth-3d' });
   blocks.push({ kind: 'figure', caption: 'Figure 4-3  Feature orientation by log distance', chartId: 'orientation' });
-  blocks.push({ kind: 'figure', caption: 'Figure 4-4  Anomaly screening against ASME B31G Level 0 and configured Level 1 envelopes', chartId: 'screening' });
+  blocks.push({ kind: 'figure', caption: 'Figure 4-4  Anomaly screening against the B31G Level 0 envelope', chartId: 'screening' });
   blocks.push({ kind: 'figure', caption: 'Figure 4-5  ERF against log distance', chartId: 'erf-ld' });
 
   // ── 5.0 Discussion ────────────────────────────────────────────────

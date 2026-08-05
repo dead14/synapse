@@ -54,17 +54,17 @@ function row(overrides: Record<string, string> = {}): Record<string, string> {
   };
 }
 
-/* ── The projected wall-penetration criterion ─────────────────────────── */
+/* ── The 80 %WT criterion ──────────────────────────────────────────────── */
 
-test('the depth criterion reproduces the (1.00 − d/t) · t / CR arithmetic', () => {
+test('the depth criterion reproduces the (0.80 − d/t) · t / CR arithmetic', () => {
   // Worked from the reference residual-life assessment: 44 %WT on a 9.30 mm
-  // wall growing at 0.33 mm/y reaches projected penetration in
-  // (1.00 − 0.44) × 9.30 / 0.33 = 15.78 years.
+  // wall growing at 0.33 mm/y reaches the 80 % limit in (0.80 − 0.44) × 9.30 /
+  // 0.33 = 10.14 years.
   const result = processRow(row(), config);
 
   assert.equal(result.remnantLife.status, 'calculated');
   assert.ok(result.remnantLife.depthLimitYears !== null);
-  assert.ok(Math.abs(result.remnantLife.depthLimitYears! - 15.78) < 0.02);
+  assert.ok(Math.abs(result.remnantLife.depthLimitYears! - 10.14) < 0.02);
 });
 
 test('the governing limit is the earlier of the two criteria', () => {
@@ -74,7 +74,7 @@ test('the governing limit is the earlier of the two criteria', () => {
   const candidates = [depthLimitYears, erfLimitYears].filter((value): value is number => value !== null);
   assert.ok(candidates.length > 0);
   assert.equal(years, Math.min(...candidates));
-  assert.equal(governingLimit, depthLimitYears === years ? 'Wall penetration' : 'ERF = 1');
+  assert.equal(governingLimit, depthLimitYears === years ? 'Depth = 80%' : 'ERF = 1');
 });
 
 /* ── Length growth actually reaches the projection ─────────────────────── */
@@ -183,7 +183,7 @@ test('the ERF search is bounded by the horizon rather than extrapolated past it'
       wallThickness: 9.3,
       outerDiameter: 219.1,
       smysMpa: 290,
-      designFactor: 0.72,
+      safetyFactor: 1 / 0.72,
       operatingPressureMpa: 9.35,
     },
     method: 'modified',
@@ -226,9 +226,9 @@ test('the line remnant life is the shortest among its active features', () => {
 test('the repair programme figure excludes the features it assumes replaced', () => {
   const items = screenResults(
     [
-      // Reaches a capacity limit inside the 5-year
+      // Reaches the depth limit in about 1.7 years, so it is inside the 5-year
       // review threshold and enters the repair programme.
-      processRow(row({ 'Feature ID': 'SHORT', 'LD [m]': '100', 'Max Depth [%]': '71', 'CR Depth [mm/y]': '0.7' }), config),
+      processRow(row({ 'Feature ID': 'SHORT', 'LD [m]': '100', 'Max Depth [%]': '71', 'CR Depth [mm/y]': '0.5' }), config),
       processRow(row({ 'Feature ID': 'LONG', 'LD [m]': '200', 'Max Depth [%]': '44', 'CR Depth [mm/y]': '0.33' }), config),
     ],
     config,

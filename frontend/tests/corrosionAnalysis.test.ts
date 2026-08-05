@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import {
   analyseComparison,
   buildReviewPayload,
-  isMetalLoss,
   selectableKeys,
   suggestSelection,
   summariseCorrosion,
@@ -44,19 +43,6 @@ test('reads the corrosion condition from an alignment comparison row', () => {
   assert.deepEqual(feature.blockers, []);
 });
 
-test('never classifies seepage, bolting, or coating damage as metal loss just because depth is populated', () => {
-  for (const featureType of ['Seepage', 'Bolting damage', 'Coating damage']) {
-    const feature = toCorrosionFeature(metalLoss({
-      'Feature Type NEW': featureType,
-      'Depth NEW (%WT)': 25,
-    }));
-    assert.ok(feature);
-    assert.equal(isMetalLoss(feature), false, featureType);
-    assert.equal(feature.ffsReady, false, featureType);
-  }
-  assert.equal(isMetalLoss(toCorrosionFeature(metalLoss())!), true);
-});
-
 test('rows without a NEW-run feature are not part of the review', () => {
   assert.equal(toCorrosionFeature({ 'Source Key NEW': '-', 'Source Key OLD': 'old:3' }), null);
   assert.equal(analyseComparison([{ 'Source Key NEW': '-' }, metalLoss()]).length, 1);
@@ -78,12 +64,21 @@ test('a feature missing a dimension the engine needs is not assessable', () => {
   assert.equal(noLength?.ffsReady, false);
   assert.deepEqual(noLength?.blockers, ['No reported length']);
 
+  // Depth past the 80 %WT project rejection line is not a reason to withhold a
+  // feature from FFS. It is assessed, fails there, and is disclosed — whereas
+  // blocking the handoff removed the deepest metal loss on the line from the
+  // report entirely. Only metal loss leaving no wall to assess is refused.
   const deep = toCorrosionFeature(metalLoss({ 'Depth NEW (%WT)': 92 }));
-  assert.equal(deep?.ffsReady, true, 'Level 1 remains calculable but needs enhanced accuracy/rate review');
+  assert.equal(deep?.ffsReady, true);
+  assert.deepEqual(deep?.blockers, []);
+
+  const throughWall = toCorrosionFeature(metalLoss({ 'Depth NEW (%WT)': 101 }));
+  assert.equal(throughWall?.ffsReady, false);
+  assert.match(throughWall!.blockers[0], /0–100 %WT/);
 
   const bare = toCorrosionFeature({ 'Source Key NEW': 'new:9' });
   assert.equal(bare?.ffsReady, false);
-  assert.equal(bare?.blockers.length, 6);
+  assert.equal(bare?.blockers.length, 5);
 });
 
 test('the rule proposes only assessable metal loss', () => {

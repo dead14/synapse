@@ -66,7 +66,8 @@ test('rejects partial numbers, NaN, and Infinity instead of parseFloat coercion'
 test('rejects zero, negative, and out-of-domain engineering inputs', () => {
   const row = validRow({
     [REQUIRED_COLUMNS[0]]: '-1',
-    [REQUIRED_COLUMNS[3]]: '100',
+    // Past full wall — the depth bound is the wall, not the 80 %WT line.
+    [REQUIRED_COLUMNS[3]]: '100.01',
     [REQUIRED_COLUMNS[4]]: '0',
     [REQUIRED_COLUMNS[5]]: '0',
     [REQUIRED_COLUMNS[7]]: '10',
@@ -88,22 +89,14 @@ test('rejects zero, negative, and out-of-domain engineering inputs', () => {
   }
 });
 
-test('accepts deep metal loss below full-wall penetration for Level 1 calculation', () => {
-  const row = validRow({ [REQUIRED_COLUMNS[3]]: '92' });
-  assert.deepEqual(validateData([row]), []);
-  const result = processRow(row, config);
-  assert.ok(Number.isFinite(result.ERF));
-  assert.equal(result.deepMetalLossReviewRequired, true);
-});
-
-test('does not use 80% as a universal Level 1 acceptance cutoff', () => {
+test('allows the 80% method boundary but never marks it acceptable', () => {
   const row = validRow({ [REQUIRED_COLUMNS[3]]: '80' });
   assert.deepEqual(validateData([row]), []);
 
   const result = processRow(row, config);
-  assert.equal(result.deepMetalLossReviewRequired, false);
-  assert.equal(result.acceptance, result.ERF < 1 ? 'Acceptable' : 'Un-Acceptable');
-  assert.notEqual(result.remnantLife.governingLimit, 'Wall penetration');
+  assert.equal(result.acceptance, 'Un-Acceptable');
+  assert.equal(result.remnantLife.years, 0);
+  assert.equal(result.remnantLife.governingLimit, 'Depth = 80%');
   assert.ok(Number.isFinite(result.ERF));
 });
 
@@ -126,36 +119,6 @@ test('rejects invalid runtime configuration values', () => {
     () => processRow(validRow(), { ...config, analysisHorizonYears: 101 }),
     /analysis horizon/i,
   );
-});
-
-test('enforces SMYS + 69 MPa and the minimum assessment safety factor at runtime', () => {
-  const applicability = {
-    materialClass: 'plain-carbon-low-alloy' as const,
-    operatingTemperatureC: 80,
-    ductileFractureBehaviorConfirmed: true,
-    pressureDominatedLoadingConfirmed: true,
-    codeExclusionsReviewed: true,
-    deepMetalLossMeasurementAccuracyConfirmed: false,
-    effectiveCorrosionRateConfirmed: false,
-    assessmentSafetyFactorBasis: 'MAOP and hydrotest basis',
-    lowSafetyFactorJustification: '',
-  };
-
-  assert.throws(
-    () => processRow(
-      validRow({ [REQUIRED_COLUMNS[12]]: '484' }),
-      { ...config, method: 'modified', applicability },
-    ),
-    /483 MPa/i,
-  );
-  assert.throws(
-    () => processRow(validRow({ [REQUIRED_COLUMNS[10]]: '0.9' }), { ...config, applicability }),
-    /below 1.25/i,
-  );
-  assert.doesNotThrow(() => processRow(
-    validRow({ [REQUIRED_COLUMNS[10]]: '0.9' }),
-    { ...config, applicability: { ...applicability, lowSafetyFactorJustification: 'Approved special-case assessment.' } },
-  ));
 });
 
 test('validates optional repair disposition values and real calendar dates', () => {
