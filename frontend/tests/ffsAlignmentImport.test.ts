@@ -59,6 +59,11 @@ test('maps the NEW-run alignment anomaly and converts depth growth from %WT/year
     'SMYS [MPa]': '359',
     'Operating Pressure P₀ [MPa]': '7.2',
     'Clustered Metal Loss': 'No',
+    // The run in this fixture reported no joint columns, so they arrive blank
+    // rather than as a zero that would read as "at the girth weld".
+    'Joint No.': '',
+    'Dist U/S GW [m]': '',
+    'Joint Length [m]': '',
     'Repair Status': 'Unrepaired',
     'Repair Method': '',
     'Repair Date': '',

@@ -61,6 +61,14 @@ function optionalText(value: string | undefined): string | null {
   return normalized || null;
 }
 
+/** A number the source may simply not have. Absent is not zero. */
+function optionalNumber(value: string | undefined): number | null {
+  const normalized = String(value ?? '').trim();
+  if (!normalized || normalized === '-') return null;
+  const parsed = Number(normalized.replace(',', '.'));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 /** Reads a workbook truthiness flag without treating a stray label as true. */
 function parseBooleanFlag(value: string | undefined): boolean {
   const normalized = String(value ?? '').trim().toLowerCase();
@@ -115,6 +123,9 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
   const recommendation = optionalText(row.Recommendation);
   const actionOwner = optionalText(row['Action Owner']);
   const isClusteredMetalLoss = parseBooleanFlag(row['Clustered Metal Loss']);
+  const jointNumber = optionalText(row['Joint No.']);
+  const usGwDistanceM = optionalNumber(row['Dist U/S GW [m]']);
+  const jointLengthM = optionalNumber(row['Joint Length [m]']);
   const designFactorSource = designFactorSourceOf(row['Design Factor Source']);
   // B31G para. 1.9 wants the hydrotest-to-MAOP ratio here. Where the source did
   // not supply one, fall back to the historic 1/F so existing assessments keep
@@ -178,7 +189,8 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
   return {
     featureId, ld: parseFloat(ld as string) || ld as any, section, surface, maxDepthPct, length, width, orient, wall,
     crDepth, crLength, df, od, smys, p0, repairStatus, repairMethod, repairDate, repairReference,
-    recommendation, actionOwner, isClusteredMetalLoss, designFactorSource,
+    recommendation, actionOwner, isClusteredMetalLoss,
+    jointNumber, usGwDistanceM, jointLengthM, designFactorSource,
     safetyFactor: +safetyFactor.toFixed(4), safetyFactorSource,
     growthEvidence: {
       oldSurveyYear: null,

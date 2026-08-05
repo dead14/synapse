@@ -14,9 +14,17 @@ import {
   searchFeatures,
   type FeatureQuery,
 } from '../../lib/ffs/featureSearch';
-import type { FfsRepairDispositionPatch, FfsRepairStatus, FfsScreenedResult } from '../../lib/ffs/types';
+import type { FfsSpoolDisposition } from '../../lib/ffs/spoolReview';
+import type {
+  FfsConfig,
+  FfsRepairDispositionPatch,
+  FfsRepairStatus,
+  FfsScreenedResult,
+  FfsScreeningConfig,
+} from '../../lib/ffs/types';
 import { isIsoCalendarDate } from '../../lib/ffs/validation';
 import SynButton from '../ui/SynButton';
+import FfsSpoolReviewPanel from './FfsSpoolReviewPanel';
 import { Callout, Panel, PanelHeader, Stat, formatErf } from './FfsPrimitives';
 
 /** How many matches the picker renders before asking for a narrower query. */
@@ -175,14 +183,29 @@ function ScenarioCard({
 
 export default function FfsCaseReviewPanel({
   items,
+  config,
+  screening,
   reportContext,
+  spoolDispositions,
+  onSaveSpoolDisposition,
+  onClearSpoolDisposition,
+  onApplyRepairPatches,
   onSelect,
   onUpdateRepair,
   onResetRepair,
   changedRepairIndexes = new Set<number>(),
 }: {
   items: FfsScreenedResult[];
+  config: FfsConfig;
+  screening: FfsScreeningConfig;
   reportContext: FfsReportContext;
+  spoolDispositions: Record<string, FfsSpoolDisposition>;
+  onSaveSpoolDisposition: (spoolId: string, disposition: FfsSpoolDisposition) => void;
+  onClearSpoolDisposition: (spoolId: string) => void;
+  onApplyRepairPatches?: (
+    indexes: number[],
+    patch: (item: FfsScreenedResult) => FfsRepairDispositionPatch,
+  ) => void;
   onSelect?: (item: FfsScreenedResult) => void;
   onUpdateRepair?: (index: number, patch: FfsRepairDispositionPatch) => void;
   onResetRepair?: (index: number) => void;
@@ -313,11 +336,26 @@ export default function FfsCaseReviewPanel({
         </div>
       </Panel>
 
+      {/* Spool first: a repair is decided for a piece of pipe, and the registers
+          below record what was decided and what has since been evidenced. */}
+      <FfsSpoolReviewPanel
+        items={items}
+        config={config}
+        screening={screening}
+        reportContext={reportContext}
+        dispositions={spoolDispositions}
+        onSaveDisposition={onSaveSpoolDisposition}
+        onClearDisposition={onClearSpoolDisposition}
+        onApplyToFeatures={onApplyRepairPatches}
+        onRecordFeature={onUpdateRepair ? openEditor : undefined}
+        onSelectFeature={onSelect}
+      />
+
       <Panel padded={false}>
         <div className="p-5 pb-3">
           <PanelHeader
             title="Repair disposition register"
-            subtitle="Capacity credit requires a unique feature ID and permanent-repair evidence completed from the ILI date through the report as-of date."
+            subtitle="Completed repairs only. Capacity credit requires a unique feature ID and permanent-repair evidence completed from the ILI date through the report as-of date — planning what to do with a spool happens in the spool review above."
             actions={onUpdateRepair ? (
               <SynButton
                 type="button"
@@ -328,7 +366,7 @@ export default function FfsCaseReviewPanel({
               >
                 <span className="inline-flex items-center gap-1.5">
                   {pickerOpen ? <FiX /> : <FiPlus />}
-                  {pickerOpen ? 'Close feature search' : 'Record / update'}
+                  {pickerOpen ? 'Close feature search' : 'Find a feature to evidence'}
                 </span>
               </SynButton>
             ) : <FiTool aria-hidden="true" className="h-4 w-4 text-slate-400" />}

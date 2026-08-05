@@ -206,6 +206,15 @@ export interface FfsInput {
    * growth rate mean something different for these rows.
    */
   isClusteredMetalLoss: boolean;
+  /**
+   * Where the feature sits on the pipe skeleton, as the ILI reported it. These
+   * are what make a spool (girth weld to girth weld) reviewable as one piece of
+   * pipe instead of a list of independent features. Null when the run did not
+   * report them — the review then says so rather than inventing a boundary.
+   */
+  jointNumber: string | null;
+  usGwDistanceM: number | null;
+  jointLengthM: number | null;
   /** Which rule supplied `df`. */
   designFactorSource: FfsDesignFactorSource;
   /** The divisor between failure pressure and safe pressure: P_S = P_F / SF. */

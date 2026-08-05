@@ -112,11 +112,6 @@ function clockToY(deg: number): number {
   return CLOCK_TOP + (deg / 360) * CLOCK_H;
 }
 
-/** The cluster strip carries the same 0–360° sweep, compressed. */
-function clusterToY(deg: number): number {
-  return CLUSTER_TOP + (deg / 360) * CLUSTER_H;
-}
-
 /**
  * The band is one full turn around the pipe read top to bottom, so it runs
  * 00:00 → 12:00. Labelling the first gridline 12:00 printed the same hour at

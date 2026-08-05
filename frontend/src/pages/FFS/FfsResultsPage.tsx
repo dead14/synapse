@@ -26,6 +26,7 @@ import { Callout, NumberField, Panel } from '../../components/ffs/FfsPrimitives'
 import { exportResultsWorkbook } from '../../lib/ffs/exports';
 import { methodProfileLabel, pressureBasisLabel } from '../../lib/ffs/assessmentProfile.ts';
 import type { AlignmentImportProvenance } from '../../lib/ffs/alignmentImport';
+import type { FfsSpoolDisposition } from '../../lib/ffs/spoolReview';
 import { screenResults } from '../../lib/ffs/screening';
 import {
   buildFfsReportCase,
@@ -90,6 +91,10 @@ export default function FfsResultsPage() {
   // after that panel unmounts.
   const [chartImages, setChartImages] = useState<Record<string, string>>({});
   const [repairOverrides, setRepairOverrides] = useState<Record<number, FfsRepairDispositionPatch>>({});
+  // One decision per spool, held beside the per-feature repair evidence rather
+  // than inside it: a plan for a joint is not a claim that anything was done to
+  // any feature on it.
+  const [spoolDispositions, setSpoolDispositions] = useState<Record<string, FfsSpoolDisposition>>({});
   const [reportAsOfDateIso] = useState(() => formatLocalCalendarDate());
   const handleFiguresCaptured = useCallback((images: Record<string, string>) => {
     setChartImages((previous) => ({ ...previous, ...images }));
@@ -108,6 +113,19 @@ export default function FfsResultsPage() {
     setRepairOverrides((previous) => ({ ...previous, [index]: patch }));
   }, []);
 
+  const saveSpoolDisposition = useCallback((spoolId: string, disposition: FfsSpoolDisposition) => {
+    setSpoolDispositions((previous) => ({ ...previous, [spoolId]: disposition }));
+  }, []);
+
+  const clearSpoolDisposition = useCallback((spoolId: string) => {
+    setSpoolDispositions((previous) => {
+      if (!(spoolId in previous)) return previous;
+      const next = { ...previous };
+      delete next[spoolId];
+      return next;
+    });
+  }, []);
+
   const resetRepairDisposition = useCallback((index: number) => {
     setRepairOverrides((previous) => {
       if (!(index in previous)) return previous;
@@ -121,6 +139,24 @@ export default function FfsResultsPage() {
     () => (config ? screenResults(resultsWithRepairReview, config, screening) : []),
     [resultsWithRepairReview, config, screening],
   );
+  // Bulk edit from the spool review. The patch is a function of the feature so
+  // the caller can carry existing fields through untouched instead of having to
+  // reconstruct them, which is how a plan would otherwise wipe real evidence.
+  const applyRepairPatches = useCallback((
+    indexes: number[],
+    patch: (item: FfsScreenedResult) => FfsRepairDispositionPatch,
+  ) => {
+    const byIndex = new Map(screened.map((item) => [item.index, item]));
+    setRepairOverrides((previous) => {
+      const next = { ...previous };
+      for (const index of indexes) {
+        const item = byIndex.get(index);
+        if (item) next[index] = patch(item);
+      }
+      return next;
+    });
+  }, [screened]);
+
   const reportContext = useMemo(
     () => config
       ? { ...createFfsReportContext(config), asOfDateIso: reportAsOfDateIso }
@@ -487,7 +523,13 @@ export default function FfsResultsPage() {
           {activeTab === 'case' && (
             <FfsCaseReviewPanel
               items={screened}
+              config={config}
+              screening={screening}
               reportContext={reportContext}
+              spoolDispositions={spoolDispositions}
+              onSaveSpoolDisposition={saveSpoolDisposition}
+              onClearSpoolDisposition={clearSpoolDisposition}
+              onApplyRepairPatches={applyRepairPatches}
               onSelect={setSelected}
               onUpdateRepair={updateRepairDisposition}
               onResetRepair={resetRepairDisposition}
