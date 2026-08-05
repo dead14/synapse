@@ -14,6 +14,7 @@ import {
   searchFeatures,
   type FeatureQuery,
 } from '../../lib/ffs/featureSearch';
+import type { FfsGirthWeld } from '../../lib/ffs/alignmentImport';
 import type { FfsSpoolDisposition } from '../../lib/ffs/spoolReview';
 import type {
   FfsConfig,
@@ -186,6 +187,7 @@ export default function FfsCaseReviewPanel({
   config,
   screening,
   reportContext,
+  girthWelds,
   spoolDispositions,
   onSaveSpoolDisposition,
   onClearSpoolDisposition,
@@ -199,6 +201,7 @@ export default function FfsCaseReviewPanel({
   config: FfsConfig;
   screening: FfsScreeningConfig;
   reportContext: FfsReportContext;
+  girthWelds?: readonly FfsGirthWeld[];
   spoolDispositions: Record<string, FfsSpoolDisposition>;
   onSaveSpoolDisposition: (spoolId: string, disposition: FfsSpoolDisposition) => void;
   onClearSpoolDisposition: (spoolId: string) => void;
@@ -343,12 +346,12 @@ export default function FfsCaseReviewPanel({
         config={config}
         screening={screening}
         reportContext={reportContext}
+        girthWelds={girthWelds}
         dispositions={spoolDispositions}
         onSaveDisposition={onSaveSpoolDisposition}
         onClearDisposition={onClearSpoolDisposition}
         onApplyToFeatures={onApplyRepairPatches}
-        onRecordFeature={onUpdateRepair ? openEditor : undefined}
-        onSelectFeature={onSelect}
+        onOpenFeature={onSelect}
       />
 
       <Panel padded={false}>

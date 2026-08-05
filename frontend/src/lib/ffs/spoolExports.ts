@@ -26,11 +26,16 @@ import {
   type FfsSpoolDisposition,
 } from './spoolReview.ts';
 
-const DECISION_LABEL: Record<FfsSpoolDisposition['decision'], string> = {
-  repair: 'Repair',
-  monitor: 'Monitor',
-  defer: 'Defer with justification',
-  'no-action': 'No action',
+const MODE_LABEL: Record<FfsSpoolDisposition['mode'], string> = {
+  recommendation: 'Recommended',
+  repaired: 'Repaired',
+};
+
+const GROUPING_LABEL: Record<FfsSpool['grouping'], string> = {
+  'girth-weld': 'Between two girth welds of the run',
+  'joint-number': 'Reported joint number',
+  'upstream-weld': 'Derived from distance to the upstream GW',
+  unassigned: 'Section only - no spool boundary reported',
 };
 
 const SEVERITY_LABEL = {
@@ -70,7 +75,8 @@ export function buildSpoolReviewWorkbook(
 ): XLSX.WorkBook {
   const workbook = XLSX.utils.book_new();
   const decided = spools.filter((spool) => dispositions[spool.id]);
-  const repairs = decided.filter((spool) => dispositions[spool.id]?.decision === 'repair');
+  const repaired = decided.filter((spool) => dispositions[spool.id]?.mode === 'repaired');
+  const recommended = decided.filter((spool) => dispositions[spool.id]?.mode === 'recommendation');
 
   // ── Cover ───────────────────────────────────────────────────────────────
   const cover: (string | number)[][] = [
@@ -96,20 +102,22 @@ export function buildSpoolReviewWorkbook(
     [],
     ['Population'],
     ['Spools reviewed', spools.length],
-    ['Features covered', spools.reduce((total, spool) => total + spool.featureCount, 0)],
+    ['Metal-loss features covered', spools.reduce((total, spool) => total + spool.featureCount, 0)],
+    ['Total metal-loss axial length [mm]', num(spools.reduce((total, spool) => total + spool.totalMetalLossLengthMm, 0), 0)],
     ['Spools not acceptable', spools.filter((spool) => spool.severity === 'fail').length],
     ['Spools in the review band', spools.filter((spool) => spool.severity === 'review').length],
-    ['Spools with a recorded decision', decided.length],
-    ['Spools with a repair planned', repairs.length],
-    ['Spools still undecided', spools.length - decided.length],
+    ['Spools with a recommendation', recommended.length],
+    ['Spools recorded as repaired', repaired.length],
+    ['Spools with no record yet', spools.length - decided.length],
     [],
     ['Reading this document'],
     ['A spool is one length of pipe between two girth welds. A repair is made to a spool, not to a feature, so'],
     ['the ERF, remnant life and corrosion rate quoted for a spool are those of the single feature that governs it.'],
     ['That feature is named on every row, and its full calculation is on the Feature detail sheet.'],
     [],
-    ['A decision recorded here is a plan. It carries no capacity credit and does not remove any feature from the'],
-    ['assessed population: that requires completed repair evidence, recorded in the repair disposition register.'],
+    ['A recommendation is what should be done. It carries no date, no capacity credit, and removes no feature from'],
+    ['the assessed population. Only a spool recorded as repaired, with a completion date and an evidence reference,'],
+    ['changes the population - and only when the repair is permanent and verified.'],
     [],
     ['This is an engineering calculation record. Final disposition requires an approved procedure and independent checking.'],
     ['Generated', new Date().toISOString()],
@@ -124,14 +132,17 @@ export function buildSpoolReviewWorkbook(
 
   // ── Spool register ──────────────────────────────────────────────────────
   const registerHeader = [
-    'Spool', 'Joint no.', 'Section', 'Boundary source', 'Extent [m]', 'Joint length [m]',
-    'Features', 'Clusters', 'Internal', 'External',
+    'Spool', 'U/S girth weld', 'D/S girth weld', 'Joint no.', 'Section', 'Boundary source',
+    'Extent [m]', 'Joint length [m]',
+    'Metal loss count', 'Total ML length [mm]', 'Total ML footprint [mm2]', 'ML coverage of joint [%]',
+    'Clusters', 'Internal', 'External',
     'Max depth [%WT]', 'Mean depth [%WT]', 'Longest feature [mm]',
     'Governing feature', 'Governing ERF', 'ERF with tolerance', 'Not acceptable',
     'Shortest remnant life', 'Life limited by', 'Due date',
     'Mean CR depth [mm/y]', 'Worst CR depth [mm/y]', 'Rates observed', 'Rates assumed', 'No rate',
     'Interacting pairs', 'Result',
-    'Decision', 'Method', 'Method class', 'Target date', 'Owner', 'Features in decision', 'Justification',
+    'Record', 'Method', 'Method class', 'Repair kind', 'Completion date', 'Evidence reference',
+    'Owner', 'Features in record', 'Justification / notes',
     'Suggested method', 'Suggestion basis',
   ];
   const registerRows = spools.map((spool) => {
@@ -141,16 +152,17 @@ export function buildSpoolReviewWorkbook(
     const life = spool.governingLife?.nominal.remnantLife ?? null;
     return [
       spool.label,
+      spool.usGwId ?? '',
+      spool.dsGwId ?? '',
       spool.jointNumber ?? '',
       spool.section,
-      spool.grouping === 'joint-number'
-        ? 'Reported joint number'
-        : spool.grouping === 'upstream-weld'
-          ? 'Derived from distance to upstream GW'
-          : 'Section only - no spool boundary reported',
+      GROUPING_LABEL[spool.grouping],
       extentText(spool),
       num(spool.lengthM, 2),
       spool.featureCount,
+      num(spool.totalMetalLossLengthMm, 0),
+      num(spool.totalMetalLossAreaMm2, 0),
+      num(spool.metalLossCoveragePct, 2),
       spool.clusterCount,
       spool.internalCount,
       spool.externalCount,
@@ -171,10 +183,14 @@ export function buildSpoolReviewWorkbook(
       spool.growth.unavailableCount,
       spool.interactionCount,
       SEVERITY_LABEL[spool.severity],
-      disposition ? DECISION_LABEL[disposition.decision] : 'Not decided',
+      disposition ? MODE_LABEL[disposition.mode] : 'No record',
       option?.label ?? '',
       option ? (option.repairClass === 'permanent' ? 'Permanent' : option.repairClass === 'temporary' ? 'Temporary' : 'No intervention') : '',
-      disposition?.targetDateIso ?? '',
+      disposition?.mode === 'repaired'
+        ? (disposition.repairKind === 'permanent-repair-verified' ? 'Permanent, verified' : 'Temporary')
+        : '',
+      disposition?.mode === 'repaired' ? disposition.completedDateIso ?? '' : '',
+      disposition?.mode === 'repaired' ? disposition.evidenceReference ?? '' : '',
       disposition?.owner ?? '',
       disposition ? disposition.memberIndexes.length : '',
       disposition?.justification ?? '',
@@ -195,31 +211,39 @@ export function buildSpoolReviewWorkbook(
 
   // ── Repair plan ─────────────────────────────────────────────────────────
   const planHeader = [
-    'Priority', 'Spool', 'Section', 'Extent [m]', 'Decision', 'Method', 'Method class',
-    'What the method does', 'Target date', 'Owner', 'Governing ERF', 'ERF with tolerance',
-    'Shortest remnant life', 'Due date', 'Features in decision', 'Features in spool', 'Justification',
+    'Priority', 'Spool', 'Section', 'Extent [m]', 'Metal loss count', 'Record', 'Method', 'Method class',
+    'What the method does', 'Repair kind', 'Completion date', 'Evidence reference', 'Owner',
+    'Governing ERF', 'ERF with tolerance', 'Shortest remnant life', 'Due date',
+    'Features in record', 'Features in spool', 'Justification / notes',
   ];
-  const planRows = decided
-    // Repairs first and worst first: the sheet is a work list, not a survey.
+  const planRows = [...decided]
+    // Outstanding recommendations first and worst first: the sheet is a work
+    // list, and a spool already repaired is not work anyone has left to do.
     .sort((left, right) => {
-      const leftRepair = dispositions[left.id]?.decision === 'repair' ? 0 : 1;
-      const rightRepair = dispositions[right.id]?.decision === 'repair' ? 0 : 1;
-      return leftRepair - rightRepair || right.worstConservativeErf - left.worstConservativeErf;
+      const leftOpen = dispositions[left.id]?.mode === 'recommendation' ? 0 : 1;
+      const rightOpen = dispositions[right.id]?.mode === 'recommendation' ? 0 : 1;
+      return leftOpen - rightOpen || right.worstConservativeErf - left.worstConservativeErf;
     })
     .map((spool, index) => {
       const disposition = dispositions[spool.id]!;
       const option = repairOptionById(disposition.optionId);
       const life = spool.governingLife?.nominal.remnantLife ?? null;
+      const isRepaired = disposition.mode === 'repaired';
       return [
         index + 1,
         spool.label,
         spool.section,
         extentText(spool),
-        DECISION_LABEL[disposition.decision],
+        spool.featureCount,
+        MODE_LABEL[disposition.mode],
         option?.label ?? 'Not selected',
         option ? (option.repairClass === 'permanent' ? 'Permanent' : option.repairClass === 'temporary' ? 'Temporary' : 'No intervention') : '',
         option?.note ?? '',
-        disposition.targetDateIso ?? '',
+        isRepaired
+          ? (disposition.repairKind === 'permanent-repair-verified' ? 'Permanent, verified' : 'Temporary')
+          : '',
+        isRepaired ? disposition.completedDateIso ?? '' : '',
+        isRepaired ? disposition.evidenceReference ?? '' : '',
         disposition.owner ?? '',
         num(spool.worstNominalErf, 4),
         num(spool.worstConservativeErf, 4),
@@ -233,7 +257,7 @@ export function buildSpoolReviewWorkbook(
   const planSheet = XLSX.utils.aoa_to_sheet(
     planRows.length > 0
       ? [planHeader, ...planRows]
-      : [planHeader, ['', 'No spool decision has been recorded yet.']],
+      : [planHeader, ['', 'No spool record has been made yet.']],
   );
   planSheet['!cols'] = widthsFor(planHeader, 12, 48);
   planSheet['!freeze'] = { xSplit: 2, ySplit: 1 };
@@ -254,7 +278,7 @@ export function buildSpoolReviewWorkbook(
 
   // ── Feature detail ──────────────────────────────────────────────────────
   const featureHeader = [
-    'Spool', 'In decision', 'Feature ID', 'LD [m]', 'Clock', 'Surface', 'Clustered',
+    'Spool', 'In spool record', 'Feature ID', 'LD [m]', 'Clock', 'Surface', 'Clustered',
     'Depth [%WT]', 'Length [mm]', 'Width [mm]', 'Wall [mm]',
     'd/t', 'z', 'M', 'S_flow [MPa]', 'S_f [MPa]', 'P_f [MPa]', 'Safety factor',
     'Safe pressure [MPa]', 'Required P0 [MPa]', 'ERF', 'ERF with tolerance', 'Acceptance',

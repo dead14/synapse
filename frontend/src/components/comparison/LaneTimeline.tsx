@@ -35,6 +35,12 @@ interface LaneTimelineProps {
 
 type ColorMode = 'status' | 'depth';
 type FeatureFilter = 'all' | 'anomaly' | 'attention';
+/**
+ * How a metal-loss record is painted. `geometry` draws the reported footprint;
+ * `dot` is the marker this viewer used before, kept because a dot is easier to
+ * pick out when the question is "where are they" rather than "how big are they".
+ */
+type MarkerShape = 'geometry' | 'dot';
 
 const GUTTER = 66;
 const RIGHT_PAD = 14;
@@ -43,22 +49,28 @@ const GW_ROW = 20;
 /** Row holding the pipe furniture markers and their type tags. */
 const FIT_ROW = 15;
 const CLOCK_TOP = LANE_HEAD + GW_ROW + FIT_ROW;
-const CLOCK_H = 140;
+/**
+ * Tall enough that an hour of the clock is a readable band rather than a line.
+ * At the previous 140 px a whole inspection run was squeezed into less vertical
+ * space than one row of the results table underneath it.
+ */
+const CLOCK_H = 224;
 /**
  * A separate strip under the clock band for vendor-merged corrosion groups.
  * A cluster box is a bounding box over several pits, so drawing it among the
  * individual anomalies would bury them; kept below, the reviewer sees both the
  * pits and the group that covers them at the same distance.
  */
-const CLUSTER_H = 30;
+const CLUSTER_H = 44;
 const CLUSTER_TOP = CLOCK_TOP + CLOCK_H;
-const NOCLOCK_H = 24;
+const NOCLOCK_H = 26;
 const LANE_H = CLUSTER_TOP + CLUSTER_H + NOCLOCK_H + 2;
 const LANE_GAP = 10;
 const AXIS_H = 22;
 const NAV_H = 32;
 const MIN_SPAN_M = 0.5;
-const MAX_LANES_ON_SCREEN = 3;
+// Two full-height lanes already fill a laptop viewport; the rest scroll.
+const MAX_LANES_ON_SCREEN = 2;
 const MAX_MARKS_PER_LANE = 900;
 const MAX_LINKS = 500;
 const DRAG_THRESHOLD_PX = 3;
@@ -155,6 +167,11 @@ export default function LaneTimeline({
   // Turning it on superimposes the same boxes on the individual anomalies, which
   // is what an engineer wants when judging whether the group covers them.
   const [overlayClusters, setOverlayClusters] = useState(false);
+  const [markerShape, setMarkerShape] = useState<MarkerShape>('geometry');
+  // A real ILI defect is centimetres on a pipeline kilometres long, so at true
+  // scale most of them are sub-pixel. The multiplier is applied to both axes at
+  // once, which magnifies the footprint without distorting its proportions.
+  const [markerScale, setMarkerScale] = useState(4);
   const [odMm, setOdMm] = useState<number | null>(null);
   const [odText, setOdText] = useState('');
   const [view, setView] = useState<{ start: number; span: number } | null>(null);
@@ -341,13 +358,19 @@ export default function LaneTimeline({
    */
   const defectBox = useCallback((feature: PlacedFeature, bandTop: number, bandHeight: number) => {
     const lengthM = Math.max(0, (feature.lengthMm ?? 0) / 1000);
-    const boxWidth = Math.max(MIN_BOX_PX, (lengthM / viewSpan) * chartWidth);
+    const boxWidth = Math.max(MIN_BOX_PX, ((lengthM * markerScale) / viewSpan) * chartWidth);
     const arcDeg = arcDegrees(feature.widthMm, odMm);
-    const boxHeight = arcDeg === null
-      // No diameter, no arc: a fixed nominal band that says "width unknown"
-      // rather than a height that would read as a measurement.
-      ? Math.max(MIN_BOX_PX, bandHeight * 0.05)
-      : Math.max(MIN_BOX_PX, (arcDeg / 360) * bandHeight);
+    // With a diameter the width is a true arc, so it is drawn against the clock
+    // scale. Without one it is still drawn to scale — just against the axial
+    // millimetre scale instead, which keeps the box's length-to-width
+    // proportions exactly as reported rather than flattening every defect to
+    // one nominal band. What it cannot do is say how far round the pipe the
+    // metal loss reaches, so the legend says which of the two is on screen.
+    const mmPerPx = (viewSpan * 1000) / chartWidth;
+    const rawHeight = arcDeg === null
+      ? ((feature.widthMm ?? 0) * markerScale) / mmPerPx
+      : ((arcDeg * markerScale) / 360) * bandHeight;
+    const boxHeight = Math.min(bandHeight, Math.max(MIN_BOX_PX, rawHeight));
     const centreY = feature.clockDeg === null
       ? bandTop + bandHeight / 2
       : bandTop + (feature.clockDeg / 360) * bandHeight;
@@ -356,9 +379,17 @@ export default function LaneTimeline({
       y: centreY - boxHeight / 2,
       width: boxWidth,
       height: boxHeight,
-      widthIsNominal: arcDeg === null,
     };
-  }, [chartWidth, mToX, odMm, viewSpan]);
+  }, [chartWidth, markerScale, mToX, odMm, viewSpan]);
+
+  /** The dot marker, kept from the previous viewer for the "where" question. */
+  const defectDot = useCallback((feature: PlacedFeature, bandTop: number, bandHeight: number) => ({
+    cx: mToX(feature.position),
+    cy: feature.clockDeg === null
+      ? bandTop + bandHeight / 2
+      : bandTop + (feature.clockDeg / 360) * bandHeight,
+    r: 4 + clamp((feature.depthPct ?? 0) / 100, 0, 1) * 4,
+  }), [mToX]);
 
   // Reverse lanes so master (newest) is at top, old at bottom. Sorting and projecting
   // is axis work, not viewport work: doing it here keeps panning, zooming and cursor
@@ -554,6 +585,46 @@ export default function LaneTimeline({
           <label className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--syn-ink-soft)' }}>
             <input type="checkbox" checked={showLinks} onChange={(event) => setShowLinks(event.target.checked)} />
             Match links
+          </label>
+        )}
+
+        <div className="flex items-center gap-1.5">
+          <span className="syn-kicker" style={{ fontSize: '0.58rem' }}>Shape</span>
+          {([['geometry', 'Geometry'], ['dot', 'Dot']] as Array<[MarkerShape, string]>).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={markerShape === value}
+              onClick={() => setMarkerShape(value)}
+              className={`syn-btn syn-btn--sm ${markerShape === value ? 'syn-btn--ink' : 'syn-btn--outline'}`}
+              style={{ minHeight: '1.6rem', fontSize: '0.66rem' }}
+              title={value === 'geometry'
+                ? 'Draw each defect at its reported length and width.'
+                : 'Draw each defect as a dot sized by depth, the way this viewer used to.'}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {markerShape === 'geometry' && (
+          <label
+            className="flex items-center gap-1.5 text-xs"
+            style={{ color: 'var(--syn-ink-soft)' }}
+            title="Display magnification applied to both the length and the width at once, so the footprint grows without its proportions changing."
+          >
+            Size
+            <select
+              value={markerScale}
+              onChange={(event) => setMarkerScale(Number(event.target.value))}
+              aria-label="Defect footprint magnification"
+              className="syn-input"
+              style={{ minHeight: '1.6rem', fontSize: '0.68rem', padding: '0.15rem 0.3rem' }}
+            >
+              {[1, 2, 4, 8, 16, 32].map((factor) => (
+                <option key={factor} value={factor}>{factor === 1 ? 'True scale' : `${factor}×`}</option>
+              ))}
+            </select>
           </label>
         )}
 
@@ -817,15 +888,29 @@ export default function LaneTimeline({
                         fill="none" stroke={color} strokeWidth="1.5" strokeDasharray="2 2"
                       />
                     )}
-                    <rect
-                      x={box.x} y={box.y} width={box.width} height={box.height}
-                      // An internal defect is hollow, as it was when these were
-                      // dots: the fill means "you can see it from outside".
-                      fill={feature.external === false ? 'var(--syn-surface-raised)' : color}
-                      fillOpacity={feature.external === false ? 1 : 0.82}
-                      stroke={color}
-                      strokeWidth={feature.external === false ? 1.6 : 0.8}
-                    />
+                    {markerShape === 'geometry' ? (
+                      <rect
+                        x={box.x} y={box.y} width={box.width} height={box.height}
+                        // An internal defect is hollow, as it was when these were
+                        // dots: the fill means "you can see it from outside".
+                        fill={feature.external === false ? 'var(--syn-surface-raised)' : color}
+                        fillOpacity={feature.external === false ? 1 : 0.82}
+                        stroke={color}
+                        strokeWidth={feature.external === false ? 1.6 : 0.8}
+                      />
+                    ) : (() => {
+                      const dot = hasClock
+                        ? defectDot(feature, CLOCK_TOP, CLOCK_H)
+                        : defectDot(feature, CLUSTER_TOP + CLUSTER_H, NOCLOCK_H);
+                      return (
+                        <circle
+                          cx={dot.cx} cy={dot.cy} r={dot.r}
+                          fill={feature.external === false ? 'var(--syn-surface-raised)' : color}
+                          stroke={color}
+                          strokeWidth={feature.external === false ? 1.8 : 1}
+                        />
+                      );
+                    })()}
                   </g>
                 );
               })}
@@ -1043,9 +1128,11 @@ export default function LaneTimeline({
             </span>
           );
         })}
-        {odMm === null && (
-          <span className="text-xs" style={{ color: 'var(--syn-warning)' }}>
-            No OD entered — defect width drawn nominal, not to scale
+        {markerShape === 'geometry' && (
+          <span className="text-xs" style={{ color: odMm === null ? 'var(--syn-warning)' : 'var(--syn-muted)' }}>
+            {odMm === null
+              ? `Width drawn at the axial mm scale (no OD) — proportions are true, circumferential reach is not${markerScale > 1 ? `, ×${markerScale}` : ''}`
+              : `Width drawn as a true arc on OD ${odMm} mm${markerScale > 1 ? `, ×${markerScale}` : ''}`}
           </span>
         )}
       </div>

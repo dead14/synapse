@@ -371,6 +371,9 @@ export default function FfsSetupPage() {
             // Features the review did not release are the bulk of the rejects;
             // they are carried through so the results page can state the count.
             rejected: imported.rejected,
+            // The weld ladder the spool review groups against. Sent with the
+            // results because it is a property of the run, not of any feature.
+            girthWelds: imported.girthWelds,
             warningCount: imported.accepted.reduce((sum, item) => sum + item.warnings.length, 0),
           },
         },

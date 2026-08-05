@@ -87,9 +87,54 @@ export interface RejectedAlignmentRow {
   reason: string;
 }
 
+/** One girth weld of the NEW run, on the master odometer the FFS rows use. */
+export interface FfsGirthWeld {
+  id: string;
+  ldM: number;
+}
+
 export interface AlignmentImportResult {
   accepted: AcceptedAlignmentRow[];
   rejected: RejectedAlignmentRow[];
+  /**
+   * The weld ladder the assessment is reviewed against. A spool is the pipe
+   * between two of these, which is the unit a repair is actually made to — and
+   * it is the only grouping that does not depend on the vendor having filled in
+   * a joint-number column.
+   */
+  girthWelds: FfsGirthWeld[];
+}
+
+const WELD_LABEL_PATTERN = /weld|girth|\bgw\b|seam/i;
+
+/**
+ * Girth welds of the NEW run, ascending and de-duplicated.
+ *
+ * NEW side only, on purpose. An OLD-only weld row does exist physically, but it
+ * carries no position on the run the assessment was built from, and inserting
+ * one would split a joint at a boundary none of the assessed features were
+ * measured against.
+ */
+export function extractGirthWeldLadder(comparison: readonly ComparisonRow[]): FfsGirthWeld[] {
+  const seen = new Map<number, FfsGirthWeld>();
+  for (const row of comparison) {
+    const group = text(row['Result Group'], '').toUpperCase();
+    const isWeld = group === 'GW'
+      || WELD_LABEL_PATTERN.test(text(row['Feature Type NEW'], ''))
+      || WELD_LABEL_PATTERN.test(text(row['Feature Identification NEW'], ''));
+    if (!isWeld) continue;
+    const ldM = finiteNumber(row['Log Dist NEW (m)']);
+    if (ldM === null) continue;
+    // Two rows can report the same weld (a locked pair and a leftover sweep);
+    // millimetre rounding keeps them one boundary rather than a zero-length spool.
+    const key = Math.round(ldM * 1000);
+    if (seen.has(key)) continue;
+    seen.set(key, {
+      id: text(row['Identif. NEW'], text(row['Feature ID NEW'], `GW ${ldM.toFixed(2)}`)),
+      ldM,
+    });
+  }
+  return [...seen.values()].sort((left, right) => left.ldM - right.ldM);
 }
 
 export interface AlignmentImportReadinessInput {
@@ -539,5 +584,5 @@ export function mapAlignmentRowsToFfs(
     });
   }
 
-  return { accepted, rejected };
+  return { accepted, rejected, girthWelds: extractGirthWeldLadder(comparison) };
 }

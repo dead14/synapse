@@ -240,29 +240,133 @@ test('a new disposition covers every member of the spool by default', () => {
   assert.deepEqual(emptySpoolDisposition(spool).memberIndexes, [3, 7]);
 });
 
-test('the programme counts decided spools and the features they cover', () => {
+test('the programme separates a recommendation from work already done', () => {
   const spools = buildFfsSpools(
     [
       feature({ index: 0, ld: 100, jointNumber: 'J-1' }),
       feature({ index: 1, ld: 102, jointNumber: 'J-1' }),
       feature({ index: 2, ld: 200, jointNumber: 'J-2' }),
+      feature({ index: 3, ld: 300, jointNumber: 'J-3' }),
     ],
     { screening: SCREENING },
   );
-  const target = spools.find((spool) => spool.jointNumber === 'J-1')!;
+  const recommended = spools.find((spool) => spool.jointNumber === 'J-1')!;
+  const repaired = spools.find((spool) => spool.jointNumber === 'J-2')!;
   const programme = buildSpoolProgramme(spools, {
-    [target.id]: {
-      decision: 'repair',
+    [recommended.id]: {
+      mode: 'recommendation',
       optionId: 'type-b-sleeve',
-      targetDateIso: '2026-12-01',
       owner: 'Integrity',
       justification: null,
+      repairKind: 'permanent-repair-verified',
+      completedDateIso: null,
+      evidenceReference: null,
       memberIndexes: [0, 1],
+    },
+    [repaired.id]: {
+      mode: 'repaired',
+      optionId: 'cut-and-replace',
+      owner: 'Construction',
+      justification: null,
+      repairKind: 'permanent-repair-verified',
+      completedDateIso: '2026-03-04',
+      evidenceReference: 'WO-9912',
+      memberIndexes: [2],
     },
   });
 
-  assert.equal(programme.decided, 1);
+  assert.equal(programme.decided, 2);
   assert.equal(programme.undecided, 1);
-  assert.equal(programme.repairCount, 1);
-  assert.equal(programme.coveredFeatures, 2);
+  assert.equal(programme.recommendedCount, 1);
+  assert.equal(programme.repairedCount, 1);
+  assert.equal(programme.coveredFeatures, 3);
+});
+
+test('a new record covers the whole spool and starts as a recommendation', () => {
+  const [spool] = buildFfsSpools(
+    [feature({ index: 0, ld: 100, jointNumber: 'J-1' })],
+    { screening: SCREENING },
+  );
+  const empty = emptySpoolDisposition(spool);
+  assert.equal(empty.mode, 'recommendation');
+  assert.equal(empty.completedDateIso, null);
+});
+
+// ── Girth-weld grouping ─────────────────────────────────────────────────────
+
+const LADDER = [
+  { id: 'GW-1', ldM: 100 },
+  { id: 'GW-2', ldM: 112 },
+  { id: 'GW-3', ldM: 124 },
+];
+
+test('the weld ladder is what defines a spool, not the section or the joint column', () => {
+  const spools = buildFfsSpools(
+    [
+      // Same section, same missing joint number, but three different joints.
+      feature({ index: 0, ld: 104, section: 'KP 0-5' }),
+      feature({ index: 1, ld: 110, section: 'KP 0-5' }),
+      feature({ index: 2, ld: 118, section: 'KP 0-5' }),
+      feature({ index: 3, ld: 130, section: 'KP 0-5' }),
+    ],
+    { screening: SCREENING, girthWelds: LADDER },
+  );
+
+  assert.equal(spools.length, 3);
+  const first = spools.find((spool) => spool.usGwId === 'GW-1')!;
+  assert.equal(first.grouping, 'girth-weld');
+  assert.equal(first.featureCount, 2);
+  assert.equal(first.usGwLdM, 100);
+  assert.equal(first.dsGwLdM, 112);
+  assert.equal(first.lengthM, 12);
+  assert.equal(first.label, 'GW GW-1 → GW-2');
+});
+
+test('a feature past the last weld keeps its own spool instead of joining the last joint', () => {
+  const spools = buildFfsSpools(
+    [feature({ index: 0, ld: 118 }), feature({ index: 1, ld: 300 })],
+    { screening: SCREENING, girthWelds: LADDER },
+  );
+  assert.equal(spools.length, 2);
+  const trailing = spools.find((spool) => spool.lastFeatureLdM === 300)!;
+  assert.equal(trailing.dsGwId, null);
+  assert.equal(trailing.usGwId, 'GW-3');
+  assert.equal(trailing.label, 'Downstream of GW GW-3');
+});
+
+test('a feature upstream of the first weld is reported as such, not dropped', () => {
+  const [spool] = buildFfsSpools(
+    [feature({ index: 0, ld: 40 })],
+    { screening: SCREENING, girthWelds: LADDER },
+  );
+  assert.equal(spool.usGwId, null);
+  assert.equal(spool.dsGwId, 'GW-1');
+  assert.equal(spool.label, 'Upstream of GW GW-1');
+});
+
+test('the ladder beats the vendor joint column where the two disagree', () => {
+  const spools = buildFfsSpools(
+    [
+      feature({ index: 0, ld: 104, jointNumber: 'J-99' }),
+      feature({ index: 1, ld: 118, jointNumber: 'J-99' }),
+    ],
+    { screening: SCREENING, girthWelds: LADDER },
+  );
+  // One joint number, two welds apart: the welds are measured, the column is not.
+  assert.equal(spools.length, 2);
+  assert.ok(spools.every((spool) => spool.grouping === 'girth-weld'));
+});
+
+test('the spool totals the metal loss it carries', () => {
+  const spools = buildFfsSpools(
+    [feature({ index: 0, ld: 104 }), feature({ index: 1, ld: 108 })],
+    { screening: SCREENING, girthWelds: LADDER },
+  );
+  const spool = spools[0];
+  // Two fixture features of 100 x 40 mm on a 12 m joint.
+  assert.equal(spool.featureCount, 2);
+  assert.equal(spool.totalMetalLossLengthMm, 200);
+  assert.equal(spool.totalMetalLossAreaMm2, 8000);
+  assert.ok(Math.abs((spool.metalLossCoveragePct ?? 0) - (200 / 12000) * 100) < 1e-9);
+  assert.ok(spool.drivers.some((driver) => driver.includes('metal-loss record')));
 });

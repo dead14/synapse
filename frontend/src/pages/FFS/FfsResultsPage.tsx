@@ -25,7 +25,7 @@ import ShareSnapshotButton from '../../components/sharing/ShareSnapshotButton';
 import { Callout, NumberField, Panel } from '../../components/ffs/FfsPrimitives';
 import { exportResultsWorkbook } from '../../lib/ffs/exports';
 import { methodProfileLabel, pressureBasisLabel } from '../../lib/ffs/assessmentProfile.ts';
-import type { AlignmentImportProvenance } from '../../lib/ffs/alignmentImport';
+import type { AlignmentImportProvenance, FfsGirthWeld } from '../../lib/ffs/alignmentImport';
 import type { FfsSpoolDisposition } from '../../lib/ffs/spoolReview';
 import { screenResults } from '../../lib/ffs/screening';
 import {
@@ -65,6 +65,8 @@ interface LocationState {
     sessionId: string;
     accepted: AlignmentImportProvenance[];
     rejected: unknown[];
+    /** The run's weld ladder, which is what a spool is measured between. */
+    girthWelds?: FfsGirthWeld[];
     warningCount: number;
   };
 }
@@ -526,6 +528,7 @@ export default function FfsResultsPage() {
               config={config}
               screening={screening}
               reportContext={reportContext}
+              girthWelds={state.alignmentImport?.girthWelds}
               spoolDispositions={spoolDispositions}
               onSaveSpoolDisposition={saveSpoolDisposition}
               onClearSpoolDisposition={clearSpoolDisposition}
