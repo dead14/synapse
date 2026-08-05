@@ -101,8 +101,10 @@ export function buildSpoolReviewWorkbook(
     ['Depth rejection limit [% WT]', screening.depthRejectionPct],
     [],
     ['Population'],
-    ['Spools reviewed', spools.length],
-    ['Metal-loss features covered', spools.reduce((total, spool) => total + spool.featureCount, 0)],
+    ['Girth-weld spools listed', spools.length],
+    ['Spools carrying metal loss', spools.filter((spool) => spool.metalLossTotal > 0).length],
+    ['Metal-loss records reported', spools.reduce((total, spool) => total + spool.metalLossTotal, 0)],
+    ['Of those, assessed', spools.reduce((total, spool) => total + spool.assessedCount, 0)],
     ['Total metal-loss axial length [mm]', num(spools.reduce((total, spool) => total + spool.totalMetalLossLengthMm, 0), 0)],
     ['Spools not acceptable', spools.filter((spool) => spool.severity === 'fail').length],
     ['Spools in the review band', spools.filter((spool) => spool.severity === 'review').length],
@@ -134,7 +136,8 @@ export function buildSpoolReviewWorkbook(
   const registerHeader = [
     'Spool', 'U/S girth weld', 'D/S girth weld', 'Joint no.', 'Section', 'Boundary source',
     'Extent [m]', 'Joint length [m]',
-    'Metal loss count', 'Total ML length [mm]', 'Total ML footprint [mm2]', 'ML coverage of joint [%]',
+    'Metal loss reported', 'Assessed', 'Not released', 'Total ML length [mm]',
+    'Total ML footprint [mm2]', 'ML coverage of joint [%]',
     'Clusters', 'Internal', 'External',
     'Max depth [%WT]', 'Mean depth [%WT]', 'Longest feature [mm]',
     'Governing feature', 'Governing ERF', 'ERF with tolerance', 'Not acceptable',
@@ -159,7 +162,9 @@ export function buildSpoolReviewWorkbook(
       GROUPING_LABEL[spool.grouping],
       extentText(spool),
       num(spool.lengthM, 2),
-      spool.featureCount,
+      spool.metalLossTotal,
+      spool.assessedCount,
+      spool.unassessedCount,
       num(spool.totalMetalLossLengthMm, 0),
       num(spool.totalMetalLossAreaMm2, 0),
       num(spool.metalLossCoveragePct, 2),
@@ -211,10 +216,10 @@ export function buildSpoolReviewWorkbook(
 
   // ── Repair plan ─────────────────────────────────────────────────────────
   const planHeader = [
-    'Priority', 'Spool', 'Section', 'Extent [m]', 'Metal loss count', 'Record', 'Method', 'Method class',
+    'Priority', 'Spool', 'Section', 'Extent [m]', 'Metal loss reported', 'Record', 'Method', 'Method class',
     'What the method does', 'Repair kind', 'Completion date', 'Evidence reference', 'Owner',
     'Governing ERF', 'ERF with tolerance', 'Shortest remnant life', 'Due date',
-    'Features in record', 'Features in spool', 'Justification / notes',
+    'Features in record', 'Metal loss on spool', 'Justification / notes',
   ];
   const planRows = [...decided]
     // Outstanding recommendations first and worst first: the sheet is a work
@@ -234,7 +239,7 @@ export function buildSpoolReviewWorkbook(
         spool.label,
         spool.section,
         extentText(spool),
-        spool.featureCount,
+        spool.metalLossTotal,
         MODE_LABEL[disposition.mode],
         option?.label ?? 'Not selected',
         option ? (option.repairClass === 'permanent' ? 'Permanent' : option.repairClass === 'temporary' ? 'Temporary' : 'No intervention') : '',
@@ -250,7 +255,7 @@ export function buildSpoolReviewWorkbook(
         life ? formatRemnantLife(life) : 'Not established',
         life?.dueDateIso ?? '',
         disposition.memberIndexes.length,
-        spool.featureCount,
+        spool.metalLossTotal,
         disposition.justification ?? '',
       ];
     });

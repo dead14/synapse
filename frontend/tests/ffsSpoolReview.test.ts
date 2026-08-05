@@ -188,7 +188,7 @@ test('clustered records are counted and called out, not silently averaged in', (
   assert.ok(spools[0].drivers.some((driver) => driver.includes('vendor-merged clusters')));
 });
 
-test('spools are ordered worst first so the register reads as a work list', () => {
+test('spools are ordered along the line, because the register is an inventory', () => {
   const spools = buildFfsSpools(
     [
       feature({ index: 0, ld: 100, jointNumber: 'J-1', conservativeErf: 0.3 }),
@@ -198,7 +198,9 @@ test('spools are ordered worst first so the register reads as a work list', () =
     { screening: SCREENING },
   );
 
-  assert.deepEqual(spools.map((spool) => spool.jointNumber), ['J-2', 'J-3', 'J-1']);
+  // Worst-first would make the reader jump about a line they are walking; the
+  // table header re-sorts by severity in one click.
+  assert.deepEqual(spools.map((spool) => spool.jointNumber), ['J-1', 'J-2', 'J-3']);
 });
 
 test('a spool past the depth rejection limit is suggested for cut and replace', () => {
@@ -327,11 +329,72 @@ test('a feature past the last weld keeps its own spool instead of joining the la
     [feature({ index: 0, ld: 118 }), feature({ index: 1, ld: 300 })],
     { screening: SCREENING, girthWelds: LADDER },
   );
-  assert.equal(spools.length, 2);
+  // Both joints of the ladder plus the stretch past the last weld.
+  assert.equal(spools.length, 3);
   const trailing = spools.find((spool) => spool.lastFeatureLdM === 300)!;
   assert.equal(trailing.dsGwId, null);
   assert.equal(trailing.usGwId, 'GW-3');
   assert.equal(trailing.label, 'Downstream of GW GW-3');
+});
+
+test('every pair of welds is a row, including the joints the run found nothing on', () => {
+  // Three welds are two joints. One released feature must not collapse the
+  // register to one row: an engineer reading it is walking the whole line.
+  const spools = buildFfsSpools(
+    [feature({ index: 0, ld: 104 })],
+    { screening: SCREENING, girthWelds: LADDER },
+  );
+
+  assert.equal(spools.length, 2);
+  assert.deepEqual(spools.map((spool) => spool.label), ['GW GW-1 → GW-2', 'GW GW-2 → GW-3']);
+  const empty = spools[1];
+  assert.equal(empty.metalLossTotal, 0);
+  assert.equal(empty.assessedCount, 0);
+  assert.equal(empty.maxDepthPct, 0);
+  assert.equal(empty.governingErf, null);
+  assert.deepEqual(empty.drivers, ['The inspection reported no metal loss between these two girth welds.']);
+});
+
+test('a 500-weld run produces 499 spools, not one per released feature', () => {
+  const ladder = Array.from({ length: 500 }, (_unused, index) => ({
+    id: `GW-${index + 1}`,
+    ldM: index * 12,
+  }));
+  const spools = buildFfsSpools(
+    [feature({ index: 0, ld: 6 }), feature({ index: 1, ld: 4802 })],
+    { screening: SCREENING, girthWelds: ladder },
+  );
+  assert.equal(spools.length, 499);
+  assert.equal(spools.filter((spool) => spool.assessedCount > 0).length, 2);
+});
+
+test('the census counts the metal loss the run reported, not just what was released', () => {
+  const spools = buildFfsSpools(
+    [feature({ index: 0, ld: 104 })],
+    {
+      screening: SCREENING,
+      girthWelds: LADDER,
+      census: [
+        { sourceKey: 'new:1', featureId: 'A-0', ldM: 104, depthPct: 20, lengthMm: 100, widthMm: 40, isCluster: false, assessed: true },
+        { sourceKey: 'new:2', featureId: 'A-9', ldM: 106, depthPct: 55, lengthMm: 250, widthMm: 60, isCluster: false, assessed: false },
+        { sourceKey: 'new:3', featureId: 'A-8', ldM: 120, depthPct: 15, lengthMm: 50, widthMm: 20, isCluster: true, assessed: false },
+      ],
+    },
+  );
+
+  const first = spools[0];
+  assert.equal(first.metalLossTotal, 2);
+  assert.equal(first.assessedCount, 1);
+  assert.equal(first.unassessedCount, 1);
+  // The deepest pit on the joint was never released; the register still shows it.
+  assert.equal(first.maxDepthPct, 55);
+  assert.equal(first.totalMetalLossLengthMm, 350);
+
+  const second = spools[1];
+  assert.equal(second.metalLossTotal, 1);
+  assert.equal(second.assessedCount, 0);
+  assert.equal(second.clusterCount, 1);
+  assert.ok(second.drivers.some((driver) => driver.includes('none was released')));
 });
 
 test('a feature upstream of the first weld is reported as such, not dropped', () => {

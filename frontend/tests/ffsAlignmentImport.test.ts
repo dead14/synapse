@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractGirthWeldLadder, getAlignmentImportReadiness, mapAlignmentRowsToFfs } from '../src/lib/ffs/alignmentImport.ts';
+import {
+  extractGirthWeldLadder,
+  extractSpoolCensus,
+  getAlignmentImportReadiness,
+  mapAlignmentRowsToFfs,
+} from '../src/lib/ffs/alignmentImport.ts';
 import { REQUIRED_COLUMNS } from '../src/lib/ffs/types.ts';
 import { validateData } from '../src/lib/ffs/validation.ts';
 
@@ -392,4 +397,22 @@ test('a weld is recognised from its feature type when the group column is absent
     { 'Feature Type NEW': 'Girth Weld', 'Identif. NEW': 'W-7', 'Log Dist NEW (m)': 55 },
   ]);
   assert.deepEqual(welds, [{ id: 'W-7', ldM: 55 }]);
+});
+
+test('the census counts every metal-loss record the run reported, released or not', () => {
+  const census = extractSpoolCensus([
+    { 'Result Group': 'ANOMALY', 'Source Key NEW': 'new:1', 'Identif. NEW': 'A-1', 'Log Dist NEW (m)': 20, 'Depth NEW (%WT)': 30, 'Length NEW (mm)': 100, 'Width NEW (mm)': 40 },
+    { 'Result Group': 'ANOMALY', 'Source Key NEW': 'new:2', 'Identif. NEW': 'A-2', 'Log Dist NEW (m)': 10, 'Depth NEW (%WT)': 45, 'Length NEW (mm)': 60, 'Width NEW (mm)': 20 },
+    // A bypassed cluster is still metal on the pipe.
+    { 'Result Group': 'BYPASSED', 'Source Key NEW': 'new:3', 'Identif. NEW': 'A-3', 'Log Dist NEW (m)': 30, 'Feature Type NEW': 'Corrosion cluster', 'Depth NEW (%WT)': 25 },
+    // Skeleton and fittings are not.
+    { 'Result Group': 'GW', 'Source Key NEW': 'new:gw', 'Log Dist NEW (m)': 40 },
+    { 'Result Group': 'BYPASSED', 'Source Key NEW': 'new:bend', 'Feature Type NEW': 'Bend', 'Log Dist NEW (m)': 50 },
+    // An exclusion is a decision that the row is not real.
+    { 'Result Group': 'ANOMALY', 'Source Key NEW': 'new:x', 'Log Dist NEW (m)': 60, __excluded: true },
+  ], { selectedKeys: new Set(['new:1']) });
+
+  assert.deepEqual(census.map((row) => row.sourceKey), ['new:2', 'new:1', 'new:3']);
+  assert.deepEqual(census.map((row) => row.assessed), [false, true, false]);
+  assert.equal(census.find((row) => row.sourceKey === 'new:3')?.isCluster, true);
 });

@@ -15,7 +15,7 @@
  * feature that produced it.
  */
 
-import type { FfsGirthWeld } from './alignmentImport.ts';
+import type { FfsGirthWeld, FfsSpoolCensusRow } from './alignmentImport.ts';
 import type {
   FfsConfig,
   FfsRepairStatus,
@@ -68,13 +68,26 @@ export interface FfsSpool {
   /** Identifiers of the two welds that bound the spool, when known. */
   usGwId: string | null;
   dsGwId: string | null;
+  /** True for a real interval of the ladder, with a weld at each end. */
+  weldBounded: boolean;
   /** Girth-weld-to-girth-weld length as the ILI reported it. */
   lengthM: number | null;
   /** Extent actually covered by the features, used when no weld is known. */
   firstFeatureLdM: number;
   lastFeatureLdM: number;
+  /** The features the FFS assessed on this spool. Empty is a real answer. */
   members: FfsScreenedResult[];
+  /** Alias of `members.length`, kept for readers of the aggregate. */
   featureCount: number;
+  /**
+   * Every metal-loss record the ILI reported on this spool, released for
+   * assessment or not. A joint carrying nine unreleased pits and one released
+   * one is not a joint with one defect on it, so the register counts the run
+   * and marks how much of it was assessed.
+   */
+  metalLossTotal: number;
+  assessedCount: number;
+  unassessedCount: number;
   clusterCount: number;
   internalCount: number;
   externalCount: number;
@@ -82,10 +95,10 @@ export interface FfsSpool {
   meanDepthPct: number;
   longestFeatureMm: number;
   /**
-   * How much metal loss the joint is actually carrying. The count answers "how
-   * many", the summed axial length answers "how much of the joint", and the
-   * summed footprint answers "how much of the shell" — three different
-   * questions a reviewer asks before choosing between a wrap and a cut-out.
+   * How much metal loss the joint is actually carrying. Summed over the same
+   * population as `metalLossTotal`, so the count and the lengths always describe
+   * the same set: the summed axial length answers "how much of the joint" and
+   * the summed footprint answers "how much of the shell".
    */
   totalMetalLossLengthMm: number;
   totalMetalLossAreaMm2: number;
@@ -228,6 +241,18 @@ function summariseGrowth(
 
 function buildDrivers(spool: Omit<FfsSpool, 'drivers'>): string[] {
   const drivers: string[] = [];
+  // An empty joint is a normal result on a long line, not a gap in the data.
+  // Saying so plainly is more use than a page of dashes.
+  if (spool.metalLossTotal === 0) {
+    return ['The inspection reported no metal loss between these two girth welds.'];
+  }
+  if (spool.assessedCount === 0) {
+    drivers.push(
+      `${spool.metalLossTotal} metal-loss record${spool.metalLossTotal === 1 ? '' : 's'} were reported on this ` +
+      'spool, but none was released to the assessment by the Corrosion Analysis review, so there is no ERF or ' +
+      'remnant life for it here.',
+    );
+  }
   const erf = spool.governingErf;
   if (erf) {
     const n = erf.nominal;
@@ -258,7 +283,7 @@ function buildDrivers(spool: Omit<FfsSpool, 'drivers'>): string[] {
         'the life above is not conservative in the length direction.',
       );
     }
-  } else {
+  } else if (spool.assessedCount > 0) {
     drivers.push('No finite remnant life was established for this spool within the analysis horizon.');
   }
   if (spool.growth.meanMmPerYear !== null) {
@@ -268,18 +293,19 @@ function buildDrivers(spool: Omit<FfsSpool, 'drivers'>): string[] {
       `${spool.growth.measuredCount} observed and ${spool.growth.assumedCount} assumed rates` +
       `${spool.growth.unavailableCount > 0 ? `, ${spool.growth.unavailableCount} with no rate at all` : ''}.`,
     );
-  } else {
+  } else if (spool.assessedCount > 0) {
     drivers.push('No usable corrosion rate on any feature in this spool, so nothing here projects forward.');
   }
   drivers.push(
-    `${spool.featureCount} metal-loss record${spool.featureCount === 1 ? '' : 's'} on this spool, ` +
+    `${spool.metalLossTotal} metal-loss record${spool.metalLossTotal === 1 ? '' : 's'} on this spool` +
+    `${spool.unassessedCount > 0 ? ` (${spool.assessedCount} assessed, ${spool.unassessedCount} not released)` : ''}, ` +
     `${fixed(spool.totalMetalLossLengthMm, 0)} mm of axial length in total` +
     `${spool.metalLossCoveragePct !== null ? ` (${fixed(spool.metalLossCoveragePct, 1)} % of the joint)` : ''}, ` +
     `footprint ${fixed(spool.totalMetalLossAreaMm2 / 1e6, 3)} m².`,
   );
   if (spool.clusterCount > 0) {
     drivers.push(
-      `${spool.clusterCount} of the ${spool.featureCount} records are vendor-merged clusters: their extent is a ` +
+      `${spool.clusterCount} of the ${spool.metalLossTotal} records are vendor-merged clusters: their extent is a ` +
       'bounding box over several pits and they carry no run-pair growth rate.',
     );
   }
@@ -301,40 +327,79 @@ export interface BuildSpoolsOptions {
   screening: FfsScreeningConfig;
   /**
    * The NEW run's girth welds. When present this is what a spool is: the pipe
-   * between two of them. Everything else is a fallback for a run that did not
-   * report a ladder.
+   * between two of them, and *every* pair produces a spool — the register is an
+   * inventory of the line, so a joint the inspection found nothing on is a row
+   * reading zero, not a row that is missing. Everything else is a fallback for
+   * a run that did not report a ladder.
    */
   girthWelds?: readonly FfsGirthWeld[];
+  /**
+   * Every metal-loss record the run reported, released for assessment or not.
+   * Without it the register can only count the assessed subset, which on a line
+   * where the review released a handful of features makes most joints look
+   * clean when they are not.
+   */
+  census?: readonly FfsSpoolCensusRow[];
   /** Only used to keep interaction screening consistent with the other tabs. */
   config?: FfsConfig;
 }
 
+interface SpoolBucket {
+  grouping: FfsSpoolGrouping;
+  weldIndex: number | null;
+  members: FfsScreenedResult[];
+  census: FfsSpoolCensusRow[];
+}
+
 /**
- * Group the screened population into spools, worst first.
+ * Group the run into spools.
  *
- * Ordering is by severity and then by governing ERF, because the register
- * exists to decide what to do next — not to walk the line end to end. The
- * caller can re-sort by distance when that is what is wanted.
+ * With a weld ladder this enumerates the line: one spool per pair of welds,
+ * plus the stretches before the first weld and after the last one when anything
+ * sits there. Without one it falls back to grouping only what it has.
  */
 export function buildFfsSpools(
   items: FfsScreenedResult[],
-  { screening, girthWelds = [] }: BuildSpoolsOptions,
+  { screening, girthWelds = [], census = [] }: BuildSpoolsOptions,
 ): FfsSpool[] {
   const ladder = [...girthWelds].sort((left, right) => left.ldM - right.ldM);
-  const buckets = new Map<string, {
-    grouping: FfsSpoolGrouping;
-    weldIndex: number | null;
-    members: FfsScreenedResult[];
-  }>();
+  const hasLadder = ladder.length >= 2;
+  const buckets = new Map<string, SpoolBucket>();
+
+  const bucketFor = (key: string, grouping: FfsSpoolGrouping, weldIndex: number | null) => {
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { grouping, weldIndex, members: [], census: [] };
+      buckets.set(key, bucket);
+    }
+    return bucket;
+  };
+
+  // Seed every interval of the ladder first, so a joint with nothing on it is
+  // still a row. This is the whole point of a per-weld register: an engineer
+  // reading it is walking the line, and a missing joint reads as missing data.
+  if (hasLadder) {
+    for (let index = 0; index < ladder.length - 1; index += 1) {
+      bucketFor(`gw:${index}`, 'girth-weld', index);
+    }
+  }
+
   for (const item of items) {
     const { key, grouping, weldIndex } = spoolKeyOf(item, ladder);
-    const bucket = buckets.get(key);
-    if (bucket) bucket.members.push(item);
-    else buckets.set(key, { grouping, weldIndex, members: [item] });
+    bucketFor(key, grouping, weldIndex).members.push(item);
+  }
+
+  // The census is only bucketable against the ladder: the fallback keys are
+  // derived from per-feature columns a census row does not carry.
+  if (hasLadder) {
+    for (const row of census) {
+      const index = upperWeldIndex(ladder, row.ldM) - 1;
+      bucketFor(`gw:${index}`, 'girth-weld', index).census.push(row);
+    }
   }
 
   const spools: FfsSpool[] = [];
-  for (const [id, { grouping, weldIndex, members }] of buckets) {
+  for (const [id, { grouping, weldIndex, members, census: spoolCensus }] of buckets) {
     const ordered = [...members].sort((a, b) => numericLd(a) - numericLd(b));
     const distances = ordered.map(numericLd);
     const jointNumber = firstNonEmpty(ordered.map((item) => item.nominal.jointNumber));
@@ -376,23 +441,44 @@ export function buildFfsSpools(
       severityRank(item.conservative.severity) > severityRank(worst) ? item.conservative.severity : worst
     ), 'pass');
 
-    const depths = ordered.map((item) => item.nominal.maxDepthPct);
     const repairCounts: FfsSpoolRepairCounts = { unrepaired: 0, temporary: 0, permanent: 0 };
-    let clusterCount = 0;
     let internalCount = 0;
     let externalCount = 0;
-    let totalMetalLossLengthMm = 0;
-    let totalMetalLossAreaMm2 = 0;
     for (const item of ordered) {
-      if (item.nominal.isClusteredMetalLoss) clusterCount += 1;
       if (/int/i.test(item.nominal.surface ?? '')) internalCount += 1;
       else if (/ext/i.test(item.nominal.surface ?? '')) externalCount += 1;
       if (item.nominal.repairStatus === 'temporary-repair') repairCounts.temporary += 1;
       else if (item.nominal.repairStatus === 'permanent-repair-verified') repairCounts.permanent += 1;
       else repairCounts.unrepaired += 1;
-      totalMetalLossLengthMm += item.nominal.length;
-      totalMetalLossAreaMm2 += item.nominal.length * item.nominal.width;
     }
+
+    // The census is the run; the members are what the review released from it.
+    // Counts and lengths are taken from the same population so they can never
+    // describe different sets, and the census wins whenever it is available.
+    const useCensus = spoolCensus.length > 0 || (hasLadder && census.length > 0);
+    const depths = useCensus
+      ? spoolCensus.map((row) => row.depthPct).filter((value): value is number => value !== null)
+      : ordered.map((item) => item.nominal.maxDepthPct);
+    const lengths = useCensus
+      ? spoolCensus.map((row) => row.lengthMm ?? 0)
+      : ordered.map((item) => item.nominal.length);
+    const totalMetalLossLengthMm = lengths.reduce((sum, value) => sum + value, 0);
+    const totalMetalLossAreaMm2 = useCensus
+      ? spoolCensus.reduce((sum, row) => sum + (row.lengthMm ?? 0) * (row.widthMm ?? 0), 0)
+      : ordered.reduce((sum, item) => sum + item.nominal.length * item.nominal.width, 0);
+    const clusterCount = useCensus
+      ? spoolCensus.filter((row) => row.isCluster).length
+      : ordered.filter((item) => item.nominal.isClusteredMetalLoss).length;
+    const metalLossTotal = useCensus ? spoolCensus.length : ordered.length;
+
+    // An empty joint carries no feature to take a section name from, so it
+    // inherits the boundary it sits on rather than inventing one.
+    const section = ordered[0]?.nominal.section ?? '';
+    const positions = distances.length > 0
+      ? distances
+      : spoolCensus.length > 0
+        ? spoolCensus.map((row) => row.ldM)
+        : [usGwLdM ?? 0, dsGwLdM ?? usGwLdM ?? 0];
 
     const partial: Omit<FfsSpool, 'drivers'> = {
       id,
@@ -402,28 +488,34 @@ export function buildFfsSpools(
         dsGwId: downstream?.id ?? null,
         usGwLdM,
         dsGwLdM,
-        distances,
+        distances: positions,
         grouping,
-        section: ordered[0].nominal.section,
+        section,
       }),
       grouping,
       jointNumber,
-      section: ordered[0].nominal.section,
+      section,
       usGwLdM,
       dsGwLdM,
       usGwId: upstream?.id ?? null,
       dsGwId: downstream?.id ?? null,
+      weldBounded: upstream !== null && downstream !== null,
       lengthM,
-      firstFeatureLdM: distances[0],
-      lastFeatureLdM: distances[distances.length - 1],
+      firstFeatureLdM: positions[0],
+      lastFeatureLdM: positions[positions.length - 1],
       members: ordered,
       featureCount: ordered.length,
+      metalLossTotal,
+      assessedCount: ordered.length,
+      unassessedCount: Math.max(0, metalLossTotal - ordered.length),
       clusterCount,
       internalCount,
       externalCount,
-      maxDepthPct: Math.max(...depths),
-      meanDepthPct: depths.reduce((sum, value) => sum + value, 0) / depths.length,
-      longestFeatureMm: Math.max(...ordered.map((item) => item.nominal.length)),
+      maxDepthPct: depths.length > 0 ? Math.max(...depths) : 0,
+      meanDepthPct: depths.length > 0
+        ? depths.reduce((sum, value) => sum + value, 0) / depths.length
+        : 0,
+      longestFeatureMm: lengths.length > 0 ? Math.max(...lengths) : 0,
       totalMetalLossLengthMm,
       totalMetalLossAreaMm2,
       metalLossCoveragePct: lengthM !== null && lengthM > 0
@@ -444,11 +536,21 @@ export function buildFfsSpools(
     spools.push({ ...partial, drivers: buildDrivers(partial) });
   }
 
-  return spools.sort((left, right) => (
-    severityRank(right.severity) - severityRank(left.severity)
-    || right.worstConservativeErf - left.worstConservativeErf
-    || left.firstFeatureLdM - right.firstFeatureLdM
-  ));
+  // Along the line, not worst first. The register is now an inventory of every
+  // joint, and an inventory that jumps about is unreadable; the table header
+  // re-sorts it by severity or ERF in one click when that is the question.
+  return spools
+    .filter((spool) => (
+      // Leading and trailing stretches only exist when something is on them.
+      spool.grouping !== 'girth-weld'
+      || spool.weldBounded
+      || spool.metalLossTotal > 0
+      || spool.assessedCount > 0
+    ))
+    .sort((left, right) => (
+      (left.usGwLdM ?? left.firstFeatureLdM) - (right.usGwLdM ?? right.firstFeatureLdM)
+      || left.firstFeatureLdM - right.firstFeatureLdM
+    ));
 }
 
 function firstNonEmpty(values: Array<string | null | undefined>): string | null {
