@@ -134,6 +134,47 @@ export const DEFAULT_SCREENING_CONFIG: FfsScreeningConfig = {
   depthRejectionPct: 80,
 };
 
+/**
+ * Fills in a screening config that arrived missing fields.
+ *
+ * The results workspace receives its config through router navigation state,
+ * which the browser keeps in its history entry — so it survives a reload, a
+ * back navigation, and a deploy. An entry written by an earlier build comes
+ * back shaped the way that build wrote it, and the type says nothing about it
+ * because the value never passed through a parser.
+ *
+ * That is not hypothetical. A restored config without `reviewBandErf` took the
+ * whole Narrative tab down with "Cannot read properties of undefined (reading
+ * 'toFixed')", because the prose quotes the review band directly. Every panel
+ * reads these fields, so the repair belongs here rather than in each caller: a
+ * missing or non-finite value falls back to its default instead of reaching a
+ * template as `undefined`.
+ */
+export function normaliseScreeningConfig(value: Partial<FfsScreeningConfig> | null | undefined): FfsScreeningConfig {
+  const source = value ?? {};
+  const numeric = (
+    key: Exclude<keyof FfsScreeningConfig, 'growthBasis'>,
+  ): number => {
+    const candidate = source[key];
+    return typeof candidate === 'number' && Number.isFinite(candidate)
+      ? candidate
+      : DEFAULT_SCREENING_CONFIG[key];
+  };
+
+  return {
+    depthTolerancePct: numeric('depthTolerancePct'),
+    lengthToleranceMm: numeric('lengthToleranceMm'),
+    growthBasis: source.growthBasis === 'uniform' || source.growthBasis === 'measured'
+      ? source.growthBasis
+      : DEFAULT_SCREENING_CONFIG.growthBasis,
+    growthRateMmPerYear: numeric('growthRateMmPerYear'),
+    forecastYears: numeric('forecastYears'),
+    reviewBandErf: numeric('reviewBandErf'),
+    interactionSpacingFactor: numeric('interactionSpacingFactor'),
+    depthRejectionPct: numeric('depthRejectionPct'),
+  };
+}
+
 export interface FfsInput {
   featureId: string | null;
   ld: number | string;
