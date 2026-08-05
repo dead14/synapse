@@ -21,6 +21,7 @@ type SortKey =
   | 'dueDate'
   | 'governingLimit'
   | 'repairStatus'
+  | 'disposition'
   | 'priority';
 
 interface Column {
@@ -47,8 +48,43 @@ const COLUMNS: Column[] = [
   { key: 'dueDate', header: 'Due date', align: 'center', value: (i) => i.nominal.remnantLife.dueDateIso ?? '' },
   { key: 'governingLimit', header: 'Governing limit', align: 'left', value: (i) => i.nominal.remnantLife.governingLimit ?? i.nominal.remnantLife.status },
   { key: 'repairStatus', header: 'Repair', align: 'center', value: (i) => i.nominal.repairStatus },
+  { key: 'disposition', header: 'Disposition', align: 'left', value: (i) => dispositionRank(i) },
   { key: 'priority', header: 'Priority', align: 'center', value: (i) => PRIORITY_RANK[i.priority] },
 ];
+
+/**
+ * What the spool review has said about this feature. A repair that has been
+ * carried out outranks a recommendation, and a recommendation outranks nothing
+ * recorded, so sorting on this column walks the register from decided to open.
+ */
+function dispositionRank(item: FfsScreenedResult): number {
+  if (item.nominal.repairStatus === 'permanent-repair-verified') return 3;
+  if (item.nominal.repairStatus === 'temporary-repair') return 2;
+  return item.nominal.recommendation ? 1 : 0;
+}
+
+function DispositionCell({ item }: { item: FfsScreenedResult }) {
+  const n = item.nominal;
+  if (n.repairStatus !== 'unrepaired') {
+    return (
+      <span className="inline-flex items-center gap-1 font-semibold text-emerald-600 dark:text-emerald-400">
+        Repaired
+        <span className="font-normal text-slate-500 dark:text-slate-400">
+          {n.repairMethod ? `· ${n.repairMethod}` : ''}
+        </span>
+      </span>
+    );
+  }
+  if (n.recommendation) {
+    return (
+      <span className="inline-flex items-center gap-1 font-semibold text-indigo-600 dark:text-indigo-400">
+        Recommended
+        <span className="font-normal text-slate-500 dark:text-slate-400">· {n.recommendation}</span>
+      </span>
+    );
+  }
+  return <span className="text-slate-400">—</span>;
+}
 
 /**
  * The assessment register: every feature with its nominal and conservative
@@ -354,6 +390,9 @@ export default function FfsResultsTable({
                             ? 'Temporary'
                             : 'None'}
                       </span>
+                    </td>
+                    <td className="max-w-[240px] truncate px-2 py-2 text-[11px]">
+                      <DispositionCell item={item} />
                     </td>
                     <td className="px-2 py-2 text-center">
                       <PriorityLabel priority={item.priority} />

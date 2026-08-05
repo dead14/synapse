@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getAlignmentImportReadiness, mapAlignmentRowsToFfs } from '../src/lib/ffs/alignmentImport.ts';
+import { extractGirthWeldLadder, getAlignmentImportReadiness, mapAlignmentRowsToFfs } from '../src/lib/ffs/alignmentImport.ts';
 import { REQUIRED_COLUMNS } from '../src/lib/ffs/types.ts';
 import { validateData } from '../src/lib/ffs/validation.ts';
 
@@ -359,4 +359,37 @@ test('does not apply the zero baseline to a matched feature whose CGR is missing
   assert.equal(mapped.accepted[0].provenance.growthEvidence.depth.observation, 'unavailable');
   assert.equal(mapped.accepted[0].provenance.growthEvidence.depth.analysisBasis, 'none');
   assert.match(mapped.accepted[0].provenance.growthEvidence.depth.note, /matched run-pair CGR is unavailable/i);
+});
+
+test('the girth-weld ladder is read from the NEW run, sorted and de-duplicated', () => {
+  const welds = extractGirthWeldLadder([
+    { 'Result Group': 'GW', 'Identif. NEW': 'GW-2', 'Log Dist NEW (m)': 112.5 },
+    { 'Result Group': 'GW', 'Identif. NEW': 'GW-1', 'Log Dist NEW (m)': 100 },
+    // The same weld swept up twice by two engine buckets is one boundary.
+    { 'Result Group': 'GW', 'Identif. NEW': 'GW-1', 'Log Dist NEW (m)': 100.0004 },
+    { 'Result Group': 'ANOMALY', 'Identif. NEW': 'A-1', 'Log Dist NEW (m)': 105 },
+  ]);
+
+  assert.deepEqual(welds, [
+    { id: 'GW-1', ldM: 100 },
+    { id: 'GW-2', ldM: 112.5 },
+  ]);
+});
+
+test('a weld the new run never reported adds no spool boundary', () => {
+  // An OLD-only weld row exists physically, but it carries no position on the
+  // odometer the assessment was built from.
+  const welds = extractGirthWeldLadder([
+    { 'Result Group': 'GW', 'Identif. OLD': 'GW-9', 'Log Dist OLD (m)': 90 },
+    { 'Result Group': 'GW', 'Identif. NEW': 'GW-1', 'Log Dist NEW (m)': 100 },
+  ]);
+
+  assert.deepEqual(welds, [{ id: 'GW-1', ldM: 100 }]);
+});
+
+test('a weld is recognised from its feature type when the group column is absent', () => {
+  const welds = extractGirthWeldLadder([
+    { 'Feature Type NEW': 'Girth Weld', 'Identif. NEW': 'W-7', 'Log Dist NEW (m)': 55 },
+  ]);
+  assert.deepEqual(welds, [{ id: 'W-7', ldM: 55 }]);
 });

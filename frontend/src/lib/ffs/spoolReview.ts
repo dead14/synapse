@@ -15,8 +15,10 @@
  * feature that produced it.
  */
 
+import type { FfsGirthWeld } from './alignmentImport.ts';
 import type {
   FfsConfig,
+  FfsRepairStatus,
   FfsScreenedResult,
   FfsScreeningConfig,
   FfsSeverity,
@@ -26,11 +28,13 @@ import { remnantSortValue } from './lifeProjection.ts';
 
 /** How the boundary of a spool was established. */
 export type FfsSpoolGrouping =
-  /** The run reported a joint number: the strongest identity available. */
+  /** Between two welds of the run's own girth-weld ladder: the real spool. */
+  | 'girth-weld'
+  /** The run reported a joint number. */
   | 'joint-number'
   /** Derived from the reported distance to the upstream girth weld. */
   | 'upstream-weld'
-  /** Neither was reported, so the features are grouped by section only. */
+  /** None of the above was reported, so the features are grouped by section. */
   | 'unassigned';
 
 export interface FfsSpoolGrowth {
@@ -61,6 +65,9 @@ export interface FfsSpool {
   /** Log distance of the upstream girth weld, when it can be established. */
   usGwLdM: number | null;
   dsGwLdM: number | null;
+  /** Identifiers of the two welds that bound the spool, when known. */
+  usGwId: string | null;
+  dsGwId: string | null;
   /** Girth-weld-to-girth-weld length as the ILI reported it. */
   lengthM: number | null;
   /** Extent actually covered by the features, used when no weld is known. */
@@ -74,6 +81,16 @@ export interface FfsSpool {
   maxDepthPct: number;
   meanDepthPct: number;
   longestFeatureMm: number;
+  /**
+   * How much metal loss the joint is actually carrying. The count answers "how
+   * many", the summed axial length answers "how much of the joint", and the
+   * summed footprint answers "how much of the shell" — three different
+   * questions a reviewer asks before choosing between a wrap and a cut-out.
+   */
+  totalMetalLossLengthMm: number;
+  totalMetalLossAreaMm2: number;
+  /** Summed axial length as a fraction of the joint, when its length is known. */
+  metalLossCoveragePct: number | null;
   governingErf: FfsScreenedResult | null;
   governingLife: FfsScreenedResult | null;
   worstNominalErf: number;
@@ -122,17 +139,44 @@ function fixed(value: number | null | undefined, digits: number): string {
  * all: a spool built from a section name is a reviewing convenience, not a
  * piece of pipe, and the grouping is labelled so the reader can tell.
  */
-function spoolKeyOf(item: FfsScreenedResult): { key: string; grouping: FfsSpoolGrouping } {
+function spoolKeyOf(
+  item: FfsScreenedResult,
+  ladder: readonly FfsGirthWeld[],
+): { key: string; grouping: FfsSpoolGrouping; weldIndex: number | null } {
+  if (ladder.length >= 2) {
+    // The interval the feature falls in: index i means "between weld i and
+    // weld i+1". -1 is upstream of the first weld, ladder.length-1 downstream
+    // of the last; both are real places on the line and get their own bucket
+    // rather than being folded into the nearest joint.
+    const index = upperWeldIndex(ladder, numericLd(item)) - 1;
+    return { key: `gw:${index}`, grouping: 'girth-weld', weldIndex: index };
+  }
   const joint = item.nominal.jointNumber?.trim();
-  if (joint) return { key: `joint:${joint}`, grouping: 'joint-number' };
+  if (joint) return { key: `joint:${joint}`, grouping: 'joint-number', weldIndex: null };
   const usGw = item.nominal.usGwDistanceM;
   if (usGw !== null && usGw !== undefined && Number.isFinite(usGw)) {
     // 0.1 m is finer than any real weld-position uncertainty, so two features
     // in one joint round to the same weld while two joints never merge.
     const weldLd = numericLd(item) - usGw;
-    return { key: `gw:${weldLd.toFixed(1)}`, grouping: 'upstream-weld' };
+    return { key: `usgw:${weldLd.toFixed(1)}`, grouping: 'upstream-weld', weldIndex: null };
   }
-  return { key: `section:${item.nominal.section || 'unassigned'}`, grouping: 'unassigned' };
+  return {
+    key: `section:${item.nominal.section || 'unassigned'}`,
+    grouping: 'unassigned',
+    weldIndex: null,
+  };
+}
+
+/** First weld strictly past `distance`; ladder.length when there is none. */
+function upperWeldIndex(ladder: readonly FfsGirthWeld[], distance: number): number {
+  let low = 0;
+  let high = ladder.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (ladder[middle].ldM <= distance) low = middle + 1;
+    else high = middle;
+  }
+  return low;
 }
 
 function firstFinite(values: Array<number | null | undefined>): number | null {
@@ -227,6 +271,12 @@ function buildDrivers(spool: Omit<FfsSpool, 'drivers'>): string[] {
   } else {
     drivers.push('No usable corrosion rate on any feature in this spool, so nothing here projects forward.');
   }
+  drivers.push(
+    `${spool.featureCount} metal-loss record${spool.featureCount === 1 ? '' : 's'} on this spool, ` +
+    `${fixed(spool.totalMetalLossLengthMm, 0)} mm of axial length in total` +
+    `${spool.metalLossCoveragePct !== null ? ` (${fixed(spool.metalLossCoveragePct, 1)} % of the joint)` : ''}, ` +
+    `footprint ${fixed(spool.totalMetalLossAreaMm2 / 1e6, 3)} m².`,
+  );
   if (spool.clusterCount > 0) {
     drivers.push(
       `${spool.clusterCount} of the ${spool.featureCount} records are vendor-merged clusters: their extent is a ` +
@@ -239,18 +289,22 @@ function buildDrivers(spool: Omit<FfsSpool, 'drivers'>): string[] {
       'interaction spacing, so the spool may behave as a longer flaw than any single feature suggests.',
     );
   }
-  if (spool.grouping !== 'joint-number') {
-    drivers.push(
-      spool.grouping === 'upstream-weld'
-        ? 'Spool boundary derived from the reported distance to the upstream girth weld; the run gave no joint number.'
-        : 'The run reported neither a joint number nor a distance to the upstream weld, so this group is a section, not a spool.',
-    );
+  if (spool.grouping === 'upstream-weld') {
+    drivers.push('Spool boundary derived from the reported distance to the upstream girth weld; the run carried no weld ladder.');
+  } else if (spool.grouping === 'unassigned') {
+    drivers.push('The run reported no girth weld, joint number or upstream-weld distance for these features, so this group is a section, not a spool.');
   }
   return drivers;
 }
 
 export interface BuildSpoolsOptions {
   screening: FfsScreeningConfig;
+  /**
+   * The NEW run's girth welds. When present this is what a spool is: the pipe
+   * between two of them. Everything else is a fallback for a run that did not
+   * report a ladder.
+   */
+  girthWelds?: readonly FfsGirthWeld[];
   /** Only used to keep interaction screening consistent with the other tabs. */
   config?: FfsConfig;
 }
@@ -264,27 +318,42 @@ export interface BuildSpoolsOptions {
  */
 export function buildFfsSpools(
   items: FfsScreenedResult[],
-  { screening }: BuildSpoolsOptions,
+  { screening, girthWelds = [] }: BuildSpoolsOptions,
 ): FfsSpool[] {
-  const buckets = new Map<string, { grouping: FfsSpoolGrouping; members: FfsScreenedResult[] }>();
+  const ladder = [...girthWelds].sort((left, right) => left.ldM - right.ldM);
+  const buckets = new Map<string, {
+    grouping: FfsSpoolGrouping;
+    weldIndex: number | null;
+    members: FfsScreenedResult[];
+  }>();
   for (const item of items) {
-    const { key, grouping } = spoolKeyOf(item);
+    const { key, grouping, weldIndex } = spoolKeyOf(item, ladder);
     const bucket = buckets.get(key);
     if (bucket) bucket.members.push(item);
-    else buckets.set(key, { grouping, members: [item] });
+    else buckets.set(key, { grouping, weldIndex, members: [item] });
   }
 
   const spools: FfsSpool[] = [];
-  for (const [id, { grouping, members }] of buckets) {
+  for (const [id, { grouping, weldIndex, members }] of buckets) {
     const ordered = [...members].sort((a, b) => numericLd(a) - numericLd(b));
     const distances = ordered.map(numericLd);
     const jointNumber = firstNonEmpty(ordered.map((item) => item.nominal.jointNumber));
-    const lengthM = firstFinite(ordered.map((item) => item.nominal.jointLengthM));
-    const usGwLdM = firstFinite(ordered.map((item) => {
+    const upstream = weldIndex !== null && weldIndex >= 0 ? ladder[weldIndex] ?? null : null;
+    const downstream = weldIndex !== null && weldIndex + 1 < ladder.length
+      ? ladder[weldIndex + 1] ?? null
+      : null;
+    // The ladder wins where it exists: it is a measured weld position, not a
+    // column the vendor may have filled in from its own joint tally.
+    const usGwLdM = upstream?.ldM ?? firstFinite(ordered.map((item) => {
       const usGw = item.nominal.usGwDistanceM;
       return usGw === null || usGw === undefined ? null : numericLd(item) - usGw;
     }));
-    const dsGwLdM = usGwLdM !== null && lengthM !== null ? usGwLdM + lengthM : null;
+    const reportedJointLengthM = firstFinite(ordered.map((item) => item.nominal.jointLengthM));
+    const dsGwLdM = downstream?.ldM
+      ?? (usGwLdM !== null && reportedJointLengthM !== null ? usGwLdM + reportedJointLengthM : null);
+    const lengthM = usGwLdM !== null && dsGwLdM !== null
+      ? dsGwLdM - usGwLdM
+      : reportedJointLengthM;
 
     const governingErf = ordered.reduce<FfsScreenedResult | null>((worst, item) => (
       !worst || item.nominal.ERF > worst.nominal.ERF ? item : worst
@@ -312,6 +381,8 @@ export function buildFfsSpools(
     let clusterCount = 0;
     let internalCount = 0;
     let externalCount = 0;
+    let totalMetalLossLengthMm = 0;
+    let totalMetalLossAreaMm2 = 0;
     for (const item of ordered) {
       if (item.nominal.isClusteredMetalLoss) clusterCount += 1;
       if (/int/i.test(item.nominal.surface ?? '')) internalCount += 1;
@@ -319,16 +390,29 @@ export function buildFfsSpools(
       if (item.nominal.repairStatus === 'temporary-repair') repairCounts.temporary += 1;
       else if (item.nominal.repairStatus === 'permanent-repair-verified') repairCounts.permanent += 1;
       else repairCounts.unrepaired += 1;
+      totalMetalLossLengthMm += item.nominal.length;
+      totalMetalLossAreaMm2 += item.nominal.length * item.nominal.width;
     }
 
     const partial: Omit<FfsSpool, 'drivers'> = {
       id,
-      label: spoolLabel(jointNumber, usGwLdM, dsGwLdM, distances, grouping, ordered[0].nominal.section),
+      label: spoolLabel({
+        jointNumber,
+        usGwId: upstream?.id ?? null,
+        dsGwId: downstream?.id ?? null,
+        usGwLdM,
+        dsGwLdM,
+        distances,
+        grouping,
+        section: ordered[0].nominal.section,
+      }),
       grouping,
       jointNumber,
       section: ordered[0].nominal.section,
       usGwLdM,
       dsGwLdM,
+      usGwId: upstream?.id ?? null,
+      dsGwId: downstream?.id ?? null,
       lengthM,
       firstFeatureLdM: distances[0],
       lastFeatureLdM: distances[distances.length - 1],
@@ -340,6 +424,11 @@ export function buildFfsSpools(
       maxDepthPct: Math.max(...depths),
       meanDepthPct: depths.reduce((sum, value) => sum + value, 0) / depths.length,
       longestFeatureMm: Math.max(...ordered.map((item) => item.nominal.length)),
+      totalMetalLossLengthMm,
+      totalMetalLossAreaMm2,
+      metalLossCoveragePct: lengthM !== null && lengthM > 0
+        ? (totalMetalLossLengthMm / (lengthM * 1000)) * 100
+        : null,
       governingErf,
       governingLife,
       worstNominalErf: governingErf ? governingErf.nominal.ERF : 0,
@@ -370,14 +459,34 @@ function firstNonEmpty(values: Array<string | null | undefined>): string | null 
   return null;
 }
 
-function spoolLabel(
-  jointNumber: string | null,
-  usGwLdM: number | null,
-  dsGwLdM: number | null,
-  distances: number[],
-  grouping: FfsSpoolGrouping,
-  section: string,
-): string {
+function spoolLabel({
+  jointNumber,
+  usGwId,
+  dsGwId,
+  usGwLdM,
+  dsGwLdM,
+  distances,
+  grouping,
+  section,
+}: {
+  jointNumber: string | null;
+  usGwId: string | null;
+  dsGwId: string | null;
+  usGwLdM: number | null;
+  dsGwLdM: number | null;
+  distances: number[];
+  grouping: FfsSpoolGrouping;
+  section: string;
+}): string {
+  if (grouping === 'girth-weld') {
+    // Named by the two welds that bound it, because that is how the spool is
+    // identified on site and in the dig sheet.
+    if (usGwId && dsGwId) {
+      return `GW ${usGwId} → ${dsGwId}${jointNumber ? ` · Joint ${jointNumber}` : ''}`;
+    }
+    if (dsGwId) return `Upstream of GW ${dsGwId}`;
+    if (usGwId) return `Downstream of GW ${usGwId}`;
+  }
   if (jointNumber) return `Joint ${jointNumber}`;
   if (grouping === 'upstream-weld' && usGwLdM !== null) {
     return dsGwLdM !== null
@@ -537,16 +646,31 @@ export function suggestSpoolDisposition(
   };
 }
 
-export type FfsSpoolDecision = 'repair' | 'monitor' | 'defer' | 'no-action';
+/**
+ * A spool card records one of two things, and they are not the same statement.
+ *
+ * `recommendation` is what the engineer thinks should be done. It has no date,
+ * because a recommendation is not scheduled work, and it never changes the
+ * assessed population.
+ *
+ * `repaired` is a claim that work has already been carried out, which does
+ * change the population — so it is the only mode that asks for a completion
+ * date and an evidence reference, and the only one that writes a repair status.
+ */
+export type FfsSpoolDispositionMode = 'recommendation' | 'repaired';
 
 export interface FfsSpoolDisposition {
-  decision: FfsSpoolDecision;
+  mode: FfsSpoolDispositionMode;
   optionId: string | null;
-  targetDateIso: string | null;
   owner: string | null;
   justification: string | null;
+  /** `repaired` only: whether the completed work is temporary or permanent. */
+  repairKind: Extract<FfsRepairStatus, 'temporary-repair' | 'permanent-repair-verified'>;
+  /** `repaired` only. */
+  completedDateIso: string | null;
+  evidenceReference: string | null;
   /**
-   * Members the decision applies to, by feature index. A spool decision is
+   * Members the record applies to, by feature index. A spool decision is
    * usually taken for the whole joint, but a sleeve over one pit while the rest
    * of the joint is left to the next inspection is a real answer too.
    */
@@ -555,11 +679,13 @@ export interface FfsSpoolDisposition {
 
 export function emptySpoolDisposition(spool: FfsSpool): FfsSpoolDisposition {
   return {
-    decision: 'monitor',
+    mode: 'recommendation',
     optionId: null,
-    targetDateIso: null,
     owner: null,
     justification: null,
+    repairKind: 'permanent-repair-verified',
+    completedDateIso: null,
+    evidenceReference: null,
     memberIndexes: spool.members.map((member) => member.index),
   };
 }
@@ -569,9 +695,9 @@ export interface FfsSpoolProgramme {
   dispositions: Map<string, FfsSpoolDisposition>;
   decided: number;
   undecided: number;
-  repairCount: number;
-  monitorCount: number;
-  /** Features covered by a recorded spool decision. */
+  recommendedCount: number;
+  repairedCount: number;
+  /** Features covered by a recorded spool record. */
   coveredFeatures: number;
 }
 
@@ -580,15 +706,15 @@ export function buildSpoolProgramme(
   dispositions: Record<string, FfsSpoolDisposition>,
 ): FfsSpoolProgramme {
   const map = new Map<string, FfsSpoolDisposition>();
-  let repairCount = 0;
-  let monitorCount = 0;
+  let recommendedCount = 0;
+  let repairedCount = 0;
   let coveredFeatures = 0;
   for (const spool of spools) {
     const disposition = dispositions[spool.id];
     if (!disposition) continue;
     map.set(spool.id, disposition);
-    if (disposition.decision === 'repair') repairCount += 1;
-    else monitorCount += 1;
+    if (disposition.mode === 'repaired') repairedCount += 1;
+    else recommendedCount += 1;
     coveredFeatures += disposition.memberIndexes.length;
   }
   return {
@@ -596,8 +722,8 @@ export function buildSpoolProgramme(
     dispositions: map,
     decided: map.size,
     undecided: spools.length - map.size,
-    repairCount,
-    monitorCount,
+    recommendedCount,
+    repairedCount,
     coveredFeatures,
   };
 }
