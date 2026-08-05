@@ -107,6 +107,52 @@ export function buildErfScatter(items: FfsScreenedResult[]): SplitScatter {
   return splitScatter(items, (item) => (Number.isFinite(item.nominal.ERF) ? item.nominal.ERF : null));
 }
 
+/**
+ * What a single dominant value in one measured column means for a chart drawn
+ * against it.
+ *
+ * A population whose axial lengths are all the same number plots as one
+ * vertical stripe, and every acceptance envelope beside it is decoration. That
+ * is not a drawing problem to be worked around — it is the tally saying the
+ * column was never populated, or that the parser mapped the wrong one — so the
+ * chart reports it instead of rendering a stripe and leaving the reader to
+ * work out why the screen tells them nothing.
+ */
+export interface ColumnUniformity {
+  /** The value that dominates, when one does. */
+  value: number | null;
+  /** How many features carry it. */
+  count: number;
+  total: number;
+  /** How many distinct values the column holds at all. */
+  distinctCount: number;
+  /** True once a single value covers `threshold` of the population. */
+  degenerate: boolean;
+}
+
+export function measureUniformity(
+  values: number[],
+  threshold = 0.98,
+): ColumnUniformity {
+  const total = values.length;
+  if (!total) {
+    return { value: null, count: 0, total: 0, distinctCount: 0, degenerate: false };
+  }
+  const tally = new Map<number, number>();
+  for (const value of values) tally.set(value, (tally.get(value) ?? 0) + 1);
+
+  let best: [number, number] = [values[0], 0];
+  for (const entry of tally) if (entry[1] > best[1]) best = entry;
+
+  return {
+    value: best[0],
+    count: best[1],
+    total,
+    distinctCount: tally.size,
+    degenerate: best[1] / total >= threshold,
+  };
+}
+
 /** Anomaly length against depth — the axes of the B31G Level 0 screen. */
 export function buildScreeningScatter(items: FfsScreenedResult[]): SplitScatter {
   const internal: FfsPoint[] = [];
@@ -139,15 +185,71 @@ const ENVELOPE_COLORS = [
 ];
 
 /**
+ * The axial length the screening chart has to span for its envelopes to mean
+ * anything.
+ *
+ * Driving the x axis off the reported lengths alone is what made this chart
+ * useless: a tally whose boxes are all short keeps the domain short, the
+ * envelope never reaches the lengths where it bends down, and every curve is
+ * a flat line off the top of the plot — or, once clipped, nothing at all.
+ *
+ * So the domain is whichever is wider: the population's own lengths, or the
+ * length at which the shallowest wall's envelope has fallen to `floorPct`.
+ * That guarantees the knee of the curve is on screen whatever the data looks
+ * like, which is the whole point of drawing an acceptance boundary.
+ */
+export function envelopeDomainMm(
+  items: FfsScreenedResult[],
+  config: FfsConfig,
+  floorPct = 25,
+  hardCapMm = 2000,
+): number {
+  const dataMax = items.reduce((max, item) => Math.max(max, item.nominal.length), 0);
+  if (!items.length) return Math.max(50, dataMax * 1.1);
+
+  // The thinnest wall bends down soonest, so it sets the length at which the
+  // interesting part of the family is visible.
+  const thinnest = items.reduce((min, item) => (item.nominal.wall < min.nominal.wall ? item : min), items[0]);
+  const { wall, od, smys, safetyFactor, p0 } = thinnest.nominal;
+  const geometry: B31gGeometry = {
+    wallThickness: wall,
+    outerDiameter: od,
+    smysMpa: smys,
+    safetyFactor,
+    operatingPressureMpa: p0,
+  };
+
+  let needed = 0;
+  for (let length = 10; length <= hardCapMm; length += 10) {
+    const ratio = acceptableDepthRatio(length, geometry, config.method, config.modifiedSa);
+    needed = length;
+    if (ratio !== null && ratio * 100 <= floorPct) break;
+  }
+
+  return Math.max(50, dataMax * 1.1, needed);
+}
+
+/**
  * Builds the B31G Level 0 acceptance envelope for each distinct wall thickness
  * in the dataset: for a given anomaly length, the greatest depth that still
- * keeps ERF at 1.0. Features plotting above their wall's curve fail the screen.
+ * keeps the safe pressure at the required pressure. Features plotting above
+ * their wall's curve fail the screen.
+ *
+ * Short anomalies solve to an allowable depth above the wall itself — the
+ * equations do not stop the metal loss reaching 117 % of a wall that only has
+ * 100 % to give. Dropping those points, as this used to, deleted the entire
+ * flat top of the curve, and on a lightly loaded line that is the entire curve:
+ * the chart rendered a legend with no line beside it. They are clamped to the
+ * project rejection line now, which is where the real boundary sits and what
+ * the reference reports draw.
  */
 export function buildEnvelopeCurves(
   items: FfsScreenedResult[],
   config: FfsConfig,
   maxLengthMm: number,
-  steps = 60,
+  /** The %WT line the envelope is flat along before the equations govern. */
+  depthLimitPct = 80,
+  steps = 120,
 ): EnvelopeCurve[] {
   // Group by wall thickness — each distinct wall gets its own curve, using the
   // most common geometry/material for that wall so the curve is representative.
@@ -188,13 +290,16 @@ export function buildEnvelopeCurves(
     const geometry = [...tally.values()].sort((a, b) => b.count - a.count)[0].geometry;
 
     const points: { x: number; y: number }[] = [];
-    for (let s = 1; s <= steps; s++) {
+    for (let s = 0; s <= steps; s++) {
       const length = (maxLengthMm * s) / steps;
       const ratio = acceptableDepthRatio(length, geometry, config.method, config.modifiedSa);
       if (ratio === null) continue;
       const depthPct = ratio * 100;
-      if (depthPct <= 0 || depthPct > 100) continue;
-      points.push({ x: length, y: Math.min(100, depthPct) });
+      // Below zero there is no acceptable depth at all: the line already
+      // exceeds its own flow stress at this length, and the curve ends rather
+      // than being drawn along the axis as if any metal loss were tolerable.
+      if (depthPct <= 0) break;
+      points.push({ x: length, y: Math.min(depthLimitPct, depthPct) });
     }
 
     return {

@@ -34,6 +34,7 @@ import {
 } from '../../lib/ffs/reportCase';
 import {
   DEFAULT_SCREENING_CONFIG,
+  normaliseScreeningConfig,
   type FfsConfig,
   type FfsResult,
   type FfsRepairDispositionPatch,
@@ -80,8 +81,10 @@ export default function FfsResultsPage() {
   const [activeTab, setActiveTab] = useState<TabId>('results');
   const [selected, setSelected] = useState<FfsScreenedResult | null>(null);
   const [assumptionsOpen, setAssumptionsOpen] = useState(false);
+  // Navigation state outlives the build that wrote it, so the screening config
+  // is repaired on the way in rather than trusted. See normaliseScreeningConfig.
   const [screening, setScreening] = useState<FfsScreeningConfig>(
-    state?.screening ?? DEFAULT_SCREENING_CONFIG,
+    () => normaliseScreeningConfig(state?.screening),
   );
   // Figures snapshotted by the Charts tab, kept so the narrative can embed them
   // after that panel unmounts.
