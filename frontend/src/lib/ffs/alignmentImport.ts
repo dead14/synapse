@@ -127,6 +127,12 @@ function numericText(value: number): string {
   return Number(value.toFixed(6)).toString();
 }
 
+/** Blank when the run did not report the value, so absent never reads as zero. */
+function optionalNumericText(value: unknown): string {
+  const parsed = finiteNumber(value);
+  return parsed === null ? '' : numericText(parsed);
+}
+
 function roundedRate(value: number): number {
   return Number(value.toFixed(6));
 }
@@ -506,6 +512,11 @@ export function mapAlignmentRowsToFfs(
         'SMYS [MPa]': numericText(engineering.smysMpa),
         'Operating Pressure P₀ [MPa]': numericText(engineering.operatingPressureMpa),
         'Clustered Metal Loss': isClusteredMetalLoss ? 'Yes' : 'No',
+        // Skeleton position, carried so the assessment can be reviewed spool by
+        // spool. Blank when the run did not report it.
+        'Joint No.': text(source['Joint No. NEW'], ''),
+        'Dist U/S GW [m]': optionalNumericText(source['Dist GW NEW (m)']),
+        'Joint Length [m]': optionalNumericText(source['Joint Len NEW (m)']),
         'Repair Status': 'Unrepaired',
         'Repair Method': '',
         'Repair Date': '',

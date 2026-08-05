@@ -27,7 +27,34 @@ import { extentOf } from '../utils/numericRange.ts';
 
 export type ComparisonRow = Record<string, unknown>;
 
-export type FeatureKind = 'weld' | 'valve' | 'tee' | 'bend' | 'flange' | 'anomaly' | 'other';
+export type FeatureKind =
+  | 'weld'
+  | 'valve'
+  | 'tee'
+  | 'bend'
+  | 'flange'
+  | 'fitting'
+  | 'anomaly'
+  | 'other';
+
+/**
+ * Kinds drawn as pipe furniture rather than as defects: a physical thing bolted
+ * to or welded into the line, whose position is evidence about the odometer.
+ * They share the girth weld's presentation — a full-height rule plus a marker on
+ * the joint row — because that is what a reviewer reads them as.
+ *
+ * `other` is deliberately outside this set: it is the fallback for a feature
+ * type nobody recognised, which is as likely to be an unusual anomaly label as
+ * it is to be a fitting, and promoting it would move real metal loss out of the
+ * defect band.
+ */
+export const FITTING_KINDS: ReadonlySet<FeatureKind> = new Set<FeatureKind>([
+  'valve', 'tee', 'bend', 'flange', 'fitting',
+]);
+
+export function isFittingKind(kind: FeatureKind): boolean {
+  return FITTING_KINDS.has(kind);
+}
 
 export type AxisMode = 'raw' | 'aligned';
 
@@ -62,6 +89,12 @@ export interface LaneFeature {
   jointNo: string | null;
   external: boolean | null;
   featureType: string;
+  /**
+   * True when the vendor reported this record as a merged corrosion group. The
+   * engine refuses to align these, so the viewer must not present the box as
+   * one defect either — see {@link CLUSTER_LABEL_PATTERN}.
+   */
+  isCluster: boolean;
   matchedBack: boolean | null;
   matchedForward: boolean | null;
   status: LaneFeatureStatus;
@@ -115,11 +148,22 @@ const MISSING = new Set(['', '-', 'nan', 'null', 'undefined']);
 const KIND_PATTERNS: Array<[FeatureKind, RegExp]> = [
   ['weld', /weld|girth|\bgw\b|seam/],
   ['valve', /valve/],
-  ['tee', /\btee\b|offtake|branch/],
+  ['tee', /\btee\b|offtake|off[\s_-]?take|branch/],
   ['flange', /flange/],
   ['bend', /bend|elbow/],
+  // Named pipe furniture the vendors report alongside the anchors. Matched
+  // before the anomaly pattern so a "repair sleeve" is a fitting, not a defect.
+  ['fitting', /anode|support|\bmarker\b|casing|sleeve|clamp|launcher|receiver|\btrap\b|reducer|\bcap\b|\bstub\b|tap\b|fitting/],
   ['anomaly', /anomal|metal[\s_-]?loss|corros|dent|crack|lamination|gouge|pitting/],
 ];
+
+/**
+ * Same rule as `hungarian_engine._is_cluster_feature` and
+ * `alignmentDisplay.isClusteredAlignmentRow`: a vendor-merged corrosion group.
+ * Its extent is a bounding box over several pits, so it is never aligned across
+ * runs and must never be read as one defect on the viewer.
+ */
+const CLUSTER_LABEL_PATTERN = /\b(?:cluster|klaster|kluster)s?(?:ed|ing)?\b/i;
 
 function text(value: unknown): string {
   return value === null || value === undefined ? '' : String(value).trim();
@@ -231,6 +275,7 @@ interface Observation {
   jointNo: string | null;
   external: boolean | null;
   featureType: string;
+  isCluster: boolean;
   rowMatched: boolean;
 }
 
@@ -249,6 +294,13 @@ function sideObservation(
   if (!hasId && mappedM === null && originalM === null) return null;
 
   const featureType = text(row[`Feature Type ${suffix}`] ?? row[`Feature Identification ${suffix}`]);
+  // Classification columns only: a free-text comment reading "not a cluster"
+  // must not reclassify the row.
+  const classification = [
+    featureType,
+    text(row[`Feature Identification ${suffix}`]),
+    text(row[`Dim Classification ${suffix}`]),
+  ];
   const surface = text(row[`Int/Ext ${suffix}`] ?? row[`Surface ${suffix}`]);
   const sourceKey = text(row[`Source Key ${suffix}`]);
   const clockHours = present(row[`O'Clock ${suffix}`])
@@ -276,6 +328,7 @@ function sideObservation(
     jointNo: present(row[`Joint No. ${suffix}`]) ? text(row[`Joint No. ${suffix}`]) : null,
     external: present(surface) ? surface.toUpperCase().includes('EXT') : null,
     featureType,
+    isCluster: classification.some((label) => CLUSTER_LABEL_PATTERN.test(label)),
     rowMatched,
   };
 }
@@ -465,6 +518,7 @@ export function buildComparisonLanes(rows: readonly ComparisonRow[]): Comparison
         jointNo: primary.jointNo,
         external: primary.external,
         featureType: primary.featureType,
+        isCluster: observations.some((observation) => observation.isCluster),
         matchedBack,
         matchedForward,
         status: statusOf(matchedBack, matchedForward),
@@ -652,7 +706,12 @@ export function laneFeaturesInWindow(
   }
   if (visible.length <= limit) return { features: visible, total: visible.length };
 
-  const keep = (feature: PlacedFeature) => feature.kind === 'weld' || Boolean(pinned?.(feature));
+  // Pipe furniture survives thinning for the same reason welds do: it is the
+  // skeleton the reviewer navigates by, and there is never enough of it to be
+  // the reason a lane is slow to paint.
+  const keep = (feature: PlacedFeature) => (
+    feature.kind === 'weld' || isFittingKind(feature.kind) || Boolean(pinned?.(feature))
+  );
   const kept = visible.filter(keep);
   const rest = visible
     .filter((feature) => !keep(feature))

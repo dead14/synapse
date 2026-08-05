@@ -358,7 +358,15 @@ test('feature kinds are read from the vendor feature type, falling back to the r
   assert.equal(classifyFeatureKind('Metal Loss', 'ANOMALY'), 'anomaly');
   assert.equal(classifyFeatureKind('Ball Valve', 'BYPASSED'), 'valve');
   assert.equal(classifyFeatureKind('', 'GW'), 'weld');
-  assert.equal(classifyFeatureKind('Casing', 'BYPASSED'), 'other');
+  // Named pipe furniture is drawn on the skeleton rows, so it has to be
+  // recognised as furniture rather than falling through to the defect band.
+  assert.equal(classifyFeatureKind('Casing', 'BYPASSED'), 'fitting');
+  assert.equal(classifyFeatureKind('Sacrificial Anode', 'BYPASSED'), 'fitting');
+  assert.equal(classifyFeatureKind('Offtake', 'BYPASSED'), 'tee');
+  // An unrecognised label stays 'other': it is as likely to be an unusual
+  // anomaly as a fitting, and promoting it would move real metal loss off the
+  // clock band.
+  assert.equal(classifyFeatureKind('Unclassified indication', 'BYPASSED'), 'other');
 });
 
 test('clock labels round to whole minutes and wrap at twelve', () => {

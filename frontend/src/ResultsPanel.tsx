@@ -341,6 +341,7 @@ export default function ResultsPanel({
        flattened = [
           ...(rawData.gw_locked || []).map((row: any) => ({ ...row, __resultGroup: 'GW' })),
           ...(rawData.gw_unmatched || []).map((row: any) => ({ ...row, __resultGroup: 'GW' })),
+          ...(rawData.fitting_matched || []).map((row: any) => ({ ...row, __resultGroup: 'FITTING' })),
           ...(rawData.anomaly_matched || []).map((row: any) => ({ ...row, __resultGroup: 'ANOMALY' })),
           ...(rawData.anomaly_only_old || []).map((row: any) => ({ ...row, __resultGroup: 'ANOMALY' })),
           ...(rawData.anomaly_only_new || []).map((row: any) => ({ ...row, __resultGroup: 'ANOMALY' })),
@@ -377,6 +378,7 @@ export default function ResultsPanel({
       return {
         gwLocked: rawData.gw_locked?.length || 0,
         gwUnmatched: rawData.gw_unmatched?.length || 0,
+        fittingMatched: rawData.fitting_matched?.length || 0,
         anomalyMatched: rawData.anomaly_matched?.length || 0,
         anomalyOnlyOld: rawData.anomaly_only_old?.length || 0,
         anomalyOnlyNew: rawData.anomaly_only_new?.length || 0,
@@ -1016,8 +1018,8 @@ export default function ResultsPanel({
             <div className="results-summary grid grid-cols-2 md:grid-cols-5 z-10" style={{ borderBottom: '1px solid var(--syn-line)' }}>
               <div>
                 <span>Total Pairs Matched</span>
-                <span>{summaryCounts.gwLocked + summaryCounts.anomalyMatched}</span>
-                <span>({summaryCounts.gwLocked} GW + {summaryCounts.anomalyMatched} Anom)</span>
+                <span>{summaryCounts.gwLocked + summaryCounts.fittingMatched + summaryCounts.anomalyMatched}</span>
+                <span>({summaryCounts.gwLocked} GW + {summaryCounts.fittingMatched} Fitting + {summaryCounts.anomalyMatched} Anom)</span>
               </div>
               <div>
                 <span>GW Orphan</span>

@@ -23,7 +23,7 @@ import {
   type FfsScenarioSummary,
 } from './reportCase.ts';
 
-function triggerDownload(blob: Blob, filename: string): void {
+export function triggerDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -34,7 +34,7 @@ function triggerDownload(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function safeFilename(name: string): string {
+export function safeFilename(name: string): string {
   return (name || 'ffs-assessment').replace(/[^\w.-]+/g, '_').slice(0, 80);
 }
 

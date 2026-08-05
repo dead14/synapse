@@ -1,6 +1,9 @@
 const COMPARISON_GROUP_ORDER = Object.freeze([
     'gw_locked',
     'gw_unmatched',
+    // Pipe furniture paired in sequence by the engine — valves, tees, bends,
+    // flanges and the rest. Skeleton evidence, so it sits with the girth welds.
+    'fitting_matched',
     'anomaly_matched',
     'anomaly_only_old',
     'anomaly_only_new',

@@ -35,6 +35,34 @@ CLUSTER_LABEL_PATTERN = re.compile(r"\b(?:cluster|klaster|kluster)s?(?:ed|ing)?\
 
 CLUSTER_BYPASS_REASON = "Clustered metal loss — excluded from alignment"
 
+# Pipe furniture an ILI reports alongside the anomalies.  Each entry is one
+# identity class: a bend is only ever paired with a bend, a valve only with a
+# valve.  Pairing is by *order* within the class — the n-th bend of the old run
+# is the n-th bend of the new one — because that is the only thing about a
+# fitting that survives an odometer that drifted.  Nothing outside this table is
+# ever paired; an unrecognised label stays a bypass row rather than becoming a
+# guess.
+FITTING_CLASS_PATTERNS = (
+    ("Valve", re.compile(r"\bvalve\b", re.IGNORECASE)),
+    ("Tee / offtake", re.compile(r"\btee\b|\boff[\s_-]?take\b|\bbranch(?:\s+connection)?\b", re.IGNORECASE)),
+    ("Flange", re.compile(r"\bflang(?:e|ed)\b", re.IGNORECASE)),
+    ("Bend", re.compile(r"\b(?:bend|elbow)\b", re.IGNORECASE)),
+    ("Launcher / receiver", re.compile(r"\b(?:launcher|receiver|pig\s*trap)\b", re.IGNORECASE)),
+    ("Anode", re.compile(r"\banodes?\b", re.IGNORECASE)),
+    ("Casing", re.compile(r"\bcasing\b", re.IGNORECASE)),
+    ("Support", re.compile(r"\b(?:support|clamp|saddle)\b", re.IGNORECASE)),
+    ("Marker", re.compile(r"\bmarker\b|\bmagnet\b", re.IGNORECASE)),
+    ("Sleeve / repair", re.compile(r"\bsleeve\b|\brepair\b", re.IGNORECASE)),
+    ("Reducer", re.compile(r"\breducer\b|\bswage\b", re.IGNORECASE)),
+    ("Tap / stub", re.compile(r"\btapp?(?:ing)?\b|\bstub\b|\bnozzle\b", re.IGNORECASE)),
+)
+
+# How far a fitting may have moved on the odometer, after the girth-weld offset
+# table has already been applied, and still be the same fitting.  Deliberately
+# looser than the anomaly gate: the sequence and the class carry the identity
+# here, and the distance is only a guard against pairing across a whole section.
+DEFAULT_FITTING_DISTANCE_TOLERANCE_M = 10.0
+
 
 def _coerce_distance(value):
     """Parse an odometer value, or return None when it is not a real number.
@@ -1137,6 +1165,101 @@ class HungarianAnomalyAlignmentEngine:
         return cls._is_dtw_anchor_feature(feature) or cls._is_structural_feature(feature)
 
     @classmethod
+    def _fitting_class(cls, feature: dict) -> str | None:
+        """Which identity class this fitting belongs to, or None if unknown.
+
+        A clustered record is never a fitting, and an unrecognised label returns
+        None so it keeps flowing to the bypass bucket instead of being paired
+        against something it may have nothing to do with.
+        """
+        if cls._is_cluster_feature(feature):
+            return None
+        primary, identification = cls._gw_feature_labels(feature)
+        haystack = f"{primary} {identification}"
+        for name, pattern in FITTING_CLASS_PATTERNS:
+            if pattern.search(haystack):
+                return name
+        return None
+
+    def match_fittings_in_order(
+        self,
+        old_features: list[dict],
+        new_features: list[dict],
+        offset_table: list[tuple[float, float]],
+        offset_keys: list[float] | None = None,
+        tolerance_m: float | None = None,
+    ) -> tuple[list[tuple[dict, dict]], list[dict], list[dict]]:
+        """Pair pipe furniture across the two runs, in order, within its class.
+
+        Bends, valves, tees and flanges are physical objects that do not appear,
+        disappear or swap places between runs; what changes is the odometer that
+        reports them.  So the pairing rule is ordinal: inside one class, the
+        sequence of old fittings is aligned to the sequence of new ones without
+        ever crossing, and a pair is only kept when the girth-weld offset table
+        already brings the two within ``tolerance_m`` of each other.
+
+        Returns the pairs plus whatever is left over on each side.  Leftovers
+        are conserved by the caller, never dropped.
+        """
+        gate = float(
+            tolerance_m
+            if tolerance_m is not None
+            else getattr(self, "fitting_distance_tolerance_m", DEFAULT_FITTING_DISTANCE_TOLERANCE_M)
+        )
+
+        def grouped(features: list[dict]) -> dict[str, list[dict]]:
+            buckets: dict[str, list[dict]] = {}
+            for feature in features:
+                name = self._fitting_class(feature)
+                if name is None:
+                    continue
+                buckets.setdefault(name, []).append(feature)
+            for bucket in buckets.values():
+                bucket.sort(key=lambda item: float(item["abs_distance_m"]))
+            return buckets
+
+        old_buckets = grouped(old_features)
+        new_buckets = grouped(new_features)
+
+        pairs: list[tuple[dict, dict]] = []
+        paired_keys: set = set()
+
+        for name, olds in old_buckets.items():
+            news = new_buckets.get(name)
+            if not news:
+                continue
+            cost = np.full((len(olds), len(news)), self.INF_COST, dtype=float)
+            for old_index, old_feature in enumerate(olds):
+                corrected = float(old_feature["abs_distance_m"]) + self._interpolate_offset(
+                    float(old_feature["abs_distance_m"]), offset_table, offset_keys,
+                )
+                for new_index, new_feature in enumerate(news):
+                    separation = abs(float(new_feature["abs_distance_m"]) - corrected)
+                    if separation <= gate:
+                        # Distance is the whole cost: the ordering constraint is
+                        # already enforced by the solver, so the only thing left
+                        # to prefer is the closer of two otherwise equal options.
+                        cost[old_index, new_index] = separation
+            for old_index, new_index in self.solve_monotonic_assignment(cost):
+                if cost[old_index, new_index] >= self.INF_COST:
+                    continue
+                old_feature = olds[old_index]
+                new_feature = news[new_index]
+                pairs.append((old_feature, new_feature))
+                paired_keys.add(("old", old_feature.get("source_key")))
+                paired_keys.add(("new", new_feature.get("source_key")))
+
+        unmatched_old = [
+            feature for feature in old_features
+            if ("old", feature.get("source_key")) not in paired_keys
+        ]
+        unmatched_new = [
+            feature for feature in new_features
+            if ("new", feature.get("source_key")) not in paired_keys
+        ]
+        return pairs, unmatched_old, unmatched_new
+
+    @classmethod
     def _partition_hungarian_features(cls, features: list[dict], locked_ids: set[str]):
         """Split Phase-2 input without re-emitting any Phase-1 GW feature."""
         # Phase ownership is determined by feature type, not identifier alone.
@@ -1332,6 +1455,9 @@ class HungarianAnomalyAlignmentEngine:
             self.w_length = float(tol_config["w_length"])
         if "w_width" in tol_config:
             self.w_width = float(tol_config["w_width"])
+        self.fitting_distance_tolerance_m = float(tol_config.get(
+            "fitting_distance_tolerance", DEFAULT_FITTING_DISTANCE_TOLERANCE_M,
+        ))
 
         gw_matches_final = [
             self._logical_gw_pair(pair)
@@ -1414,8 +1540,17 @@ class HungarianAnomalyAlignmentEngine:
 
         # Non-anomaly records stay visible in bypass buckets. Missing depth is
         # not a bypass reason; identity matching must rely on position/shape.
-        excluded_old = list(non_anomaly_old)
-        excluded_new = list(non_anomaly_new)
+        #
+        # Anything that carries a recognised fitting class is held back from the
+        # bypass bucket and offered to the ordinal matcher below instead: a
+        # support or an anode reported by both runs is the same object, and
+        # saying so is more useful than listing it twice as unpaired.
+        fitting_pool_old = [f for f in non_anomaly_old if self._fitting_class(f) is not None]
+        fitting_pool_new = [f for f in non_anomaly_new if self._fitting_class(f) is not None]
+        held_old = {id(f) for f in fitting_pool_old}
+        held_new = {id(f) for f in fitting_pool_new}
+        excluded_old = [f for f in non_anomaly_old if id(f) not in held_old]
+        excluded_new = [f for f in non_anomaly_new if id(f) not in held_new]
 
         # Filter before segmenting so matrix indexes and source features always
         # refer to the same list.  Filtering inside build_cost_matrix used to
@@ -1756,12 +1891,51 @@ class HungarianAnomalyAlignmentEngine:
         # Structural fittings (bends, flanges, launchers) are split out: DTW is
         # never able to match them, so an unconsumed one is expected, not
         # missing evidence.  They pass through as bypass rows.
-        structural_old = []
-        structural_new = []
+        leftover_gw_old = []
+        leftover_gw_new = []
         for feature in anomalies_1_all:
             if not self._is_gw_feature(feature) or feature["source_key"] in consumed_gw_old:
                 continue
             consumed_gw_old.add(feature["source_key"])
+            leftover_gw_old.append(feature)
+        for feature in anomalies_2_all:
+            if not self._is_gw_feature(feature) or feature["source_key"] in consumed_gw_new:
+                continue
+            consumed_gw_new.add(feature["source_key"])
+            leftover_gw_new.append(feature)
+
+        # Ordinal fitting matching.  Everything Phase 1 did not consume plus the
+        # recognised furniture held back from the bypass bucket goes in: bends
+        # and flanges that DTW is structurally unable to match, and the odd
+        # valve or tee it happened to miss.  Pairing is within one class and in
+        # sequence, so a run that gained an odometer offset still lines its
+        # fittings up with the previous run's.
+        fitting_pairs, unpaired_old, unpaired_new = self.match_fittings_in_order(
+            leftover_gw_old + fitting_pool_old,
+            leftover_gw_new + fitting_pool_new,
+            offset_table,
+            offset_keys,
+        )
+        print(
+            f"      [Fittings] {len(fitting_pairs)} paired in order "
+            f"({len(unpaired_old)} unpaired OLD, {len(unpaired_new)} unpaired NEW)",
+            file=sys.stderr,
+        )
+
+        fitting_matched = [
+            format_row(
+                f1["id"], f2["id"], "Matched", "FITTING",
+                odo_diff=float(f2["abs_distance_m"]) - float(f1["abs_distance_m"]),
+                old_feature=f1, new_feature=f2,
+            )
+            for f1, f2 in fitting_pairs
+        ]
+
+        # Leftovers keep the reporting they always had, so a genuinely missing
+        # anchor still reads as missing evidence and a bend still does not.
+        structural_old = []
+        structural_new = []
+        for feature in unpaired_old:
             if self._is_dtw_anchor_feature(feature):
                 gw_unmatched.append(format_row(
                     feature["id"], None, "ONLY_OLD", "GW", old_feature=feature,
@@ -1770,10 +1944,7 @@ class HungarianAnomalyAlignmentEngine:
                 structural_old.append(format_row(
                     feature["id"], None, "Bypassed OLD", "BYPASSED", old_feature=feature,
                 ))
-        for feature in anomalies_2_all:
-            if not self._is_gw_feature(feature) or feature["source_key"] in consumed_gw_new:
-                continue
-            consumed_gw_new.add(feature["source_key"])
+        for feature in unpaired_new:
             if self._is_dtw_anchor_feature(feature):
                 gw_unmatched.append(format_row(
                     None, feature["id"], "ONLY_NEW", "GW", new_feature=feature,
@@ -1825,6 +1996,7 @@ class HungarianAnomalyAlignmentEngine:
         output_rows = [
             *gw_locked,
             *gw_unmatched,
+            *fitting_matched,
             *anomaly_matched,
             *anomaly_only_old,
             *anomaly_only_new,
@@ -1836,6 +2008,7 @@ class HungarianAnomalyAlignmentEngine:
         json_output = {
             "gw_locked": gw_locked,
             "gw_unmatched": gw_unmatched,
+            "fitting_matched": fitting_matched,
             "anomaly_matched": anomaly_matched,
             "anomaly_only_old": anomaly_only_old,
             "anomaly_only_new": anomaly_only_new,

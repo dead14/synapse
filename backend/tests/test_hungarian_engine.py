@@ -941,6 +941,92 @@ class GwAnchorPartitionTests(unittest.TestCase):
         )
 
 
+class FittingOrdinalMatchingTests(unittest.TestCase):
+    """Pipe furniture pairs by class and by sequence, never across classes.
+
+    A bend does not move, appear or swap places between runs; the odometer that
+    reports it does.  So the n-th bend of the old run is the n-th bend of the
+    new one, and the distance gate is only a guard against pairing across a
+    whole section.
+    """
+
+    @staticmethod
+    def engine(tolerance_m=10.0):
+        engine = HungarianAnomalyAlignmentEngine.__new__(HungarianAnomalyAlignmentEngine)
+        engine.fitting_distance_tolerance_m = tolerance_m
+        return engine
+
+    @staticmethod
+    def feature(key, feature_type, distance, identification=""):
+        return {
+            "id": key,
+            "source_key": key,
+            "abs_distance_m": distance,
+            "originalType": feature_type,
+            "raw": {"feature_identification": identification},
+        }
+
+    def test_same_class_pairs_in_sequence_despite_an_odometer_shift(self):
+        old = [
+            self.feature("o1", "Bend", 100.0),
+            self.feature("o2", "Bend", 250.0),
+            self.feature("o3", "Bend", 400.0),
+        ]
+        new = [
+            self.feature("n1", "Bend", 102.0),
+            self.feature("n2", "Bend", 252.0),
+            self.feature("n3", "Bend", 402.0),
+        ]
+        pairs, unmatched_old, unmatched_new = self.engine().match_fittings_in_order(old, new, [])
+        self.assertEqual(
+            [(a["id"], b["id"]) for a, b in pairs],
+            [("o1", "n1"), ("o2", "n2"), ("o3", "n3")],
+        )
+        self.assertEqual(unmatched_old, [])
+        self.assertEqual(unmatched_new, [])
+
+    def test_classes_never_cross(self):
+        old = [self.feature("o1", "Bend", 100.0)]
+        new = [self.feature("n1", "Valve", 100.2)]
+        pairs, unmatched_old, unmatched_new = self.engine().match_fittings_in_order(old, new, [])
+        self.assertEqual(pairs, [])
+        self.assertEqual([f["id"] for f in unmatched_old], ["o1"])
+        self.assertEqual([f["id"] for f in unmatched_new], ["n1"])
+
+    def test_an_extra_new_fitting_leaves_the_order_intact(self):
+        old = [
+            self.feature("o1", "Flange", 10.0),
+            self.feature("o2", "Flange", 60.0),
+        ]
+        new = [
+            self.feature("n1", "Flange", 10.5),
+            self.feature("n2", "Flange", 35.0),
+            self.feature("n3", "Flange", 60.5),
+        ]
+        pairs, _unmatched_old, unmatched_new = self.engine().match_fittings_in_order(old, new, [])
+        self.assertEqual(
+            [(a["id"], b["id"]) for a, b in pairs],
+            [("o1", "n1"), ("o2", "n3")],
+        )
+        self.assertEqual([f["id"] for f in unmatched_new], ["n2"])
+
+    def test_distance_gate_rejects_a_fitting_a_whole_section_away(self):
+        old = [self.feature("o1", "Valve", 100.0)]
+        new = [self.feature("n1", "Valve", 900.0)]
+        pairs, unmatched_old, unmatched_new = self.engine().match_fittings_in_order(old, new, [])
+        self.assertEqual(pairs, [])
+        self.assertEqual(len(unmatched_old), 1)
+        self.assertEqual(len(unmatched_new), 1)
+
+    def test_clustered_metal_loss_is_never_a_fitting(self):
+        item = self.feature("o1", "Corrosion cluster", 100.0)
+        self.assertIsNone(HungarianAnomalyAlignmentEngine._fitting_class(item))
+
+    def test_unrecognised_labels_are_left_for_the_bypass_bucket(self):
+        item = self.feature("o1", "unclassified thing", 100.0)
+        self.assertIsNone(HungarianAnomalyAlignmentEngine._fitting_class(item))
+
+
 class SectionIndexSpaceTests(unittest.TestCase):
     """Section boundaries and segment ids must index the same list.
 
