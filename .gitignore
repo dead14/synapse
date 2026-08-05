@@ -74,3 +74,11 @@ scratch/
 
 # Vendored third-party template (reference only, never track)
 free-react-tailwind-admin-dashboard-main/
+
+# Git worktree checkouts. A worktree directory is a repository in its own
+# right, so `git add` on one records a gitlink rather than its files — a
+# submodule entry with no matching .gitmodules. actions/checkout then aborts
+# with "No url found for submodule path", which is how three of these took
+# production deploys down after they were committed by accident.
+.worktrees/
+worktrees/
