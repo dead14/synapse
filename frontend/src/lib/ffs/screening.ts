@@ -14,6 +14,7 @@ import type {
   FfsSeverity,
   FfsTier,
 } from './types.ts';
+import { findInteractionPairs } from './interactions.ts';
 import { buildFfsReportCase, type FfsReportContext } from './reportCase.ts';
 import { analysisHorizonYears, formatLifeProjection, lifeSortValue } from './lifeProjection.ts';
 import { computeRemnantLife, EMPTY_SERVICE_LIFE, type FfsRemnantLife } from './remnantLife.ts';
@@ -197,6 +198,7 @@ function evaluateTier(
     ERF: result.erf,
     severity: severityOf(result.erf, safeDepthPct, screening),
     beyondDepthLimit: result.beyondDepthLimit,
+    deepMetalLossReviewRequired: result.deepMetalLossReviewRequired,
     growthRateMmPerYear,
     growthObservation: growthApplication?.observation,
     growthAnalysisBasis: growthApplication?.analysisBasis,
@@ -391,30 +393,9 @@ export function buildLocationZones(items: FfsScreenedResult[]): FfsLocationZone[
  */
 export function findInteractions(
   items: FfsScreenedResult[],
-  screening: FfsScreeningConfig,
+  _screening: FfsScreeningConfig,
 ): FfsInteractionPair[] {
-  const sorted = [...items].sort((a, b) => numericLd(a) - numericLd(b));
-  const pairs: FfsInteractionPair[] = [];
-  // The scan can only stop once the centre gap clears the *longest* feature in
-  // the population. Cutting off on the current pair's lengths skipped a long
-  // downstream anomaly whose near edge still fell inside the threshold.
-  const longestMm = sorted.reduce((max, item) => Math.max(max, item.nominal.length), 0);
-
-  for (let i = 0; i < sorted.length; i++) {
-    const a = sorted[i];
-    const thresholdMm = screening.interactionSpacingFactor * a.nominal.wall;
-    const scanLimitMm = thresholdMm + (a.nominal.length + longestMm) / 2;
-    for (let j = i + 1; j < sorted.length; j++) {
-      const b = sorted[j];
-      const centerGapMm = (numericLd(b) - numericLd(a)) * 1000;
-      if (centerGapMm > scanLimitMm) break;
-      const edgeGapMm = centerGapMm - (a.nominal.length + b.nominal.length) / 2;
-      if (edgeGapMm <= thresholdMm) {
-        pairs.push({ a, b, edgeGapMm, thresholdMm });
-      }
-    }
-  }
-  return pairs;
+  return findInteractionPairs(items);
 }
 
 const PRIORITY_RANK: Record<FfsPriority, number> = { High: 3, Medium: 2, Routine: 1 };

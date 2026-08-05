@@ -33,6 +33,7 @@ export interface FfsScenarioEvaluation {
   capacityMarginMpa: number;
   severity: FfsSeverity;
   beyondDepthLimit: boolean;
+  deepMetalLossReviewRequired: boolean;
   valid: boolean;
   invalidReason: string | null;
   limitYears: number | null;
@@ -164,6 +165,7 @@ export function evaluateFfsScenario(
     capacityMarginMpa: result.safePressureMpa - inputs.requiredPressureMpa,
     severity: outsideDomain ? 'fail' : severityOf(result.erf, result.depthPct, screening),
     beyondDepthLimit: result.beyondDepthLimit,
+    deepMetalLossReviewRequired: result.deepMetalLossReviewRequired,
     valid: result.valid,
     invalidReason: result.invalidReason,
     limitYears: remnant.years,

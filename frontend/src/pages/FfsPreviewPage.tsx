@@ -37,6 +37,17 @@ const CONFIG: FfsConfig = {
   pressureBasis: 'maop',
   inputUnits: { pressure: 'MPa', diameter: 'mm' },
   serviceLife: { designLifeYears: 25, commissioningYear: 1985 },
+  applicability: {
+    materialClass: 'plain-carbon-low-alloy',
+    operatingTemperatureC: 80,
+    ductileFractureBehaviorConfirmed: true,
+    pressureDominatedLoadingConfirmed: true,
+    codeExclusionsReviewed: true,
+    deepMetalLossMeasurementAccuracyConfirmed: true,
+    effectiveCorrosionRateConfirmed: true,
+    assessmentSafetyFactorBasis: 'Preview harness MAOP basis',
+    lowSafetyFactorJustification: '',
+  },
 };
 
 /** Three sections at two design factors, matching the reference report's shape. */

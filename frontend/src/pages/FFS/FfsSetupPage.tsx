@@ -15,7 +15,12 @@ import PageMeta from '../../components/common/PageMeta';
 import { validateData } from '../../lib/ffs/validation';
 import type { ValidationError } from '../../lib/ffs/validation';
 import { processAllRows } from '../../lib/ffs/calcEngine';
-import { DEFAULT_SCREENING_CONFIG, type FfsConfig, type FfsScreeningConfig } from '../../lib/ffs/types';
+import {
+  DEFAULT_SCREENING_CONFIG,
+  type FfsConfig,
+  type FfsMaterialClass,
+  type FfsScreeningConfig,
+} from '../../lib/ffs/types';
 import SynButton from '../../components/ui/SynButton';
 import { NumberField } from '../../components/ffs/FfsPrimitives';
 import { fetchAlignmentResult, type ComparisonRow } from '../../utils/alignment';
@@ -94,6 +99,15 @@ export default function FfsSetupPage() {
   const [fallbackLengthGrowth, setFallbackLengthGrowth] = useState('0');
   const [designLifeYears, setDesignLifeYears] = useState('');
   const [commissioningYear, setCommissioningYear] = useState('');
+  const [materialClass, setMaterialClass] = useState<FfsMaterialClass>('unknown');
+  const [operatingTemperatureC, setOperatingTemperatureC] = useState('');
+  const [ductileFractureConfirmed, setDuctileFractureConfirmed] = useState(false);
+  const [pressureDominatedConfirmed, setPressureDominatedConfirmed] = useState(false);
+  const [codeExclusionsReviewed, setCodeExclusionsReviewed] = useState(false);
+  const [deepMeasurementConfirmed, setDeepMeasurementConfirmed] = useState(false);
+  const [effectiveCorrosionRateConfirmed, setEffectiveCorrosionRateConfirmed] = useState(false);
+  const [assessmentSafetyFactorBasis, setAssessmentSafetyFactorBasis] = useState('');
+  const [lowSafetyFactorJustification, setLowSafetyFactorJustification] = useState('');
 
   // Sections come from the released features, and the factor for each is typed
   // once against a stretch the engineer has already named and reviewed. Keyed
@@ -168,9 +182,31 @@ export default function FfsSetupPage() {
   const readinessReasons = [
     ...(sourceMode === 'released' ? alignmentReadinessReasons : manualReadinessReasons),
     ...(sourceMode === 'released' && invalidSectionFactors.length > 0
-      ? [`Enter a design factor between 0 and 1 for: ${invalidSectionFactors.map((option) => option.section).join(', ')}.`]
+      ? [`Enter an assessment pressure factor between 0 and 1 for: ${invalidSectionFactors.map((option) => option.section).join(', ')}.`]
       : []),
     ...serviceLifeReasons,
+    ...(materialClass === 'unknown' ? ['Select and confirm the assessed material class.'] : []),
+    ...(modifiedSa === 'smys69' && materialClass !== 'plain-carbon-low-alloy'
+      ? ['SMYS + 69 MPa requires plain carbon or low-alloy steel.']
+      : []),
+    ...(sourceMode === 'released' && modifiedSa === 'smys69' && Number(smysMpaForCalculation) > 483
+      ? ['SMYS + 69 MPa requires SMYS not greater than 483 MPa.']
+      : []),
+    ...(modifiedSa === 'smys69' && (
+      operatingTemperatureC.trim() === '' ||
+      !Number.isFinite(Number(operatingTemperatureC)) ||
+      Number(operatingTemperatureC) >= 120
+    ) ? ['SMYS + 69 MPa requires a confirmed operating temperature below 120 °C.'] : []),
+    ...(!ductileFractureConfirmed ? ['Confirm ductile fracture behavior.'] : []),
+    ...(!pressureDominatedConfirmed ? ['Confirm pressure-dominated loading.'] : []),
+    ...(!codeExclusionsReviewed ? ['Confirm the ASME B31G exclusions review.'] : []),
+    ...(!assessmentSafetyFactorBasis.trim() ? ['Document the assessment safety-factor basis.'] : []),
+    ...(
+      (Number(designFactor) > 0.8 || sectionDesignFactors.some((rule) => rule.designFactor > 0.8)) &&
+      !lowSafetyFactorJustification.trim()
+        ? ['Effective safety factor below 1.25 requires documented engineering justification.']
+        : []
+    ),
   ];
 
   useEffect(() => {
@@ -299,6 +335,17 @@ export default function FfsSetupPage() {
         serviceLife: {
           designLifeYears: designLifeYears.trim() === '' ? null : Number(designLifeYears),
           commissioningYear: commissioningYear.trim() === '' ? null : Number(commissioningYear),
+        },
+        applicability: {
+          materialClass,
+          operatingTemperatureC: operatingTemperatureC.trim() === '' ? null : Number(operatingTemperatureC),
+          ductileFractureBehaviorConfirmed: ductileFractureConfirmed,
+          pressureDominatedLoadingConfirmed: pressureDominatedConfirmed,
+          codeExclusionsReviewed,
+          deepMetalLossMeasurementAccuracyConfirmed: deepMeasurementConfirmed,
+          effectiveCorrosionRateConfirmed,
+          assessmentSafetyFactorBasis: assessmentSafetyFactorBasis.trim(),
+          lowSafetyFactorJustification: lowSafetyFactorJustification.trim(),
         },
       };
 
@@ -489,7 +536,7 @@ export default function FfsSetupPage() {
                 step={1}
               />
               <p className="mt-2 text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
-                Numerical projection boundary only. If neither ERF 1.0 nor 80% depth is reached inside this
+                Numerical projection boundary only. If neither ERF 1.0 nor projected wall penetration is reached inside this
                 window, Synapse reports no service-limit date.
               </p>
             </div>
@@ -567,21 +614,15 @@ export default function FfsSetupPage() {
                       max={1}
                       step={0.01}
                     />
-                    <NumberField
-                      label="Interaction spacing"
-                      value={screening.interactionSpacingFactor}
-                      onChange={(interactionSpacingFactor) =>
-                        setScreening((s) => ({ ...s, interactionSpacingFactor }))
-                      }
-                      unit="× t"
-                      min={1}
-                      max={20}
-                      step={1}
-                    />
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
+                      <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">Interaction spacing</span>
+                      <strong className="mt-1 block text-sm text-slate-800 dark:text-slate-100">3 × t</strong>
+                      <span className="text-[10px] text-slate-400">ASME fixed criterion</span>
+                    </div>
                   </div>
                   <p className="mt-3 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-                    These are project screening decisions, not ASME B31G requirements. They can also be retuned
-                    on the results page without re-running the assessment.
+                    Tolerances, growth, forecast, and review band are project screening decisions. The 3t
+                    interaction criterion is fixed by ASME and cannot be retuned.
                   </p>
                 </div>
               )}
@@ -745,7 +786,7 @@ export default function FfsSetupPage() {
                 <input type="number" min="0" step="any" value={smysMpa} onChange={(event) => setSmysMpa(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
               </label>
               <label className="block text-xs font-semibold text-slate-500">
-                Design Factor (line default)
+                Assessment pressure factor, 1/SF (line default)
                 <input
                   type="number"
                   min="0"
@@ -767,7 +808,10 @@ export default function FfsSetupPage() {
                   }}
                   className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                 />
-                <span className="mt-1 block text-[10px] font-normal leading-snug">Applied to any section without its own value below.</span>
+                <span className="mt-1 block text-[10px] font-normal leading-snug">
+                  Effective SF = {Number(designFactor) > 0 ? (1 / Number(designFactor)).toFixed(3) : '—'}.
+                  Applied to any section without its own value below.
+                </span>
               </label>
               <label className="block text-xs font-semibold text-slate-500">
                 Required assessment pressure [{pressureUnit}]
@@ -815,7 +859,7 @@ export default function FfsSetupPage() {
               <div className="rounded-xl border border-slate-200 dark:border-slate-700">
                 <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
-                    Design factor by section
+                    Assessment pressure factor by section
                   </p>
                   <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
                     {sectionOptions.length} section{sectionOptions.length === 1 ? '' : 's'} carry released
@@ -831,7 +875,7 @@ export default function FfsSetupPage() {
                         <th className="px-4 py-2">Section</th>
                         <th className="px-2 py-2 text-right">Features</th>
                         <th className="px-2 py-2 text-right">Range [m]</th>
-                        <th className="px-4 py-2 text-right">Design factor</th>
+                        <th className="px-4 py-2 text-right">1 / SF</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -978,6 +1022,92 @@ export default function FfsSetupPage() {
                 )}
               </>
             )}
+
+            <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-700 dark:bg-slate-900/40">
+              <div className="flex items-start gap-3">
+                <FiShield className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+                <div>
+                  <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">ASME B31G applicability declaration</p>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                    These confirmations are audit gates. They do not alter ILI dimensions or silently change the selected calculation method.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="block text-xs font-semibold text-slate-500">
+                  Material class
+                  <select
+                    value={materialClass}
+                    onChange={(event) => setMaterialClass(event.target.value as FfsMaterialClass)}
+                    className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  >
+                    <option value="unknown">Select…</option>
+                    <option value="plain-carbon-low-alloy">Plain carbon / low-alloy steel</option>
+                    <option value="other">Other material</option>
+                  </select>
+                </label>
+                <label className="block text-xs font-semibold text-slate-500">
+                  Maximum operating temperature [°C]
+                  <input
+                    type="number"
+                    step="any"
+                    value={operatingTemperatureC}
+                    onChange={(event) => setOperatingTemperatureC(event.target.value)}
+                    className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  />
+                  {modifiedSa === 'smys69' && (
+                    <span className="mt-1 block text-[10px] font-normal leading-snug">
+                      SMYS + 69 MPa is gated to &lt;120 °C and SMYS ≤483 MPa. SMTS is intentionally not used for this project gate.
+                    </span>
+                  )}
+                </label>
+                <label className="block text-xs font-semibold text-slate-500 sm:col-span-2">
+                  Assessment safety-factor basis
+                  <input
+                    type="text"
+                    value={assessmentSafetyFactorBasis}
+                    onChange={(event) => setAssessmentSafetyFactorBasis(event.target.value)}
+                    placeholder="e.g. MAOP and hydrotest record reference"
+                    className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  />
+                </label>
+                {(
+                  Number(designFactor) > 0.8 ||
+                  sectionDesignFactors.some((rule) => rule.designFactor > 0.8)
+                ) && (
+                  <label className="block text-xs font-semibold text-rose-600 sm:col-span-2">
+                    Justification for assessment SF below 1.25
+                    <textarea
+                      rows={2}
+                      value={lowSafetyFactorJustification}
+                      onChange={(event) => setLowSafetyFactorJustification(event.target.value)}
+                      className="mt-1.5 w-full rounded-lg border border-rose-300 bg-white px-3 py-2 text-sm text-slate-800 dark:border-rose-800 dark:bg-slate-900 dark:text-slate-200"
+                    />
+                  </label>
+                )}
+              </div>
+
+              <div className="mt-4 grid gap-2 text-xs text-slate-600 dark:text-slate-300 sm:grid-cols-2">
+                {[
+                  ['Ductile fracture behavior confirmed', ductileFractureConfirmed, setDuctileFractureConfirmed],
+                  ['Pressure-dominated loading confirmed', pressureDominatedConfirmed, setPressureDominatedConfirmed],
+                  ['Crack-like, mechanical, environmental, and other exclusions reviewed', codeExclusionsReviewed, setCodeExclusionsReviewed],
+                  ['Enhanced sizing accuracy confirmed for any depth >80% WT', deepMeasurementConfirmed, setDeepMeasurementConfirmed],
+                  ['Effective corrosion rate confirmed for any depth >80% WT', effectiveCorrosionRateConfirmed, setEffectiveCorrosionRateConfirmed],
+                ].map(([label, checked, setter]) => (
+                  <label key={String(label)} className="flex items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950/40">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(checked)}
+                      onChange={(event) => (setter as (value: boolean) => void)(event.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span>{String(label)}</span>
+                  </label>
+                ))}
+              </div>
+            </section>
 
             {readinessReasons.length > 0 && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">

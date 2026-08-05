@@ -200,6 +200,7 @@ export default function FfsScenarioLab({
 
   const evaluation = evaluationState.value;
   const outsideDomain = Boolean(evaluation && (evaluation.beyondDepthLimit || !evaluation.valid));
+  const deepReviewRequired = Boolean(evaluation?.deepMetalLossReviewRequired && !outsideDomain);
 
   return (
     <section className="ffs-detail__section ffs-scenario">
@@ -332,6 +333,11 @@ export default function FfsScenarioLab({
                 <div className="ffs-scenario__error" role="status">
                   {evaluation.invalidReason ?? 'Projected depth is outside the supported B31G depth domain.'}
                   {' '}The values below are indicators only and must not be treated as an acceptable code result.
+                </div>
+              )}
+              {deepReviewRequired && (
+                <div className="ffs-scenario__error" role="status">
+                  Projected depth exceeds 80% WT. The Level 1 result remains calculable, but enhanced sizing-accuracy and effective-corrosion-rate review are mandatory before approval.
                 </div>
               )}
 

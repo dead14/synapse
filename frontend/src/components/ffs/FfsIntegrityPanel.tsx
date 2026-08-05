@@ -4,7 +4,6 @@ import {
   buildActionRegister,
   buildLocationZones,
   buildKpis,
-  findInteractions,
   formatLife,
 } from '../../lib/ffs/screening';
 import { buildClockRose, buildDistanceProfile } from '../../lib/ffs/integrityViews';
@@ -454,11 +453,11 @@ export default function FfsIntegrityPanel({
 }) {
   const kpis = useMemo(() => buildKpis(items), [items]);
   const locationZones = useMemo(() => buildLocationZones(items), [items]);
-  const interactions = useMemo(() => findInteractions(items, screening), [items, screening]);
   const reportCase = useMemo(
     () => buildFfsReportCase(items, reportContext),
     [items, reportContext],
   );
+  const interactions = reportCase.interactionAssessments;
   const actions = useMemo(
     () => buildActionRegister(items, screening, reportContext),
     [items, screening, reportContext],
@@ -724,8 +723,8 @@ export default function FfsIntegrityPanel({
 
           <Panel>
             <PanelHeader
-              title="Axial interaction screen"
-              subtitle={`Edge-to-edge separation against ${screening.interactionSpacingFactor}t`}
+              title="ASME 3t combined-flaw assessment"
+              subtitle="Axial and circumferential separation checked; resolved colonies are recalculated as one flaw"
               actions={
                 <span
                   className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
@@ -740,17 +739,30 @@ export default function FfsIntegrityPanel({
             />
             {interactions.length ? (
               <ul className="space-y-1.5">
-                {interactions.slice(0, 12).map((pair, i) => (
+                {interactions.slice(0, 12).map((assessment) => (
                   <li
-                    key={`${pair.a.key}-${pair.b.key}-${i}`}
-                    className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] dark:border-slate-700"
+                    key={assessment.id}
+                    className="rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] dark:border-slate-700"
                   >
-                    <span className="min-w-0 truncate text-slate-600 dark:text-slate-300">
-                      {numericLd(pair.a).toFixed(1)} m ↔ {numericLd(pair.b).toFixed(1)} m
-                    </span>
-                    <span className="shrink-0 tabular-nums text-slate-400">
-                      gap {pair.edgeGapMm.toFixed(1)} / {pair.thresholdMm.toFixed(1)} mm
-                    </span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate font-medium text-slate-600 dark:text-slate-300">
+                        {assessment.members.map((member) => member.nominal.featureId || member.key).join(' + ')}
+                      </span>
+                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${
+                        assessment.status === 'fail'
+                          ? 'bg-rose-50 text-rose-600 dark:bg-rose-950/30 dark:text-rose-400'
+                          : assessment.status === 'pass'
+                            ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-400'
+                            : 'bg-amber-50 text-amber-600 dark:bg-amber-950/30 dark:text-amber-400'
+                      }`}>
+                        {assessment.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 tabular-nums text-slate-400">
+                      {assessment.resolved && assessment.evaluation
+                        ? `Combined L ${assessment.combinedLengthMm!.toFixed(1)} mm · depth ${assessment.combinedDepthPct!.toFixed(1)}% WT · ERF ${formatErf(assessment.evaluation.erf)}`
+                        : assessment.reason}
+                    </p>
                   </li>
                 ))}
                 {interactions.length > 12 && (
@@ -761,9 +773,7 @@ export default function FfsIntegrityPanel({
               </ul>
             ) : (
               <Callout>
-                No pair has a calculated axial edge-to-edge separation within{' '}
-                {screening.interactionSpacingFactor}t. This simplified screen does not replace a full
-                interaction or colony assessment.
+                No feature pair meets the ASME 3t interaction criteria in both axial and circumferential directions.
               </Callout>
             )}
           </Panel>

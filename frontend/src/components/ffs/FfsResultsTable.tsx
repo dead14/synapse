@@ -176,7 +176,7 @@ export default function FfsResultsTable({
           >
             <option value="All">All criteria</option>
             <option value="ERF = 1">ERF = 1</option>
-            <option value="Depth = 80%">Depth limit</option>
+            <option value="Wall penetration">Wall penetration</option>
             <option value="not-reached-within-horizon">Limit not reached</option>
             <option value="insufficient-growth-basis">No growth basis</option>
           </select>

@@ -123,6 +123,9 @@ export interface EnvelopeCurve {
   wall: number;
   color: string;
   points: { x: number; y: number }[];
+  basis: 'level0' | 'level1';
+  label: string;
+  borderDash: number[];
   /** How many features share this wall thickness. */
   count: number;
   /**
@@ -161,7 +164,7 @@ export function buildEnvelopeCurves(
 
   const walls = [...byWall.keys()].sort((a, b) => a - b);
 
-  return walls.map((wall, i) => {
+  return walls.flatMap((wall, i) => {
     const members = byWall.get(wall)!;
     // The curve belongs to a line geometry, not to a feature. Pick the geometry
     // the most features on this wall actually share, and say so when the group
@@ -187,23 +190,58 @@ export function buildEnvelopeCurves(
     }
     const geometry = [...tally.values()].sort((a, b) => b.count - a.count)[0].geometry;
 
-    const points: { x: number; y: number }[] = [];
-    for (let s = 1; s <= steps; s++) {
-      const length = (maxLengthMm * s) / steps;
-      const ratio = acceptableDepthRatio(length, geometry, config.method, config.modifiedSa);
-      if (ratio === null) continue;
-      const depthPct = ratio * 100;
-      if (depthPct <= 0 || depthPct > 100) continue;
-      points.push({ x: length, y: Math.min(100, depthPct) });
-    }
+    const pointsFor = (
+      curveGeometry: B31gGeometry,
+      method: FfsConfig['method'],
+      flowStressMode: FfsConfig['modifiedSa'],
+      maximumDepthPct: number,
+    ) => {
+      const points: { x: number; y: number }[] = [];
+      // Quadratic sampling keeps the short-defect knee visible even when one
+      // long anomaly stretches the axis into the metre range.
+      for (let s = 0; s <= steps; s++) {
+        const fraction = s / steps;
+        const length = maxLengthMm * fraction * fraction;
+        const ratio = acceptableDepthRatio(length, curveGeometry, method, flowStressMode);
+        if (ratio === null) continue;
+        const depthPct = ratio * 100;
+        if (depthPct <= 0) continue;
+        points.push({ x: length, y: Math.min(maximumDepthPct, depthPct) });
+      }
+      return points;
+    };
 
-    return {
+    // Level 0 is the conservative ASME tabular basis: Original B31G, line at
+    // 72% SMYS and minimum SF ~= 1/0.72, capped at the Level 0 80% table limit.
+    const level0Geometry: B31gGeometry = {
+      ...geometry,
+      designFactor: 0.72,
+      operatingPressureMpa: (2 * 0.72 * geometry.smysMpa * wall) / geometry.outerDiameter,
+    };
+    const level0: EnvelopeCurve = {
       wall,
-      color: ENVELOPE_COLORS[i % ENVELOPE_COLORS.length],
-      points,
+      color: '#f97316',
+      points: pointsFor(level0Geometry, 'original', 'smys11', 80),
+      basis: 'level0',
+      label: `ASME B31G Level 0 · t=${wall.toFixed(2)} mm`,
+      borderDash: [],
       count: members.length,
       mixedGeometry: tally.size > 1,
     };
+    const methodLabel = config.method === 'original'
+      ? 'Original B31G'
+      : `Modified B31G (${config.modifiedSa === 'smys69' ? 'SMYS + 69 MPa' : '1.1 × SMYS'})`;
+    const level1: EnvelopeCurve = {
+      wall,
+      color: ENVELOPE_COLORS[i % ENVELOPE_COLORS.length],
+      points: pointsFor(geometry, config.method, config.modifiedSa, 100),
+      basis: 'level1',
+      label: `Configured Level 1 · ${methodLabel} · t=${wall.toFixed(2)} mm`,
+      borderDash: [6, 4],
+      count: members.length,
+      mixedGeometry: tally.size > 1,
+    };
+    return [level0, level1];
   });
 }
 

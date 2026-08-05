@@ -68,9 +68,11 @@ export function applicabilityChecks(item: FfsScreenedResult): FfsApplicabilityCh
     },
     {
       id: 'depth-domain',
-      label: 'B31G depth domain below 80% WT',
-      status: n.maxDepthPct < 80 ? 'pass' : 'fail',
-      detail: `${n.maxDepthPct.toFixed(1)}% WT as reported.`,
+      label: 'Deep metal-loss measurement review',
+      status: n.maxDepthPct >= 100 ? 'fail' : n.maxDepthPct > 80 ? 'review' : 'pass',
+      detail: n.maxDepthPct > 80
+        ? `${n.maxDepthPct.toFixed(1)}% WT; enhanced sizing accuracy and effective corrosion-rate review are required.`
+        : `${n.maxDepthPct.toFixed(1)}% WT as reported.`,
     },
     {
       id: 'single-feature',

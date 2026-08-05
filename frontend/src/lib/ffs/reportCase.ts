@@ -1,6 +1,13 @@
 import { lifeSortValue } from './lifeProjection.ts';
-import type { FfsConfig, FfsLifeStatus, FfsScreenedResult } from './types.ts';
+import type {
+  FfsApplicabilityDeclaration,
+  FfsConfig,
+  FfsLifeStatus,
+  FfsScreenedResult,
+} from './types.ts';
 import { isIsoCalendarDate } from './validation.ts';
+import { ASME_MIN_ASSESSMENT_SAFETY_FACTOR, validateFlowStressQualification } from './b31g.ts';
+import { buildInteractionAssessments, type FfsInteractionAssessment } from './interactions.ts';
 
 /**
  * The remnant life of the line, as opposed to of one anomaly.
@@ -86,6 +93,9 @@ export interface FfsReportContext {
   asOfDateIso: string;
   /** Remnant life below which a feature enters the repair programme. */
   reviewThresholdYears: number;
+  applicability?: FfsApplicabilityDeclaration | null;
+  method?: FfsConfig['method'];
+  modifiedSa?: FfsConfig['modifiedSa'];
 }
 
 export type FfsScenarioLifeSummaryStatus =
@@ -131,6 +141,7 @@ export interface FfsReportCase {
   repairProgrammeTargets: FfsScreenedResult[];
   /** One centralized, fail-closed credit decision per assessed feature. */
   repairCreditDecisions: ReadonlyMap<FfsScreenedResult, FfsRepairCreditDecision>;
+  interactionAssessments: FfsInteractionAssessment[];
   repairCounts: {
     unrepaired: number;
     temporary: number;
@@ -168,6 +179,9 @@ export function createFfsReportContext(
     inspectionDateIso: config.iliDate.toISOString().slice(0, 10),
     asOfDateIso: formatLocalCalendarDate(asOfDate),
     reviewThresholdYears: config.highlightYears,
+    applicability: config.applicability ?? null,
+    method: config.method,
+    modifiedSa: config.modifiedSa,
   };
 }
 
@@ -278,6 +292,110 @@ export function buildFfsReportCase(
     (item) => repairCreditDecisions.get(item)?.credited,
   ).length;
   const findings: FfsReadinessFinding[] = [];
+
+  const applicability = context.applicability;
+  if (!applicability) {
+    findings.push(finding(
+      'APPLICABILITY_NOT_CONFIRMED',
+      'error',
+      'ASME B31G applicability declarations for material behavior, loading, exclusions, temperature, and safety-factor basis are missing.',
+      items.length,
+    ));
+    const smys69Count = items.filter(
+      (item) => item.nominal.method === 'modified' && item.nominal.saMode === 'smys69',
+    ).length;
+    if (smys69Count > 0) {
+      findings.push(finding(
+        'SMYS69_QUALIFICATION_MISSING',
+        'error',
+        'SMYS + 69 MPa cannot be approved without material class and operating-temperature qualification.',
+        smys69Count,
+      ));
+    }
+  } else {
+    const unconfirmedGeneral = [
+      applicability.ductileFractureBehaviorConfirmed,
+      applicability.pressureDominatedLoadingConfirmed,
+      applicability.codeExclusionsReviewed,
+    ].filter((confirmed) => !confirmed).length;
+    if (unconfirmedGeneral > 0) {
+      findings.push(finding(
+        'APPLICABILITY_NOT_CONFIRMED',
+        'error',
+        'Ductile fracture behavior, pressure-dominated loading, and code exclusions must all be confirmed.',
+        unconfirmedGeneral,
+      ));
+    }
+
+    const smys69Failures = items.filter((item) => validateFlowStressQualification({
+      method: item.nominal.method,
+      flowStressMode: item.nominal.saMode,
+      smysMpa: item.nominal.smys,
+      materialClass: applicability.materialClass,
+      operatingTemperatureC: applicability.operatingTemperatureC,
+    }).length > 0);
+    if (smys69Failures.length > 0) {
+      findings.push(finding(
+        'SMYS69_QUALIFICATION_FAILED',
+        'error',
+        'SMYS + 69 MPa requires plain carbon/low-alloy steel, SMYS not above 483 MPa, and operating temperature below 120 C.',
+        smys69Failures.length,
+      ));
+    }
+
+    const deepCount = items.filter((item) => item.nominal.deepMetalLossReviewRequired).length;
+    if (deepCount > 0 && (
+      !applicability.deepMetalLossMeasurementAccuracyConfirmed ||
+      !applicability.effectiveCorrosionRateConfirmed
+    )) {
+      findings.push(finding(
+        'DEEP_METAL_LOSS_REVIEW_INCOMPLETE',
+        'error',
+        'Metal loss above 80% WT requires enhanced measurement-accuracy and effective-corrosion-rate review.',
+        deepCount,
+      ));
+    }
+
+    if (!normalizedText(applicability.assessmentSafetyFactorBasis)) {
+      findings.push(finding(
+        'SAFETY_FACTOR_BASIS_MISSING',
+        'error',
+        'Document the hydrotest, MAOP/MOP, code, or approved engineering basis for the assessment safety factor.',
+        items.length,
+      ));
+    }
+    const lowSafetyFactorCount = items.filter(
+      (item) => item.nominal.SF < ASME_MIN_ASSESSMENT_SAFETY_FACTOR,
+    ).length;
+    if (lowSafetyFactorCount > 0 && !normalizedText(applicability.lowSafetyFactorJustification)) {
+      findings.push(finding(
+        'SAFETY_FACTOR_BELOW_1_25',
+        'error',
+        'Assessment safety factor below 1.25 requires documented engineering justification.',
+        lowSafetyFactorCount,
+      ));
+    }
+  }
+
+  const interactionAssessments = buildInteractionAssessments(activeItems);
+  const unresolvedInteractions = interactionAssessments.filter((assessment) => !assessment.resolved);
+  if (unresolvedInteractions.length > 0) {
+    findings.push(finding(
+      'INTERACTION_ASSESSMENT_UNRESOLVED',
+      'error',
+      'Potential 3t interactions could not be combined because clock position or one calculation basis is incomplete.',
+      unresolvedInteractions.length,
+    ));
+  }
+  const failedInteractions = interactionAssessments.filter((assessment) => assessment.status === 'fail');
+  if (failedInteractions.length > 0) {
+    findings.push(finding(
+      'COMBINED_FLAW_UNACCEPTABLE',
+      'error',
+      'One or more interacting colonies fail after recalculation as a combined flaw.',
+      failedInteractions.length,
+    ));
+  }
 
   const contextValid = isIsoCalendarDate(context.inspectionDateIso) &&
     isIsoCalendarDate(context.asOfDateIso) &&
@@ -529,6 +647,7 @@ export function buildFfsReportCase(
     ),
     repairProgrammeTargets: programmeTargets,
     repairCreditDecisions,
+    interactionAssessments,
     repairCounts: {
       unrepaired: items.filter((item) => item.nominal.repairStatus === 'unrepaired').length,
       temporary: temporaryCount,

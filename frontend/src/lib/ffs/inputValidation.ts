@@ -1,6 +1,11 @@
 import { validateData, type ValidationError } from './validation.ts';
 import type { FfsConfig } from './types.ts';
 import { MAX_FFS_ANALYSIS_HORIZON_YEARS } from './lifeProjection.ts';
+import {
+  ASME_MIN_ASSESSMENT_SAFETY_FACTOR,
+  assessmentSafetyFactor,
+  validateFlowStressQualification,
+} from './b31g.ts';
 
 export class FfsInputValidationError extends TypeError {
   readonly code = 'INVALID_FFS_INPUT';
@@ -44,5 +49,29 @@ export function assertValidFfsConfig(config: FfsConfig): void {
 export function assertValidFfsRow(row: Record<string, string>, config: FfsConfig): void {
   assertValidFfsConfig(config);
   const errors = validateData([row]);
+  const designFactor = Number(String(row['Design Factor']).trim());
+  if (
+    Number.isFinite(designFactor) && designFactor > 0 &&
+    assessmentSafetyFactor(designFactor) < ASME_MIN_ASSESSMENT_SAFETY_FACTOR &&
+    !String(config.applicability?.lowSafetyFactorJustification ?? '').trim()
+  ) {
+    errors.push({
+      row: 2,
+      col: 'Design Factor',
+      msg: 'Effective assessment safety factor below 1.25 requires documented justification',
+    });
+  }
+  const smysMpa = Number(String(row['SMYS [MPa]']).trim());
+  if (config.applicability) {
+    for (const message of validateFlowStressQualification({
+      method: config.method,
+      flowStressMode: config.modifiedSa,
+      smysMpa,
+      materialClass: config.applicability.materialClass,
+      operatingTemperatureC: config.applicability.operatingTemperatureC,
+    })) {
+      errors.push({ row: 2, col: 'SMYS [MPa]', msg: message });
+    }
+  }
   if (errors.length > 0) throw new FfsInputValidationError(errors);
 }

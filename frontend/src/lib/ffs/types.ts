@@ -18,6 +18,27 @@ export interface FfsConfig {
   pressureBasis?: FfsPressureBasis;
   /** Design-dossier figures used by the residual life assessment. */
   serviceLife?: FfsServiceLifeInputs;
+  /** Engineer-confirmed ASME B31G applicability inputs. Missing data blocks final reporting. */
+  applicability?: FfsApplicabilityDeclaration;
+}
+
+export type FfsMaterialClass = 'plain-carbon-low-alloy' | 'other' | 'unknown';
+
+export interface FfsApplicabilityDeclaration {
+  materialClass: FfsMaterialClass;
+  /** Maximum metal temperature during the assessed operating condition. */
+  operatingTemperatureC: number | null;
+  ductileFractureBehaviorConfirmed: boolean;
+  pressureDominatedLoadingConfirmed: boolean;
+  codeExclusionsReviewed: boolean;
+  /** Required when any assessed metal loss exceeds 80% WT. */
+  deepMetalLossMeasurementAccuracyConfirmed: boolean;
+  /** Required when any assessed metal loss exceeds 80% WT. */
+  effectiveCorrosionRateConfirmed: boolean;
+  /** Hydrotest, MAOP/MOP, code, or approved engineering basis for the assessment SF. */
+  assessmentSafetyFactorBasis: string;
+  /** Required only when effective SF is below 1.25. */
+  lowSafetyFactorJustification: string;
 }
 
 export type FfsPressureBasis = 'maop' | 'mop' | 'current-operating' | 'other-required';
@@ -107,7 +128,7 @@ export interface FfsScreeningConfig {
   forecastYears: number;
   /** ERF at which a feature enters the engineering-review band. */
   reviewBandErf: number;
-  /** Multiple of wall thickness used for the axial interaction screen. */
+  /** Legacy persisted field. The ASME interaction engine always applies fixed 3t. */
   interactionSpacingFactor: number;
   /** Depth at which a feature is rejected regardless of ERF, as % of wall. */
   depthRejectionPct: number;
@@ -182,6 +203,8 @@ export interface FfsResult extends FfsInput {
   safePressure: number;
   ERF: number;
   acceptance: 'Acceptable' | 'Un-Acceptable';
+  /** Para. 1.2(f): >80% WT remains Level 1 calculable but needs enhanced review. */
+  deepMetalLossReviewRequired: boolean;
   branch: string;
   /**
    * Remnant life on the as-reported dimensions — the figure this assessment
@@ -217,13 +240,10 @@ export interface FfsTier {
   safePressure: number;
   ERF: number;
   severity: FfsSeverity;
-  /**
-   * True when this tier's depth is past the 80 %WT limit B31G is written for.
-   * The tier is still evaluated — the tolerance and forecast tiers are meant to
-   * push features past the limit — but the ERF is no longer a code result and
-   * must be presented as an indicator, not an assessment.
-   */
+  /** True only when projected metal loss reaches full-wall penetration. */
   beyondDepthLimit: boolean;
+  /** Para. 1.2(f) enhanced-review flag above 80% WT. */
+  deepMetalLossReviewRequired: boolean;
   /** The growth rate this tier was projected with, in mm/year. */
   growthRateMmPerYear: number;
   /** Evidence behind the rate used by this tier. */
@@ -273,8 +293,13 @@ export interface FfsLocationZone {
 export interface FfsInteractionPair {
   a: FfsScreenedResult;
   b: FfsScreenedResult;
+  /** Axial edge-to-edge separation. Kept as `edgeGapMm` for existing consumers. */
   edgeGapMm: number;
+  axialEdgeGapMm: number;
+  /** Arc-distance edge gap; null when either clock position is unavailable. */
+  circumferentialEdgeGapMm: number | null;
   thresholdMm: number;
+  resolved: boolean;
 }
 
 export interface FfsAction {

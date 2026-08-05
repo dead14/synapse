@@ -7,7 +7,13 @@ import {
   evaluateModifiedB31g,
   evaluateOriginalB31g,
 } from '../src/lib/ffs/calcEngine.ts';
-import { millimetresToInches } from '../src/lib/ffs/units.ts';
+import { validateFlowStressQualification } from '../src/lib/ffs/b31g.ts';
+import {
+  inchesToMillimetres,
+  ksiToMegapascals,
+  millimetresToInches,
+  psiToMegapascals,
+} from '../src/lib/ffs/units.ts';
 
 const baseInput = {
   depth: 2,
@@ -18,6 +24,56 @@ const baseInput = {
   designFactor: 0.72,
   operatingPressureMpa: 5,
 };
+
+test('uses the exact ASME Original B31G branch boundary z = 20', () => {
+  assert.equal(ORIGINAL_B31G_Z_CUTOFF, 20);
+  const lengthAtBoundary = Math.sqrt(20 * baseInput.outerDiameter * baseInput.wallThickness);
+  assert.equal(evaluateOriginalB31g({ ...baseInput, length: lengthAtBoundary }).branch, 'ORIGINAL_SHORT_PARABOLIC');
+  assert.equal(
+    evaluateOriginalB31g({ ...baseInput, length: lengthAtBoundary + 1e-6 }).branch,
+    'ORIGINAL_LONG_RECTANGULAR',
+  );
+});
+
+test('enforces the ASME qualifications for SMYS + 69 MPa without an SMTS gate', () => {
+  const valid = {
+    method: 'modified' as const,
+    flowStressMode: 'smys69' as const,
+    smysMpa: 400,
+    materialClass: 'plain-carbon-low-alloy' as const,
+    operatingTemperatureC: 80,
+  };
+
+  assert.deepEqual(validateFlowStressQualification(valid), []);
+  assert.match(validateFlowStressQualification({ ...valid, smysMpa: 484 }).join(' '), /483 MPa/i);
+  assert.match(
+    validateFlowStressQualification({ ...valid, materialClass: 'other' }).join(' '),
+    /plain carbon|low-alloy/i,
+  );
+  assert.match(
+    validateFlowStressQualification({ ...valid, operatingTemperatureC: 120 }).join(' '),
+    /120.*C/i,
+  );
+});
+
+test('reproduces the ASME B31G-2023 Appendix A combined-flaw benchmarks', () => {
+  const appendixA = {
+    depth: inchesToMillimetres(0.190),
+    length: inchesToMillimetres(9.9),
+    wallThickness: inchesToMillimetres(0.313),
+    outerDiameter: inchesToMillimetres(24),
+    smysMpa: ksiToMegapascals(52),
+    designFactor: 1 / 1.39,
+    operatingPressureMpa: psiToMegapascals(976),
+  };
+
+  const original = evaluateOriginalB31g(appendixA);
+  const modified = evaluateModifiedB31g(appendixA, 'smys69');
+  const mpaToPsi = (value: number) => value / psiToMegapascals(1);
+
+  assert.ok(Math.abs(mpaToPsi(original.failureStressMpa) - 38_680) < 1);
+  assert.ok(Math.abs(mpaToPsi(modified.failureStressMpa) - 36_411) < 1);
+});
 
 function assertClose(actual: number, expected: number, tolerance = 1e-10) {
   assert.ok(Math.abs(actual - expected) <= tolerance, `${actual} != ${expected}`);

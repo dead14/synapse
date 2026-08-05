@@ -160,7 +160,7 @@ test('forecast preset is bounded when the screening forecast exceeds the analysi
   assert.doesNotThrow(() => evaluateFfsScenario(result, config, longForecast, inputs));
 });
 
-test('a projection outside the B31G depth domain cannot be presented as pass', () => {
+test('a projection above 80% remains Level 1 calculable and carries the enhanced-review flag', () => {
   const result = nominal();
   const permissiveScreening = { ...screening, depthRejectionPct: 95 };
   const inputs = scenarioInputsForPreset('as-reported', result, permissiveScreening);
@@ -171,8 +171,9 @@ test('a projection outside the B31G depth domain cannot be presented as pass', (
   });
 
   assert.ok(outsideDomain.depthPct > 80 && outsideDomain.depthPct < 95);
-  assert.equal(outsideDomain.beyondDepthLimit, true);
-  assert.equal(outsideDomain.severity, 'fail');
+  assert.equal(outsideDomain.beyondDepthLimit, false);
+  assert.equal(outsideDomain.deepMetalLossReviewRequired, true);
+  assert.equal(outsideDomain.valid, true);
 });
 
 test('invalid scenario assumptions are rejected instead of silently clamped', () => {

@@ -4,6 +4,7 @@ import test from 'node:test';
 import { processRow } from '../src/lib/ffs/calcEngine.ts';
 import {
   buildFfsReportCase,
+  createFfsReportContext,
   formatLocalCalendarDate,
   type FfsReportContext,
 } from '../src/lib/ffs/reportCase.ts';
@@ -24,7 +25,27 @@ const config: FfsConfig = {
 const reportContext: FfsReportContext = {
   inspectionDateIso: '2024-08-23',
   asOfDateIso: '2026-08-03',
+  applicability: {
+    materialClass: 'plain-carbon-low-alloy',
+    operatingTemperatureC: 80,
+    ductileFractureBehaviorConfirmed: true,
+    pressureDominatedLoadingConfirmed: true,
+    codeExclusionsReviewed: true,
+    deepMetalLossMeasurementAccuracyConfirmed: true,
+    effectiveCorrosionRateConfirmed: true,
+    assessmentSafetyFactorBasis: 'MAOP and hydrotest basis',
+    lowSafetyFactorJustification: '',
+  },
 };
+
+test('report readiness fails closed when ASME applicability declarations are missing', () => {
+  const items = assessed([row()]);
+  const reportCase = buildFfsReportCase(items, createFfsReportContext(config, new Date('2026-08-03')));
+
+  assert.equal(reportCase.readiness.status, 'blocked');
+  assert.ok(reportCase.readiness.findings.some((finding) => finding.code === 'APPLICABILITY_NOT_CONFIRMED'));
+  assert.ok(reportCase.readiness.findings.some((finding) => finding.code === 'SMYS69_QUALIFICATION_MISSING'));
+});
 
 function row(overrides: Record<string, string> = {}): Record<string, string> {
   return {
@@ -96,6 +117,25 @@ test('temporary repairs remain active in the managed scenario', () => {
   assert.equal(reportCase.repairCounts.temporary, 1);
   assert.ok(reportCase.readiness.findings.some((finding) => finding.code === 'TEMPORARY_REPAIR_ACTIVE'));
   assert.ok(reportCase.readiness.findings.some((finding) => finding.code === 'TEMPORARY_REPAIR_ACTION_INCOMPLETE'));
+});
+
+test('an unacceptable combined flaw blocks report readiness', () => {
+  const items = assessed([
+    row({
+      'Feature ID': 'INT-1', 'LD [m]': '100.000', 'Max Depth [%]': '75',
+      'Length [mm]': '180', 'Width [mm]': '80', 'Orient. (hrs:mins)': '6:00',
+    }),
+    row({
+      'Feature ID': 'INT-2', 'LD [m]': '100.170', 'Max Depth [%]': '75',
+      'Length [mm]': '180', 'Width [mm]': '80', 'Orient. (hrs:mins)': '6:00',
+    }),
+  ]);
+
+  const reportCase = buildFfsReportCase(items, reportContext);
+  assert.equal(reportCase.interactionAssessments.length, 1);
+  assert.equal(reportCase.interactionAssessments[0].status, 'fail');
+  assert.equal(reportCase.readiness.status, 'blocked');
+  assert.ok(reportCase.readiness.findings.some((finding) => finding.code === 'COMBINED_FLAW_UNACCEPTABLE'));
 });
 
 test('report readiness is blocked when a verified repair has incomplete evidence', () => {

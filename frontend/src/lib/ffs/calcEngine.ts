@@ -7,7 +7,6 @@ import type {
 } from './types';
 import { assertValidFfsRow } from './inputValidation.ts';
 import {
-  B31G_DEPTH_LIMIT_RATIO,
   evaluateB31g,
   type B31gBranch,
   type B31gGeometry,
@@ -128,10 +127,9 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
 
   const init = calcAtYear(config, geometry, dInit, length, crDepth, crLength, 0);
   const safePressure = init.safePressureMpa;
-  const depthLimitPct = B31G_DEPTH_LIMIT_RATIO * 100;
-  // ERF 1.0 is the safe-pressure limit itself, so it is not acceptable. The
-  // depth gate is the code's own applicability limit, not a project setting.
-  const acceptance = (init.erf < 1 && maxDepthPct < depthLimitPct) ? 'Acceptable' : 'Un-Acceptable';
+  // ERF 1.0 is the safe-pressure limit itself. Depth above 80% is not an
+  // automatic Level 1 rejection in B31G-2023; it triggers enhanced review.
+  const acceptance = init.erf < 1 ? 'Acceptable' : 'Un-Acceptable';
   const horizonYears = analysisHorizonYears(config);
 
   // One remnant-life kernel, on the as-reported dimensions. The tolerance
@@ -180,6 +178,7 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
     Sf: +(init.failureStressMpa || 0).toFixed(4), Pf: +(init.failurePressureMpa || 0).toFixed(4),
     So: +so.toFixed(4), safePressure: +safePressure.toFixed(4),
     ERF: round4(init.erf), acceptance,
+    deepMetalLossReviewRequired: init.deepMetalLossReviewRequired,
     branch: BRANCH_LABEL[init.branch],
     remnantLife,
     atFailure_ERF: atFailure ? round4(atFailure.erf) : null,

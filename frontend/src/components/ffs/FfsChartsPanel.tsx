@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Bar, Scatter } from 'react-chartjs-2';
+import { Bar, Chart as ReactChart, Scatter } from 'react-chartjs-2';
 import type { Chart } from 'chart.js';
 import {
   BarElement,
   CategoryScale,
   Chart as ChartJS,
   Legend,
+  LineController,
   LineElement,
   LinearScale,
   PointElement,
@@ -42,6 +43,7 @@ ChartJS.register(
   CategoryScale,
   LinearScale,
   PointElement,
+  LineController,
   LineElement,
   Tooltip,
   Legend,
@@ -744,8 +746,8 @@ export default function FfsChartsPanel({
       {/* Row 4 — screening envelope and ERF profile */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <ChartCard
-          title="Anomaly screening — B31G Level 0"
-          subtitle="Depth against axial length, with the acceptance envelope per wall thickness"
+          title="Anomaly screening — ASME B31G Level 0 / Level 1"
+          subtitle="Solid orange: conservative Level 0 basis · dashed: configured Level 1 ERF = 1 limit"
           filename="FFS_anomaly_screening"
           height={360}
           settings={
@@ -753,7 +755,7 @@ export default function FfsChartsPanel({
               <div>
                 <SettingsSectionLabel>Envelope curves — wall thickness</SettingsSectionLabel>
                 <div className="flex flex-wrap gap-1.5">
-                  {envelopes.map((curve) => {
+                  {envelopes.filter((curve) => curve.basis === 'level0').map((curve) => {
                     const hidden = hiddenWalls.has(curve.wall);
                     return (
                       <button
@@ -790,19 +792,22 @@ export default function FfsChartsPanel({
           }
         >
           {(registerCanvas) => (
-            <Scatter
-              ref={bind('screening', registerCanvas)}
+            <ReactChart<'scatter' | 'line', { x: number; y: number }[]>
+              type="scatter"
+              ref={(instance) => bind('screening', registerCanvas)(instance as Chart | null)}
               data={{
                 datasets: [
                   ...envelopes
                     .filter((curve) => !hiddenWalls.has(curve.wall))
                     .map((curve) => ({
-                      label: `Envelope t=${curve.wall.toFixed(2)} mm`,
+                      type: 'line' as const,
+                      label: curve.label,
                       data: curve.points,
                       showLine: true,
                       borderColor: curve.color,
                       backgroundColor: curve.color,
                       borderWidth: 1.75,
+                      borderDash: curve.borderDash,
                       pointRadius: 0,
                       tension: 0.25,
                     })),
@@ -832,7 +837,7 @@ export default function FfsChartsPanel({
                     grid: { color: theme.grid },
                   },
                 },
-              })}
+              }) as ChartOptions<'scatter' | 'line'>}
             />
           )}
         </ChartCard>

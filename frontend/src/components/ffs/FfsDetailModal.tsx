@@ -382,10 +382,10 @@ export default function FfsDetailModal({
                 description={pressureBasisLabel(config)}
               />
               <InputCard
-                label="Design Factor"
-                symbol="DF"
+                label="Assessment pressure factor (1/SF)"
+                symbol="1/SF"
                 value={n.df.toFixed(3)}
-                description="Code value"
+                description={`Effective SF ${n.SF.toFixed(3)}`}
               />
               <InputCard
                 label="Defect Length"
@@ -539,7 +539,7 @@ export default function FfsDetailModal({
               <CalcStep
                 step={1}
                 name="Safety Factor (SF)"
-                formula="SF = 1 / DF"
+                formula="SF = 1 / assessment pressure factor"
                 substitution={`1 / ${n.df.toFixed(3)}`}
                 result={fmt(n.SF)}
               />
@@ -663,8 +663,8 @@ export default function FfsDetailModal({
                 unit="MPa"
                 sideBySide={{
                   name: 'Calculated Safe Pressure',
-                  formula: 'Pₛₐᶠₑ = Pᶠ × DF',
-                  substitution: `${fmt(n.Pf, 4)} × ${n.df.toFixed(3)}`,
+                  formula: 'Pₛₐᶠₑ = Pᶠ / SF',
+                  substitution: `${fmt(n.Pf, 4)} / ${fmt(n.SF, 4)}`,
                   result: fmt(n.safePressure, 4),
                   unit: 'MPa',
                 }}
@@ -673,8 +673,8 @@ export default function FfsDetailModal({
               <CalcStep
                 step={10}
                 name={'ERF — Estimated Repair Factor'}
-                formula={'ERF = S₀ / (Sᶠ × DF)'}
-                substitution={`${fmt(n.So, 4)} / (${fmt(n.Sf, 4)} × ${n.df.toFixed(3)})`}
+                formula={'ERF = P₀ / Pₛₐᶠₑ'}
+                substitution={`${n.p0.toFixed(3)} / ${fmt(n.safePressure, 4)}`}
                 result={formatErf(n.ERF)}
                 tone={n.ERF > 1 ? 'bad' : n.ERF >= screening.reviewBandErf ? 'warn' : 'good'}
               />
@@ -687,11 +687,11 @@ export default function FfsDetailModal({
                     <div>
                       <p className="ffs-detail__calc-name">Acceptance Level</p>
                       <p className="ffs-detail__calc-formula">
-                        ERF {'<'} 1 AND Depth {'<'} 80%
+                        Level 1 acceptance: ERF {'<'} 1
                       </p>
                       <p className="ffs-detail__calc-sub">
-                        = ERF={formatErf(n.ERF)} {n.ERF < 1 ? '✓' : '✗'} & Depth=
-                        {n.maxDepthPct.toFixed(2)}% {n.maxDepthPct < 80 ? '✓' : '✗'}
+                        = ERF={formatErf(n.ERF)} {n.ERF < 1 ? '✓' : '✗'} · Depth=
+                        {n.maxDepthPct.toFixed(2)}% {n.deepMetalLossReviewRequired ? '(enhanced review required)' : ''}
                       </p>
                     </div>
                   </div>
@@ -786,7 +786,7 @@ export default function FfsDetailModal({
                   close the other limit is, which is what decides whether a
                   repair buys years or months. */}
               <LifeCard
-                label="Years to 80% Depth"
+                label="Years to Wall Penetration"
                 value={life.depthLimitYears === null ? '—' : life.depthLimitYears.toFixed(2)}
                 unit={life.depthLimitYears === null ? undefined : 'y'}
                 description={`(0.80 − d/t) × t / CR depth`}
@@ -866,7 +866,7 @@ export default function FfsDetailModal({
             <Callout tone="neutral">
               {life.status === 'insufficient-growth-basis'
                 ? 'No due date is calculated because neither depth nor length has a positive growth basis.'
-                : `Neither the 80% depth limit nor ERF 1.0 is reached inside the configured ${life.analysisHorizonYears}-year analysis horizon.`}{' '}
+                : `Neither projected wall penetration nor ERF 1.0 is reached inside the configured ${life.analysisHorizonYears}-year analysis horizon.`}{' '}
               This is not a prediction of unlimited service life. Final disposition requires an approved
               procedure and independent checking.
             </Callout>

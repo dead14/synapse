@@ -69,8 +69,8 @@ function requireEvaluationInput(input: B31gEvaluationInput): void {
   }
 
   const depthRatio = input.depth / input.wallThickness;
-  if (!Number.isFinite(depthRatio) || depthRatio > B31G_DEPTH_LIMIT_RATIO + Number.EPSILON * 8) {
-    throw new RangeError('depth must not exceed 80% of wall thickness');
+  if (!Number.isFinite(depthRatio) || depthRatio >= B31G_DEPTH_LIMIT_RATIO) {
+    throw new RangeError('depth must remain below full-wall penetration');
   }
 }
 

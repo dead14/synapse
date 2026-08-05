@@ -12,6 +12,7 @@ export interface FfsScenarioForecastPoint {
   depthPct: number;
   severity: FfsSeverity;
   valid: boolean;
+  deepMetalLossReviewRequired: boolean;
 }
 
 export interface FfsScenarioForecastSeries {
@@ -71,6 +72,7 @@ export function buildScenarioForecastComparison(
         depthPct: result.depthPct,
         severity: result.severity,
         valid: result.valid && !result.beyondDepthLimit,
+        deepMetalLossReviewRequired: result.deepMetalLossReviewRequired,
       };
     }),
   }));
@@ -107,6 +109,7 @@ export interface FfsScenarioSnapshot {
     | 'limitCriterion'
     | 'valid'
     | 'beyondDepthLimit'
+    | 'deepMetalLossReviewRequired'
   >;
 }
 
@@ -168,6 +171,7 @@ export function createScenarioSnapshot(input: ScenarioSnapshotInput): FfsScenari
       limitCriterion: input.evaluation.limitCriterion,
       valid: input.evaluation.valid,
       beyondDepthLimit: input.evaluation.beyondDepthLimit,
+      deepMetalLossReviewRequired: input.evaluation.deepMetalLossReviewRequired,
     },
   };
 }

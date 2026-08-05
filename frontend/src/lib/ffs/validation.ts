@@ -64,8 +64,8 @@ export function validateData(rows: Record<string, string>[]): ValidationError[] 
     }
 
     const depth = Number(String(row[REQUIRED_COLUMNS[3]]).trim());
-    if (Number.isFinite(depth) && (depth < 0 || depth > 80)) {
-      errors.push({ row: rowNumber, col: REQUIRED_COLUMNS[3], msg: `Must be 0-80 (got ${depth})` });
+    if (Number.isFinite(depth) && (depth < 0 || depth >= 100)) {
+      errors.push({ row: rowNumber, col: REQUIRED_COLUMNS[3], msg: `Must be 0 to <100 (got ${depth})` });
     }
 
     const designFactor = Number(String(row[REQUIRED_COLUMNS[10]]).trim());

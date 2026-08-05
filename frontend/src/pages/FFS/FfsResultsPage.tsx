@@ -242,7 +242,7 @@ export default function FfsResultsPage() {
                   ? `per-feature source evidence${screening.growthRateMmPerYear > 0 ? ` (explicit fallback ${screening.growthRateMmPerYear.toFixed(2)} mm/y)` : ' (no implicit fallback)'}`
                   : `uniform ${screening.growthRateMmPerYear.toFixed(2)} mm/y`}{' '}
                 over {screening.forecastYears} y · review band ERF {screening.reviewBandErf.toFixed(2)} ·
-                interaction {screening.interactionSpacingFactor}t
+                interaction 3t (ASME fixed)
               </p>
             </div>
             <button
@@ -336,17 +336,11 @@ export default function FfsResultsPage() {
                   max={1}
                   step={0.01}
                 />
-                <NumberField
-                  label="Interaction"
-                  value={screening.interactionSpacingFactor}
-                  onChange={(interactionSpacingFactor) =>
-                    setScreening((s) => ({ ...s, interactionSpacingFactor }))
-                  }
-                  unit="× t"
-                  min={1}
-                  max={20}
-                  step={1}
-                />
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
+                  <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">Interaction</span>
+                  <strong className="mt-1 block text-sm text-slate-800 dark:text-slate-100">3 × t</strong>
+                  <span className="text-[10px] text-slate-400">ASME fixed criterion</span>
+                </div>
                 <NumberField
                   label="Depth limit"
                   value={screening.depthRejectionPct}
