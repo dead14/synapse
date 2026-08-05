@@ -96,6 +96,11 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
       ['Width', feature.widthMm === null ? '—' : `${feature.widthMm} mm`],
       ['Type', feature.featureType || '—'],
     );
+    // Said outright, because the run-to-run columns above stay empty for these
+    // rows by rule rather than because the runs disagreed.
+    if (feature.isCluster) {
+      rows.push(['Clustered', 'Merged group — not aligned across runs']);
+    }
     return rows;
   };
 

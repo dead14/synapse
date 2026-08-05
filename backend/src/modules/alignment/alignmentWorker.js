@@ -156,6 +156,7 @@ function mergeMultiPairResults(pairResults, runPairs = []) {
     const merged = {
         gw_locked: [],
         gw_unmatched: [],
+        fitting_matched: [],
         anomaly_matched: [],
         anomaly_only_old: [],
         anomaly_only_new: [],
@@ -184,6 +185,7 @@ function mergeMultiPairResults(pairResults, runPairs = []) {
         const tag = (rows) => rows.map((r) => ({ ...r, ...identity }));
         merged.gw_locked.push(...tag(result.gw_locked || []));
         merged.gw_unmatched.push(...tag(result.gw_unmatched || []));
+        merged.fitting_matched.push(...tag(result.fitting_matched || []));
         merged.anomaly_matched.push(...tag(result.anomaly_matched || []));
         merged.anomaly_only_old.push(...tag(result.anomaly_only_old || []));
         merged.anomaly_only_new.push(...tag(result.anomaly_only_new || []));

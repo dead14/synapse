@@ -3,12 +3,14 @@ import { FiChevronLeft, FiChevronRight, FiCrosshair, FiMaximize2, FiZoomIn, FiZo
 import {
   defaultComparisonAxis,
   featureAxisValue,
+  isFittingKind,
   laneFeaturesInWindow,
   laneReadoutAt,
   lanesExtent,
   placeLane,
   type AxisMode,
   type ComparisonLane,
+  type FeatureKind,
   type LaneFeature,
   type PlacedFeature,
 } from '../../domain/comparisonLanes.ts';
@@ -38,10 +40,20 @@ const GUTTER = 66;
 const RIGHT_PAD = 14;
 const LANE_HEAD = 26;
 const GW_ROW = 20;
-const CLOCK_TOP = LANE_HEAD + GW_ROW;
+/** Row holding the pipe furniture markers and their type tags. */
+const FIT_ROW = 15;
+const CLOCK_TOP = LANE_HEAD + GW_ROW + FIT_ROW;
 const CLOCK_H = 140;
+/**
+ * A separate strip under the clock band for vendor-merged corrosion groups.
+ * A cluster box is a bounding box over several pits, so drawing it among the
+ * individual anomalies would bury them; kept below, the reviewer sees both the
+ * pits and the group that covers them at the same distance.
+ */
+const CLUSTER_H = 30;
+const CLUSTER_TOP = CLOCK_TOP + CLOCK_H;
 const NOCLOCK_H = 24;
-const LANE_H = CLOCK_TOP + CLOCK_H + NOCLOCK_H + 2;
+const LANE_H = CLUSTER_TOP + CLUSTER_H + NOCLOCK_H + 2;
 const LANE_GAP = 10;
 const AXIS_H = 22;
 const NAV_H = 32;
@@ -52,6 +64,25 @@ const MAX_LINKS = 500;
 const DRAG_THRESHOLD_PX = 3;
 
 const MAJOR_HOURS = new Set([0, 3, 6, 9, 12]);
+
+/** Smallest painted defect footprint, so a 2 mm pit stays clickable. */
+const MIN_BOX_PX = 3;
+
+/**
+ * Each kind of pipe furniture gets its own colour and a short tag, because the
+ * reviewer's question about them is "what is it", not "how deep is it".
+ */
+const FITTING_STYLE: Partial<Record<FeatureKind, { color: string; tag: string; label: string }>> = {
+  valve: { color: '#7c3aed', tag: 'VLV', label: 'Valve' },
+  tee: { color: '#0891b2', tag: 'TEE', label: 'Tee / offtake' },
+  bend: { color: '#ea580c', tag: 'BEND', label: 'Bend' },
+  flange: { color: '#4d7c0f', tag: 'FLG', label: 'Flange' },
+  fitting: { color: '#be123c', tag: 'FIT', label: 'Other fitting' },
+};
+
+function fittingStyle(kind: FeatureKind) {
+  return FITTING_STYLE[kind] ?? FITTING_STYLE.fitting!;
+}
 
 const STATUS_COLOR: Record<string, string> = {
   persistent: '#087443',
@@ -81,8 +112,28 @@ function clockToY(deg: number): number {
   return CLOCK_TOP + (deg / 360) * CLOCK_H;
 }
 
+/** The cluster strip carries the same 0–360° sweep, compressed. */
+function clusterToY(deg: number): number {
+  return CLUSTER_TOP + (deg / 360) * CLUSTER_H;
+}
+
+/**
+ * The band is one full turn around the pipe read top to bottom, so it runs
+ * 00:00 → 12:00. Labelling the first gridline 12:00 printed the same hour at
+ * both ends and made the axis look like it wrapped twice.
+ */
 function hourLabel(hour: number): string {
-  return `${String(hour === 0 ? 12 : hour).padStart(2, '0')}:00`;
+  return `${String(hour).padStart(2, '0')}:00`;
+}
+
+/**
+ * Circumferential extent of a defect in degrees. Needs the outer diameter: an
+ * alignment session does not carry one, so without an operator-supplied value
+ * the width is drawn nominal rather than guessed into a false arc.
+ */
+function arcDegrees(widthMm: number | null, odMm: number | null): number | null {
+  if (widthMm === null || odMm === null || !(widthMm > 0) || !(odMm > 0)) return null;
+  return Math.min(360, (widthMm / (Math.PI * odMm)) * 360);
 }
 
 function formatMeters(value: number | null, digits = 2): string {
@@ -105,6 +156,12 @@ export default function LaneTimeline({
   const [colorMode, setColorMode] = useState<ColorMode>('status');
   const [filter, setFilter] = useState<FeatureFilter>('all');
   const [showLinks, setShowLinks] = useState(true);
+  // Off by default: the cluster strip already answers "where is the group".
+  // Turning it on superimposes the same boxes on the individual anomalies, which
+  // is what an engineer wants when judging whether the group covers them.
+  const [overlayClusters, setOverlayClusters] = useState(false);
+  const [odMm, setOdMm] = useState<number | null>(null);
+  const [odText, setOdText] = useState('');
   const [view, setView] = useState<{ start: number; span: number } | null>(null);
   const [cursorM, setCursorM] = useState<number | null>(null);
   const [spool, setSpool] = useState<{ startKey: string; endKey: string | null; laneLabel: string } | null>(null);
@@ -281,6 +338,33 @@ export default function LaneTimeline({
     )
   ), [selectedRowIdx]);
 
+  /**
+   * The painted footprint of one metal-loss record: reported length along the
+   * pipe, reported width around it. Drawing a defect as a dot threw away the
+   * two dimensions the assessment is actually made from, and made a 30 mm pit
+   * and a 2 m long groove look identical.
+   */
+  const defectBox = useCallback((feature: PlacedFeature, bandTop: number, bandHeight: number) => {
+    const lengthM = Math.max(0, (feature.lengthMm ?? 0) / 1000);
+    const boxWidth = Math.max(MIN_BOX_PX, (lengthM / viewSpan) * chartWidth);
+    const arcDeg = arcDegrees(feature.widthMm, odMm);
+    const boxHeight = arcDeg === null
+      // No diameter, no arc: a fixed nominal band that says "width unknown"
+      // rather than a height that would read as a measurement.
+      ? Math.max(MIN_BOX_PX, bandHeight * 0.05)
+      : Math.max(MIN_BOX_PX, (arcDeg / 360) * bandHeight);
+    const centreY = feature.clockDeg === null
+      ? bandTop + bandHeight / 2
+      : bandTop + (feature.clockDeg / 360) * bandHeight;
+    return {
+      x: mToX(feature.position) - boxWidth / 2,
+      y: centreY - boxHeight / 2,
+      width: boxWidth,
+      height: boxHeight,
+      widthIsNominal: arcDeg === null,
+    };
+  }, [chartWidth, mToX, odMm, viewSpan]);
+
   // Reverse lanes so master (newest) is at top, old at bottom. Sorting and projecting
   // is axis work, not viewport work: doing it here keeps panning, zooming and cursor
   // movement off the hot path.
@@ -289,12 +373,28 @@ export default function LaneTimeline({
 
   const laneViews = useMemo(() => placements.map((placement) => {
     const windowed = laneFeaturesInWindow(placement, viewStart, viewEnd, MAX_MARKS_PER_LANE, isSelected);
+    // One pass, four destinations: welds and fittings are pipe furniture drawn
+    // on the joint rows, anomalies are footprints in the clock band, and merged
+    // corrosion groups get the strip of their own beneath it.
+    const welds: PlacedFeature[] = [];
+    const fittings: PlacedFeature[] = [];
+    const marks: PlacedFeature[] = [];
+    const clusters: PlacedFeature[] = [];
+    for (const feature of windowed.features) {
+      if (feature.kind === 'weld') welds.push(feature);
+      else if (isFittingKind(feature.kind)) fittings.push(feature);
+      else if (!keepFeature(feature)) continue;
+      else if (feature.isCluster) clusters.push(feature);
+      else marks.push(feature);
+    }
     return {
       placement,
       lane: placement.lane,
       visibleJoints: placement.joints.filter((joint) => joint.endM >= viewStart && joint.startM <= viewEnd),
-      marks: windowed.features.filter((feature) => feature.kind !== 'weld' && keepFeature(feature)),
-      welds: windowed.features.filter((feature) => feature.kind === 'weld'),
+      marks,
+      clusters,
+      fittings,
+      welds,
       hidden: windowed.total - windowed.features.length,
     };
   }), [placements, viewStart, viewEnd, isSelected, keepFeature]);
@@ -462,6 +562,39 @@ export default function LaneTimeline({
           </label>
         )}
 
+        <label
+          className="flex items-center gap-1.5 text-xs"
+          style={{ color: 'var(--syn-ink-soft)' }}
+          title="Also draw each merged corrosion group over the individual anomalies it covers, so the combined extent can be judged in one place."
+        >
+          <input type="checkbox" checked={overlayClusters} onChange={(event) => setOverlayClusters(event.target.checked)} />
+          Overlay clusters
+        </label>
+
+        {/* An alignment session carries no outer diameter, so the width of a
+            defect cannot become a real arc without one. Supplying it here turns
+            the reported width into a circumferential extent; leaving it empty
+            keeps the boxes at a nominal height that claims nothing. */}
+        <label
+          className="flex items-center gap-1.5 text-xs"
+          style={{ color: 'var(--syn-ink-soft)' }}
+          title="Outer diameter of the line. Without it the defect width is drawn nominal rather than as a measured arc."
+        >
+          OD
+          <input
+            value={odText}
+            onChange={(event) => {
+              setOdText(event.target.value);
+              const parsed = Number(event.target.value.replace(',', '.'));
+              setOdMm(Number.isFinite(parsed) && parsed > 0 ? parsed : null);
+            }}
+            placeholder="mm"
+            aria-label="Outer diameter in millimetres"
+            className="syn-input"
+            style={{ width: '4.5rem', minHeight: '1.6rem', fontSize: '0.68rem', padding: '0.15rem 0.4rem' }}
+          />
+        </label>
+
         <form onSubmit={jumpTo} className="flex items-center gap-1.5 ml-auto">
           <input
             value={jumpValue}
@@ -517,7 +650,7 @@ export default function LaneTimeline({
         onPointerLeave={() => setCursorM(null)}
         onKeyDown={onKeyDown}
       >
-        {laneViews.map(({ lane, visibleJoints, marks, welds, hidden }, laneIndex) => {
+        {laneViews.map(({ lane, visibleJoints, marks, clusters, fittings, welds, hidden }, laneIndex) => {
           const emptyOnAxis = axis === 'aligned' && !lane.alignedAvailable;
           const readout = readouts?.[laneIndex] ?? null;
           return (
@@ -530,11 +663,11 @@ export default function LaneTimeline({
                 const right = Math.min(GUTTER + chartWidth, mToX(joint.endM));
                 if (joint.index % 2 !== 0 || right <= left) return null;
                 return (
-                  <rect key={`band-${joint.index}`} x={left} y={CLOCK_TOP} width={right - left} height={CLOCK_H + NOCLOCK_H} fill="var(--syn-canvas)" opacity={0.5} />
+                  <rect key={`band-${joint.index}`} x={left} y={CLOCK_TOP} width={right - left} height={CLOCK_H + CLUSTER_H + NOCLOCK_H} fill="var(--syn-canvas)" opacity={0.5} />
                 );
               })}
 
-              {/* Clock grid — one line per hour, labelled at 12/3/6/9/12 */}
+              {/* Clock grid — one line per hour, labelled 00:00 through 12:00 */}
               {Array.from({ length: 13 }, (_, hour) => hour).map((hour) => {
                 const y = clockToY(hour * 30);
                 const major = MAJOR_HOURS.has(hour);
@@ -543,13 +676,21 @@ export default function LaneTimeline({
                     <line x1={GUTTER} y1={y} x2={GUTTER + chartWidth} y2={y} stroke="var(--syn-line)" strokeWidth={major ? 0.8 : 0.4} strokeDasharray={major ? '4 4' : '2 6'} />
                     {major && (
                       <text x={GUTTER - 6} y={y} textAnchor="end" dominantBaseline="central" fontSize="10" fontWeight="700" fill="var(--syn-muted)">
-                        {hourLabel(hour % 12)}
+                        {hourLabel(hour)}
                       </text>
                     )}
                   </g>
                 );
               })}
-              <text x={GUTTER - 6} y={CLOCK_TOP + CLOCK_H + NOCLOCK_H / 2} textAnchor="end" dominantBaseline="central" fontSize="9" fontWeight="700" fill="var(--syn-muted)">
+
+              {/* Merged-corrosion strip: its own baseline so a group box never
+                  hides the individual pits it was built from. */}
+              <rect x={GUTTER} y={CLUSTER_TOP} width={chartWidth} height={CLUSTER_H} fill="var(--syn-canvas-strong)" opacity={0.35} />
+              <line x1={GUTTER} y1={CLUSTER_TOP} x2={GUTTER + chartWidth} y2={CLUSTER_TOP} stroke="var(--syn-line-strong)" strokeWidth="0.8" />
+              <text x={GUTTER - 6} y={CLUSTER_TOP + CLUSTER_H / 2} textAnchor="end" dominantBaseline="central" fontSize="8.5" fontWeight="700" fill="var(--syn-muted)">
+                cluster
+              </text>
+              <text x={GUTTER - 6} y={CLUSTER_TOP + CLUSTER_H + NOCLOCK_H / 2} textAnchor="end" dominantBaseline="central" fontSize="9" fontWeight="700" fill="var(--syn-muted)">
                 no clock
               </text>
 
@@ -584,6 +725,51 @@ export default function LaneTimeline({
                 );
               })}
 
+              {/* Pipe furniture — valves, tees, bends, flanges. Same full-height
+                  rule and joint-row marker as a girth weld so it reads as part
+                  of the skeleton, separated only by colour and its type tag. */}
+              {fittings.map((fitting) => {
+                const x = mToX(fitting.position);
+                if (x < GUTTER - 6 || x > GUTTER + chartWidth + 6) return null;
+                const style = fittingStyle(fitting.kind);
+                const paired = fitting.status === 'persistent' || fitting.status === 'single';
+                const markerY = LANE_HEAD + GW_ROW + FIT_ROW / 2;
+                const selected = isSelected(fitting);
+                return (
+                  <g
+                    key={`fit-${fitting.key}`}
+                    role="button"
+                    tabIndex={0}
+                    style={{ cursor: 'pointer' }}
+                    aria-label={`${style.label} ${fitting.id} of ${lane.label} at ${formatMeters(fitting.rawM)}, ${paired ? 'matched to the neighbouring run' : 'unmatched'}`}
+                    onClick={(event) => { event.stopPropagation(); onFeatureClick(fitting, lane, event); }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      const box = event.currentTarget.getBoundingClientRect();
+                      onFeatureClick(fitting, lane, { clientX: box.left + box.width / 2, clientY: box.top });
+                    }}
+                  >
+                    <line
+                      x1={x} y1={markerY} x2={x} y2={LANE_H}
+                      stroke={style.color} strokeWidth={selected ? 1.8 : 1.1}
+                      strokeDasharray={paired ? '' : '3 3'} opacity={0.85}
+                    />
+                    <rect
+                      x={x - 4.5} y={markerY - 4.5} width={9} height={9} rx={1.5}
+                      fill={paired ? style.color : 'var(--syn-surface-raised)'}
+                      stroke={style.color} strokeWidth={selected ? 2 : 1.2}
+                    />
+                    <text
+                      x={x + 7} y={markerY} dominantBaseline="central"
+                      fontSize="7.5" fontWeight="800" fill={style.color} letterSpacing="0.04em"
+                    >
+                      {style.tag}
+                    </text>
+                  </g>
+                );
+              })}
+
               {/* Real joint length, printed from this run own weld spacing */}
               {visibleJoints.map((joint) => {
                 const left = mToX(joint.startM);
@@ -605,40 +791,94 @@ export default function LaneTimeline({
                 );
               })}
 
-              {/* Features at their reported clock position */}
+              {/* Metal loss drawn at its reported extent: axial length across,
+                  circumferential width down, positioned at its clock hour. */}
               {marks.map((feature) => {
-                const x = mToX(feature.position);
-                if (x < GUTTER - 6 || x > GUTTER + chartWidth + 6) return null;
                 const hasClock = feature.clockDeg !== null;
-                const y = hasClock ? clockToY(feature.clockDeg as number) : CLOCK_TOP + CLOCK_H + NOCLOCK_H / 2;
+                const box = hasClock
+                  ? defectBox(feature, CLOCK_TOP, CLOCK_H)
+                  : defectBox(feature, CLUSTER_TOP + CLUSTER_H, NOCLOCK_H);
+                if (box.x + box.width < GUTTER - 6 || box.x > GUTTER + chartWidth + 6) return null;
                 const selected = isSelected(feature);
                 const color = colorMode === 'depth' ? depthColor(feature.depthPct) : STATUS_COLOR[feature.status];
-                const radius = selected ? 8 : 4 + clamp((feature.depthPct ?? 0) / 100, 0, 1) * 4;
                 return (
                   <g
                     key={`mark-${feature.key}`}
                     role="button"
                     tabIndex={0}
                     style={{ cursor: 'pointer' }}
-                    aria-label={`${feature.featureType || 'Feature'} ${feature.id} of ${lane.label} at ${formatMeters(feature.rawM)}, clock ${feature.clockLabel}`}
+                    aria-label={`${feature.featureType || 'Feature'} ${feature.id} of ${lane.label} at ${formatMeters(feature.rawM)}, clock ${feature.clockLabel}, ${feature.lengthMm ?? '?'} by ${feature.widthMm ?? '?'} millimetres`}
                     onClick={(event) => { event.stopPropagation(); onFeatureClick(feature, lane, event); }}
                     onKeyDown={(event) => {
                       if (event.key !== 'Enter' && event.key !== ' ') return;
                       event.preventDefault();
-                      const box = event.currentTarget.getBoundingClientRect();
-                      onFeatureClick(feature, lane, { clientX: box.left + box.width / 2, clientY: box.top });
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      onFeatureClick(feature, lane, { clientX: rect.left + rect.width / 2, clientY: rect.top });
                     }}
                   >
-                    {selected && <circle cx={x} cy={y} r={radius + 4} fill="none" stroke={color} strokeWidth="1.5" strokeDasharray="2 2" />}
-                    {hasClock ? (
-                      <circle
-                        cx={x} cy={y} r={radius}
-                        fill={feature.external === false ? 'var(--syn-surface-raised)' : color}
-                        stroke={color}
-                        strokeWidth={feature.external === false ? 1.8 : 1}
+                    {selected && (
+                      <rect
+                        x={box.x - 3} y={box.y - 3} width={box.width + 6} height={box.height + 6}
+                        fill="none" stroke={color} strokeWidth="1.5" strokeDasharray="2 2"
                       />
-                    ) : (
-                      <rect x={x - 3} y={y - 3} width={6} height={6} fill={color} opacity={0.85} />
+                    )}
+                    <rect
+                      x={box.x} y={box.y} width={box.width} height={box.height}
+                      // An internal defect is hollow, as it was when these were
+                      // dots: the fill means "you can see it from outside".
+                      fill={feature.external === false ? 'var(--syn-surface-raised)' : color}
+                      fillOpacity={feature.external === false ? 1 : 0.82}
+                      stroke={color}
+                      strokeWidth={feature.external === false ? 1.6 : 0.8}
+                    />
+                  </g>
+                );
+              })}
+
+              {/* Vendor-merged corrosion groups. Faded and dashed everywhere they
+                  appear, because the box is a bounding box over several pits and
+                  never a single defect the assessment can act on. */}
+              {clusters.map((feature) => {
+                const strip = defectBox(feature, CLUSTER_TOP, CLUSTER_H);
+                if (strip.x + strip.width < GUTTER - 6 || strip.x > GUTTER + chartWidth + 6) return null;
+                const selected = isSelected(feature);
+                const color = colorMode === 'depth' ? depthColor(feature.depthPct) : STATUS_COLOR[feature.status];
+                const overlay = overlayClusters ? defectBox(feature, CLOCK_TOP, CLOCK_H) : null;
+                return (
+                  <g
+                    key={`cluster-${feature.key}`}
+                    role="button"
+                    tabIndex={0}
+                    style={{ cursor: 'pointer' }}
+                    aria-label={`Clustered metal loss ${feature.id} of ${lane.label} at ${formatMeters(feature.rawM)}, clock ${feature.clockLabel}, not aligned across runs`}
+                    onClick={(event) => { event.stopPropagation(); onFeatureClick(feature, lane, event); }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      onFeatureClick(feature, lane, { clientX: rect.left + rect.width / 2, clientY: rect.top });
+                    }}
+                  >
+                    {overlay && (
+                      <rect
+                        x={overlay.x} y={overlay.y} width={overlay.width} height={overlay.height}
+                        fill={color} fillOpacity={0.14} stroke={color} strokeWidth="0.8"
+                        strokeDasharray="3 2" opacity={0.9}
+                      />
+                    )}
+                    <rect
+                      x={strip.x} y={strip.y} width={strip.width} height={strip.height}
+                      fill={color} fillOpacity={0.3}
+                      stroke={color} strokeWidth={selected ? 1.6 : 0.9} strokeDasharray="3 2"
+                    />
+                    {strip.width >= 16 && (
+                      <text
+                        x={strip.x + strip.width / 2} y={strip.y + strip.height / 2}
+                        textAnchor="middle" dominantBaseline="central"
+                        fontSize="7" fontWeight="800" fill={color} opacity={0.95}
+                      >
+                        CL
+                      </text>
                     )}
                   </g>
                 );
@@ -777,24 +1017,42 @@ export default function LaneTimeline({
         {colorMode === 'status'
           ? (['persistent', 'new', 'lost', 'transient'] as const).map((status) => (
             <span key={status} className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--syn-ink-soft)' }}>
-              <svg width="9" height="9"><circle cx="4.5" cy="4.5" r="4" fill={STATUS_COLOR[status]} /></svg>
+              <svg width="12" height="9"><rect x="0" y="1.5" width="12" height="6" fill={STATUS_COLOR[status]} fillOpacity="0.82" stroke={STATUS_COLOR[status]} strokeWidth="0.8" /></svg>
               {STATUS_LABEL[status]}
             </span>
           ))
           : ([['≤10 %WT', 5], ['10–25 %WT', 20], ['25–50 %WT', 40], ['>50 %WT', 60]] as Array<[string, number]>).map(([label, depth]) => (
             <span key={label} className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--syn-ink-soft)' }}>
-              <svg width="9" height="9"><circle cx="4.5" cy="4.5" r="4" fill={depthColor(depth)} /></svg>
+              <svg width="12" height="9"><rect x="0" y="1.5" width="12" height="6" fill={depthColor(depth)} fillOpacity="0.82" stroke={depthColor(depth)} strokeWidth="0.8" /></svg>
               {label}
             </span>
           ))}
         <span className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--syn-ink-soft)' }}>
-          <svg width="9" height="9"><circle cx="4.5" cy="4.5" r="3.4" fill="var(--syn-surface-raised)" stroke="var(--syn-muted)" strokeWidth="1.6" /></svg>
+          <svg width="12" height="9"><rect x="0" y="1.5" width="12" height="6" fill="var(--syn-surface-raised)" stroke="var(--syn-muted)" strokeWidth="1.4" /></svg>
           Internal
+        </span>
+        <span className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--syn-ink-soft)' }}>
+          <svg width="12" height="9"><rect x="0" y="1.5" width="12" height="6" fill="var(--syn-muted)" fillOpacity="0.3" stroke="var(--syn-muted)" strokeWidth="0.9" strokeDasharray="3 2" /></svg>
+          Clustered metal loss (own strip, never aligned)
         </span>
         <span className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--syn-ink-soft)' }}>
           <svg width="12" height="9"><line x1="6" y1="0" x2="6" y2="9" stroke="var(--syn-line-strong)" strokeWidth="1.4" /></svg>
           Girth weld of that run
         </span>
+        {(['valve', 'tee', 'bend', 'flange', 'fitting'] as FeatureKind[]).map((kind) => {
+          const style = fittingStyle(kind);
+          return (
+            <span key={kind} className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--syn-ink-soft)' }}>
+              <svg width="9" height="9"><rect x="0.5" y="0.5" width="8" height="8" rx="1.5" fill={style.color} stroke={style.color} /></svg>
+              {style.label}
+            </span>
+          );
+        })}
+        {odMm === null && (
+          <span className="text-xs" style={{ color: 'var(--syn-warning)' }}>
+            No OD entered — defect width drawn nominal, not to scale
+          </span>
+        )}
       </div>
     </div>
   );
