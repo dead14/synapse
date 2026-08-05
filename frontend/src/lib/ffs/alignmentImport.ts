@@ -93,16 +93,39 @@ export interface FfsGirthWeld {
   ldM: number;
 }
 
+/**
+ * One metal-loss record of the NEW run as the alignment reported it, whether or
+ * not the Corrosion Analysis review released it for assessment.
+ *
+ * The FFS calculation only ever sees released features, and that is correct —
+ * but the spool register is an inventory of the line, and a joint carrying nine
+ * unreleased pits and one released one is not a joint with one defect on it.
+ */
+export interface FfsSpoolCensusRow {
+  sourceKey: string;
+  featureId: string;
+  ldM: number;
+  depthPct: number | null;
+  lengthMm: number | null;
+  widthMm: number | null;
+  isCluster: boolean;
+  /** True when this record went into the FFS assessment. */
+  assessed: boolean;
+}
+
 export interface AlignmentImportResult {
   accepted: AcceptedAlignmentRow[];
   rejected: RejectedAlignmentRow[];
   /**
-   * The weld ladder the assessment is reviewed against. A spool is the pipe
-   * between two of these, which is the unit a repair is actually made to — and
-   * it is the only grouping that does not depend on the vendor having filled in
-   * a joint-number column.
+   * Every girth weld of the NEW run. A spool is the pipe between two of these,
+   * which is the unit a repair is actually made to — and it is the only
+   * grouping that does not depend on the vendor having filled in a joint-number
+   * column. All of them are carried, not only the ones near a released feature:
+   * the register lists the whole line, joint by joint.
    */
   girthWelds: FfsGirthWeld[];
+  /** Every metal-loss record on the NEW run, released or not. */
+  census: FfsSpoolCensusRow[];
 }
 
 const WELD_LABEL_PATTERN = /weld|girth|\bgw\b|seam/i;
@@ -135,6 +158,51 @@ export function extractGirthWeldLadder(comparison: readonly ComparisonRow[]): Ff
     });
   }
   return [...seen.values()].sort((left, right) => left.ldM - right.ldM);
+}
+
+/** Groups the engine emits for things that are not anomalies. */
+const NON_ANOMALY_GROUPS = new Set(['GW', 'FITTING']);
+
+const NON_METAL_LOSS_PATTERN =
+  /weld|girth|\bgw\b|seam|valve|\btee\b|off[\s_-]?take|branch|flang|bend|elbow|anode|support|\bmarker\b|casing|sleeve|clamp|launcher|receiver|reducer|\bcap\b|dent|deform|ovality|buckle|wrinkle|crack|lamination/i;
+
+/**
+ * Every metal-loss record the NEW run reported, whichever bucket it landed in.
+ *
+ * Deliberately wider than the assessment: a bypassed cluster and a feature the
+ * review did not release are both still metal on the pipe, and a spool register
+ * that counted only the assessed ones would tell an engineer a joint carries
+ * one defect when the ILI found ten. Excluded rows are the one exception — an
+ * exclusion is a decision that the row is not real.
+ */
+export function extractSpoolCensus(
+  comparison: readonly ComparisonRow[],
+  selection?: AlignmentSelection,
+): FfsSpoolCensusRow[] {
+  const released = selection?.selectedKeys;
+  const census: FfsSpoolCensusRow[] = [];
+  for (const row of comparison) {
+    if (row.__excluded === true) continue;
+    const group = text(row['Result Group'], '').toUpperCase();
+    if (NON_ANOMALY_GROUPS.has(group)) continue;
+    const sourceKey = text(row['Source Key NEW'], '');
+    if (!sourceKey) continue;
+    const ldM = finiteNumber(row['Log Dist NEW (m)']);
+    if (ldM === null) continue;
+    const label = `${text(row['Feature Type NEW'], '')} ${text(row['Feature Identification NEW'], '')}`;
+    if (NON_METAL_LOSS_PATTERN.test(label)) continue;
+    census.push({
+      sourceKey,
+      featureId: text(row['Identif. NEW'], text(row['Feature ID NEW'], sourceKey)),
+      ldM,
+      depthPct: finiteNumber(row['Depth NEW (%WT)']),
+      lengthMm: finiteNumber(row['Length NEW (mm)']),
+      widthMm: finiteNumber(row['Width NEW (mm)']),
+      isCluster: isClusteredAlignmentRow(row),
+      assessed: released ? released.has(sourceKey) : false,
+    });
+  }
+  return census.sort((left, right) => left.ldM - right.ldM);
 }
 
 export interface AlignmentImportReadinessInput {
@@ -584,5 +652,10 @@ export function mapAlignmentRowsToFfs(
     });
   }
 
-  return { accepted, rejected, girthWelds: extractGirthWeldLadder(comparison) };
+  return {
+    accepted,
+    rejected,
+    girthWelds: extractGirthWeldLadder(comparison),
+    census: extractSpoolCensus(comparison, selection),
+  };
 }

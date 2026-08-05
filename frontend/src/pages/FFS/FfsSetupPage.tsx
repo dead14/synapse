@@ -374,6 +374,9 @@ export default function FfsSetupPage() {
             // The weld ladder the spool review groups against. Sent with the
             // results because it is a property of the run, not of any feature.
             girthWelds: imported.girthWelds,
+            // Every metal-loss record the run reported, so the spool register can
+            // count the line rather than only the released subset.
+            census: imported.census,
             warningCount: imported.accepted.reduce((sum, item) => sum + item.warnings.length, 0),
           },
         },

@@ -39,7 +39,7 @@ import {
   type FfsSpoolDispositionMode,
 } from '../../lib/ffs/spoolReview';
 import { exportSpoolReviewWorkbook } from '../../lib/ffs/spoolExports';
-import type { FfsGirthWeld } from '../../lib/ffs/alignmentImport';
+import type { FfsGirthWeld, FfsSpoolCensusRow } from '../../lib/ffs/alignmentImport';
 import type { FfsReportContext } from '../../lib/ffs/reportCase';
 import type {
   FfsConfig,
@@ -221,8 +221,10 @@ function SpoolCard({
   const evidenceMissing = isRepaired && (
     !option || !draft.completedDateIso?.trim() || !draft.evidenceReference?.trim()
   );
+  // A spool whose metal loss the review never released still deserves a
+  // recorded decision — it just has no feature rows to write it onto.
   const blocked = !option
-    || draft.memberIndexes.length === 0
+    || (spool.assessedCount > 0 && draft.memberIndexes.length === 0)
     || (isRepaired && (evidenceMissing || dateInvalid || dateFuture));
 
   const toggleMember = (index: number) => {
@@ -289,7 +291,8 @@ function SpoolCard({
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
               {spool.section} · {extentLabel(spool)} m
               {spool.lengthM !== null && ` · ${spool.lengthM.toFixed(2)} m joint`} ·{' '}
-              {spool.featureCount.toLocaleString()} metal-loss record{spool.featureCount === 1 ? '' : 's'}
+              {spool.metalLossTotal.toLocaleString()} metal-loss record{spool.metalLossTotal === 1 ? '' : 's'}
+              {spool.unassessedCount > 0 && ` (${spool.assessedCount} assessed)`}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -472,8 +475,9 @@ function SpoolCard({
           <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
             <Stat
               label="Metal loss on spool"
-              value={spool.featureCount.toLocaleString()}
-              foot={`${spool.totalMetalLossLengthMm.toFixed(0)} mm total axial length`}
+              value={spool.metalLossTotal.toLocaleString()}
+              foot={`${spool.totalMetalLossLengthMm.toFixed(0)} mm total axial length`
+                + (spool.unassessedCount > 0 ? ` · ${spool.unassessedCount} not released` : '')}
             />
             <Stat label="Governing ERF" value={formatErf(spool.worstNominalErf)} tone={spool.worstNominalErf >= 1 ? 'bad' : 'accent'} />
             <Stat
@@ -538,7 +542,12 @@ function SpoolCard({
           <section className="mt-5">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h4 className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                Metal loss in this spool
+                Metal loss assessed on this spool
+                {spool.unassessedCount > 0 && (
+                  <span className="ml-2 font-normal normal-case tracking-normal text-amber-600 dark:text-amber-400">
+                    {spool.unassessedCount} further record{spool.unassessedCount === 1 ? '' : 's'} were reported here but not released to the assessment
+                  </span>
+                )}
               </h4>
               <div className="flex items-center gap-2 text-[11px]">
                 <button
@@ -648,6 +657,7 @@ export default function FfsSpoolReviewPanel({
   screening,
   reportContext,
   girthWelds,
+  census,
   dispositions,
   onSaveDisposition,
   onClearDisposition,
@@ -659,6 +669,7 @@ export default function FfsSpoolReviewPanel({
   screening: FfsScreeningConfig;
   reportContext: FfsReportContext;
   girthWelds?: readonly FfsGirthWeld[];
+  census?: readonly FfsSpoolCensusRow[];
   dispositions: Record<string, FfsSpoolDisposition>;
   onSaveDisposition: (spoolId: string, disposition: FfsSpoolDisposition) => void;
   onClearDisposition: (spoolId: string) => void;
@@ -672,12 +683,17 @@ export default function FfsSpoolReviewPanel({
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'undecided' | 'recommended' | 'repaired'>('all');
-  const [sortKey, setSortKey] = useState<SortKey>('severity');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  // Off by default: the register is an inventory of the line, and hiding the
+  // clean joints hides the fact that they were inspected and found clean.
+  const [onlyWithMetalLoss, setOnlyWithMetalLoss] = useState(false);
+  // Along the line by default. A per-weld register is walked, not ranked; one
+  // click on any header re-sorts it by severity or ERF when that is the question.
+  const [sortKey, setSortKey] = useState<SortKey>('position');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   const spools = useMemo(
-    () => buildFfsSpools(items, { screening, config, girthWelds }),
-    [items, screening, config, girthWelds],
+    () => buildFfsSpools(items, { screening, config, girthWelds, census }),
+    [items, screening, config, girthWelds, census],
   );
   const programme = useMemo(() => buildSpoolProgramme(spools, dispositions), [spools, dispositions]);
 
@@ -685,7 +701,7 @@ export default function FfsSpoolReviewPanel({
     const sortValue = (spool: FfsSpool): number => {
       switch (sortKey) {
         case 'position': return spoolStartM(spool);
-        case 'features': return spool.featureCount;
+        case 'features': return spool.metalLossTotal;
         case 'totalLength': return spool.totalMetalLossLengthMm;
         case 'depth': return spool.maxDepthPct;
         case 'erf': return Number.isFinite(spool.worstNominalErf) ? spool.worstNominalErf : Number.MAX_VALUE;
@@ -710,6 +726,7 @@ export default function FfsSpoolReviewPanel({
         if (query && !`${spool.label} ${spool.section} ${spool.jointNumber ?? ''}`.toLowerCase().includes(query)) {
           return false;
         }
+        if (onlyWithMetalLoss && spool.metalLossTotal === 0) return false;
         const disposition = dispositions[spool.id];
         if (statusFilter === 'undecided') return !disposition;
         if (statusFilter === 'recommended') return disposition?.mode === 'recommendation';
@@ -719,14 +736,16 @@ export default function FfsSpoolReviewPanel({
       .sort((left, right) => (
         (sortValue(left) - sortValue(right)) * direction || spoolStartM(left) - spoolStartM(right)
       ));
-  }, [spools, dispositions, search, statusFilter, sortKey, sortDir]);
+  }, [spools, dispositions, search, statusFilter, onlyWithMetalLoss, sortKey, sortDir]);
 
   const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount - 1);
   const rows = visible.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
   const openSpool = spools.find((spool) => spool.id === openSpoolId) ?? null;
   const unassigned = spools.filter((spool) => spool.grouping === 'unassigned').length;
-  const totalMetalLoss = spools.reduce((sum, spool) => sum + spool.featureCount, 0);
+  const totalMetalLoss = spools.reduce((sum, spool) => sum + spool.metalLossTotal, 0);
+  const assessedTotal = spools.reduce((sum, spool) => sum + spool.assessedCount, 0);
+  const spoolsWithMetalLoss = spools.filter((spool) => spool.metalLossTotal > 0).length;
 
   const columns: Array<{ key: SortKey; header: string; align: 'left' | 'right' | 'center' }> = [
     { key: 'position', header: 'Spool (GW → GW)', align: 'left' },
@@ -773,8 +792,18 @@ export default function FfsSpoolReviewPanel({
       </div>
 
       <div className="grid grid-cols-2 gap-2 px-5 pb-4 md:grid-cols-6">
-        <Stat label="Spools" value={spools.length.toLocaleString()} />
-        <Stat label="Metal loss total" value={totalMetalLoss.toLocaleString()} />
+        <Stat
+          label="Spools (GW → GW)"
+          value={spools.length.toLocaleString()}
+          foot={`${spoolsWithMetalLoss.toLocaleString()} carry metal loss`}
+        />
+        <Stat
+          label="Metal loss reported"
+          value={totalMetalLoss.toLocaleString()}
+          foot={totalMetalLoss > assessedTotal
+            ? `${assessedTotal.toLocaleString()} assessed · ${(totalMetalLoss - assessedTotal).toLocaleString()} not released`
+            : 'all assessed'}
+        />
         <Stat
           label="Not acceptable"
           value={spools.filter((spool) => spool.severity === 'fail').length.toLocaleString()}
@@ -817,6 +846,14 @@ export default function FfsSpoolReviewPanel({
           <option value="recommended">Recommended</option>
           <option value="repaired">Recorded as repaired</option>
         </select>
+        <label className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <input
+            type="checkbox"
+            checked={onlyWithMetalLoss}
+            onChange={(event) => { setOnlyWithMetalLoss(event.target.checked); setPage(0); }}
+          />
+          Only spools carrying metal loss
+        </label>
       </div>
 
       <div className="overflow-x-auto border-t border-slate-200 dark:border-slate-700">
@@ -876,9 +913,21 @@ export default function FfsSpoolReviewPanel({
                     )}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-[11px] tabular-nums">{extentLabel(spool)}</td>
-                  <td className="px-3 py-2 text-right font-semibold tabular-nums">{spool.featureCount}</td>
+                  <td className="px-3 py-2 text-right font-semibold tabular-nums">
+                    {spool.metalLossTotal}
+                    {spool.unassessedCount > 0 && (
+                      <span
+                        title={`${spool.assessedCount} assessed, ${spool.unassessedCount} not released by the Corrosion Analysis review`}
+                        className="ml-1 text-[9px] font-normal text-slate-400"
+                      >
+                        ({spool.assessedCount})
+                      </span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-right tabular-nums">{spool.totalMetalLossLengthMm.toFixed(0)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{spool.maxDepthPct.toFixed(1)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {spool.metalLossTotal === 0 ? '—' : spool.maxDepthPct.toFixed(1)}
+                  </td>
                   <td className={`px-3 py-2 text-right font-bold tabular-nums ${
                     spool.worstNominalErf >= 1
                       ? 'text-rose-600 dark:text-rose-400'
@@ -886,17 +935,25 @@ export default function FfsSpoolReviewPanel({
                         ? 'text-amber-600 dark:text-amber-400'
                         : 'text-slate-800 dark:text-slate-100'
                   }`}>
-                    {formatErf(spool.worstNominalErf)}
+                    {spool.assessedCount === 0 ? '—' : formatErf(spool.worstNominalErf)}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums text-amber-600 dark:text-amber-400">
-                    {formatErf(spool.worstConservativeErf)}
+                    {spool.assessedCount === 0 ? '—' : formatErf(spool.worstConservativeErf)}
                   </td>
-                  <td className="px-3 py-2 text-right">{life ? formatRemnantLife(life) : 'Not established'}</td>
+                  <td className="px-3 py-2 text-right">
+                    {spool.assessedCount === 0 ? '—' : life ? formatRemnantLife(life) : 'Not established'}
+                  </td>
                   <td className="px-3 py-2 text-right tabular-nums">{rate(spool.growth.meanMmPerYear)}</td>
                   <td className="px-3 py-2 text-center">
-                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${SEVERITY_STYLE[spool.severity]}`}>
-                      {SEVERITY_LABEL[spool.severity]}
-                    </span>
+                    {spool.assessedCount === 0 ? (
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                        {spool.metalLossTotal === 0 ? 'Clean' : 'Not assessed'}
+                      </span>
+                    ) : (
+                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${SEVERITY_STYLE[spool.severity]}`}>
+                        {SEVERITY_LABEL[spool.severity]}
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2">
                     {disposition ? (

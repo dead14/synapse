@@ -14,7 +14,7 @@ import {
   searchFeatures,
   type FeatureQuery,
 } from '../../lib/ffs/featureSearch';
-import type { FfsGirthWeld } from '../../lib/ffs/alignmentImport';
+import type { FfsGirthWeld, FfsSpoolCensusRow } from '../../lib/ffs/alignmentImport';
 import type { FfsSpoolDisposition } from '../../lib/ffs/spoolReview';
 import type {
   FfsConfig,
@@ -188,6 +188,7 @@ export default function FfsCaseReviewPanel({
   screening,
   reportContext,
   girthWelds,
+  census,
   spoolDispositions,
   onSaveSpoolDisposition,
   onClearSpoolDisposition,
@@ -202,6 +203,7 @@ export default function FfsCaseReviewPanel({
   screening: FfsScreeningConfig;
   reportContext: FfsReportContext;
   girthWelds?: readonly FfsGirthWeld[];
+  census?: readonly FfsSpoolCensusRow[];
   spoolDispositions: Record<string, FfsSpoolDisposition>;
   onSaveSpoolDisposition: (spoolId: string, disposition: FfsSpoolDisposition) => void;
   onClearSpoolDisposition: (spoolId: string) => void;
@@ -347,6 +349,7 @@ export default function FfsCaseReviewPanel({
         screening={screening}
         reportContext={reportContext}
         girthWelds={girthWelds}
+        census={census}
         dispositions={spoolDispositions}
         onSaveDisposition={onSaveSpoolDisposition}
         onClearDisposition={onClearSpoolDisposition}
