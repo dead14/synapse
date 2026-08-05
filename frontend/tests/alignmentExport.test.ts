@@ -29,6 +29,8 @@ test('creates compact Excel export rows using the report fields and aliases', ()
     'Comment NEW': 'verified',
     'Log Dist OLD (m)': 4.243,
     match_status: 'Matched',
+    'Depth Growth (%WT/yr)': 1.25,
+    'Length Growth (mm/yr)': 3.5,
     __resultGroup: 'GW',
     'Internal only': 'must not be exported',
   };
@@ -53,6 +55,8 @@ test('creates compact Excel export rows using the report fields and aliases', ()
     'Comment NEW': 'verified',
     'Log Dist OLD (m)': 4.243,
     'Match/Unmatch': 'Matched',
+    'Depth Growth (%WT/yr)': 1.25,
+    'Length Growth (mm/yr)': 3.5,
   });
   assert.equal(Object.hasOwn(row, '__resultGroup'), false);
   assert.equal(Object.hasOwn(row, 'Internal only'), false);
