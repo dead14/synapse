@@ -4,7 +4,10 @@ import {
   FiCheckCircle,
   FiChevronLeft,
   FiChevronRight,
+  FiEye,
+  FiEyeOff,
   FiInfo,
+  FiLock,
   FiSliders,
 } from 'react-icons/fi';
 
@@ -25,6 +28,14 @@ import {
   RECOMMENDED_TOLERANCES,
   type ToleranceValues,
 } from './matchingRules';
+
+const TOGGLEABLE_FEATURES = [
+  { key: 'valve', label: 'Valves' },
+  { key: 'tee', label: 'Tees' },
+  { key: 'bend', label: 'Bends' },
+  { key: 'offtake', label: 'Offtakes' },
+  { key: 'other', label: 'Other features' },
+] as const;
 
 interface StepScenarioFilterProps {
   onNext: (config: any) => void;
@@ -51,6 +62,18 @@ export default function StepScenarioFilter({ onNext, onBack, config }: StepScena
       ]),
     )
   ));
+  const [hiddenFeatures, setHiddenFeatures] = useState<Set<string>>(
+    () => new Set(config?.hiddenFeatures ?? []),
+  );
+
+  const toggleFeature = (key: string) => {
+    setHiddenFeatures((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const activePair = pairs.find((pair) => pair.key === activePairKey) ?? primaryPair ?? pairs[0] ?? null;
   const current = perPairEnabled && activePair
@@ -87,6 +110,7 @@ export default function StepScenarioFilter({ onNext, onBack, config }: StepScena
       pairs,
       primaryPairKey: primaryPair?.key,
       perPairEnabled,
+      hiddenFeatures: [...hiddenFeatures],
     }));
   };
 
@@ -133,12 +157,6 @@ export default function StepScenarioFilter({ onNext, onBack, config }: StepScena
           </article>
         </div>
 
-        <Callout tone="info" icon={<FiInfo aria-hidden="true" />}>
-          The former feature-visibility switches were removed because those structural types do not
-          enter the anomaly matrix. The controls below map directly to the engine&apos;s
-          <code> ToleranceConfig</code>.
-        </Callout>
-
         {pairs.length > 1 && (
           <Panel quiet>
             <PanelHeader
@@ -178,74 +196,107 @@ export default function StepScenarioFilter({ onNext, onBack, config }: StepScena
           </Panel>
         )}
 
-        <div className="ds-grid-2">
-          <Panel quiet>
-            <PanelBody>
-              <SliderField
-                label="Clock tolerance"
-                value={current.clock_tolerance}
-                display={`${current.clock_tolerance}°`}
-                min={5}
-                max={45}
-                step={1}
-                onChange={(value) => patch({ clock_tolerance: value })}
-                hint="Circular hard gate. Candidate pairs outside this clock difference are rejected."
-              />
-            </PanelBody>
-          </Panel>
+        <div className="scenario-split">
+          <div className="scenario-split__tolerances">
+            <div className="ds-grid-2">
+              <Panel quiet>
+                <PanelBody>
+                  <SliderField
+                    label="Clock tolerance"
+                    value={current.clock_tolerance}
+                    display={`${current.clock_tolerance}°`}
+                    min={5}
+                    max={45}
+                    step={1}
+                    onChange={(value) => patch({ clock_tolerance: value })}
+                    hint="Circular hard gate. Candidate pairs outside this clock difference are rejected."
+                  />
+                </PanelBody>
+              </Panel>
 
-          <Panel quiet>
-            <PanelBody>
-              <SliderField
-                label="US GW distance tolerance"
-                value={current.us_gw_distance_tolerance}
-                display={`± ${current.us_gw_distance_tolerance} m`}
-                min={0.05}
-                max={2}
-                step={0.05}
-                disabled={!current.use_us_gw_distance}
-                onChange={(value) => patch({ us_gw_distance_tolerance: value })}
-                hint="Hard gate against the uploaded Dist. U/S GW value."
-              >
-                <label className="ds-row matching-rule-checkbox">
+              <Panel quiet>
+                <PanelBody>
+                  <SliderField
+                    label="US GW distance tolerance"
+                    value={current.us_gw_distance_tolerance}
+                    display={`± ${current.us_gw_distance_tolerance} m`}
+                    min={0.05}
+                    max={2}
+                    step={0.05}
+                    disabled={!current.use_us_gw_distance}
+                    onChange={(value) => patch({ us_gw_distance_tolerance: value })}
+                    hint="Hard gate against the uploaded Dist. U/S GW value."
+                  >
+                    <label className="ds-row matching-rule-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={current.use_us_gw_distance}
+                        onChange={(event) => patch({ use_us_gw_distance: event.target.checked })}
+                      />
+                      <span>Use uploaded U/S GW distance</span>
+                    </label>
+                  </SliderField>
+                </PanelBody>
+              </Panel>
+
+              <Panel quiet>
+                <PanelBody>
+                  <SliderField
+                    label="DS GW distance tolerance"
+                    value={current.ds_gw_distance_tolerance}
+                    display={`± ${current.ds_gw_distance_tolerance} m`}
+                    min={0.05}
+                    max={2}
+                    step={0.05}
+                    onChange={(value) => patch({ ds_gw_distance_tolerance: value })}
+                    hint="Directional hard gate downstream of each locked girth weld."
+                  />
+                </PanelBody>
+              </Panel>
+
+              <Panel quiet>
+                <PanelBody>
+                  <SliderField
+                    label="Length tolerance"
+                    value={current.length_tolerance}
+                    display={`± ${current.length_tolerance} mm`}
+                    min={5}
+                    max={200}
+                    step={5}
+                    onChange={(value) => patch({ length_tolerance: value })}
+                    hint="Candidate pairs exceeding this length difference are rejected."
+                  />
+                </PanelBody>
+              </Panel>
+            </div>
+          </div>
+
+          <Panel quiet className="scenario-split__visibility">
+            <PanelHeader plain eyebrow="Report visibility" title="Feature types" />
+            <PanelBody className="ds-stack">
+              <label className="feature-visibility-row feature-visibility-row--locked">
+                <FiLock aria-hidden="true" />
+                <span>Metal loss</span>
+                <FiEye aria-hidden="true" className="feature-visibility-icon--on" />
+              </label>
+              <label className="feature-visibility-row feature-visibility-row--locked">
+                <FiLock aria-hidden="true" />
+                <span>Welds</span>
+                <FiEye aria-hidden="true" className="feature-visibility-icon--on" />
+              </label>
+              {TOGGLEABLE_FEATURES.map(({ key, label }) => (
+                <label key={key} className="feature-visibility-row">
                   <input
                     type="checkbox"
-                    checked={current.use_us_gw_distance}
-                    onChange={(event) => patch({ use_us_gw_distance: event.target.checked })}
+                    checked={!hiddenFeatures.has(key)}
+                    onChange={() => toggleFeature(key)}
                   />
-                  <span>Use uploaded U/S GW distance</span>
+                  <span>{label}</span>
+                  {hiddenFeatures.has(key)
+                    ? <FiEyeOff aria-hidden="true" className="feature-visibility-icon--off" />
+                    : <FiEye aria-hidden="true" className="feature-visibility-icon--on" />}
                 </label>
-              </SliderField>
-            </PanelBody>
-          </Panel>
-
-          <Panel quiet>
-            <PanelBody>
-              <SliderField
-                label="DS GW distance tolerance"
-                value={current.ds_gw_distance_tolerance}
-                display={`± ${current.ds_gw_distance_tolerance} m`}
-                min={0.05}
-                max={2}
-                step={0.05}
-                onChange={(value) => patch({ ds_gw_distance_tolerance: value })}
-                hint="Directional hard gate downstream of each locked girth weld."
-              />
-            </PanelBody>
-          </Panel>
-
-          <Panel quiet>
-            <PanelBody>
-              <SliderField
-                label="Length tolerance"
-                value={current.length_tolerance}
-                display={`± ${current.length_tolerance} mm`}
-                min={5}
-                max={200}
-                step={5}
-                onChange={(value) => patch({ length_tolerance: value })}
-                hint="Candidate pairs exceeding this length difference are rejected."
-              />
+              ))}
             </PanelBody>
           </Panel>
         </div>

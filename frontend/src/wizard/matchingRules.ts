@@ -47,14 +47,16 @@ export function buildMatchingRulesConfig({
   pairs,
   primaryPairKey,
   perPairEnabled,
+  hiddenFeatures,
 }: {
   shared: ToleranceValues;
   byPair: Record<string, ToleranceValues>;
   pairs: Array<{ key: string }>;
   primaryPairKey?: string;
   perPairEnabled: boolean;
+  hiddenFeatures?: string[];
 }): {
-  hiddenFeatures?: undefined;
+  hiddenFeatures?: string[];
   scenario?: undefined;
   distThresh?: undefined;
   ToleranceConfig: ToleranceValues;
@@ -64,9 +66,7 @@ export function buildMatchingRulesConfig({
     ? byPair[primaryPairKey] ?? shared
     : shared;
   return {
-    // Explicitly clear legacy controls when this object is merged into a saved
-    // wizard config. JSON serialization then omits them from the engine input.
-    hiddenFeatures: undefined,
+    hiddenFeatures: hiddenFeatures && hiddenFeatures.length > 0 ? hiddenFeatures : undefined,
     scenario: undefined,
     distThresh: undefined,
     ToleranceConfig: primary,

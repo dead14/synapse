@@ -36,6 +36,30 @@ test('combined scenario and tolerance settings persist the exact engine contract
   assert.equal(result.scenario, undefined);
 });
 
+test('hiddenFeatures are forwarded when non-empty', () => {
+  const shared = defaultMatchingRules({}).shared;
+  const result = buildMatchingRulesConfig({
+    shared,
+    byPair: {},
+    pairs: [],
+    perPairEnabled: false,
+    hiddenFeatures: ['bend', 'valve'],
+  });
+  assert.deepEqual(result.hiddenFeatures, ['bend', 'valve']);
+});
+
+test('hiddenFeatures omitted when empty array', () => {
+  const shared = defaultMatchingRules({}).shared;
+  const result = buildMatchingRulesConfig({
+    shared,
+    byPair: {},
+    pairs: [],
+    perPairEnabled: false,
+    hiddenFeatures: [],
+  });
+  assert.equal(result.hiddenFeatures, undefined);
+});
+
 test('per-pair mode sends each run pair its own engine tolerances', () => {
   const shared = defaultMatchingRules({}).shared;
   const result = buildMatchingRulesConfig({
