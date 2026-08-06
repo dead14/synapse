@@ -23,9 +23,11 @@ import {
   buildScreeningScatter,
   envelopeDomainMm,
   measureUniformity,
+  screenAgainstEnvelope,
   type FfsPoint,
   type SplitScatter,
 } from '../../lib/ffs/chartData';
+import type { ScreeningBasis } from '../../lib/ffs/b31g';
 import { DEFAULT_DEPTH_BUCKETS, depthBandLabel, isInternal, type DepthBucket } from '../../lib/ffs/statistics';
 import FfsPerspectiveBars from './FfsPerspectiveBars';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
@@ -244,6 +246,10 @@ export default function FfsChartsPanel({
     externalColor: '#f97316',
   });
   const [hiddenWalls, setHiddenWalls] = useState<Set<number>>(new Set());
+  // The screen the chart is titled for. The operating-pressure envelope stays
+  // one click away because it is the one that answers "is this pipe safe as it
+  // is being run" — but it is not what Level 0 means, so it is not the default.
+  const [screenBasis, setScreenBasis] = useState<ScreeningBasis>('level-0');
   // One held section for the whole panel, so highlighting RC#86 on the ERF
   // profile highlights the same stretch on every other distance chart.
   const [heldBandId, setHeldBandId] = useState<string | null>(null);
@@ -283,6 +289,8 @@ export default function FfsChartsPanel({
     depth3dBin, depth3dSurface,
     buckets, internalBuckets, externalBuckets,
     orientStyle, crDepthStyle, crLengthStyle, erfStyle, screenStyle,
+    screenBasis,
+    screening.depthRejectionPct,
     [...hiddenWalls].sort(),
     heldBandId,
     theme.isDark,
@@ -328,7 +336,10 @@ export default function FfsChartsPanel({
   // The screening chart's x domain is not the data's own range. See
   // `envelopeDomainMm`: a tally of uniformly short boxes would otherwise keep
   // the axis short enough that no envelope ever bends inside it.
-  const maxLength = useMemo(() => envelopeDomainMm(items, config), [items, config]);
+  const maxLength = useMemo(
+    () => envelopeDomainMm(items, config, screenBasis),
+    [items, config, screenBasis],
+  );
 
   /**
    * Whether the axial length column carries any information at all. All-equal
@@ -382,8 +393,12 @@ export default function FfsChartsPanel({
   const erfScatter = useMemo(() => buildErfScatter(items), [items]);
   const screeningScatter = useMemo(() => buildScreeningScatter(items), [items]);
   const envelopes = useMemo(
-    () => buildEnvelopeCurves(items, config, maxLength, screening.depthRejectionPct),
-    [items, config, maxLength, screening.depthRejectionPct],
+    () => buildEnvelopeCurves(items, config, maxLength, screening.depthRejectionPct, screenBasis),
+    [items, config, maxLength, screening.depthRejectionPct, screenBasis],
+  );
+  const screenOutcome = useMemo(
+    () => screenAgainstEnvelope(items, config, screening.depthRejectionPct, screenBasis),
+    [items, config, screening.depthRejectionPct, screenBasis],
   );
 
   /** Counts per distance bin split by surface — the reference Figure 2.3(b). */
@@ -479,6 +494,8 @@ export default function FfsChartsPanel({
     yLabel: string,
     extra?: Partial<ChartOptions<'scatter'>>,
     distanceAxis = false,
+    /** An extra tooltip line only this chart can say about the feature. */
+    describe?: (item: FfsScreenedResult) => string | null,
   ): ChartOptions<'scatter'> => ({
     responsive: true,
     maintainAspectRatio: false,
@@ -537,6 +554,8 @@ export default function FfsChartsPanel({
             // map the metre value back onto the section list themselves.
             const band = distanceAxis ? sectionTooltipLine(bands, point.x) : null;
             if (band) lines.push(band);
+            const extraLine = describe?.(point.item);
+            if (extraLine) lines.push(extraLine);
             return lines;
           },
         },
@@ -841,16 +860,78 @@ export default function FfsChartsPanel({
       {/* Row 4 — screening envelope and ERF profile */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <ChartCard
-          title="Anomaly screening — B31G Level 0"
+          title={
+            screenBasis === 'level-0'
+              ? 'Anomaly screening — B31G Level 0'
+              : 'Anomaly screening — at operating pressure'
+          }
           subtitle={
             lengthUniformity.degenerate
               ? `Depth against axial length — every feature reports ${lengthUniformity.value} mm, so the length axis carries no information`
-              : 'Depth against axial length, with the acceptance envelope per wall thickness'
+              : screenBasis === 'level-0'
+                ? `Depth against axial length. The envelope is the section 3 screen — geometry and grade only, no operating pressure — flat along ${screening.depthRejectionPct}%WT until the Folias term takes hold`
+                : `Depth against axial length. The envelope is the Level 1 acceptance limit at each line's own operating pressure and safety factor, capped at ${screening.depthRejectionPct}%WT`
           }
           filename="FFS_anomaly_screening"
           height={360}
+          footer={
+            screenOutcome.exceeded > 0 ? (
+              <Callout tone="danger">
+                <strong>
+                  {screenOutcome.exceeded.toLocaleString()} feature
+                  {screenOutcome.exceeded === 1 ? '' : 's'} exceed
+                  {screenOutcome.exceeded === 1 ? 's' : ''} the{' '}
+                  {screenBasis === 'level-0'
+                    ? 'B31G Level 0 screening threshold'
+                    : 'acceptance envelope at operating pressure'}
+                </strong>{' '}
+                ({(screenOutcome.fraction * 100).toFixed(1)}% of {screenOutcome.total.toLocaleString()}).
+                {screenBasis === 'level-0'
+                  ? ' Failing the screen is not a rejection: it means the anomaly cannot be dispositioned from its length and depth alone and needs the Level 1 result — the ERF chart beside this one — or a higher-level assessment.'
+                  : ' These features have no remaining pressure margin as reported.'}
+                {screenOutcome.indeterminate > 0 &&
+                  ` ${screenOutcome.indeterminate.toLocaleString()} further feature(s) resolve no allowable depth at all and are not counted here.`}
+              </Callout>
+            ) : (
+              <Callout tone="ok">
+                All {screenOutcome.total.toLocaleString()} assessed features plot on or below the{' '}
+                {screenBasis === 'level-0'
+                  ? 'B31G Level 0 screening envelope'
+                  : 'acceptance envelope at operating pressure'}
+                .
+                {screenOutcome.indeterminate > 0 &&
+                  ` ${screenOutcome.indeterminate.toLocaleString()} feature(s) resolve no allowable depth at all and are not screened.`}
+              </Callout>
+            )
+          }
           settings={
             <div className="space-y-3">
+              <div>
+                <SettingsSectionLabel>Screening basis</SettingsSectionLabel>
+                <div role="radiogroup" aria-label="Screening basis" className="ds-segmented w-max">
+                  {([
+                    { value: 'level-0', label: 'Level 0 — geometry and grade' },
+                    { value: 'operating-pressure', label: 'At operating pressure' },
+                  ] as const).map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={screenBasis === option.value}
+                      className={`ds-segmented__option${screenBasis === option.value ? ' is-active' : ''}`}
+                      onClick={() => setScreenBasis(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-[11px] leading-snug text-slate-500 dark:text-slate-400">
+                  The Level 0 tables carry no pressure column: they are drawn for a line at its design
+                  hoop stress with the matching safety factor, which puts the target failure stress at
+                  SMYS. Switching to operating pressure solves the same equations at this line's own P₀
+                  and SF — on a lightly loaded line that envelope sits far above the code's screen.
+                </p>
+              </div>
               <div>
                 <SettingsSectionLabel>Envelope curves — wall thickness</SettingsSectionLabel>
                 <div className="flex flex-wrap gap-1.5">
@@ -898,7 +979,7 @@ export default function FfsChartsPanel({
                   ...envelopes
                     .filter((curve) => !hiddenWalls.has(curve.wall))
                     .map((curve) => ({
-                      label: `Envelope t=${curve.wall.toFixed(2)} mm`,
+                      label: `Limit ${config.method === 'original' ? 'Orig.' : 'Mod.'} B31G — t=${curve.wall.toFixed(2)} mm`,
                       data: curve.points,
                       showLine: true,
                       borderColor: curve.color,
@@ -933,6 +1014,13 @@ export default function FfsChartsPanel({
                     grid: { color: theme.grid },
                   },
                 },
+              }, false, (item) => {
+                const verdict = screenOutcome.byKey.get(item.key);
+                if (!verdict) return null;
+                if (verdict.allowablePct === null) return 'Allowable depth: not resolvable at this length';
+                return `Allowable ${verdict.allowablePct.toFixed(1)}%WT at this length — ${
+                  verdict.exceeds ? 'exceeds the screen' : 'within the screen'
+                }`;
               })}
             />
           )}

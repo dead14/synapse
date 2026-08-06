@@ -130,12 +130,13 @@ export function Callout({
   tone = 'info',
   children,
 }: {
-  tone?: 'neutral' | 'info' | 'warn' | 'danger';
+  tone?: 'neutral' | 'info' | 'ok' | 'warn' | 'danger';
   children: ReactNode;
 }) {
   const toneClass = {
     neutral: 'border-l-slate-400 bg-slate-50 text-slate-700 dark:border-l-slate-500 dark:bg-slate-900/40 dark:text-slate-300',
     info: 'border-l-slate-500 bg-slate-50 text-slate-700 dark:border-l-slate-400 dark:bg-slate-900/40 dark:text-slate-300',
+    ok: 'border-l-emerald-500 bg-emerald-50/70 text-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200',
     warn: 'border-l-amber-500 bg-amber-50/70 text-amber-900 dark:bg-amber-950/25 dark:text-amber-200',
     danger: 'border-l-rose-500 bg-rose-50/70 text-rose-900 dark:bg-rose-950/25 dark:text-rose-200',
   }[tone];
