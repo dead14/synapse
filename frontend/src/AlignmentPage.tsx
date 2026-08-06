@@ -6,6 +6,7 @@ import StepExecution from './wizard/StepExecution';
 import StepUploadILI from './wizard/StepUploadILI';
 import StepTieInConfig from './wizard/StepTieInConfig';
 import StepMatchingSections from './wizard/StepMatchingSections';
+import StepFeatureRules from './wizard/StepFeatureRules';
 import { FiAlertTriangle, FiPlusCircle, FiX } from 'react-icons/fi';
 import { apiFetch, ApiError } from './utils/api';
 import ConfirmDialog from './components/common/ConfirmDialog';
@@ -20,7 +21,8 @@ const baseSteps = [
   { id: 'summary', name: 'Data review', desc: 'Check extraction' },
   { id: 'gw', name: 'GW matching', desc: 'Review alignment' },
   { id: 'sections', name: 'Sectioning', desc: 'Define reference' },
-  { id: 'scenario', name: 'Rules & tolerances', desc: 'Tune matcher' },
+  { id: 'features', name: 'Feature rules', desc: 'Set visibility' },
+  { id: 'scenario', name: 'Tolerances', desc: 'Tune matcher' },
   { id: 'exec', name: 'Execution', desc: 'Run & report' },
 ];
 
@@ -227,6 +229,8 @@ export default function AlignmentPage() {
           {stepsList[step]?.id === 'gw' && <StepGwSimulator initialOta={wizardConfig.ota || 1.5} onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 
           {stepsList[step]?.id === 'sections' && <StepMatchingSections onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
+
+          {stepsList[step]?.id === 'features' && <StepFeatureRules onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 
           {stepsList[step]?.id === 'scenario' && <StepScenarioFilter onNext={handleNext} onBack={handleBack} config={wizardConfig} />}
 

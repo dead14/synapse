@@ -47,16 +47,13 @@ export function buildMatchingRulesConfig({
   pairs,
   primaryPairKey,
   perPairEnabled,
-  hiddenFeatures,
 }: {
   shared: ToleranceValues;
   byPair: Record<string, ToleranceValues>;
   pairs: Array<{ key: string }>;
   primaryPairKey?: string;
   perPairEnabled: boolean;
-  hiddenFeatures?: string[];
 }): {
-  hiddenFeatures?: string[];
   scenario?: undefined;
   distThresh?: undefined;
   ToleranceConfig: ToleranceValues;
@@ -66,7 +63,9 @@ export function buildMatchingRulesConfig({
     ? byPair[primaryPairKey] ?? shared
     : shared;
   return {
-    hiddenFeatures: hiddenFeatures && hiddenFeatures.length > 0 ? hiddenFeatures : undefined,
+    // Legacy controls the engine never read. Cleared so a resumed session does
+    // not carry them; `hiddenFeatures` is deliberately absent — the Feature
+    // rules step owns that key and spreading `undefined` here would erase it.
     scenario: undefined,
     distThresh: undefined,
     ToleranceConfig: primary,
@@ -74,4 +73,16 @@ export function buildMatchingRulesConfig({
       ? Object.fromEntries(pairs.map((pair) => [pair.key, byPair[pair.key] ?? shared]))
       : undefined,
   };
+}
+
+export const TOGGLEABLE_FEATURE_TYPES = [
+  { key: 'valve', label: 'Valves' },
+  { key: 'tee', label: 'Tees' },
+  { key: 'bend', label: 'Bends' },
+  { key: 'offtake', label: 'Offtakes' },
+  { key: 'other', label: 'Other features' },
+] as const;
+
+export function buildFeatureRulesConfig(hiddenFeatures: string[]): { hiddenFeatures?: string[] } {
+  return { hiddenFeatures: hiddenFeatures.length > 0 ? hiddenFeatures : undefined };
 }
