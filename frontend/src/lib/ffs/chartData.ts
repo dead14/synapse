@@ -1,4 +1,4 @@
-import { acceptableDepthRatio, type B31gGeometry } from './b31g.ts';
+import { acceptableDepthRatio, type B31gGeometry, type ScreeningBasis } from './b31g.ts';
 import {
   assignBinIndex,
   bucketIndexFor,
@@ -169,6 +169,8 @@ export interface EnvelopeCurve {
   wall: number;
   color: string;
   points: { x: number; y: number }[];
+  /** Which criterion the curve was solved against. */
+  basis: ScreeningBasis;
   /** How many features share this wall thickness. */
   count: number;
   /**
@@ -201,6 +203,7 @@ const ENVELOPE_COLORS = [
 export function envelopeDomainMm(
   items: FfsScreenedResult[],
   config: FfsConfig,
+  basis: ScreeningBasis = 'level-0',
   floorPct = 25,
   hardCapMm = 2000,
 ): number {
@@ -221,7 +224,7 @@ export function envelopeDomainMm(
 
   let needed = 0;
   for (let length = 10; length <= hardCapMm; length += 10) {
-    const ratio = acceptableDepthRatio(length, geometry, config.method, config.modifiedSa);
+    const ratio = acceptableDepthRatio(length, geometry, config.method, config.modifiedSa, basis);
     needed = length;
     if (ratio !== null && ratio * 100 <= floorPct) break;
   }
@@ -230,10 +233,14 @@ export function envelopeDomainMm(
 }
 
 /**
- * Builds the B31G Level 0 acceptance envelope for each distinct wall thickness
- * in the dataset: for a given anomaly length, the greatest depth that still
- * keeps the safe pressure at the required pressure. Features plotting above
- * their wall's curve fail the screen.
+ * Builds the acceptance envelope for each distinct wall thickness in the
+ * dataset: for a given anomaly length, the greatest depth the criterion allows.
+ * Features plotting above their wall's curve fail the screen.
+ *
+ * `basis` selects the criterion — see `ScreeningBasis`. On the Level 0 basis
+ * every curve is the same shape the code's own tables draw: flat along the
+ * rejection line while the anomaly is short, then falling away as the Folias
+ * term takes hold.
  *
  * Short anomalies solve to an allowable depth above the wall itself — the
  * equations do not stop the metal loss reaching 117 % of a wall that only has
@@ -249,6 +256,7 @@ export function buildEnvelopeCurves(
   maxLengthMm: number,
   /** The %WT line the envelope is flat along before the equations govern. */
   depthLimitPct = 80,
+  basis: ScreeningBasis = 'level-0',
   steps = 120,
 ): EnvelopeCurve[] {
   // Group by wall thickness — each distinct wall gets its own curve, using the
@@ -292,7 +300,7 @@ export function buildEnvelopeCurves(
     const points: { x: number; y: number }[] = [];
     for (let s = 0; s <= steps; s++) {
       const length = (maxLengthMm * s) / steps;
-      const ratio = acceptableDepthRatio(length, geometry, config.method, config.modifiedSa);
+      const ratio = acceptableDepthRatio(length, geometry, config.method, config.modifiedSa, basis);
       if (ratio === null) continue;
       const depthPct = ratio * 100;
       // Below zero there is no acceptable depth at all: the line already
@@ -306,10 +314,97 @@ export function buildEnvelopeCurves(
       wall,
       color: ENVELOPE_COLORS[i % ENVELOPE_COLORS.length],
       points,
+      basis,
       count: members.length,
       mixedGeometry: tally.size > 1,
     };
   });
+}
+
+export interface ScreeningVerdict {
+  item: FfsScreenedResult;
+  /**
+   * The deepest metal loss this feature's own length and pipe allow, in %WT,
+   * clamped to the project rejection line. Null when the equations resolve no
+   * allowable depth at all — the target stress already exceeds sound pipe.
+   */
+  allowablePct: number | null;
+  /** How much of the allowance the reported depth uses, as a ratio. */
+  utilisation: number | null;
+  exceeds: boolean;
+}
+
+export interface ScreeningOutcome {
+  basis: ScreeningBasis;
+  verdicts: ScreeningVerdict[];
+  /** Keyed by `FfsScreenedResult.key`, for tooltips and table joins. */
+  byKey: Map<string, ScreeningVerdict>;
+  exceeded: number;
+  /** Features whose allowable depth could not be resolved at all. */
+  indeterminate: number;
+  total: number;
+  /** Exceedances as a fraction of the assessed population. */
+  fraction: number;
+}
+
+/**
+ * Screens every feature against the envelope, feature by feature.
+ *
+ * The count is not read off the drawn curve. Each anomaly is solved at its own
+ * reported length against its own OD, grade, and wall, so a feature whose pipe
+ * differs from the representative geometry its wall group was drawn with is
+ * still judged against its own line — and there is no interpolation error
+ * between plotted points to argue about. The curve is the picture; this is the
+ * number.
+ */
+export function screenAgainstEnvelope(
+  items: FfsScreenedResult[],
+  config: FfsConfig,
+  depthLimitPct = 80,
+  basis: ScreeningBasis = 'level-0',
+): ScreeningOutcome {
+  const verdicts = items.map<ScreeningVerdict>((item) => {
+    const { wall, od, smys, safetyFactor, p0, length, maxDepthPct } = item.nominal;
+    const ratio = acceptableDepthRatio(
+      length,
+      {
+        wallThickness: wall,
+        outerDiameter: od,
+        smysMpa: smys,
+        safetyFactor,
+        operatingPressureMpa: p0,
+      },
+      config.method,
+      config.modifiedSa,
+      basis,
+    );
+    if (ratio === null || !Number.isFinite(ratio)) {
+      return { item, allowablePct: null, utilisation: null, exceeds: false };
+    }
+    // The rejection line caps the allowance: an anomaly the equations would
+    // tolerate at 117 %WT is still rejected by project rule at 80 %. The floor
+    // matters too — where the target stress already exceeds sound pipe the
+    // equations solve negative, which means no metal loss at all is acceptable,
+    // not that a negative depth is.
+    const allowablePct = Math.max(0, Math.min(depthLimitPct, ratio * 100));
+    return {
+      item,
+      allowablePct,
+      utilisation: allowablePct > 0 ? maxDepthPct / allowablePct : null,
+      exceeds: maxDepthPct > allowablePct,
+    };
+  });
+
+  const exceeded = verdicts.filter((verdict) => verdict.exceeds).length;
+  return {
+    basis,
+    verdicts,
+    byKey: new Map(verdicts.map((verdict) => [verdict.item.key, verdict])),
+    exceeded,
+    indeterminate: verdicts.filter((verdict) => verdict.allowablePct === null).length,
+    total: verdicts.length,
+    fraction: verdicts.length ? exceeded / verdicts.length : 0,
+  };
 }
 
 export interface ErfProfilePoint {

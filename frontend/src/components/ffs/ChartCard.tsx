@@ -27,6 +27,7 @@ export default function ChartCard({
   onRedraw,
   filename,
   children,
+  footer,
   height = 320,
 }: {
   title: string;
@@ -37,6 +38,13 @@ export default function ChartCard({
   onRedraw?: () => void;
   filename: string;
   children: (registerCanvas: (canvas: HTMLCanvasElement | null) => void) => ReactNode;
+  /**
+   * Read out under the plot. For what the chart says about the population —
+   * a count, an exceedance — rather than for controls, which belong in the
+   * settings drawer. Deliberately outside the canvas so it never lands in the
+   * exported PNG twice.
+   */
+  footer?: ReactNode;
   height?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -118,6 +126,8 @@ export default function ChartCard({
       <div className="relative w-full" style={{ height }}>
         {children(registerCanvas)}
       </div>
+
+      {footer && <div className="mt-3">{footer}</div>}
     </Panel>
   );
 }

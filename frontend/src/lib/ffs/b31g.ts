@@ -262,29 +262,77 @@ export function evaluateB31g(
 }
 
 /**
- * The greatest depth, as a fraction of wall, that still keeps the safe pressure
- * at the required pressure for a given anomaly length — the acceptance envelope
- * of the Level 1 criterion, solved in closed form rather than searched.
+ * Which stress the acceptance envelope is solved against.
  *
- * This is the same boundary the section 3 tables tabulate, but computed from the
- * Level 1 equations at the line's own safety factor rather than read off the
- * published tables, which are fixed at their own basis.
+ * `level-0` is the screen of B31G section 3: the allowable length–depth
+ * boundary the published tables tabulate. Those tables carry no pressure column
+ * because they are drawn for a line at its design hoop stress with the matching
+ * safety factor — F = 0.72 with SF = 1.39 puts the target failure stress at
+ * 0.72 × 1.39 × SMYS, which is SMYS. So the boundary reduces to geometry and
+ * material alone, and every line of a given grade and D/t shares one curve.
  *
- * Returns null when no depth on the curve satisfies the equation, which happens
- * when the operating stress already exceeds the flow stress of sound pipe.
+ * `operating-pressure` solves the same equations at the line's actual P₀ and
+ * its own safety factor: the Level 1 acceptance boundary for this pipe as it is
+ * being run. It is the more relevant number once the operating pressure is
+ * known, and on a lightly loaded line it sits far above the Level 0 curve —
+ * which is exactly why the two must not be labelled interchangeably. A feature
+ * can clear the operating envelope while failing the screen the code publishes.
+ */
+export type ScreeningBasis = 'level-0' | 'operating-pressure';
+
+/**
+ * The failure stress an anomaly is allowed to reach on the chosen basis.
+ *
+ * Returns null when the inputs cannot establish one — a Level 0 screen needs a
+ * grade, and an operating-pressure screen needs a safety factor.
+ */
+export function screeningTargetStressMpa(
+  geometry: B31gGeometry,
+  basis: ScreeningBasis,
+): number | null {
+  const { wallThickness, outerDiameter, smysMpa, safetyFactor, operatingPressureMpa } = geometry;
+  if (basis === 'level-0') return smysMpa > 0 ? smysMpa : null;
+  if (!(safetyFactor > 0) || !Number.isFinite(operatingPressureMpa)) return null;
+  return hoopStress(operatingPressureMpa, outerDiameter, wallThickness) * safetyFactor;
+}
+
+/**
+ * The greatest depth, as a fraction of wall, that a given anomaly length may
+ * reach and still meet the acceptance criterion — the envelope solved in closed
+ * form rather than searched.
+ *
+ * The `basis` decides which criterion: the section 3 screen, or the Level 1
+ * check at the line's own operating pressure. See `ScreeningBasis`.
+ *
+ * Returns 0 when sound pipe already fails the criterion — no metal loss at all
+ * is acceptable — and null only when the inputs cannot establish a boundary.
  */
 export function acceptableDepthRatio(
   lengthMm: number,
   geometry: B31gGeometry,
   method: B31gMethod,
   flowStressMode: FlowStressMode = 'smys69',
+  basis: ScreeningBasis = 'operating-pressure',
 ): number | null {
-  const { wallThickness, outerDiameter, smysMpa, safetyFactor, operatingPressureMpa } = geometry;
-  if (!(wallThickness > 0) || !(outerDiameter > 0) || !(safetyFactor > 0)) return null;
+  const { wallThickness, outerDiameter, smysMpa } = geometry;
+  if (!(wallThickness > 0) || !(outerDiameter > 0)) return null;
 
   const flow = flowStress(smysMpa, method, flowStressMode);
-  // Target failure stress: the value at which the safe pressure equals P₀.
-  const target = hoopStress(operatingPressureMpa, outerDiameter, wallThickness) * safetyFactor;
+  const target = screeningTargetStressMpa(geometry, basis);
+  if (target === null || !Number.isFinite(target)) return null;
+
+  // Sound pipe already fails the criterion, so no depth of metal loss is
+  // acceptable and the answer is zero — not "unresolvable", which it is not.
+  //
+  // The guard has to come before the closed form rather than after it. Past
+  // this point the numerator (flow − target) is negative, and above the
+  // rectangular branch the denominator (flow − target/M) usually is too: the
+  // two signs cancel and the expression returns a large *positive* ratio. An
+  // over-pressured line was therefore drawing a flat envelope along the
+  // rejection line and passing every anomaly beneath it, which is the most
+  // permissive possible answer to the least acceptable possible case.
+  if (target >= flow) return 0;
+
   const z = normalizedLength(lengthMm, outerDiameter, wallThickness);
   const folias = foliasFactor(z, method);
   const shape = areaShapeFactor(method, z);

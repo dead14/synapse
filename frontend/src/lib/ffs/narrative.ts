@@ -1,4 +1,5 @@
 import { isInternal } from './statistics.ts';
+import { screenAgainstEnvelope } from './chartData.ts';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from './types.ts';
 import {
   analysisHorizonYears,
@@ -271,6 +272,33 @@ export function buildNarrative(
       `${escalated.length.toLocaleString()} feature(s) fall at or above the ERF ` +
       `${screening.reviewBandErf.toFixed(2)} review band.`,
   });
+
+  // The Level 0 screen reads before the Level 1 numbers because that is the
+  // order the code applies them: length and depth first, from the published
+  // table, and only then the calculation.
+  const level0 = screenAgainstEnvelope(items, config, screening.depthRejectionPct, 'level-0');
+  blocks.push({
+    kind: 'paragraph',
+    text:
+      `The Level 0 screen of ${methodName(config)} checks reported length against reported depth ` +
+      `alone. Its allowable curve carries no pressure term: the published tables are drawn for a ` +
+      `line at its design hoop stress with the matching safety factor, which places the target ` +
+      `failure stress at SMYS, so the boundary depends only on the diameter, the wall, and the ` +
+      `grade. ` +
+      (level0.exceeded === 0
+        ? `All ${level0.total.toLocaleString()} assessed features plot on or below that curve and ` +
+          `pass the screen.`
+        : `${level0.exceeded.toLocaleString()} feature(s) — ` +
+          `${(level0.fraction * 100).toFixed(1)}% of the assessed population — plot above it and do ` +
+          `not pass the screen. Failing the screen is not in itself a rejection: it means the ` +
+          `anomaly cannot be dispositioned from its length and depth alone, and the Level 1 result ` +
+          `below governs.`) +
+      (level0.indeterminate > 0
+        ? ` A further ${level0.indeterminate.toLocaleString()} feature(s) resolve no allowable depth ` +
+          `at all at their reported length and are not screened.`
+        : ''),
+  });
+
   blocks.push({
     kind: 'paragraph',
     text:
