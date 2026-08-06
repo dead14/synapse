@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildFeatureRulesConfig,
   buildMatchingRulesConfig,
   defaultMatchingRules,
 } from '../src/wizard/matchingRules.ts';
@@ -34,6 +35,27 @@ test('combined scenario and tolerance settings persist the exact engine contract
   assert.equal(result.distThresh, undefined);
   assert.equal(result.hiddenFeatures, undefined);
   assert.equal(result.scenario, undefined);
+});
+
+test('the tolerance step leaves hiddenFeatures alone', () => {
+  const shared = defaultMatchingRules({}).shared;
+  const result = buildMatchingRulesConfig({
+    shared,
+    byPair: {},
+    pairs: [],
+    perPairEnabled: false,
+  });
+  // Spreading this over a saved config must not erase what the Feature rules
+  // step wrote, so the key has to be absent rather than explicitly undefined.
+  assert.equal(Object.hasOwn(result, 'hiddenFeatures'), false);
+
+  const merged = { ...{ hiddenFeatures: ['bend'] }, ...result };
+  assert.deepEqual(merged.hiddenFeatures, ['bend']);
+});
+
+test('feature rules emit hiddenFeatures only when something is hidden', () => {
+  assert.deepEqual(buildFeatureRulesConfig(['bend', 'valve']).hiddenFeatures, ['bend', 'valve']);
+  assert.equal(buildFeatureRulesConfig([]).hiddenFeatures, undefined);
 });
 
 test('per-pair mode sends each run pair its own engine tolerances', () => {
