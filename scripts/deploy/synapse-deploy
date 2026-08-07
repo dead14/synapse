@@ -218,6 +218,44 @@ start_candidate() {
   log "Candidate $candidate_process is healthy on port $port"
 }
 
+# This script only ever rewrites $NGINX_CONFIG. If a second server block
+# anywhere in the Nginx tree claims PUBLIC_HOST, Nginx keeps whichever it
+# parsed first and logs "conflicting server name ... ignored" on every reload.
+# When the winner is not our file, every rewrite here is invisible to real
+# traffic and the post-switch checks 404 from a stranger's document root.
+# Catch that before we touch a single release directory.
+assert_public_host_unique() {
+  local -a owners=()
+  local owner
+
+  while IFS= read -r owner; do
+    [[ -n "$owner" ]] && owners+=("$owner")
+  done < <(
+    nginx -T 2>/dev/null | awk -v host="$PUBLIC_HOST" '
+      /^# configuration file / { file = $4; sub(/:$/, "", file) }
+      $1 == "server_name" {
+        for (i = 2; i <= NF; i++) {
+          gsub(/;/, "", $i)
+          if ($i == host) { print file; break }
+        }
+      }
+    ' | sort -u
+  )
+
+  (( ${#owners[@]} > 0 )) || fail "No Nginx server block declares server_name ${PUBLIC_HOST}"
+
+  if (( ${#owners[@]} > 1 )); then
+    log "Multiple Nginx server blocks declare server_name ${PUBLIC_HOST}:"
+    for owner in "${owners[@]}"; do
+      log "  - $owner"
+    done
+    fail "Ambiguous Nginx site for ${PUBLIC_HOST}; remove the duplicate blocks above and leave only ${NGINX_CONFIG}"
+  fi
+
+  [[ "${owners[0]}" == "$NGINX_CONFIG" ]] \
+    || fail "${PUBLIC_HOST} is served by ${owners[0]}, not ${NGINX_CONFIG}; this script would rewrite a file Nginx ignores"
+}
+
 # Probes the freshly reloaded Nginx the way a real client would. Each check is
 # named so a failure says which one broke instead of a bare curl error, and a
 # non-2xx dumps the server blocks claiming PUBLIC_HOST — a duplicate
@@ -376,6 +414,7 @@ main() {
   require_runtime
   load_environment
   valid_release_id "$release_id" || fail "Invalid release id"
+  assert_public_host_unique
 
   case "$command" in
     deploy)
