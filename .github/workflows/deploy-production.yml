@@ -136,9 +136,9 @@ jobs:
         shell: bash
         run: |
           curl --fail --silent --show-error --max-time 15 \
-            "http://${DEPLOY_HOST}/api/health" >/dev/null
+            "https://www.synapseapp.web.id/api/health" >/dev/null
           curl --fail --silent --show-error --max-time 20 \
-            "http://${DEPLOY_HOST}/" >/dev/null
+            "https://www.synapseapp.web.id/" >/dev/null
 
       - name: Roll back failed public release
         if: failure() && steps.activate.outcome == 'success'
