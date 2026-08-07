@@ -218,61 +218,61 @@ start_candidate() {
   log "Candidate $candidate_process is healthy on port $port"
 }
 
-# This script only ever rewrites $NGINX_CONFIG. If a second server block
-# anywhere in the Nginx tree claims PUBLIC_HOST, Nginx keeps whichever it
-# parsed first and logs "conflicting server name ... ignored" on every reload.
-# When the winner is not our file, every rewrite here is invisible to real
-# traffic and the post-switch checks 404 from a stranger's document root.
-# Catch that before we touch a single release directory.
-assert_public_host_unique() {
-  local -a owners=()
-  local owner
+# Nginx picks a server block by Host header, so a probe is only meaningful if
+# it sends the host real clients send. --resolve pins both ports at the
+# loopback so we always exercise this box's Nginx rather than wherever DNS
+# currently points, and --location follows the :80 -> :443 redirect this site
+# issues. Following it matters: `curl --fail` treats a 301 as success, so a
+# probe that stops at the redirect verifies nothing at all.
+probe_public_url() {
+  local timeout="$1"
+  local path="$2"
 
-  while IFS= read -r owner; do
-    [[ -n "$owner" ]] && owners+=("$owner")
-  done < <(
-    nginx -T 2>/dev/null | awk -v host="$PUBLIC_HOST" '
-      /^# configuration file / { file = $4; sub(/:$/, "", file) }
-      $1 == "server_name" {
-        for (i = 2; i <= NF; i++) {
-          gsub(/;/, "", $i)
-          if ($i == host) { print file; break }
-        }
-      }
-    ' | sort -u
-  )
+  curl --silent --show-error --location --max-time "$timeout" \
+    --output /dev/null --write-out '%{http_code}' \
+    --resolve "${PUBLIC_HOST}:80:127.0.0.1" \
+    --resolve "${PUBLIC_HOST}:443:127.0.0.1" \
+    "http://${PUBLIC_HOST}${path}" 2>/dev/null \
+    || printf '000\n'
+}
 
-  (( ${#owners[@]} > 0 )) || fail "No Nginx server block declares server_name ${PUBLIC_HOST}"
+log_server_name_owners() {
+  log "Nginx server_name by config file:"
+  nginx -T 2>/dev/null | awk '
+    /^# configuration file / { file = $4; sub(/:$/, "", file) }
+    $1 == "server_name" { gsub(/^[ \t]+/, ""); print "  " file ": " $0 }
+  ' | tee -a "$DEPLOY_LOG" >/dev/null || true
+}
 
-  if (( ${#owners[@]} > 1 )); then
-    log "Multiple Nginx server blocks declare server_name ${PUBLIC_HOST}:"
-    for owner in "${owners[@]}"; do
-      log "  - $owner"
-    done
-    fail "Ambiguous Nginx site for ${PUBLIC_HOST}; remove the duplicate blocks above and leave only ${NGINX_CONFIG}"
+# PUBLIC_HOST comes from the environment file. When it drifts from the
+# server_name Nginx actually serves — someone moves the site to a new domain
+# and updates Nginx but not this file — every probe below lands on the default
+# server and comes back 404, and we only find out after the release has been
+# built and Nginx has already been switched over. Settle it up front, while
+# failing still costs nothing.
+assert_public_host_routable() {
+  local status
+  status="$(probe_public_url 15 "/")"
+
+  if [[ "$status" == 2* ]]; then
+    log "PUBLIC_HOST ${PUBLIC_HOST} routes to this server (${status})"
+    return 0
   fi
 
-  [[ "${owners[0]}" == "$NGINX_CONFIG" ]] \
-    || fail "${PUBLIC_HOST} is served by ${owners[0]}, not ${NGINX_CONFIG}; this script would rewrite a file Nginx ignores"
+  log "PUBLIC_HOST ${PUBLIC_HOST} did not reach a live site (got ${status})"
+  log_server_name_owners
+  fail "PUBLIC_HOST ${PUBLIC_HOST} is not served by this Nginx; point it at one of the server_name values above in ${ENV_FILE}"
 }
 
 # Probes the freshly reloaded Nginx the way a real client would. Each check is
-# named so a failure says which one broke instead of a bare curl error, and a
-# non-2xx dumps the server blocks claiming PUBLIC_HOST — a duplicate
-# server_name elsewhere in the Nginx tree silently shadows our site and turns
-# every request into a 404 from someone else's document root.
+# named so a failure says which one broke instead of a bare curl error.
 check_public_url() {
   local label="$1"
   local timeout="$2"
   local path="$3"
   local status
 
-  status="$(
-    curl --silent --show-error --output /dev/null --max-time "$timeout" \
-      --write-out '%{http_code}' \
-      -H "Host: ${PUBLIC_HOST}" \
-      "http://127.0.0.1${path}"
-  )" || status="000"
+  status="$(probe_public_url "$timeout" "$path")"
 
   if [[ "$status" == 2* ]]; then
     log "Public check OK (${label}): ${path} -> ${status}"
@@ -280,10 +280,7 @@ check_public_url() {
   fi
 
   log "Public check FAILED (${label}): ${path} -> ${status}"
-  log "Server blocks claiming ${PUBLIC_HOST}:"
-  nginx -T 2>/dev/null \
-    | grep -nE '^\s*(#\s*configuration file|server_name|root)\s' \
-    | tee -a "$DEPLOY_LOG" >/dev/null || true
+  log_server_name_owners
   fail "Public ${label} check returned ${status} for ${path}"
 }
 
@@ -414,10 +411,12 @@ main() {
   require_runtime
   load_environment
   valid_release_id "$release_id" || fail "Invalid release id"
-  assert_public_host_unique
 
   case "$command" in
     deploy)
+      # Deliberately not run for rollback: recovery must stay possible while
+      # the public site is broken.
+      assert_public_host_routable
       prepare_release "$release_id"
       release_dir="$prepared_release_dir"
       port="$(next_port)"

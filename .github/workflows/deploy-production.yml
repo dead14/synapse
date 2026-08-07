@@ -132,18 +132,30 @@ jobs:
           done
           exit 1
 
+      # Hits the real public URL over https, exactly as a browser would.
+      # --location matters: the site answers :80 with a 301, and `curl --fail`
+      # treats a 301 as success, so a probe that stops there proves nothing.
       - name: Verify public release
         shell: bash
         env:
           PUBLIC_HOST: ${{ secrets.SYNAPSE_PUBLIC_HOST }}
         run: |
-          host_header="${PUBLIC_HOST:-$DEPLOY_HOST}"
-          curl --fail --silent --show-error --max-time 15 \
-            -H "Host: ${host_header}" \
-            "http://${DEPLOY_HOST}/api/health" >/dev/null
-          curl --fail --silent --show-error --max-time 20 \
-            -H "Host: ${host_header}" \
-            "http://${DEPLOY_HOST}/" >/dev/null
+          : "${PUBLIC_HOST:?Missing SYNAPSE_PUBLIC_HOST secret (the public domain, e.g. www.example.com)}"
+
+          curl --fail --location --silent --show-error --max-time 20 \
+            "https://${PUBLIC_HOST}/" >/dev/null
+
+          # Assert the API is actually proxied. If the /api location were
+          # missing, Nginx would serve index.html here and still return 200.
+          content_type="$(
+            curl --fail --location --silent --show-error --max-time 15 \
+              --output /dev/null --write-out '%{content_type}' \
+              "https://${PUBLIC_HOST}/api/health"
+          )"
+          case "$content_type" in
+            application/json*) ;;
+            *) echo "::error::/api/health returned '${content_type}', expected JSON; the Nginx /api proxy is not routing to the backend"; exit 1 ;;
+          esac
 
       - name: Roll back failed public release
         if: failure() && steps.activate.outcome == 'success'
