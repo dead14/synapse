@@ -66,7 +66,7 @@ exports.enqueueIngestion = async ({ file, pipelineName, surveyYear, vendor, user
         sourceSha256: stored.sourceSha256,
     });
     try {
-        await ingestionQueue.add('ingest-ili', {
+        const enqueuePromise = ingestionQueue.add('ingest-ili', {
             jobId,
             organizationId: user.orgId,
             userId: user.id,
@@ -76,6 +76,16 @@ exports.enqueueIngestion = async ({ file, pipelineName, surveyYear, vendor, user
             sourceFile: file.originalname,
             objectKey: stored.key,
         }, { jobId });
+        
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => {
+                const error = new Error('Queue unavailable (timeout)');
+                error.code = 'QUEUE_UNAVAILABLE';
+                reject(error);
+            }, 5000);
+        });
+
+        await Promise.race([enqueuePromise, timeoutPromise]);
     } catch (error) {
         try {
             await repository.updateIngestionJob(pool, jobId, {
