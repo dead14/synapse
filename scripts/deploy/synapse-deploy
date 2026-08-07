@@ -216,6 +216,25 @@ start_candidate() {
 
   wait_for_health "$port" || fail "Candidate failed health check on port $port"
   log "Candidate $candidate_process is healthy on port $port"
+
+  # Non-blocking readiness check to warn if dependencies (e.g. Redis) are down
+  local ready_response
+  if ! ready_response=$(curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:${port}/api/health/ready"); then
+    log "WARNING: Readiness check failed or timed out. Application may be degraded."
+  else
+    # Parse the status from the JSON response
+    local ready_status
+    if command -v jq >/dev/null 2>&1; then
+      ready_status=$(echo "$ready_response" | jq -r '.status // "unknown"')
+      if [[ "$ready_status" != "ok" ]]; then
+        log "WARNING: Readiness status is '$ready_status'. Application may be degraded. Details: $ready_response"
+      fi
+    else
+      if [[ "$ready_response" != *"\"status\":\"ok\""* && "$ready_response" != *"\"status\": \"ok\""* ]]; then
+        log "WARNING: Readiness check indicates degraded state. Details: $ready_response"
+      fi
+    fi
+  fi
 }
 
 switch_nginx() {
