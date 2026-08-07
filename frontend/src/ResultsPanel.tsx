@@ -19,8 +19,14 @@ import {
   summarizeConservationAudit,
 } from './utils/alignmentDisplay';
 import ShareSnapshotButton from './components/sharing/ShareSnapshotButton';
+import { buildAlignmentShareState } from './lib/sharing/publicShareSnapshot';
 import { sectionNameForComparisonRow } from './wizard/matchingSections';
-import { includedInterventionRows, isExcludedRow } from './utils/interventions';
+import {
+  exclusionTarget,
+  includedInterventionRows,
+  isExcludedRow,
+  isMatchedRow,
+} from './utils/interventions';
 import ExclusionControls from './components/comparison/ExclusionControls';
 
 const RAW_DEPTH_GROWTH_COLUMN = 'Depth Growth (%WT/yr)';
@@ -71,8 +77,12 @@ interface ResultsPanelProps {
   onSelectRowIdx?: (idx: number | null) => void;
   onUpdateMatch?: (sourceIdx: number, targetIdx: number) => void;
   onExcludeSingle?: (rowIdx: number) => Promise<void> | void;
+  /** Exclude every marked row in one reviewer action. */
+  onExcludeMany?: (rowIdxs: number[]) => Promise<void> | void;
   onExcludeRange?: (startRowIdx: number, endRowIdx: number) => Promise<void> | void;
-  onRestoreExclusion?: (rowIdx: number) => Promise<void> | void;
+  onRestoreExclusion?: (rowIdxs: number | number[]) => Promise<void> | void;
+  /** Break the marked matches back into their OLD-only and NEW-only rows. */
+  onUnassign?: (rowIdxs: number[]) => Promise<void> | void;
   audit?: {
     isConserved?: boolean;
     old?: { inputCount?: number; outputReferences?: number };
@@ -86,7 +96,14 @@ interface ResultsPanelProps {
   exportData?: any[];
   pipelineData?: Record<string, unknown>;
   sessionId?: string;
+  /** The completed run behind these rows; a published link names it. */
+  jobId?: string;
   interventions?: unknown[];
+  /**
+   * Section names for the Section column. The page supplies them so a read-only
+   * viewer, who cannot call the authenticated session endpoint, still sees them.
+   */
+  sections?: unknown[];
 }
 
 /** Parse a clock value to hours (0..12) regardless of format ("HH:MM" or Excel serial fraction). */
@@ -141,16 +158,19 @@ const PaginationFooter = ({ totalRows, hasActiveFilters, onClearFilters }: {
   </div>
 );
 
-const ProbabilityModal = ({ sourceRow, targetRow, onConfirm, onCancel }: { sourceRow: any, targetRow: any, onConfirm: () => void, onCancel: () => void }) => {
+const ProbabilityModal = ({ sourceRow, targetRow, movingSide = 'NEW', onConfirm, onCancel }: { sourceRow: any, targetRow: any, movingSide?: 'OLD' | 'NEW', onConfirm: () => void, onCancel: () => void }) => {
   if (!sourceRow || !targetRow) return null;
-  
-  const dDist = Math.abs((parseFloat(targetRow['Log Dist OLD (m)']) || 0) - (parseFloat(sourceRow['Log Dist NEW (m)']) || 0));
-  const dDepth = Math.abs((parseFloat(targetRow['Depth OLD (%WT)']) || 0) - (parseFloat(sourceRow['Depth NEW (%WT)']) || 0));
-  const dLength = Math.abs((parseFloat(targetRow['Length OLD (mm)']) || 0) - (parseFloat(sourceRow['Length NEW (mm)']) || 0));
-  const dWidth = Math.abs((parseFloat(targetRow['Width OLD (mm)']) || 0) - (parseFloat(sourceRow['Width NEW (mm)']) || 0));
-  const oClockOld = parseClockHours(targetRow["O'Clock OLD"]);
-  const oClockNew = parseClockHours(sourceRow["O'Clock NEW"]);
-  let dClock = Math.abs(oClockOld - oClockNew);
+
+  // The moving side always lives on the source row and the anchor side on the
+  // target, whichever direction the reviewer is repairing the pair in.
+  const anchorSide = movingSide === 'NEW' ? 'OLD' : 'NEW';
+  const dDist = Math.abs((parseFloat(targetRow[`Log Dist ${anchorSide} (m)`]) || 0) - (parseFloat(sourceRow[`Log Dist ${movingSide} (m)`]) || 0));
+  const dDepth = Math.abs((parseFloat(targetRow[`Depth ${anchorSide} (%WT)`]) || 0) - (parseFloat(sourceRow[`Depth ${movingSide} (%WT)`]) || 0));
+  const dLength = Math.abs((parseFloat(targetRow[`Length ${anchorSide} (mm)`]) || 0) - (parseFloat(sourceRow[`Length ${movingSide} (mm)`]) || 0));
+  const dWidth = Math.abs((parseFloat(targetRow[`Width ${anchorSide} (mm)`]) || 0) - (parseFloat(sourceRow[`Width ${movingSide} (mm)`]) || 0));
+  const oClockAnchor = parseClockHours(targetRow[`O'Clock ${anchorSide}`]);
+  const oClockMoved = parseClockHours(sourceRow[`O'Clock ${movingSide}`]);
+  let dClock = Math.abs(oClockAnchor - oClockMoved);
   if (dClock > 6) dClock = 12 - dClock;
   
   // Gaussian likelihoods
@@ -160,7 +180,7 @@ const ProbabilityModal = ({ sourceRow, targetRow, onConfirm, onCancel }: { sourc
   const likelihoodWidth = Math.exp(-Math.pow(dWidth, 2) / (2 * Math.pow(20, 2))); 
   const likelihoodClock = Math.exp(-Math.pow(dClock, 2) / (2 * Math.pow(1, 2))); 
   
-  const typeMatch = targetRow['Feature Type OLD'] === sourceRow['Feature Type NEW'] ? 1.0 : 0.001;
+  const typeMatch = targetRow[`Feature Type ${anchorSide}`] === sourceRow[`Feature Type ${movingSide}`] ? 1.0 : 0.001;
 
   const pMatch = likelihoodDist * likelihoodDepth * likelihoodLength * likelihoodWidth * likelihoodClock * typeMatch;
   const pUnmatch = 0.05; 
@@ -212,7 +232,7 @@ const ProbabilityModal = ({ sourceRow, targetRow, onConfirm, onCancel }: { sourc
           </div>
           <div className="flex justify-between pb-1">
             <span className="text-gray-500">Feature Match</span>
-            <span className="font-bold">{targetRow['Feature Type OLD'] || '-'} vs {sourceRow['Feature Type NEW'] || '-'}</span>
+            <span className="font-bold">{targetRow[`Feature Type ${anchorSide}`] || '-'} vs {sourceRow[`Feature Type ${movingSide}`] || '-'}</span>
           </div>
         </div>
 
@@ -231,29 +251,36 @@ const hasRowValue = (row: any, key: string) => {
 };
 
 /**
- * Keyboard path for match reassignment: lists unmatched OLD rows as targets
- * for the chosen NEW-side row. Picking one routes through the same
- * ProbabilityModal -> onUpdateMatch path the mouse drag-and-drop uses.
+ * Keyboard path for match reassignment: lists the rows that have no partner on
+ * the moving side as targets for the chosen row. Picking one routes through the
+ * same ProbabilityModal -> onUpdateMatch path the mouse drag-and-drop uses.
+ *
+ * It works in both directions. A NEW orphan is carried onto an OLD row, and an
+ * OLD orphan onto a NEW row — the reviewer decides which half of the pair is
+ * the one in the wrong place, and the engine's result never gets to decide it
+ * for them.
  */
-const ReassignDialog = ({ sourceRow, candidates, onPick, onCancel }: {
+const ReassignDialog = ({ sourceRow, movingSide, candidates, onPick, onCancel }: {
   sourceRow: any;
+  movingSide: 'OLD' | 'NEW';
   candidates: any[];
   onPick: (targetRow: any) => void;
   onCancel: () => void;
 }) => {
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+  const anchorSide = movingSide === 'NEW' ? 'OLD' : 'NEW';
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return candidates;
-    return candidates.filter((row) => ['Source Key OLD', 'Identif. OLD', 'Log Dist OLD (m)', 'Feature Type OLD']
+    return candidates.filter((row) => [`Source Key ${anchorSide}`, `Identif. ${anchorSide}`, `Log Dist ${anchorSide} (m)`, `Feature Type ${anchorSide}`]
       .some((key) => row[key] !== undefined && row[key] !== null && String(row[key]).toLowerCase().includes(needle)));
-  }, [candidates, query]);
+  }, [anchorSide, candidates, query]);
   const visible = filtered.slice(0, 100);
 
-  const sourceLabel = String(sourceRow?.['Identif. NEW'] ?? sourceRow?.['Source Key NEW'] ?? '-');
-  const sourceDist = sourceRow?.['Log Dist NEW (m)'];
+  const sourceLabel = String(sourceRow?.[`Identif. ${movingSide}`] ?? sourceRow?.[`Source Key ${movingSide}`] ?? '-');
+  const sourceDist = sourceRow?.[`Log Dist ${movingSide} (m)`];
 
   return (
     <Modal
@@ -264,12 +291,12 @@ const ReassignDialog = ({ sourceRow, candidates, onPick, onCancel }: {
       panelClassName="bg-white rounded-lg shadow-xl max-w-xl w-full p-6 flex flex-col max-h-[80vh]"
     >
       <div className="flex justify-between items-center mb-1">
-        <h3 id="reassign-dialog-title" className="text-lg font-bold text-gray-800">Reassign NEW feature</h3>
+        <h3 id="reassign-dialog-title" className="text-lg font-bold text-gray-800">Reassign {movingSide} feature</h3>
         <button onClick={onCancel} aria-label="Close reassign dialog" className="text-gray-400 hover:text-gray-600"><FiX size={22} /></button>
       </div>
       <p className="text-sm text-gray-500 mb-3">
-        NEW <span className="font-semibold text-gray-700">{sourceLabel}</span>
-        {typeof sourceDist === 'number' ? ` at ${sourceDist.toFixed(3)} m` : ''} — choose the unmatched OLD feature it belongs to.
+        {movingSide} <span className="font-semibold text-gray-700">{sourceLabel}</span>
+        {typeof sourceDist === 'number' ? ` at ${sourceDist.toFixed(3)} m` : ''} — choose the unmatched {anchorSide} feature it belongs to.
       </p>
       <input
         ref={searchRef}
@@ -277,13 +304,13 @@ const ReassignDialog = ({ sourceRow, candidates, onPick, onCancel }: {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search by Source Key, ID, or distance..."
-        aria-label="Search unmatched OLD features by source key, identifier, or distance"
+        aria-label={`Search unmatched ${anchorSide} features by source key, identifier, or distance`}
         className="mb-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
       />
       {visible.length === 0 ? (
-        <p className="py-6 text-center text-sm text-gray-400">No unmatched OLD features match this search.</p>
+        <p className="py-6 text-center text-sm text-gray-400">No unmatched {anchorSide} features match this search.</p>
       ) : (
-        <ul className="flex-1 overflow-y-auto divide-y divide-gray-100 border border-gray-100 rounded-md" aria-label="Candidate OLD features">
+        <ul className="flex-1 overflow-y-auto divide-y divide-gray-100 border border-gray-100 rounded-md" aria-label={`Candidate ${anchorSide} features`}>
           {visible.map((row) => (
             <li key={row.__origIdx}>
               <button
@@ -291,15 +318,15 @@ const ReassignDialog = ({ sourceRow, candidates, onPick, onCancel }: {
                 onClick={() => onPick(row)}
                 className="w-full px-3 py-2 text-left text-sm hover:bg-blue-50 focus:bg-blue-50 focus:outline-none"
               >
-                <span className="font-semibold text-gray-800">{String(row['Identif. OLD'] ?? row['Source Key OLD'] ?? '-')}</span>
+                <span className="font-semibold text-gray-800">{String(row[`Identif. ${anchorSide}`] ?? row[`Source Key ${anchorSide}`] ?? '-')}</span>
                 <span className="ml-2 text-gray-500">
-                  {typeof row['Log Dist OLD (m)'] === 'number' ? `${row['Log Dist OLD (m)'].toFixed(3)} m` : String(row['Log Dist OLD (m)'] ?? '')}
+                  {typeof row[`Log Dist ${anchorSide} (m)`] === 'number' ? `${row[`Log Dist ${anchorSide} (m)`].toFixed(3)} m` : String(row[`Log Dist ${anchorSide} (m)`] ?? '')}
                 </span>
-                {hasRowValue(row, 'Feature Type OLD') && (
-                  <span className="ml-2 text-xs text-gray-400">{String(row['Feature Type OLD'])}</span>
+                {hasRowValue(row, `Feature Type ${anchorSide}`) && (
+                  <span className="ml-2 text-xs text-gray-400">{String(row[`Feature Type ${anchorSide}`])}</span>
                 )}
-                {hasRowValue(row, 'Depth OLD (%WT)') && (
-                  <span className="ml-2 text-xs text-gray-400">{String(row['Depth OLD (%WT)'])} %WT</span>
+                {hasRowValue(row, `Depth ${anchorSide} (%WT)`) && (
+                  <span className="ml-2 text-xs text-gray-400">{String(row[`Depth ${anchorSide} (%WT)`])} %WT</span>
                 )}
               </button>
             </li>
@@ -322,13 +349,17 @@ export default function ResultsPanel({
   onSelectRowIdx,
   onUpdateMatch,
   onExcludeSingle,
+  onExcludeMany,
   onExcludeRange,
   onRestoreExclusion,
+  onUnassign,
   audit,
   exportData,
   pipelineData,
   sessionId = '',
+  jobId = '',
   interventions: interventionsProp,
+  sections: sectionsProp,
 }: ResultsPanelProps) {
   const data = useMemo(() => {
     let flattened: any[] = [];
@@ -370,8 +401,9 @@ export default function ResultsPanel({
   const [unmatchedOld, setUnmatchedOld] = useState(false);
   const [unmatchedNew, setUnmatchedNew] = useState(false);
   
-  // Sections state
-  const [sections, setSections] = useState<any[]>([]);
+  // Sections state, seeded from the page and refreshed from the session when
+  // this panel is being used by a signed-in reviewer.
+  const [sections, setSections] = useState<any[]>(() => (sectionsProp as any[]) ?? []);
   
   const summaryCounts = useMemo(() => {
     if (rawData && !Array.isArray(rawData)) {
@@ -391,19 +423,28 @@ export default function ResultsPanel({
     return null;
   }, [rawData]);
 
-  // Drag & Drop Match State
-  const [draggedRowIdx, setDraggedRowIdx] = useState<number | null>(null);
-  const [modalState, setModalState] = useState<{ isOpen: boolean, sourceRow: any, targetRow: any }>({ isOpen: false, sourceRow: null, targetRow: null });
-  // Keyboard path for reassignment: the row whose NEW side is being reassigned.
-  const [reassignSource, setReassignSource] = useState<any | null>(null);
-  // Same rows a drop can land on and pass the parent's validation: an OLD
-  // feature that has no NEW pair yet.
-  const reassignCandidates = useMemo(() => data
-    .filter((row: any) => !isExcludedRow(row)
-      && !isClusteredAlignmentRow(row)
-      && (hasRowValue(row, 'Source Key OLD') || hasRowValue(row, 'Identif. OLD'))
-      && !hasRowValue(row, 'Source Key NEW') && !hasRowValue(row, 'Identif. NEW'))
-    .sort((a: any, b: any) => (parseFloat(a['Log Dist OLD (m)']) || 0) - (parseFloat(b['Log Dist OLD (m)']) || 0)), [data]);
+  // Drag & Drop Match State. The dragged side travels with the row: dragging a
+  // NEW cell offers that NEW feature to an OLD row, and an OLD cell the reverse.
+  const [dragged, setDragged] = useState<{ rowIdx: number; movingSide: 'OLD' | 'NEW' } | null>(null);
+  const [modalState, setModalState] = useState<{ isOpen: boolean, sourceRow: any, targetRow: any, movingSide: 'OLD' | 'NEW' }>({ isOpen: false, sourceRow: null, targetRow: null, movingSide: 'NEW' });
+  // Keyboard path for reassignment: the row being reassigned, and which of its
+  // two sides is the one that moves.
+  const [reassignSource, setReassignSource] = useState<{ row: any; movingSide: 'OLD' | 'NEW' } | null>(null);
+  // Rows marked for a bulk action, addressed by the stable `__origIdx`.
+  const [markedRowIdxs, setMarkedRowIdxs] = useState<number[]>([]);
+  // Same rows a drop can land on and pass the parent's validation: a feature
+  // that has no partner yet on the side that is moving.
+  const reassignCandidates = useMemo(() => {
+    if (!reassignSource) return [];
+    const anchor = reassignSource.movingSide === 'NEW' ? 'OLD' : 'NEW';
+    const moving = reassignSource.movingSide;
+    return data
+      .filter((row: any) => !isExcludedRow(row)
+        && !isClusteredAlignmentRow(row)
+        && (hasRowValue(row, `Source Key ${anchor}`) || hasRowValue(row, `Identif. ${anchor}`))
+        && !hasRowValue(row, `Source Key ${moving}`) && !hasRowValue(row, `Identif. ${moving}`))
+      .sort((a: any, b: any) => (parseFloat(a[`Log Dist ${anchor} (m)`]) || 0) - (parseFloat(b[`Log Dist ${anchor} (m)`]) || 0));
+  }, [data, reassignSource]);
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState('');
@@ -463,12 +504,19 @@ export default function ResultsPanel({
     return ['Section'];
   }, [data, exportData]);
 
-  // The column that hosts the keyboard "Reassign..." affordance: the first
-  // visible NEW-side column in the Interventions tab.
-  const reassignColumn = useMemo(
-    () => visibleColumns.filter((c) => allColumns.includes(c)).find((c) => c.includes('NEW')),
+  // The column that hosts the per-row "Reassign…" and "Unassign" affordances.
+  // It is the first visible column rather than a NEW-side one: an OLD orphan
+  // has to be reachable too, and it carries no NEW cell to hang a button on.
+  const actionColumn = useMemo(
+    () => visibleColumns.filter((c) => allColumns.includes(c))[0],
     [visibleColumns, allColumns],
   );
+
+  useEffect(() => {
+    setSections((current) => (Array.isArray(sectionsProp) && sectionsProp.length > 0
+      ? sectionsProp as any[]
+      : current));
+  }, [sectionsProp]);
 
   // Fetch sections
   useEffect(() => {
@@ -851,6 +899,52 @@ export default function ResultsPanel({
     [data, selectedRowIdx],
   );
 
+  // ─── Bulk marking ─────────────────────────────────────────────────────────
+  // Marks address rows by `__origIdx`, so they survive sorting, filtering and
+  // the virtual window; a mark made in one tab still means the same row in the
+  // next. Rows that leave the result entirely are dropped on the way out.
+  const showMarkColumn = !readOnly
+    && (activeTab === 'Results' || activeTab === 'Interventions' || activeTab === 'Excluded');
+
+  const toggleMarkedRow = (rowIdx: number) => {
+    setMarkedRowIdxs((current) => (current.includes(rowIdx)
+      ? current.filter((idx) => idx !== rowIdx)
+      : [...current, rowIdx]));
+  };
+
+  const visibleRowIdxs = useMemo(
+    () => sortedData.map((row: any) => row.__origIdx as number),
+    [sortedData],
+  );
+  const markedInView = useMemo(
+    () => markedRowIdxs.filter((idx) => visibleRowIdxs.includes(idx)),
+    [markedRowIdxs, visibleRowIdxs],
+  );
+  const allInViewMarked = visibleRowIdxs.length > 0 && markedInView.length === visibleRowIdxs.length;
+  const markedRows = useMemo(
+    () => markedInView
+      .map((idx) => data.find((row: any) => row.__origIdx === idx))
+      .filter(Boolean) as any[],
+    [data, markedInView],
+  );
+
+  const toggleMarkAllInView = () => {
+    setMarkedRowIdxs((current) => (allInViewMarked
+      ? current.filter((idx) => !visibleRowIdxs.includes(idx))
+      : [...new Set([...current, ...visibleRowIdxs])]));
+  };
+
+  // A mark is a statement about a row that is on screen. Changing tab changes
+  // which rows those are, so carrying marks across would act on rows the
+  // reviewer can no longer see.
+  useEffect(() => { setMarkedRowIdxs([]); }, [activeTab]);
+  useEffect(() => {
+    setMarkedRowIdxs((current) => {
+      const live = current.filter((idx) => data.some((row: any) => row.__origIdx === idx));
+      return live.length === current.length ? current : live;
+    });
+  }, [data]);
+
   const panelContent = (
     <div className={`results-panel ${isFullScreen ? "h-full w-full flex flex-col overflow-hidden" : "flex flex-col h-full overflow-hidden"}`}>
 
@@ -878,9 +972,14 @@ export default function ResultsPanel({
               activeTab={activeTab}
               selectedRow={selectedRow}
               selectedRowIdx={selectedRowIdx ?? null}
+              markedRowIdxs={markedInView}
+              markedRows={markedRows}
+              onClearMarks={() => setMarkedRowIdxs([])}
               onExcludeSingle={onExcludeSingle}
+              onExcludeMany={onExcludeMany}
               onExcludeRange={onExcludeRange}
               onRestoreExclusion={onRestoreExclusion}
+              onUnassign={onUnassign}
             />
           )}
           {activeTab === 'Results' && (
@@ -937,10 +1036,17 @@ export default function ResultsPanel({
               <ShareSnapshotButton
                 kind="ILI_ALIGNMENT"
                 title={`Final ILI alignment${sessionId ? ` · Session ${sessionId}` : ''}`}
-                sourceRef={sessionId ? `alignment-session:${sessionId}` : undefined}
-                rows={includedInterventionRows(data)}
-                referenceOnly
-                interventions={interventionsProp}
+                // The run comes first: naming it pins the link to the result
+                // that was released, so re-running the alignment afterwards
+                // cannot change what the recipient opens.
+                sourceRef={jobId
+                  ? `alignment-job:${jobId}`
+                  : sessionId ? `alignment-session:${sessionId}` : undefined}
+                disabled={!sessionId && !jobId}
+                buildState={() => buildAlignmentShareState({
+                  interventions: interventionsProp,
+                  sections,
+                })}
                 summary={summaryCounts ? [
                   { label: 'GW locked', value: summaryCounts.gwLocked },
                   { label: 'Anomaly matched', value: summaryCounts.anomalyMatched },
@@ -948,7 +1054,7 @@ export default function ResultsPanel({
                   { label: 'Only NEW', value: summaryCounts.anomalyOnlyNew },
                 ] : undefined}
                 notes={[
-                  'Final ILI comparison view. Open any row to inspect the shared evidence; editing is disabled.',
+                  'Final ILI comparison view, frozen to this alignment run. Open any row to inspect the shared evidence; editing is disabled.',
                 ]}
                 label="Share result"
               />
@@ -988,25 +1094,28 @@ export default function ResultsPanel({
         <ProbabilityModal
           sourceRow={modalState.sourceRow}
           targetRow={modalState.targetRow}
-          onCancel={() => setModalState({ isOpen: false, sourceRow: null, targetRow: null })}
+          movingSide={modalState.movingSide}
+          onCancel={() => setModalState({ isOpen: false, sourceRow: null, targetRow: null, movingSide: 'NEW' })}
           onConfirm={() => {
             if (onUpdateMatch) {
               onUpdateMatch(modalState.sourceRow.__origIdx, modalState.targetRow.__origIdx);
             }
-            setModalState({ isOpen: false, sourceRow: null, targetRow: null });
+            setModalState({ isOpen: false, sourceRow: null, targetRow: null, movingSide: 'NEW' });
           }}
         />
       )}
 
       {!readOnly && reassignSource !== null && (
         <ReassignDialog
-          sourceRow={reassignSource}
+          sourceRow={reassignSource.row}
+          movingSide={reassignSource.movingSide}
           candidates={reassignCandidates}
           onCancel={() => setReassignSource(null)}
           onPick={(targetRow) => {
             // Route through the same confirmation modal the drop path uses.
+            const sourceRow = reassignSource.row;
             setReassignSource(null);
-            setModalState({ isOpen: true, sourceRow: reassignSource, targetRow });
+            setModalState({ isOpen: true, sourceRow, targetRow, movingSide: reassignSource.movingSide });
           }}
         />
       )}
@@ -1113,6 +1222,17 @@ export default function ResultsPanel({
                 <table className="results-table w-max text-left border-collapse text-[10px] leading-tight table-fixed break-words min-w-full">
                   <thead className="sticky top-0 z-10">
                     <tr>
+                      {showMarkColumn && (
+                        <th className="px-1 py-2 text-center align-top" style={{ width: 30 }}>
+                          <input
+                            type="checkbox"
+                            checked={allInViewMarked}
+                            onChange={toggleMarkAllInView}
+                            aria-label={allInViewMarked ? 'Clear every mark in this view' : 'Mark every row in this view'}
+                            title={`Mark all ${sortedData.length.toLocaleString()} rows currently listed`}
+                          />
+                        </th>
+                      )}
                       {visibleColumns.filter(c => allColumns.includes(c)).map((col, idx) => (
                         <th
                           key={idx}
@@ -1188,9 +1308,13 @@ export default function ResultsPanel({
                   </thead>
                   <tbody>
                     {loading ? (
-                      <tr><td colSpan={visibleColumns.length} className="p-8 text-center text-gray-400">Loading data...</td></tr>
+                      <tr><td colSpan={visibleColumns.length + (showMarkColumn ? 1 : 0)} className="p-8 text-center text-gray-400">Loading data...</td></tr>
                     ) : sortedData.length === 0 ? (
-                      <tr><td colSpan={visibleColumns.length} className="p-8 text-center text-gray-400">No data matches the current filters</td></tr>
+                      <tr><td colSpan={visibleColumns.length + (showMarkColumn ? 1 : 0)} className="p-8 text-center text-gray-400">
+                        {activeTab === 'Excluded'
+                          ? 'Nothing has been excluded from this result yet.'
+                          : 'No data matches the current filters'}
+                      </td></tr>
                     ) : (
                       <>
                         {/* Spacer top */}
@@ -1201,11 +1325,16 @@ export default function ResultsPanel({
                           // Clusters are held out of alignment by the engine;
                           // the manual path must not put them back in.
                           const isClusterRow = isClusteredAlignmentRow(row);
+                          // A drop only lands where the moving side is free —
+                          // the parent refuses anything else, and lighting up a
+                          // row that will be rejected is worse than not lighting.
                           const isDragTarget = activeTab === 'Interventions'
-                            && draggedRowIdx !== null
-                            && draggedRowIdx !== row.__origIdx
-                            && !isClusterRow;
-                          
+                            && dragged !== null
+                            && dragged.rowIdx !== row.__origIdx
+                            && !isClusterRow
+                            && !hasRowValue(row, `Source Key ${dragged.movingSide}`)
+                            && !hasRowValue(row, `Identif. ${dragged.movingSide}`);
+
                           const isMatch = row['Match/Unmatch'] === 'Matched' || row['Match/Unmatch'] === 'Match';
                           const featType = String(row['Feature Type OLD'] || row['Feature Type NEW'] || '').toLowerCase();
                           let rowClass = 'results-row';
@@ -1224,9 +1353,18 @@ export default function ResultsPanel({
                           }
                           const bgClass = '';
 
-                          const isReassignableSource = activeTab === 'Interventions'
+                          // Either orphan half can be carried onto a partner.
+                          const movableSide: 'OLD' | 'NEW' | null = isClusterRow
+                            ? null
+                            : (exclusionTarget(row)?.side === 'NEW' ? 'NEW'
+                              : exclusionTarget(row)?.side === 'OLD' ? 'OLD' : null);
+                          const isReassignableSource = activeTab === 'Interventions' && movableSide !== null;
+                          const isUnassignable = activeTab === 'Interventions'
                             && !isClusterRow
-                            && (hasRowValue(row, 'Source Key NEW') || hasRowValue(row, 'Identif. NEW'));
+                            && isMatchedRow(row)
+                            && hasRowValue(row, 'Source Key OLD')
+                            && hasRowValue(row, 'Source Key NEW');
+                          const isMarked = markedRowIdxs.includes(row.__origIdx);
 
                           return (
                             <tr
@@ -1239,21 +1377,34 @@ export default function ResultsPanel({
                                 e.preventDefault(); // allow drop
                               }}
                               onDrop={(e) => {
-                                if (!isDragTarget) return;
+                                if (!isDragTarget || !dragged) return;
                                 e.preventDefault();
-                                const sourceRow = sortedData.find((r: any) => r.__origIdx === draggedRowIdx);
+                                const sourceRow = sortedData.find((r: any) => r.__origIdx === dragged.rowIdx);
                                 if (sourceRow) {
-                                  setModalState({ isOpen: true, sourceRow, targetRow: row });
+                                  setModalState({ isOpen: true, sourceRow, targetRow: row, movingSide: dragged.movingSide });
                                 }
-                                setDraggedRowIdx(null);
+                                setDragged(null);
                               }}
                             >
+                              {showMarkColumn && (
+                                <td className="px-1 text-center" onClick={(e) => e.stopPropagation()}>
+                                  <input
+                                    type="checkbox"
+                                    checked={isMarked}
+                                    onChange={() => toggleMarkedRow(row.__origIdx)}
+                                    aria-label={`Mark row ${String(row['Identif. NEW'] ?? row['Identif. OLD'] ?? actualIdx + 1)} for a bulk action`}
+                                  />
+                                </td>
+                              )}
                               {visibleColumns.filter(c => allColumns.includes(c)).map((col, j) => {
                                 let val = alignmentDisplayValue(row, col);
                                 if (typeof val === 'string' && (val.toLowerCase() === 'null' || val.toLowerCase() === 'nan' || val.toLowerCase() === 'undefined')) {
                                   val = null;
                                 }
-                                const isNewDataCol = col.includes('NEW');
+                                const columnSide: 'OLD' | 'NEW' | null = col.includes('NEW') ? 'NEW' : col.includes('OLD') ? 'OLD' : null;
+                                const isDraggableCol = activeTab === 'Interventions'
+                                  && columnSide !== null
+                                  && columnSide === movableSide;
                                 // Only format computed columns; leave raw data values untouched
                                 if ((col === DEPTH_GROWTH_COLUMN || col === 'Length Growth (mm/yr)') && val !== '-' && val != null && !isNaN(parseFloat(String(val)))) {
                                   val = parseFloat(String(val)).toFixed(3);
@@ -1266,18 +1417,18 @@ export default function ResultsPanel({
                                   val = formatClockDisplay(val);
                                 }
                                 return (
-                                  <td 
-                                    key={j} 
-                                    className={`px-2 whitespace-nowrap overflow-hidden text-ellipsis ${col === DEPTH_GROWTH_COLUMN || col === 'Length Growth (mm/yr)' ? 'font-bold' : ''} ${activeTab === 'Interventions' && isNewDataCol && !isClusterRow ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                                  <td
+                                    key={j}
+                                    className={`px-2 whitespace-nowrap overflow-hidden text-ellipsis ${col === DEPTH_GROWTH_COLUMN || col === 'Length Growth (mm/yr)' ? 'font-bold' : ''} ${isDraggableCol ? 'cursor-grab active:cursor-grabbing' : ''}`}
                                     style={col === DEPTH_GROWTH_COLUMN || col === 'Length Growth (mm/yr)' ? { color: 'var(--syn-info, #155eef)' } : undefined}
-                                    draggable={activeTab === 'Interventions' && isNewDataCol && !isClusterRow && val !== '-' && val !== null && val !== undefined}
+                                    draggable={isDraggableCol && val !== '-' && val !== null && val !== undefined}
                                     onDragStart={(e) => {
-                                      if (activeTab === 'Interventions' && isNewDataCol && !isClusterRow) {
-                                        setDraggedRowIdx(row.__origIdx);
+                                      if (isDraggableCol && movableSide) {
+                                        setDragged({ rowIdx: row.__origIdx, movingSide: movableSide });
                                         e.dataTransfer.effectAllowed = "move";
                                       }
                                     }}
-                                    onDragEnd={() => setDraggedRowIdx(null)}
+                                    onDragEnd={() => setDragged(null)}
                                   >
                                     {val !== undefined && val !== null ? (
                                       (col === 'Feature Type OLD' || col === 'Feature Type NEW') ? (
@@ -1294,14 +1445,24 @@ export default function ResultsPanel({
                                         ) : '-'
                                       ) : val
                                     ) : ''}
-                                    {col === reassignColumn && isReassignableSource && (
+                                    {col === actionColumn && isReassignableSource && movableSide && (
                                       <button
                                         type="button"
-                                        onClick={(e) => { e.stopPropagation(); setReassignSource(row); }}
+                                        onClick={(e) => { e.stopPropagation(); setReassignSource({ row, movingSide: movableSide }); }}
                                         className="ml-1 inline-block align-middle rounded border border-blue-300 bg-white px-1 text-[9px] font-bold text-blue-700 opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
-                                        aria-label={`Reassign NEW feature ${String(row['Identif. NEW'] ?? '')} to an unmatched OLD feature`}
+                                        aria-label={`Reassign ${movableSide} feature ${String(row[`Identif. ${movableSide}`] ?? '')} to an unmatched ${movableSide === 'NEW' ? 'OLD' : 'NEW'} feature`}
                                       >
                                         Reassign…
+                                      </button>
+                                    )}
+                                    {col === actionColumn && isUnassignable && onUnassign && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => { e.stopPropagation(); void onUnassign([row.__origIdx]); }}
+                                        className="ml-1 inline-block align-middle rounded border border-amber-300 bg-white px-1 text-[9px] font-bold text-amber-700 opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
+                                        aria-label={`Unassign the match between ${String(row['Identif. OLD'] ?? '')} and ${String(row['Identif. NEW'] ?? '')}`}
+                                      >
+                                        Unassign
                                       </button>
                                     )}
                                   </td>

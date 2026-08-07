@@ -45,6 +45,12 @@ export interface ConservationAudit {
 export interface AlignmentFetchResult {
   comparison: ComparisonRow[];
   audit?: ConservationAudit;
+  /**
+   * The completed run these rows came from. A published link names it so the
+   * recipient reads the run the author released, not whichever run is newest
+   * for the session by the time they open the link.
+   */
+  jobId?: string;
 }
 
 export interface AlignmentResultPage {
@@ -141,7 +147,7 @@ export async function fetchAlignmentResult(
       );
     } while (cursor);
     reportProgress(100, 'Done!');
-    return { comparison, audit };
+    return { comparison, audit, jobId: initial.jobId };
   };
 
   if (initial.state === 'completed') {

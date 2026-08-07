@@ -15,7 +15,6 @@ import {
 
 import PageMeta from '../../components/common/PageMeta';
 import { useToast } from '../../components/common/ToastProvider';
-import ShareSnapshotButton from '../../components/sharing/ShareSnapshotButton';
 import { apiFetch } from '../../utils/api';
 import {
   applyInterventions,
@@ -195,8 +194,6 @@ export default function CorrosionAnalysisPage() {
     }
   }, [metalLoss, review, sessionId, toast]);
 
-  const shareRows = useMemo(() => metalLoss, [metalLoss]);
-
   if (!sessionId) {
     return (
       <div className="syn-page">
@@ -219,21 +216,6 @@ export default function CorrosionAnalysisPage() {
           </p>
         </div>
         <div className="ds-btn-group">
-          <ShareSnapshotButton
-            kind="CORROSION"
-            title={`Corrosion analysis · Session ${sessionId}`}
-            sourceRef={`alignment-session:${sessionId}`}
-            rows={shareRows}
-            summary={[
-              { label: 'Metal loss', value: vitals.metalLoss },
-              { label: 'Assessable', value: vitals.assessable },
-              { label: 'Active growth', value: vitals.activeGrowth },
-              { label: 'Validated for FFS', value: releasedCount },
-            ]}
-            notes={['Frozen corrosion analysis. Only the saved validation state is shareable.']}
-            disabled={loading || Boolean(error)}
-            label="Share analysis"
-          />
           <Button variant="secondary" startIcon={<FiArrowLeft aria-hidden="true" />} onClick={() => navigate('/ili-comparison')}>
             Alignment results
           </Button>

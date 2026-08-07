@@ -2,234 +2,110 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildAlignmentShareState,
+  buildFfsShareState,
   buildPublicShareSnapshot,
-  type PublicShareKind,
+  shareValue,
 } from '../src/lib/sharing/publicShareSnapshot.ts';
+import { reviveFfsShareState } from '../src/lib/ffs/shareState.ts';
 import {
   publicShareScopeKey,
   publicShareUrl,
   tokenFromLocationHash,
 } from '../src/lib/sharing/publicShareLink.ts';
 
-test('normalizes every supported result kind into one read-only snapshot contract', () => {
-  const cases: Array<{
-    kind: PublicShareKind;
-    row: Record<string, unknown>;
-    expectedKey: string;
-  }> = [
-    {
-      kind: 'GW_ALIGNMENT',
-      row: {
-        id: 'gw:1',
-        status: 'Match',
-        oldVal: 10,
-        newVal: 10.2,
-        oldDesc: 'Girth weld',
-        newDesc: 'Girth weld',
-        onSave() {},
-      },
-      expectedKey: 'oldVal',
-    },
-    {
-      kind: 'SECTIONING',
-      row: {
-        id: 'section:1',
-        name: 'KP 0-5',
-        type: 'Mainline',
-        startGw: 'GW-1',
-        endGw: 'GW-9',
-        startM: 0,
-        endM: 5_000,
-        length: 5_000,
-      },
-      expectedKey: 'name',
-    },
-    {
-      kind: 'ILI_ALIGNMENT',
-      row: {
-        'Match/Unmatch': 'Match',
-        'Source Key OLD': 'old:1',
-        'Source Key NEW': 'new:1',
-        'Original Log Dist OLD (m)': 41.9,
-        'Original Log Dist NEW (m)': 42.4,
-        'Log Dist NEW (m)': 42.5,
-        'Dist GW OLD (m)': 3.2,
-        'Dist GW NEW (m)': 3.4,
-        'Joint No. OLD': 'J-10',
-        'Joint No. NEW': 'J-11',
-        'Run Year OLD': 2021,
-        'Run Year NEW': 2026,
-        pair_index: 0,
-        pair_old_year: 2021,
-        pair_new_year: 2026,
-        __origIdx: 99,
-      },
-      expectedKey: 'Source Key NEW',
-    },
-    {
-      kind: 'CORROSION',
-      row: {
-        sourceKey: 'new:1',
-        featureId: 'ML-1',
-        distanceM: 42.5,
-        depthPct: 35,
-        growthClass: 'active',
-        ffsReady: true,
-        blockers: [],
-      },
-      expectedKey: 'sourceKey',
-    },
-    {
-      kind: 'FFS',
-      row: {
-        key: 'ffs:1',
-        index: 0,
-        nominal: {
-          ld: 42.5,
-          section: 'KP 0-5',
-          surface: 'External',
-          maxDepthPct: 35,
-          ERF: 0.82,
-          acceptance: 'Acceptable',
-          safePressure: 91,
-          branch: 'short',
-        },
-        conservative: { ERF: 0.91 },
-        forecast: { ERF: 0.97 },
-        lifeToErf1: 8.2,
-        priority: 'Medium',
-      },
-      expectedKey: 'nominalErf',
-    },
+test('an alignment link carries the reviewer edits, so the reader sees the reviewed result', () => {
+  const interventions = [
+    { id: 'exclude-1', type: 'EXCLUDE_FEATURE', side: 'PAIR', pairIndex: 0, sourceKey: 'old:7' },
+    { id: 'unassign-1', type: 'UNASSIGN_PAIR', sourceOldKey: 'old:3', sourceNewKey: 'new:3' },
   ];
-
-  for (const { kind, row, expectedKey } of cases) {
-    const snapshot = buildPublicShareSnapshot(kind, [row]);
-    assert.equal(snapshot.version, 1);
-    assert.equal(snapshot.rows.length, 1);
-    assert.ok(snapshot.columns.some((column) => column.key === expectedKey), `${kind} columns`);
-    assert.ok(Object.hasOwn(snapshot.rows[0], expectedKey), `${kind} row projection`);
-    assert.equal(Object.hasOwn(snapshot.rows[0], '__origIdx'), false);
-    assert.equal(Object.hasOwn(snapshot.rows[0], 'onSave'), false);
-    assert.deepEqual(snapshot.summary[0], { label: 'Rows', value: 1 });
-  }
-});
-
-test('keeps the explicit ILI lane evidence needed by the existing comparison viewer', () => {
-  const snapshot = buildPublicShareSnapshot('ILI_ALIGNMENT', [{
-    'Match/Unmatch': 'Match',
-    'Result Group': 'ANOMALY',
-    'Source Key OLD': 'old:1',
-    'Source Key NEW': 'new:1',
-    'Identif. OLD': 'ML-100',
-    'Identif. NEW': 'ML-101',
-    'Feature Type OLD': 'metal loss',
-    'Feature Type NEW': 'metal loss',
-    'Original Log Dist OLD (m)': 41.9,
-    'Original Log Dist NEW (m)': 42.4,
-    'Log Dist OLD (m)': 42,
-    'Log Dist NEW (m)': 42.5,
-    'Dist GW OLD (m)': 3.2,
-    'Dist GW NEW (m)': 3.4,
-    'Joint No. OLD': 'J-10',
-    'Joint No. NEW': 'J-11',
-    "O'Clock OLD": '03:00',
-    "O'Clock NEW": '03:15',
-    'Depth OLD (%WT)': 20,
-    'Depth NEW (%WT)': 24,
-    'Length OLD (mm)': 15,
-    'Length NEW (mm)': 18,
-    'Width OLD (mm)': 11,
-    'Width NEW (mm)': 13,
-    'Int/Ext OLD': 'External',
-    'Int/Ext NEW': 'External',
-    'Run Year OLD': 2021,
-    'Run Year NEW': 2026,
-    pair_index: 0,
-    pair_old_year: 2021,
-    pair_new_year: 2026,
-    __origIdx: 12,
-    onUpdate() {},
-  }]);
-
-  assert.deepEqual(snapshot.rows[0], {
-    'Match/Unmatch': 'Match',
-    'Result Group': 'ANOMALY',
-    'Source Key OLD': 'old:1',
-    'Source Key NEW': 'new:1',
-    'Identif. OLD': 'ML-100',
-    'Identif. NEW': 'ML-101',
-    'Feature Type OLD': 'metal loss',
-    'Feature Type NEW': 'metal loss',
-    'Original Log Dist OLD (m)': 41.9,
-    'Original Log Dist NEW (m)': 42.4,
-    'Log Dist OLD (m)': 42,
-    'Log Dist NEW (m)': 42.5,
-    'Dist GW OLD (m)': 3.2,
-    'Dist GW NEW (m)': 3.4,
-    'Joint No. OLD': 'J-10',
-    'Joint No. NEW': 'J-11',
-    "O'Clock OLD": '03:00',
-    "O'Clock NEW": '03:15',
-    'Depth OLD (%WT)': 20,
-    'Depth NEW (%WT)': 24,
-    'Length OLD (mm)': 15,
-    'Length NEW (mm)': 18,
-    'Width OLD (mm)': 11,
-    'Width NEW (mm)': 13,
-    'Int/Ext OLD': 'External',
-    'Int/Ext NEW': 'External',
-    'Run Year OLD': 2021,
-    'Run Year NEW': 2026,
-    pair_index: 0,
-    pair_old_year: 2021,
-    pair_new_year: 2026,
-  });
-});
-
-test('adds caller-provided summary and notes without carrying mutable values', () => {
-  const sourceSummary = [{ label: 'Selected for FFS', value: 4 }];
-  const sourceNotes = ['Snapshot after engineering review'];
   const snapshot = buildPublicShareSnapshot(
-    'CORROSION',
-    [{ sourceKey: 'new:1', blockers: ['No width'] }],
-    { summary: sourceSummary, notes: sourceNotes },
+    buildAlignmentShareState({ interventions, sections: [{ name: 'KP 0-5' }] }),
+    { notes: ['Frozen to this alignment run.'] },
   );
 
-  sourceSummary[0].value = 99;
-  sourceNotes[0] = 'changed';
-
-  assert.deepEqual(snapshot.summary, [
-    { label: 'Rows', value: 1 },
-    { label: 'Selected for FFS', value: 4 },
-  ]);
-  assert.deepEqual(snapshot.notes, ['Snapshot after engineering review']);
-  assert.notEqual(snapshot.rows[0].blockers, undefined);
+  assert.equal(snapshot.version, 1);
+  assert.equal(snapshot.state.kind, 'ILI_ALIGNMENT');
+  assert.deepEqual(snapshot.state, {
+    kind: 'ILI_ALIGNMENT',
+    interventions,
+    sections: [{ name: 'KP 0-5' }],
+  });
+  assert.deepEqual(snapshot.notes, ['Frozen to this alignment run.']);
 });
 
-test('rejects a result set larger than the public contract instead of silently truncating it', () => {
-  const rows = Array.from({ length: 10_001 }, (_, index) => ({
-    'Source Key NEW': `new:${index}`,
+test('an alignment snapshot is a copy, so later edits cannot change a published link', () => {
+  const interventions = [{ id: 'exclude-1', type: 'EXCLUDE_FEATURE', sourceKey: 'old:7' }];
+  const state = buildAlignmentShareState({ interventions, sections: [] });
+
+  interventions[0].sourceKey = 'old:9';
+  interventions.push({ id: 'exclude-2', type: 'EXCLUDE_FEATURE', sourceKey: 'old:8' });
+
+  assert.equal(state.interventions.length, 1);
+  assert.deepEqual(state.interventions[0], { id: 'exclude-1', type: 'EXCLUDE_FEATURE', sourceKey: 'old:7' });
+});
+
+test('an FFS link carries the whole assessment and reopens with the same assumptions', () => {
+  const iliDate = new Date('2026-03-14T00:00:00.000Z');
+  const state = buildFfsShareState({
+    results: [{ key: 'ffs:1', ERF: 0.82, acceptance: 'Acceptable' }],
+    config: { lineName: 'Line 12', method: 'modified', modifiedSa: 'smys11', iliDate, highlightYears: 5 },
+    screening: { depthTolerancePct: 7, forecastYears: 12, growthBasis: 'measured' },
+    alignmentImport: { sessionId: '42', accepted: [], rejected: [], warningCount: 0 },
+  });
+
+  assert.equal(state.config.iliDate, iliDate.toISOString());
+
+  const revived = reviveFfsShareState(state);
+  assert.ok(revived);
+  assert.equal(revived.config.lineName, 'Line 12');
+  assert.equal(revived.config.iliDate.getTime(), iliDate.getTime());
+  assert.equal(revived.screening.depthTolerancePct, 7);
+  assert.equal(revived.screening.forecastYears, 12);
+  assert.equal(revived.results.length, 1);
+  assert.equal(revived.alignmentImport?.sessionId, '42');
+});
+
+test('an FFS link with no readable date or result is refused rather than half-rendered', () => {
+  const base = buildFfsShareState({
+    results: [{ key: 'ffs:1' }],
+    config: { lineName: 'Line 12', iliDate: new Date('2026-03-14T00:00:00.000Z') },
+  });
+
+  assert.equal(reviveFfsShareState({ ...base, config: { ...base.config, iliDate: 'not a date' } }), null);
+  assert.equal(reviveFfsShareState({ ...base, results: [] }), null);
+  assert.equal(reviveFfsShareState(null), null);
+});
+
+test('sharing refuses to publish a result larger than the link can carry', () => {
+  const results = Array.from({ length: 40_000 }, (_, index) => ({
+    key: `ffs:${index}`,
+    note: 'x'.repeat(200),
   }));
 
   assert.throws(
-    () => buildPublicShareSnapshot('ILI_ALIGNMENT', rows),
-    /at most 10,000 rows/i,
+    () => buildPublicShareSnapshot(buildFfsShareState({
+      results,
+      config: { lineName: 'Line 12', iliDate: new Date('2026-03-14T00:00:00.000Z') },
+    })),
+    /MB a public link can carry/i,
   );
 });
 
-test('turns non-finite calculation output into a display-safe value', () => {
-  const snapshot = buildPublicShareSnapshot('FFS', [{
-    key: 'ffs:1',
-    nominal: { ERF: Number.NaN, safePressure: Number.POSITIVE_INFINITY },
-    conservative: { ERF: 0.9 },
-    forecast: { ERF: 1.1 },
-    lifeToErf1: Number.POSITIVE_INFINITY,
-  }]);
+test('non-finite calculation output and functions never reach a published link', () => {
+  const copied = shareValue({
+    erf: Number.NaN,
+    safePressure: Number.POSITIVE_INFINITY,
+    depth: 35,
+    onSave() {},
+    nested: { life: Number.NEGATIVE_INFINITY, label: 'Acceptable' },
+  }) as Record<string, unknown>;
 
-  assert.equal(snapshot.rows[0].nominalErf, null);
-  assert.equal(snapshot.rows[0].safePressure, null);
-  assert.equal(snapshot.rows[0].lifeToErf1, null);
+  assert.equal(copied.erf, null);
+  assert.equal(copied.safePressure, null);
+  assert.equal(copied.depth, 35);
+  assert.equal(Object.hasOwn(copied, 'onSave'), false);
+  assert.deepEqual(copied.nested, { life: null, label: 'Acceptable' });
 });
 
 test('keeps the bearer secret in the URL fragment and recovers it safely', () => {
@@ -244,17 +120,9 @@ test('keeps the bearer secret in the URL fragment and recovers it safely', () =>
   assert.equal(tokenFromLocationHash('#%E0%A4%A'), '');
 });
 
-test('changes the share scope when the referenced alignment session changes', () => {
-  const firstLine = publicShareScopeKey(
-    'ILI_ALIGNMENT',
-    'Final ILI alignment',
-    'alignment-session:41',
-  );
-  const secondLine = publicShareScopeKey(
-    'ILI_ALIGNMENT',
-    'Final ILI alignment',
-    'alignment-session:42',
-  );
+test('changes the share scope when the referenced alignment run changes', () => {
+  const firstRun = publicShareScopeKey('ILI_ALIGNMENT', 'Final ILI alignment', 'alignment-job:run-41');
+  const secondRun = publicShareScopeKey('ILI_ALIGNMENT', 'Final ILI alignment', 'alignment-job:run-42');
 
-  assert.notEqual(firstLine, secondLine);
+  assert.notEqual(firstRun, secondRun);
 });

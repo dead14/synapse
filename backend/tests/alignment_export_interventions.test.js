@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
     buildExportInterventionPlan,
+    expandExportRow,
     transformExportRow,
 } = require('../src/modules/alignment/exportInterventions');
 
@@ -116,4 +117,97 @@ test('stream export plan removes active range exclusions and honors restore even
     assert.equal(transformExportRow(rows[1], 2, activePlan), null);
     assert.notEqual(transformExportRow(rows[2], 3, activePlan), null);
     assert.notEqual(transformExportRow(rows[0], 1, restoredPlan), null);
+});
+
+test('the workbook drops a matched fitting the reviewer excluded', () => {
+    const rows = [
+        {
+            pair_index: 0,
+            'Source Key OLD': 'old-valve',
+            'Identif. OLD': 'VALVE-1',
+            'Source Key NEW': 'new-valve',
+            'Identif. NEW': 'VALVE-1',
+            'Feature Type OLD': 'Ball Valve',
+        },
+        {
+            pair_index: 0,
+            'Source Key OLD': 'old-keep',
+            'Identif. OLD': 'ML-9',
+            'Source Key NEW': 'new-keep',
+            'Identif. NEW': 'ML-9',
+        },
+    ];
+    const plan = buildExportInterventionPlan(rows, [{
+        id: 'exclude-valve',
+        type: 'EXCLUDE_FEATURE',
+        side: 'PAIR',
+        pairIndex: 0,
+        sourceKey: 'old-valve',
+    }]);
+
+    assert.equal(transformExportRow(rows[0], 1, plan), null);
+    assert.equal(transformExportRow(rows[1], 2, plan)['Identif. OLD'], 'ML-9');
+});
+
+test('the workbook writes both halves of a match the reviewer unassigned', () => {
+    const rows = [{
+        pair_index: 0,
+        'Source Key OLD': 'old-1',
+        'Identif. OLD': 'ML-1',
+        'Depth OLD (%WT)': 20,
+        'Source Key NEW': 'new-1',
+        'Identif. NEW': 'ML-2',
+        'Depth NEW (%WT)': 26,
+    }];
+    const plan = buildExportInterventionPlan(rows, [{
+        id: 'unassign-1',
+        type: 'UNASSIGN_PAIR',
+        sourceOldKey: 'old-1',
+        sourceNewKey: 'new-1',
+    }]);
+
+    const released = expandExportRow(rows[0], 1, plan);
+
+    assert.equal(released.length, 2);
+    assert.equal(released[0]['Identif. OLD'], 'ML-1');
+    assert.equal(released[0]['Identif. NEW'], '-');
+    assert.equal(released[0]['Match/Unmatch'], 'Only OLD');
+    assert.equal(released[1]['Identif. NEW'], 'ML-2');
+    assert.equal(released[1]['Identif. OLD'], '-');
+    assert.equal(released[1]['Match/Unmatch'], 'Only NEW');
+});
+
+test('an OLD feature can be carried onto a NEW row, the mirror of a NEW reassignment', () => {
+    const rows = [
+        {
+            pair_index: 0,
+            'Source Key OLD': 'old-source',
+            'Identif. OLD': 'OLD-SOURCE',
+            'Depth OLD (%WT)': 18,
+            'Source Key NEW': '-',
+            'Identif. NEW': '-',
+        },
+        {
+            pair_index: 0,
+            'Source Key OLD': '-',
+            'Identif. OLD': '-',
+            'Source Key NEW': 'new-target',
+            'Identif. NEW': 'NEW-TARGET',
+        },
+    ];
+    const plan = buildExportInterventionPlan(rows, [{
+        id: 'move-old-1',
+        type: 'REASSIGN_OLD',
+        sourceOldKey: 'old-source',
+        targetNewKey: 'new-target',
+        evidenceScore: 0.8,
+    }]);
+
+    const source = transformExportRow(rows[0], 1, plan);
+    const target = transformExportRow(rows[1], 2, plan);
+
+    assert.equal(source, null, 'the emptied source row leaves the workbook');
+    assert.equal(target['Identif. OLD'], 'OLD-SOURCE');
+    assert.equal(target['Depth OLD (%WT)'], 18);
+    assert.equal(target['Match/Unmatch'], 'Match');
 });

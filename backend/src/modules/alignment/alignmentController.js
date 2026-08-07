@@ -74,7 +74,7 @@ const { createExcelExport, createSessionExcelExport } = require('./exportService
 const { normalizeAlignmentExportPayload } = require('./exportContract');
 const {
     createExportInterventionCollector,
-    transformExportRow,
+    expandExportRow,
 } = require('./exportInterventions');
 const {
     claimOwnedExportDownload,
@@ -1093,12 +1093,15 @@ exports.exportExcel = async (req, res, next) => {
                             req.user.orgId,
                         )) {
                             ordinal += 1;
-                            const transformed = transformExportRow(
+                            // One source row can release two: unassigning a
+                            // match splits it back into its OLD and NEW halves.
+                            for (const released of expandExportRow(
                                 row,
                                 ordinal,
                                 interventionPlan,
-                            );
-                            if (transformed) yield transformed;
+                            )) {
+                                yield released;
+                            }
                         }
                     };
 

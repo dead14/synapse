@@ -28,7 +28,11 @@ export interface PublicShareView {
   sourceRef: string | null;
   createdAt: string;
   expiresAt: string;
-  snapshot: PublicShareSnapshot;
+  /**
+   * Stored as published. Links made before a snapshot carried page state have
+   * no `state`, which is why every reader of this field guards for it.
+   */
+  snapshot: Partial<PublicShareSnapshot> | null;
 }
 
 export async function fetchPublicShareResultPage(
