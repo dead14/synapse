@@ -25,6 +25,14 @@ function buildRedisOptions() {
   return options;
 }
 
+function commandTimeoutMs(env = process.env) {
+  const configured = Number(env.REDIS_COMMAND_TIMEOUT_MS);
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  // Far longer than a healthy Redis ever needs, short enough that a caller
+  // waiting on an enqueue gets an answer while the engineer is still watching.
+  return 10_000;
+}
+
 function attachLogging(client, label) {
   client.on('error', (err) => {
     console.error(`Redis ${label} error:`, err.message);
@@ -37,11 +45,28 @@ function attachLogging(client, label) {
 
 // Shared connection for Queue producers.  Queues only issue non-blocking
 // commands, so they can share one client.
-const connection = attachLogging(new Redis(buildRedisOptions()), 'queue');
+//
+// The command timeout is what makes `queue.add()` answer at all when Redis is
+// unreachable.  maxRetriesPerRequest: null plus ioredis' offline queue means a
+// command issued while disconnected is buffered and never rejected, so an
+// upload sat on `add()` forever: no error, no timeout, no job -- the request
+// simply never returned and the uploader spun until the engineer gave up.  It
+// also made the QUEUE_UNAVAILABLE handlers in the ingestion and alignment
+// controllers unreachable, because the rejection they catch never arrived.
+// ioredis arms this timer before the offline-queue branch, so it bounds
+// buffered commands too, not just ones already on the wire.
+const connection = attachLogging(new Redis({
+  ...buildRedisOptions(),
+  commandTimeout: commandTimeoutMs(),
+}), 'queue');
 
 // BullMQ Workers hold a blocking connection (BRPOPLPUSH) for the lifetime of
 // the worker.  Sharing that client with the queues stalls every producer
 // command behind the block, so each worker gets its own.
+//
+// Deliberately without commandTimeout: a worker waiting on an empty queue is
+// *supposed* to block indefinitely, and timing that out would tear down the
+// consumer every few seconds on an idle queue.
 function createWorkerConnection(label = 'worker') {
   return attachLogging(new Redis(buildRedisOptions()), label);
 }
@@ -77,6 +102,7 @@ function getRateLimiterConnection() {
 
 module.exports = {
   connection,
+  commandTimeoutMs,
   createWorkerConnection,
   getRateLimiterConnection,
   buildRedisOptions,

@@ -79,7 +79,18 @@ export async function fetchAlignmentResultPage(
 }
 
 const POLL_INTERVAL_MS = 1_000;
-const MAX_POLL_ATTEMPTS = 180;
+const MAX_POLL_INTERVAL_MS = 5_000;
+/**
+ * How long to keep watching a run before calling it lost.
+ *
+ * This must cover the worker's own ceiling for one run
+ * (ALIGNMENT_PROCESS_TIMEOUT_MS, 10 minutes by default) plus the wait for a
+ * free worker slot in front of it. A budget shorter than the worker's showed
+ * the engineer a timeout for a run that went on to finish, and the reload it
+ * invited queued a second run behind the first — which is how a session ends
+ * up permanently reporting that it is waiting for the alignment worker.
+ */
+const POLL_BUDGET_MS = 15 * 60 * 1000;
 
 function asComparisonRows(value: unknown): ComparisonRow[] {
   if (!Array.isArray(value)) {
@@ -89,9 +100,9 @@ function asComparisonRows(value: unknown): ComparisonRow[] {
   return value.filter((row): row is ComparisonRow => Boolean(row) && typeof row === 'object' && !Array.isArray(row));
 }
 
-function waitForPoll(signal?: AbortSignal): Promise<void> {
+function waitForPoll(delayMs: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(resolve, POLL_INTERVAL_MS);
+    const timer = window.setTimeout(resolve, delayMs);
     signal?.addEventListener('abort', () => {
       window.clearTimeout(timer);
       reject(new DOMException('Request cancelled.', 'AbortError'));
@@ -157,7 +168,13 @@ export async function fetchAlignmentResult(
   const initialProgress = Math.max(5, Number(initial.progress) || 0);
   reportProgress(initialProgress, jobProgressMessage(initial.state, initialProgress));
 
-  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
+  const startedAt = Date.now();
+  // A run that outlasts the first few seconds is doing real work, so back the
+  // polling off rather than asking a busy API the same question every second
+  // for the rest of the budget.
+  let pollInterval = POLL_INTERVAL_MS;
+
+  while (Date.now() - startedAt < POLL_BUDGET_MS) {
     const job = await apiFetch<JobResponse>(`/api/job/${encodeURIComponent(initial.jobId)}/result`, { signal });
     const serverProgress = Number(job.progress);
     if (Number.isFinite(serverProgress)) {
@@ -176,14 +193,15 @@ export async function fetchAlignmentResult(
     }
 
     const estimatedProgress = Math.min(
-      10 + Math.floor((attempt / MAX_POLL_ATTEMPTS) * 80),
+      10 + Math.floor(((Date.now() - startedAt) / POLL_BUDGET_MS) * 80),
       89,
     );
     reportProgress(
       estimatedProgress,
       jobProgressMessage(job.state, estimatedProgress),
     );
-    await waitForPoll(signal);
+    await waitForPoll(pollInterval, signal);
+    pollInterval = Math.min(pollInterval * 1.5, MAX_POLL_INTERVAL_MS);
   }
 
   throw new Error('Alignment timed out. Reopen this session to try again.');

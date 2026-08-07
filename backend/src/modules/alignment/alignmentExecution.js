@@ -8,15 +8,42 @@ const REUSABLE_JOB_STATES = new Set(['queued', 'active', 'retrying', 'completed'
 // before its final attempt) would otherwise answer 202 for this session
 // forever, because nothing ever moves it to a terminal state.
 const PENDING_JOB_STATES = new Set(['queued', 'active', 'retrying']);
-const RUNTIME_CONFIG_FIELDS = new Set(['resultSummary', 'failureReason']);
+// A job that has not reached the engine yet can still be dropped: nothing has
+// been spawned, so discarding it costs nothing.  An 'active' job owns a running
+// Python child that this process cannot stop, so it is left to finish.
+const DISCARDABLE_JOB_STATES = new Set(['queued', 'retrying']);
+// Session config fields that never reach the engine, so changing one must not
+// invalidate a finished run.  resultSummary and failureReason are written by
+// the worker; interventions, sections and pipelineRoute are written by the
+// reviewer *reading* the result, which meant every exclusion, intervention or
+// saved section threw away the very run being reviewed and made the next page
+// load re-run the engine from scratch.
+//
+// matchingSections is deliberately absent: hungarian_engine.py reads it, so it
+// genuinely changes the result and must stay in the fingerprint.
+const RUNTIME_CONFIG_FIELDS = new Set([
+    'resultSummary',
+    'failureReason',
+    'interventions',
+    'sections',
+    'pipelineRoute',
+]);
+
+function alignmentProcessTimeoutMs(env = process.env) {
+    const configured = Number(env.ALIGNMENT_PROCESS_TIMEOUT_MS);
+    if (Number.isFinite(configured) && configured > 0) return configured;
+    // With one worker slot this ceiling is also how long a wedged run can block
+    // every other session, so it is bounded by what a reviewer will wait for
+    // rather than by what the engine might conceivably need.
+    return 10 * 60 * 1000;
+}
 
 function alignmentJobReuseMaxAgeMs(env = process.env) {
     const configured = Number(env.ALIGNMENT_JOB_REUSE_MAX_AGE_MS);
     if (Number.isFinite(configured) && configured > 0) return configured;
     // The bound must comfortably exceed the engine's own per-process timeout,
     // or a legitimately long run would be declared stale while still working.
-    const processTimeoutMs = Number(env.ALIGNMENT_PROCESS_TIMEOUT_MS) || 30 * 60 * 1000;
-    return Math.max(30 * 60 * 1000, processTimeoutMs + 10 * 60 * 1000);
+    return Math.max(30 * 60 * 1000, alignmentProcessTimeoutMs(env) + 10 * 60 * 1000);
 }
 
 function canonicalize(value) {
@@ -69,6 +96,18 @@ function isReusableAlignmentJob(job, config, { now = Date.now(), env = process.e
         && metadata?.configFingerprint === alignmentConfigFingerprint(config);
 }
 
+/**
+ * True when a job is still waiting for the engine and its configuration has
+ * already been replaced, so nothing will ever read what it produces.  Left in
+ * the queue it holds the single worker slot and every reload stacks another run
+ * behind it, which is how a session ends up permanently reporting that it is
+ * waiting for the alignment worker.
+ */
+function isSupersededAlignmentJob(job, config, options = {}) {
+    if (!job || !DISCARDABLE_JOB_STATES.has(job.state)) return false;
+    return !isReusableAlignmentJob(job, config, options);
+}
+
 function buildReusableAlignmentJobResponse(job) {
     const metadata = jobExecutionMetadata(job);
     const response = {
@@ -85,8 +124,11 @@ function buildReusableAlignmentJobResponse(job) {
 
 module.exports = {
     ALIGNMENT_ENGINE_VERSION,
+    RUNTIME_CONFIG_FIELDS,
     alignmentConfigFingerprint,
     alignmentJobReuseMaxAgeMs,
+    alignmentProcessTimeoutMs,
     buildReusableAlignmentJobResponse,
     isReusableAlignmentJob,
+    isSupersededAlignmentJob,
 };
