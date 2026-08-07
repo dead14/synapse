@@ -31,6 +31,8 @@ import {
   type SpoolLayers,
 } from '../../domain/spoolFeatures.ts';
 import SpoolScene3D, { type CameraCommand, type CameraPreset } from './SpoolScene3D.tsx';
+import SpoolFittingBar from './SpoolFittingBar.tsx';
+import { collectSpoolFittings, type SpoolFittingOverride } from './spoolFittings.ts';
 import SpoolUnrolled2D from './SpoolUnrolled2D.tsx';
 import SpoolAnomalyList from './SpoolAnomalyList.tsx';
 import SpoolInspector from './SpoolInspector.tsx';
@@ -97,6 +99,10 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
   const [crossSection, setCrossSection] = useState(false);
   const [markerScale, setMarkerScale] = useState(3);
   const [showWelds, setShowWelds] = useState(true);
+  const [showFittings, setShowFittings] = useState(true);
+  // What the engineer corrected about the furniture in this window: an ILI run
+  // reports that a bend is there far more reliably than it reports its angle.
+  const [fittingOverrides, setFittingOverrides] = useState<Record<string, SpoolFittingOverride>>({});
   const [showAxialScale, setShowAxialScale] = useState(true);
   const [measureMode, setMeasureMode] = useState(false);
   const [measurePicks, setMeasurePicks] = useState<SpoolFeature[]>([]);
@@ -139,6 +145,7 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
     setFilters(defaultFilters(range.startM, range.endM));
     setSelectedKey(null);
     setMeasurePicks([]);
+    setFittingOverrides({});
   }, [range.startM, range.endM]);
 
   const inWindow = useMemo(
@@ -157,6 +164,19 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
       : []),
     [model.welds, layers.weld, filters.maStartM, filters.maEndM],
   );
+
+  // The furniture between the two picked girth welds. A bend here is what makes
+  // the 3D shell turn, so it is derived from every feature in the window rather
+  // than from the filtered set — hiding a layer must not straighten the pipe.
+  const fittings = useMemo(
+    () => collectSpoolFittings(
+      model.features,
+      { startM: filters.maStartM, endM: filters.maEndM },
+      fittingOverrides,
+    ),
+    [model.features, filters.maStartM, filters.maEndM, fittingOverrides],
+  );
+  const bendCount = fittings.filter((fitting) => fitting.kind === 'bend').length;
 
   const counts = useMemo(() => {
     const tally: Record<SpoolFeatureClass, number> = {
@@ -363,6 +383,28 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
         </div>
       </div>
 
+      {fittings.length > 0 && (
+        <SpoolFittingBar
+          fittings={fittings}
+          showFittings={showFittings}
+          onToggleFittings={() => setShowFittings((on) => !on)}
+          onChange={(key, override) => setFittingOverrides((current) => ({
+            ...current,
+            [key]: { ...current[key], ...override },
+          }))}
+          onReset={(key) => setFittingOverrides((current) => {
+            if (!(key in current)) return current;
+            const next = { ...current };
+            delete next[key];
+            return next;
+          })}
+          onFocus={(fitting) => {
+            const feature = model.features.find((item) => item.key === fitting.key);
+            if (feature) setSelectedKey(feature.key);
+          }}
+        />
+      )}
+
       {/* Body. Every pane is drag-sized: the stage is the one that has to grow
           when a reviewer is actually reading metal, so nothing here is fixed. */}
       <div
@@ -412,7 +454,8 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
                   onSelect={pick}
                   onHover={setHovered}
                   hovered={hovered}
-                  view={{ xray, cutaway, crossSection, markerScale, showPrevious: compareRuns && layers.previousRun }}
+                  fittings={fittings}
+                  view={{ xray, cutaway, crossSection, markerScale, showPrevious: compareRuns && layers.previousRun, showFittings }}
                   command={command}
                   measureMode={measureMode}
                   measurePicks={measurePicks}
@@ -554,6 +597,9 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
         <span><strong>Window</strong> {stageStart.toFixed(2)} – {stageEnd.toFixed(2)} m</span>
         <span><strong>Anomalies</strong> {visible.length.toLocaleString()} shown / {inWindow.length.toLocaleString()} in window</span>
         <span><strong>Girth welds</strong> {welds.length}</span>
+        <span>
+          <strong>Fittings</strong> {fittings.length === 0 ? 'none in window' : `${fittings.length}${bendCount > 0 ? ` · ${bendCount} bend${bendCount === 1 ? '' : 's'}` : ''}`}
+        </span>
         <span><strong>Wall (median)</strong> {wallMedian === null ? 'not in tally' : `${wallMedian.toFixed(1)} mm`}</span>
         <span><strong>Diameter</strong> {odMm === null ? 'not set' : `${odMm.toFixed(0)} mm`}</span>
         <span><strong>Runs</strong> {model.hasComparison ? `${model.currentRun.label} vs ${model.previousRun.label}` : model.currentRun.label}</span>

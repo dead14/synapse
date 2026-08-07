@@ -18,6 +18,7 @@ import { FiMaximize2, FiRotateCw } from 'react-icons/fi';
 import type { SpoolFeature } from '../../domain/spoolFeatures';
 import type { CameraPreset } from '../spool/SpoolScene3D';
 import SpoolUnrolled2D from '../spool/SpoolUnrolled2D';
+import { collectSpoolFittings } from '../spool/spoolFittings';
 import { ffsSpoolGeometry } from '../../lib/ffs/spoolGeometryAdapter';
 import type { FfsSpool } from '../../lib/ffs/spoolReview';
 import type { FfsScreenedResult } from '../../lib/ffs/types';
@@ -46,6 +47,12 @@ export default function FfsSpoolGeometryPanes({
   onSelect?: (item: FfsScreenedResult) => void;
 }) {
   const geometry = useMemo(() => ffsSpoolGeometry(spool), [spool]);
+  // Same rule as the comparison workspace: a bend reported inside the spool
+  // turns the shell here too, so both pictures of one joint agree.
+  const fittings = useMemo(
+    () => collectSpoolFittings(geometry.features, { startM: geometry.startM, endM: geometry.endM }),
+    [geometry],
+  );
   const [markerScale, setMarkerScale] = useState(6);
   const [hovered, setHovered] = useState<SpoolFeature | null>(null);
   const [command, setCommand] = useState({ preset: 'home' as CameraPreset, nonce: 0 });
@@ -122,6 +129,7 @@ export default function FfsSpoolGeometryPanes({
             <SpoolScene3D
               features={geometry.features}
               welds={geometry.welds}
+              fittings={fittings}
               startM={geometry.startM}
               endM={geometry.endM}
               odMm={geometry.odMm}
@@ -136,6 +144,7 @@ export default function FfsSpoolGeometryPanes({
                 crossSection: false,
                 markerScale,
                 showPrevious: false,
+                showFittings: true,
               }}
               command={command}
               measureMode={false}
