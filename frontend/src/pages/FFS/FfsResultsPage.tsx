@@ -22,6 +22,8 @@ import FfsResultsTable from '../../components/ffs/FfsResultsTable';
 import FfsStatisticsPanel from '../../components/ffs/FfsStatisticsPanel';
 import FfsSummaryCards from '../../components/ffs/FfsSummaryCards';
 import ShareSnapshotButton from '../../components/sharing/ShareSnapshotButton';
+import { buildFfsShareState, type FfsShareState } from '../../lib/sharing/publicShareSnapshot';
+import { reviveFfsShareState } from '../../lib/ffs/shareState';
 import { Callout, NumberField, Panel } from '../../components/ffs/FfsPrimitives';
 import { exportResultsWorkbook } from '../../lib/ffs/exports';
 import { methodProfileLabel, pressureBasisLabel } from '../../lib/ffs/assessmentProfile.ts';
@@ -77,15 +79,30 @@ interface LocationState {
   };
 }
 
+interface FfsResultsPageProps {
+  /**
+   * Opened from a public link: the case comes frozen in the link instead of
+   * from navigation state, and the actions that would publish or restart the
+   * assessment are withheld.
+   */
+  readOnly?: boolean;
+  sharedState?: FfsShareState;
+}
+
 /**
  * The assessment workspace. The nominal B31G results arrive from the setup page;
  * the screening tiers are derived here so the engineer can retune the tolerance
  * and growth assumptions without re-running the parse.
+ *
+ * A published link mounts this same component — the reader gets the results,
+ * charts, statistics, integrity review, case review and narrative the author
+ * was reading, not a summary written for the link.
  */
-export default function FfsResultsPage() {
+export default function FfsResultsPage({ readOnly = false, sharedState }: FfsResultsPageProps = {}) {
   const location = useLocation();
   const navigate = useNavigate();
-  const state = location.state as LocationState | null;
+  const shared = useMemo(() => reviveFfsShareState(sharedState), [sharedState]);
+  const state = (shared ?? (location.state as LocationState | null)) as LocationState | null;
 
   const [activeTab, setActiveTab] = useState<TabId>('results');
   const [selected, setSelected] = useState<FfsScreenedResult | null>(null);
@@ -181,6 +198,15 @@ export default function FfsResultsPage() {
   const selectedItem = selectedIndex >= 0 ? screened[selectedIndex] : null;
 
   if (!state || !config || !reportContext || !reportCase) {
+    // A shared link that carries nothing renderable must not bounce the reader
+    // into the authenticated setup page they have no access to.
+    if (readOnly) {
+      return (
+        <Callout tone="warn">
+          This shared assessment carries no readable result. Ask the Synapse owner for a new link.
+        </Callout>
+      );
+    }
     return <Navigate to="/ffs" replace />;
   }
 
@@ -213,13 +239,19 @@ export default function FfsResultsPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {!readOnly && (
           <ShareSnapshotButton
             kind="FFS"
             title={`${config.lineName} · FFS results`}
             sourceRef={state.alignmentImport?.sessionId
               ? `alignment-session:${state.alignmentImport.sessionId}`
               : undefined}
-            rows={screened}
+            buildState={() => buildFfsShareState({
+              results,
+              config,
+              screening,
+              alignmentImport: state.alignmentImport,
+            })}
             summary={[
               {
                 label: 'Pass',
@@ -240,11 +272,14 @@ export default function FfsResultsPage() {
             ]}
             label="Share FFS"
           />
-          <SynButton variant="outline" size="sm" onClick={() => navigate('/ffs')}>
-            <span className="inline-flex items-center gap-2">
-              <FiArrowLeft /> New assessment
-            </span>
-          </SynButton>
+          )}
+          {!readOnly && (
+            <SynButton variant="outline" size="sm" onClick={() => navigate('/ffs')}>
+              <span className="inline-flex items-center gap-2">
+                <FiArrowLeft /> New assessment
+              </span>
+            </SynButton>
+          )}
           <SynButton
             variant="lime"
             size="sm"

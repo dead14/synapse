@@ -593,10 +593,13 @@ function normalizeInterventionEvent(event) {
         }
         return key;
     };
+    // A matched row is excluded as one record, so PAIR is a scope of its own
+    // beside the two single-run sides. Without it a reviewer cannot drop a
+    // matched valve or tee from the released outputs at all.
     const side = () => {
         const value = String(event.side || '').toUpperCase();
-        if (value !== 'OLD' && value !== 'NEW') {
-            throw validationError('INVALID_INTERVENTION', 'Exclusion side must be OLD or NEW');
+        if (value !== 'OLD' && value !== 'NEW' && value !== 'PAIR') {
+            throw validationError('INVALID_INTERVENTION', 'Exclusion side must be OLD, NEW, or PAIR');
         }
         return value;
     };
@@ -631,12 +634,25 @@ function normalizeInterventionEvent(event) {
             exclusionId: boundedKey(event.exclusionId, 'Exclusion ID', 120),
         };
     }
-    if (type !== 'REASSIGN_NEW') {
+    // Breaking a match apart is the inverse of reassigning one: it names both
+    // halves so replaying the log can find the exact pair it has to split.
+    if (type === 'UNASSIGN_PAIR') {
+        return {
+            ...normalized,
+            sourceOldKey: boundedKey(event.sourceOldKey, 'Pair OLD source key'),
+            sourceNewKey: boundedKey(event.sourceNewKey, 'Pair NEW source key'),
+        };
+    }
+    if (type !== 'REASSIGN_NEW' && type !== 'REASSIGN_OLD') {
         throw validationError('INVALID_INTERVENTION', 'Unsupported intervention type');
     }
-    const sourceNewKey = String(event.sourceNewKey || '').trim();
-    const targetOldKey = String(event.targetOldKey || '').trim();
-    if (!sourceNewKey || !targetOldKey || sourceNewKey.length > 500 || targetOldKey.length > 500) {
+    // Either half can be the one that moves. REASSIGN_NEW carries a NEW feature
+    // onto an OLD row; REASSIGN_OLD carries an OLD feature onto a NEW row.
+    const movingField = type === 'REASSIGN_NEW' ? 'sourceNewKey' : 'sourceOldKey';
+    const targetField = type === 'REASSIGN_NEW' ? 'targetOldKey' : 'targetNewKey';
+    const sourceKey = String(event[movingField] || '').trim();
+    const targetKey = String(event[targetField] || '').trim();
+    if (!sourceKey || !targetKey || sourceKey.length > 500 || targetKey.length > 500) {
         throw validationError('INVALID_INTERVENTION', 'Intervention requires bounded source and target keys');
     }
     const evidenceScore = Number(event.evidenceScore);
@@ -645,8 +661,8 @@ function normalizeInterventionEvent(event) {
     }
     return {
         ...normalized,
-        sourceNewKey,
-        targetOldKey,
+        [movingField]: sourceKey,
+        [targetField]: targetKey,
         evidenceScore,
     };
 }

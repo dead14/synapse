@@ -15,6 +15,7 @@ import { publicShareScopeKey } from '../../lib/sharing/publicShareLink.ts';
 import {
   buildPublicShareSnapshot,
   type PublicShareKind,
+  type PublicShareState,
   type PublicShareSummaryItem,
 } from '../../lib/sharing/publicShareSnapshot.ts';
 
@@ -24,11 +25,13 @@ interface ShareSnapshotButtonProps {
   kind: PublicShareKind;
   title: string;
   sourceRef?: string;
-  rows: object[];
-  referenceOnly?: boolean;
+  /**
+   * The page state the link reopens, built at click time so the link always
+   * carries what is on screen now rather than what was on screen at mount.
+   */
+  buildState: () => PublicShareState;
   summary?: PublicShareSummaryItem[];
   notes?: string[];
-  interventions?: unknown[];
   disabled?: boolean;
   className?: string;
   label?: string;
@@ -51,11 +54,9 @@ export default function ShareSnapshotButton({
   kind,
   title,
   sourceRef,
-  rows,
-  referenceOnly = false,
+  buildState,
   summary,
   notes,
-  interventions,
   disabled = false,
   className = '',
   label = 'Share',
@@ -93,11 +94,7 @@ export default function ShareSnapshotButton({
     setCopied(false);
     setIsCreating(true);
     try {
-      const snapshot = buildPublicShareSnapshot(
-        kind,
-        referenceOnly ? [] : rows,
-        { summary, notes, interventions },
-      );
+      const snapshot = buildPublicShareSnapshot(buildState(), { summary, notes });
       const share = await createPublicShare({
         kind,
         title,
@@ -155,9 +152,9 @@ export default function ShareSnapshotButton({
         variant="outline"
         size="sm"
         className={className}
-        disabled={disabled || rows.length === 0}
+        disabled={disabled}
         onClick={() => setIsOpen(true)}
-        title={rows.length === 0 ? 'No result rows are available to share.' : undefined}
+        title={disabled ? 'There is no released result to share yet.' : undefined}
       >
         <span className="inline-flex items-center gap-2">
           <FiLink aria-hidden="true" /> {label}
@@ -174,7 +171,7 @@ export default function ShareSnapshotButton({
             <div>
               <p className="syn-eyebrow">External read-only access</p>
               <h2 id={titleId} className="mt-1 text-lg font-bold text-slate-900 dark:text-white">
-                {referenceOnly ? 'Share this view' : 'Share this snapshot'}
+                Share this result
               </h2>
             </div>
             <button
@@ -189,8 +186,8 @@ export default function ShareSnapshotButton({
 
           <div className="space-y-4 px-5 py-5">
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-relaxed text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-200">
-              Anyone with the complete link can view this {referenceOnly ? 'read-only result' : 'frozen result'} without logging in.
-              They cannot edit the source analysis. Do not share it beyond the intended audience.
+              Anyone with the complete link opens this result read-only, without logging in — the same screen you are
+              looking at now. They cannot edit the source analysis. Do not share it beyond the intended audience.
             </div>
 
             {!created && (

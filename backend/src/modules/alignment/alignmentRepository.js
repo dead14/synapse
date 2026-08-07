@@ -249,6 +249,42 @@ async function listOwnedAlignmentResultPage(pool, sessionId, orgId, { limit, aft
     };
 }
 
+/**
+ * One page of a specific completed run, rather than of whichever run happens to
+ * be the newest for its session. A published link names the run it was made
+ * from, so re-running the alignment can never change what that link shows.
+ */
+async function listOwnedAlignmentJobResultPage(pool, jobId, orgId, { limit, after }) {
+    const startedAt = performance.now();
+    const values = [String(jobId), orgId, after === null ? 0 : after, limit + 1];
+    const result = await pool.query(
+        `WITH completed AS (
+            SELECT result_json
+            FROM alignment_jobs
+            WHERE job_id = $1
+              AND organization_id = $2
+              AND state = 'completed'
+            LIMIT 1
+         )
+         SELECT item.value AS row, item.ordinality::int AS ordinal
+         FROM completed c
+         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.result_json->'comparison', '[]'::jsonb))
+             WITH ORDINALITY AS item(value, ordinality)
+         WHERE item.ordinality > $3
+         ORDER BY item.ordinality ASC
+         LIMIT $4`,
+        values,
+    );
+    metrics.observe('alignment_result_query', performance.now() - startedAt, { query: 'job_page' });
+    const hasNextPage = result.rows.length > limit;
+    const rows = hasNextPage ? result.rows.slice(0, limit) : result.rows;
+    const tail = rows[rows.length - 1];
+    return {
+        rows: rows.map((row) => row.row),
+        nextCursor: hasNextPage && tail ? Number(tail.ordinal) : null,
+    };
+}
+
 async function findOwnedAlignmentExport(pool, sessionId, orgId) {
     const result = await pool.query(
         `SELECT j.job_id,
@@ -390,6 +426,7 @@ module.exports = {
     getOwnedAlignmentJob,
     findOwnedAlignmentExport,
     iterateOwnedAlignmentExportRows,
+    listOwnedAlignmentJobResultPage,
     listOwnedAlignmentResultPage,
     listOwnedSessions,
     createOwnedSession,

@@ -68,6 +68,15 @@ test('create contract rejects unknown kinds, unsafe expiry, and malformed displa
         () => parseCreateShare({ kind: 'PDF', title: 'x', snapshot: validSnapshot() }),
         /kind must be one of/i,
     );
+    // Only the alignment and FFS results are publishable; the rest were removed
+    // rather than left half-supported behind a link.
+    for (const retired of ['GW_ALIGNMENT', 'SECTIONING', 'CORROSION']) {
+        assert.throws(
+            () => parseCreateShare({ kind: retired, title: 'x', snapshot: validSnapshot() }),
+            /kind must be one of/i,
+            `${retired} must not be publishable`,
+        );
+    }
     assert.throws(
         () => parseCreateShare({
             kind: 'FFS',
@@ -79,7 +88,7 @@ test('create contract rejects unknown kinds, unsafe expiry, and malformed displa
     );
     assert.throws(
         () => parseCreateShare({
-            kind: 'CORROSION',
+            kind: 'FFS',
             title: 'x',
             snapshot: validSnapshot({ columns: [{ key: '__proto__', label: 'bad' }] }),
         }),
@@ -87,7 +96,7 @@ test('create contract rejects unknown kinds, unsafe expiry, and malformed displa
     );
     assert.throws(
         () => parseCreateShare({
-            kind: 'SECTIONING',
+            kind: 'ILI_ALIGNMENT',
             title: 'x',
             snapshot: validSnapshot({ rows: Array.from({ length: MAX_SNAPSHOT_ROWS + 1 }, () => ({})) }),
         }),
@@ -97,7 +106,7 @@ test('create contract rejects unknown kinds, unsafe expiry, and malformed displa
     const oversizedText = 'x'.repeat(MAX_SNAPSHOT_BYTES);
     assert.throws(
         () => parseCreateShare({
-            kind: 'GW_ALIGNMENT',
+            kind: 'FFS',
             title: 'x',
             snapshot: validSnapshot({
                 columns: [{ key: 'blob', label: 'Blob' }],
@@ -348,4 +357,102 @@ test('ILI share reads the canonical paged result with the scoped organization', 
         9,
         { limit: 20_000, after: 0 },
     ]]);
+});
+
+test('a link published from a run reads that run, not whichever run is newest', async () => {
+    const token = 'F'.repeat(43);
+    const sessionCalls = [];
+    const jobCalls = [];
+    const controller = createPublicShareController({
+        repository: {
+            findPublic: async () => ({
+                public_id: 'f349577d-4bbf-4a99-8a46-6ee88cd84ea8',
+                token_hash: hashShareToken(token),
+                organization_id: 9,
+                kind: 'ILI_ALIGNMENT',
+                source_ref: 'alignment-job:align-77',
+                created_at: new Date('2026-07-28T00:00:00.000Z'),
+                expires_at: new Date('2026-08-27T00:00:00.000Z'),
+                revoked_at: null,
+            }),
+        },
+        readAlignmentPage: async (...args) => {
+            sessionCalls.push(args);
+            return { rows: [{ 'Source Key NEW': 'later-run' }], nextCursor: null };
+        },
+        readAlignmentJobPage: async (...args) => {
+            jobCalls.push(args);
+            return { rows: [{ 'Source Key NEW': 'published-run' }], nextCursor: null };
+        },
+        now: () => new Date('2026-07-28T00:00:00.000Z'),
+        pool: { name: 'pool' },
+    });
+    const res = fakeResponse();
+
+    await controller.getPublicAlignmentResultsPage({
+        params: { id: 'f349577d-4bbf-4a99-8a46-6ee88cd84ea8' },
+        headers: { 'x-share-token': token },
+        query: { limit: '20000', cursor: '0' },
+    }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body.items, [{ 'Source Key NEW': 'published-run' }]);
+    assert.deepEqual(sessionCalls, []);
+    assert.deepEqual(jobCalls, [[
+        { name: 'pool' },
+        'align-77',
+        9,
+        { limit: 20_000, after: 0 },
+    ]]);
+});
+
+test('the published page state survives the contract instead of being dropped', () => {
+    const parsed = parseCreateShare({
+        kind: 'ILI_ALIGNMENT',
+        title: 'Final alignment',
+        sourceRef: 'alignment-job:align-77',
+        snapshot: {
+            version: 1,
+            summary: [{ label: 'Matched', value: 42 }],
+            notes: [],
+            state: {
+                kind: 'ILI_ALIGNMENT',
+                interventions: [
+                    { id: 'exclude-1', type: 'EXCLUDE_FEATURE', side: 'PAIR', sourceKey: 'old:7' },
+                ],
+                sections: [{ name: 'KP 0-5' }],
+            },
+        },
+    });
+
+    assert.deepEqual(parsed.snapshot.state, {
+        kind: 'ILI_ALIGNMENT',
+        interventions: [
+            { id: 'exclude-1', type: 'EXCLUDE_FEATURE', side: 'PAIR', sourceKey: 'old:7' },
+        ],
+        sections: [{ name: 'KP 0-5' }],
+    });
+    assert.deepEqual(parsed.snapshot.columns, []);
+    assert.deepEqual(parsed.snapshot.rows, []);
+});
+
+test('published state cannot smuggle prototype pollution or unbounded nesting', () => {
+    const polluted = JSON.parse('{"kind":"FFS","results":[{"__proto__":{"admin":true},"key":"ffs:1"}]}');
+    const parsed = parseCreateShare({
+        kind: 'FFS',
+        title: 'Assessment',
+        snapshot: { version: 1, state: polluted },
+    });
+    assert.deepEqual(parsed.snapshot.state.results, [{ key: 'ffs:1' }]);
+
+    let deep = { kind: 'FFS' };
+    for (let level = 0; level < 40; level += 1) deep = { nested: deep };
+    assert.throws(
+        () => parseCreateShare({
+            kind: 'FFS',
+            title: 'Assessment',
+            snapshot: { version: 1, state: deep },
+        }),
+        /nested deeper/i,
+    );
 });

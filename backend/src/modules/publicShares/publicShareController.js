@@ -2,7 +2,10 @@ const defaultPool = require('../../config/db');
 const { writeAuditLog: defaultWriteAuditLog } = require('../audit/auditLog');
 const { parseCreateShare, parseShareFilters } = require('./publicShareContract');
 const defaultRepository = require('./publicShareRepository');
-const { listOwnedAlignmentResultPage } = require('../alignment/alignmentRepository');
+const {
+    listOwnedAlignmentJobResultPage,
+    listOwnedAlignmentResultPage,
+} = require('../alignment/alignmentRepository');
 const { parseAlignmentResultPageQuery } = require('../alignment/alignmentResultPaging');
 const {
     canPublishShare,
@@ -24,10 +27,23 @@ function publicUnavailable(res) {
     ));
 }
 
-function alignmentSessionId(sourceRef) {
-    const match = String(sourceRef || '').match(/^alignment-session:(\d+)$/);
-    const sessionId = match ? Number(match[1]) : 0;
-    return Number.isSafeInteger(sessionId) && sessionId > 0 ? sessionId : null;
+/**
+ * What a published alignment link points at.
+ *
+ * A link created from a specific run names that run, so re-running the
+ * alignment in the same session cannot swap out what the recipient sees. Links
+ * made before runs were addressable still resolve through their session, which
+ * reads the newest completed run for it.
+ */
+function alignmentSource(sourceRef) {
+    const raw = String(sourceRef || '');
+    const job = raw.match(/^alignment-job:([A-Za-z0-9:_-]{1,120})$/);
+    if (job) return { kind: 'job', id: job[1] };
+    const session = raw.match(/^alignment-session:(\d+)$/);
+    const sessionId = session ? Number(session[1]) : 0;
+    return Number.isSafeInteger(sessionId) && sessionId > 0
+        ? { kind: 'session', id: sessionId }
+        : null;
 }
 
 function metadata(row, currentTime) {
@@ -53,6 +69,7 @@ function createPublicShareController({
     },
     credentialFactory = createShareCredential,
     readAlignmentPage = listOwnedAlignmentResultPage,
+    readAlignmentJobPage = listOwnedAlignmentJobResultPage,
     now = () => new Date(),
     writeAuditLog = defaultWriteAuditLog,
 } = {}) {
@@ -227,10 +244,10 @@ function createPublicShareController({
         async getPublicAlignmentResultsPage(req, res) {
             try {
                 const row = await resolvePublicShare(req);
-                const sessionId = row?.kind === 'ILI_ALIGNMENT'
-                    ? alignmentSessionId(row.source_ref)
+                const source = row?.kind === 'ILI_ALIGNMENT'
+                    ? alignmentSource(row.source_ref)
                     : null;
-                if (!row || !sessionId) return publicUnavailable(res);
+                if (!row || !source) return publicUnavailable(res);
 
                 let pageQuery;
                 try {
@@ -242,9 +259,10 @@ function createPublicShareController({
                     ));
                 }
 
-                const page = await readAlignmentPage(
+                const readPage = source.kind === 'job' ? readAlignmentJobPage : readAlignmentPage;
+                const page = await readPage(
                     pool,
-                    sessionId,
+                    source.id,
                     row.organization_id,
                     pageQuery,
                 );

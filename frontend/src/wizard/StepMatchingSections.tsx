@@ -27,7 +27,6 @@ import {
 } from './matchingSections';
 import { fetchSectioningAnchors, prepareSectioningMasterRows } from './sectioningEvidence';
 import { pairGwResult, pairTieIn, primaryRunPair, resolveRunPairs, sectionsForPair } from '../domain/runPairs';
-import ShareSnapshotButton from '../components/sharing/ShareSnapshotButton';
 import {
   ActionBar,
   Button,
@@ -556,24 +555,6 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
           <Button variant="ghost" startIcon={<FiChevronLeft aria-hidden="true" />} onClick={onBack}>
             GW matching
           </Button>
-        }
-        center={
-          <ShareSnapshotButton
-            kind="SECTIONING"
-            title={`Sectioning${activePair?.label ? ` · ${activePair.label}` : ''}`}
-            sourceRef={config?.sessionId ? `alignment-session:${config.sessionId}` : undefined}
-            rows={displaySections}
-            summary={[
-              { label: 'Coverage', value: `${coverage.toFixed(1)}%` },
-              { label: 'Locked GW', value: lockedGws.length },
-              { label: 'Missing in NEW', value: features.stats.missingGwCount },
-            ]}
-            notes={[
-              'Sections are frozen against the NEW spatial master at the time this link was created.',
-            ]}
-            disabled={Boolean(validationError)}
-            label="Share sectioning"
-          />
         }
         next={
           <Button
