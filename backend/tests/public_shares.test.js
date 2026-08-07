@@ -6,6 +6,7 @@ process.env.DATABASE_URL ||= 'postgresql://test:test@127.0.0.1:5432/test';
 const {
     MAX_SNAPSHOT_BYTES,
     MAX_SNAPSHOT_ROWS,
+    PUBLIC_SHARE_BODY_LIMIT,
     parseCreateShare,
     parseShareFilters,
 } = require('../src/modules/publicShares/publicShareContract');
@@ -454,5 +455,17 @@ test('published state cannot smuggle prototype pollution or unbounded nesting', 
             snapshot: { version: 1, state: deep },
         }),
         /nested deeper/i,
+    );
+});
+
+test('the publish route accepts a body at least as large as the snapshot it must carry', () => {
+    // A transport limit below the snapshot limit rejects the upload with a bare
+    // 413 before the contract can say what was wrong, so the two are derived
+    // from one number rather than written down twice.
+    const megabytes = Number(PUBLIC_SHARE_BODY_LIMIT.replace('mb', ''));
+    assert.ok(Number.isFinite(megabytes), 'the body limit is a parseable size');
+    assert.ok(
+        megabytes * 1024 * 1024 > MAX_SNAPSHOT_BYTES,
+        `body limit ${PUBLIC_SHARE_BODY_LIMIT} must exceed the ${MAX_SNAPSHOT_BYTES} byte snapshot ceiling`,
     );
 });

@@ -11,6 +11,7 @@ const {
     integerFromEnv,
 } = require('./middlewares/redisRateLimit');
 const metrics = require('./observability/metrics');
+const { PUBLIC_SHARE_BODY_LIMIT } = require('./modules/publicShares/publicShareContract');
 const app = express();
 
 // Label metrics by the matched route template, never by the raw URL.  This
@@ -59,7 +60,17 @@ app.use(securityHeaders);
 app.use(cors(corsOptions));
 
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '10mb';
-app.use(express.json({ limit: requestBodyLimit }));
+// Publishing an FFS link uploads the whole frozen assessment in one request,
+// which is legitimately far larger than anything else the API accepts. It gets
+// its own ceiling, taken from the share contract so the two cannot drift, and
+// the general body guard stays where it is for every other route.
+const shareBodyLimit = process.env.PUBLIC_SHARE_BODY_LIMIT || PUBLIC_SHARE_BODY_LIMIT;
+const generalJsonParser = express.json({ limit: requestBodyLimit });
+const shareJsonParser = express.json({ limit: shareBodyLimit });
+const isSharePublish = (req) => req.method === 'POST' && req.path === '/api/public-shares';
+app.use((req, res, next) => (
+    isSharePublish(req) ? shareJsonParser : generalJsonParser
+)(req, res, next));
 app.use(express.urlencoded({ limit: requestBodyLimit, extended: true }));
 
 app.get('/api/health', healthHandler);

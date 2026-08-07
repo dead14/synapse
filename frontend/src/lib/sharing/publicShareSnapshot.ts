@@ -66,8 +66,12 @@ interface BuildSnapshotOptions {
 
 const BLOCKED_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const MAX_DEPTH = 12;
-/** Same ceiling the API enforces; failing here names the field that overflowed. */
-const MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024;
+/**
+ * Same ceiling the API enforces; failing here reports the size before spending
+ * a large upload on a request the server would refuse. Keep it in step with
+ * MAX_SNAPSHOT_BYTES in publicShareContract.js.
+ */
+const MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

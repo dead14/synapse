@@ -9,12 +9,19 @@ const SHARE_KINDS = Object.freeze([
 ]);
 const SHARE_KIND_SET = new Set(SHARE_KINDS);
 const SHARE_EXPIRY_DAYS = new Set([7, 30, 90]);
-const MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024;
+// A full FFS assessment runs to tens of megabytes: the link freezes every
+// feature, because that page persists nothing server-side and would otherwise
+// have nothing to reopen. Keep this in step with MAX_SNAPSHOT_BYTES in
+// publicShareSnapshot.ts, which fails the same size in the browser first.
+const MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024;
 const MAX_SNAPSHOT_ROWS = 10_000;
 const MAX_COLUMNS = 100;
 const MAX_NOTES = 100;
 const MAX_STATE_DEPTH = 12;
-const MAX_STATE_NODES = 400_000;
+// Scaled with the byte ceiling. A node is roughly a JSON value, and the byte
+// limit is the one that actually bounds the payload; this only stops a
+// pathological structure from spending the walk before it gets there.
+const MAX_STATE_NODES = 4_000_000;
 const DANGEROUS_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 function isRecord(value) {
@@ -195,9 +202,21 @@ function parseShareFilters(query = {}) {
     };
 }
 
+/**
+ * Transport ceiling for a publish request, derived from the snapshot ceiling
+ * rather than written down beside it: a body limit lower than the snapshot
+ * limit rejects the upload before the contract can explain why, and the two
+ * drifting apart is exactly the failure that produces a bare 413.
+ *
+ * The margin covers the request envelope and JSON escaping, which can inflate
+ * a snapshot noticeably when it is full of quoted strings.
+ */
+const PUBLIC_SHARE_BODY_LIMIT = `${Math.ceil((MAX_SNAPSHOT_BYTES / (1024 * 1024)) * 1.1)}mb`;
+
 module.exports = {
     MAX_SNAPSHOT_BYTES,
     MAX_SNAPSHOT_ROWS,
+    PUBLIC_SHARE_BODY_LIMIT,
     SHARE_KINDS,
     parseCreateShare,
     parseShareFilters,
