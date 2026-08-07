@@ -55,6 +55,11 @@ cleanup_on_exit() {
     log "Removed failed candidate process $candidate_process"
   fi
 
+  if [[ -n "$prepared_release_dir" && -d "$prepared_release_dir" ]]; then
+    rm -rf -- "$prepared_release_dir"
+    log "Removed incomplete release directory $prepared_release_dir"
+  fi
+
   trap - EXIT
   exit "$exit_code"
 }
