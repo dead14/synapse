@@ -54,6 +54,7 @@ const {
     alignmentConfigFingerprint,
     buildReusableAlignmentJobResponse,
     isReusableAlignmentJob,
+    isSupersededAlignmentJob,
 } = require('./alignmentExecution');
 const {
     parseAlignmentResultPageQuery,
@@ -903,6 +904,37 @@ exports.resumeWizardState = async (req, res) => {
     }
 };
 
+/**
+ * Drop a queued run whose configuration this request has already replaced.
+ * Removal is best effort: BullMQ refuses to remove a job it has already handed
+ * to a worker, and a row whose queue entry cannot be dropped is left alone
+ * rather than reported dead while its engine is still running.
+ */
+async function discardSupersededAlignmentJob(jobId) {
+    try {
+        // A missing queue entry is not a failure: the durable row outlives
+        // Redis, and a queued row with nothing behind it is exactly the ghost
+        // this is here to clear.
+        const queued = await alignmentQueue.getJob(jobId);
+        if (queued) await queued.remove();
+    } catch (error) {
+        console.warn(JSON.stringify({
+            event: 'alignment_supersede_skipped',
+            jobId,
+            reason: String(error?.message || error),
+        }));
+        return false;
+    }
+    await updateAlignmentJob(pool, jobId, {
+        state: 'failed',
+        errorCode: 'ALIGNMENT_SUPERSEDED',
+        errorMessage: 'Superseded by a newer alignment configuration.',
+        completedAt: new Date(),
+    });
+    console.log(JSON.stringify({ event: 'alignment_job_superseded', jobId }));
+    return true;
+}
+
 exports.getIliResults = async (req, res) => {
     try {
         const requestedSessionId = req.query.sessionId
@@ -930,6 +962,9 @@ exports.getIliResults = async (req, res) => {
             return res
                 .status(previousJob.state === 'completed' ? 200 : 202)
                 .json(buildReusableAlignmentJobResponse(previousJob));
+        }
+        if (isSupersededAlignmentJob(previousJob, session.params_json)) {
+            await discardSupersededAlignmentJob(previousJob.job_id);
         }
 
         const jobId = randomUUID();

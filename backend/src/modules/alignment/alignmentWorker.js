@@ -15,7 +15,7 @@ const {
     normalizeComparisonResult,
     summarizeComparison,
 } = require('./alignmentContract');
-const { ALIGNMENT_ENGINE_VERSION } = require('./alignmentExecution');
+const { ALIGNMENT_ENGINE_VERSION, alignmentProcessTimeoutMs } = require('./alignmentExecution');
 const { pairKeyOf } = require('./runPairIdentity');
 const { pythonExecutable, pythonSpawnOptions, killPythonProcess } = require('../../config/python');
 
@@ -72,7 +72,7 @@ async function runPythonAlignment(sessionId, algorithm, pairConfig = null) {
                 },
             }));
             let errorOutput = '';
-            const timeoutMs = Number(process.env.ALIGNMENT_PROCESS_TIMEOUT_MS) || 30 * 60 * 1000;
+            const timeoutMs = alignmentProcessTimeoutMs();
             const timeout = setTimeout(() => {
                 killPythonProcess(child);
                 const error = new Error(`Alignment process exceeded ${timeoutMs} ms`);
