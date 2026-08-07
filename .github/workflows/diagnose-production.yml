@@ -1,0 +1,140 @@
+name: Diagnose Production
+
+# Read-only. Run this from the Actions tab when a deploy fails its public
+# checks: it probes the site the way synapse-deploy does and prints which
+# Nginx server block actually answers, so the failure can be diagnosed
+# without anyone hand-running ssh against production.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: synapse-production-diagnose
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    env:
+      DEPLOY_HOST: ${{ secrets.SYNAPSE_HOST }}
+      DEPLOY_USER: ${{ secrets.SYNAPSE_DEPLOY_USER }}
+      DEPLOY_PORT: ${{ secrets.SYNAPSE_SSH_PORT }}
+      DEPLOY_KEY: ${{ secrets.SYNAPSE_SSH_PRIVATE_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.SYNAPSE_SSH_KNOWN_HOSTS }}
+      PUBLIC_HOST: ${{ secrets.SYNAPSE_PUBLIC_HOST }}
+
+    steps:
+      # No sudo, no SSH -- just asks the public edge what it serves. If https
+      # answers 200 where http answers 404, the site is healthy and only the
+      # deploy script's port-80 probe is wrong.
+      - name: Probe the public edge over http and https
+        shell: bash
+        run: |
+          host_header="${PUBLIC_HOST:-$DEPLOY_HOST}"
+          echo "Host header in use: ${host_header}"
+
+          probe() {
+            local scheme="$1"
+            local path="$2"
+            local send_host="$3"
+            local code
+            local -a args=(
+              --silent --show-error --insecure --max-time 15
+              --output /tmp/body --dump-header /tmp/head
+              --write-out '%{http_code}'
+            )
+            if [[ "$send_host" == "with-host" ]]; then
+              args+=(-H "Host: ${host_header}")
+            fi
+
+            code="$(curl "${args[@]}" "${scheme}://${DEPLOY_HOST}${path}" 2>/tmp/err)" \
+              || code="000"
+
+            echo "::group::${scheme} ${path} (${send_host}) -> ${code}"
+            if [[ -s /tmp/err ]]; then
+              echo "curl stderr:"
+              sed -n '1,3p' /tmp/err
+            fi
+            echo "response headers:"
+            sed -n '1,12p' /tmp/head 2>/dev/null || echo "(none)"
+            echo "body (first 5 lines):"
+            sed -n '1,5p' /tmp/body 2>/dev/null || echo "(empty)"
+            echo "::endgroup::"
+          }
+
+          for scheme in http https; do
+            for path in /api/health /; do
+              probe "$scheme" "$path" with-host
+            done
+          done
+
+          # Same requests without the Host header, to show whether a default
+          # server block is swallowing bare-IP traffic.
+          probe http /api/health no-host
+          probe https /api/health no-host
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          : "${DEPLOY_HOST:?Missing SYNAPSE_HOST secret}"
+          : "${DEPLOY_USER:?Missing SYNAPSE_DEPLOY_USER secret}"
+          : "${DEPLOY_KEY:?Missing SYNAPSE_SSH_PRIVATE_KEY secret}"
+          : "${DEPLOY_KNOWN_HOSTS:?Missing SYNAPSE_SSH_KNOWN_HOSTS secret}"
+          deploy_port="${DEPLOY_PORT:-22}"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.ssh/config" <<EOF
+          Host synapse-production
+            HostName $DEPLOY_HOST
+            User $DEPLOY_USER
+            Port $deploy_port
+            IdentityFile $HOME/.ssh/id_ed25519
+            BatchMode yes
+            StrictHostKeyChecking yes
+            ConnectTimeout 20
+          EOF
+          chmod 600 "$HOME/.ssh/config"
+
+      # Best effort: the deploy user's sudo grant is normally scoped to
+      # synapse-deploy, so `sudo nginx -T` may be refused. Never fail the job
+      # on that -- the probes above already carry the useful signal.
+      - name: Map each server_name back to the file that declares it
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          ssh synapse-production 'sudo -n nginx -T 2>/dev/null' > /tmp/nginx-dump.txt 2>/tmp/nginx-err.txt \
+            || { echo "Could not read the Nginx config (expected if sudo is scoped):"; sed -n '1,5p' /tmp/nginx-err.txt; exit 0; }
+
+          if [[ ! -s /tmp/nginx-dump.txt ]]; then
+            echo "Nginx config dump was empty; sudo likely denied."
+            exit 0
+          fi
+
+          echo "server_name / listen / root, grouped by config file:"
+          awk '
+            /^# configuration file / { file = $4; sub(/:$/, "", file) }
+            $1 == "server_name" || $1 == "listen" || $1 == "root" {
+              gsub(/^[ \t]+/, "")
+              print file ": " $0
+            }
+          ' /tmp/nginx-dump.txt
+
+      - name: Show which release the server thinks is live
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          ssh synapse-production '
+            echo "current-release: $(cat /var/www/synapse-shared/current-release 2>/dev/null || echo unknown)"
+            echo "release dirs:"
+            ls -1 /var/www/synapse-releases 2>/dev/null || echo "(cannot list)"
+          '
