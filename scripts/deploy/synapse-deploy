@@ -218,6 +218,37 @@ start_candidate() {
   log "Candidate $candidate_process is healthy on port $port"
 }
 
+# Probes the freshly reloaded Nginx the way a real client would. Each check is
+# named so a failure says which one broke instead of a bare curl error, and a
+# non-2xx dumps the server blocks claiming PUBLIC_HOST — a duplicate
+# server_name elsewhere in the Nginx tree silently shadows our site and turns
+# every request into a 404 from someone else's document root.
+check_public_url() {
+  local label="$1"
+  local timeout="$2"
+  local path="$3"
+  local status
+
+  status="$(
+    curl --silent --show-error --output /dev/null --max-time "$timeout" \
+      --write-out '%{http_code}' \
+      -H "Host: ${PUBLIC_HOST}" \
+      "http://127.0.0.1${path}"
+  )" || status="000"
+
+  if [[ "$status" == 2* ]]; then
+    log "Public check OK (${label}): ${path} -> ${status}"
+    return 0
+  fi
+
+  log "Public check FAILED (${label}): ${path} -> ${status}"
+  log "Server blocks claiming ${PUBLIC_HOST}:"
+  nginx -T 2>/dev/null \
+    | grep -nE '^\s*(#\s*configuration file|server_name|root)\s' \
+    | tee -a "$DEPLOY_LOG" >/dev/null || true
+  fail "Public ${label} check returned ${status} for ${path}"
+}
+
 switch_nginx() {
   local release_id="$1"
   local release_dir="$2"
@@ -243,13 +274,8 @@ switch_nginx() {
   nginx -s reload
   nginx_switched=1
 
-  curl --fail --silent --show-error --max-time 10 \
-    -H "Host: ${PUBLIC_HOST}" \
-    "http://127.0.0.1/api/health" >/dev/null
-
-  curl --fail --silent --show-error --max-time 15 \
-    -H "Host: ${PUBLIC_HOST}" \
-    "http://127.0.0.1/" >/dev/null
+  check_public_url "backend health" 10 "/api/health"
+  check_public_url "frontend index" 15 "/"
 
   asset_path="$(
     grep -Eo 'src="/assets/[^"]+\.js"' "${release_dir}/frontend/dist/index.html" \
@@ -258,9 +284,7 @@ switch_nginx() {
   )"
   [[ -n "$asset_path" ]] || fail "Could not locate the main JavaScript asset"
 
-  curl --fail --silent --show-error --max-time 15 \
-    -H "Host: ${PUBLIC_HOST}" \
-    "http://127.0.0.1${asset_path}" >/dev/null
+  check_public_url "frontend asset" 15 "$asset_path"
 
   log "Nginx now serves $release_id on port $port"
 }
