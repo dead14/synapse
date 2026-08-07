@@ -12,6 +12,7 @@
 
 import type { CorrosionAnalysisConfig, CorrosionFeature } from './analysis.ts';
 import { DEFAULT_CORROSION_ANALYSIS_CONFIG, isMetalLoss } from './analysis.ts';
+import { maxOf, maxOrNull, minOrNull } from '../../utils/numericRange.ts';
 
 /* ── Severity ─────────────────────────────────────────────────────────────── */
 
@@ -327,7 +328,7 @@ export function densityByKp(
     return { windows: [], peak: null, hotspot: null, meanPerKm: 0 };
   }
 
-  const maxDistance = Math.max(...distances);
+  const maxDistance = maxOf(distances);
   const windowCount = Math.max(1, Math.ceil((maxDistance + 1e-6) / windowM));
   const windows: DensityWindow[] = Array.from({ length: windowCount }, (_, index) => ({
     startM: index * windowM,
@@ -531,8 +532,8 @@ export function growthBySection(
     const sortedRates = [...rates].sort((left, right) => left - right);
     rows.push({
       section,
-      startM: distances.length > 0 ? Math.min(...distances) : null,
-      endM: distances.length > 0 ? Math.max(...distances) : null,
+      startM: minOrNull(distances),
+      endM: maxOrNull(distances),
       total: members.length,
       measured: rates.length,
       active: members.filter((feature) => {

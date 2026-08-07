@@ -281,10 +281,9 @@ class HungarianToleranceTests(unittest.TestCase):
             "raw": {"type": "weld"},
         }
 
-        anomalies, bypassed = self.engine._partition_hungarian_features(
-            [anomaly, weld],
-            {"duplicate-vendor-id"},
-        )
+        # Deliberately takes no lock-id set: phase ownership is decided by
+        # feature type, because vendor ids are not unique across exports.
+        anomalies, bypassed = self.engine._partition_hungarian_features([anomaly, weld])
 
         self.assertEqual(anomalies, [anomaly])
         self.assertEqual(bypassed, [])
@@ -579,7 +578,6 @@ class HungarianGwLockTests(unittest.TestCase):
 
         anomalies, bypassed = HungarianAnomalyAlignmentEngine._partition_hungarian_features(
             features,
-            locked_ids={"gw-matched"},
         )
 
         self.assertEqual([feature["id"] for feature in anomalies], ["defect"])
@@ -645,7 +643,6 @@ class HungarianGwLockTests(unittest.TestCase):
 
         anomalies, bypassed = HungarianAnomalyAlignmentEngine._partition_hungarian_features(
             features,
-            locked_ids=set(),
         )
 
         self.assertEqual([feature["id"] for feature in anomalies], ["single-defect"])

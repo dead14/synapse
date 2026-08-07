@@ -280,6 +280,15 @@ def _load_xlsx_table(file_path, synonym_lookup, preview_rows):
                 if trailing_empty_rows >= TRAILING_EMPTY_ROW_LIMIT:
                     break
 
+        # openpyxl's read-only iterator can yield a short tuple for a row whose
+        # trailing cells were never written, and pandas rejects a ragged list
+        # outright — one such row aborted the whole ingestion. Rows are padded
+        # to the header width instead, which is what the missing cells mean.
+        width = len(headers)
+        data_rows = [
+            row if len(row) == width else tuple(row) + (None,) * (width - len(row))
+            for row in data_rows
+        ]
         return pd.DataFrame(data_rows, columns=headers), header_index, matched_fields
     finally:
         workbook.close()
@@ -299,7 +308,13 @@ def load_source_table(file_path, synonym_lookup, preview_rows=30):
         header_index, matched_fields = detect_header_row(preview, synonym_lookup, preview_rows)
         raw = pd.read_csv(file_path, header=header_index)
 
+    # Blank rows are dropped before mapping, but the audit's source-row count is
+    # a conservation claim: measuring it after this filter under-reported the
+    # file and made "accepted + rejected == source" true by construction.
+    rows_before_blank_filter = int(len(raw))
     raw = raw.dropna(how="all").reset_index(drop=True)
+    raw.attrs["source_rows"] = rows_before_blank_filter
+    raw.attrs["blank_rows"] = rows_before_blank_filter - int(len(raw))
     raw.columns = [
         str(column).strip() if pd.notna(column) else f"_col{index}"
         for index, column in enumerate(raw.columns)
@@ -338,16 +353,21 @@ def summarize_feature_counts(frame):
     welds = int(counts.get("weld", 0))
     valves = int(counts.get("valve", 0))
     tees = int(counts.get("tee", 0))
+    offtakes = int(counts.get("offtake", 0))
     return {
         "total": int(len(frame)),
         "anomalies": int(counts.get("anomaly", 0)),
         "welds": welds,
         "valves": valves,
         "tees": tees,
-        "offtakes": int(counts.get("offtake", 0)),
+        "offtakes": offtakes,
         "bends": int(counts.get("bend", 0)),
         "others": int(counts.get("other", 0)),
-        "gw_anchors": welds + valves + tees,
+        # Offtakes are counted here because the matcher counts them: DTW's
+        # _alignment_feature_kind normalises "offtake" to "tee", so they are
+        # Tier-1 anchors. Excluding them made the wizard promise fewer anchors
+        # than the engine would actually use.
+        "gw_anchors": welds + valves + tees + offtakes,
         # Invalid distances are rejected before a canonical run is persisted.
         "invalid_anchor_distances": 0,
     }
@@ -430,13 +450,31 @@ def normalize_ingestion_frame(raw, field_map):
     )
     feature_types = universal["feature_type"].values
     feature_identifications = universal["feature_identification"].values
-    universal["feature_type"] = [
+    normalized_types = [
         normalize_feature_type(
             None if pd.isna(feature_types[index]) else feature_types[index],
             None if pd.isna(feature_identifications[index]) else feature_identifications[index],
         )
         for index in range(len(universal))
     ]
+    # Normalisation collapses a vendor label onto a canonical class, and that
+    # loses information downstream consumers need. "Cluster corrosion" becomes
+    # "Metal Loss", and the alignment engine's cluster rule — which reads
+    # feature_type, feature_identification and dim_classification — then had no
+    # column left carrying the word "cluster", so vendor-merged groups were fed
+    # into anomaly matching after all. The source label is kept in
+    # feature_identification whenever the vendor left that column empty.
+    universal["feature_identification"] = [
+        feature_identifications[index]
+        if not pd.isna(feature_identifications[index])
+        and str(feature_identifications[index]).strip() != ""
+        else (
+            None if pd.isna(feature_types[index])
+            else str(feature_types[index]).strip() or None
+        )
+        for index in range(len(universal))
+    ]
+    universal["feature_type"] = normalized_types
 
     valid_distance = universal["log_distance_m"].notna()
     rejected_rows = int((~valid_distance).sum())
@@ -450,15 +488,30 @@ def normalize_ingestion_frame(raw, field_map):
     universal = universal.sort_values("log_distance_m", kind="stable").reset_index(drop=True)
 
     quality_warnings = {}
+    # A depth outside 0-100 %WT is not a measurement this schema can carry: it
+    # would reach B31G as a depth ratio above 1 (or below 0) and produce an
+    # invalid remaining-strength result presented as an engineering number. The
+    # value is cleared and counted; the row itself is conserved, because its
+    # position and identity remain valid evidence.
     invalid_depth = universal["depth_pct"].notna() & ~universal["depth_pct"].between(0, 100)
-    if invalid_depth.any():
-        quality_warnings["depth_pct_out_of_range"] = int(invalid_depth.sum())
+    invalid_depth_count = int(invalid_depth.sum())
+    if invalid_depth_count:
+        quality_warnings["depth_pct_out_of_range"] = invalid_depth_count
+        universal.loc[invalid_depth, "depth_pct"] = np.nan
+
+    blank_rows = int(raw.attrs.get("blank_rows", 0))
+    source_rows = int(raw.attrs.get("source_rows", len(raw)))
+    rejection_reasons = {}
+    if rejected_rows:
+        rejection_reasons["invalid_log_distance_m"] = rejected_rows
+    if blank_rows:
+        rejection_reasons["blank_row"] = blank_rows
 
     audit = {
-        "source_rows": int(len(raw)),
+        "source_rows": source_rows,
         "accepted_rows": int(len(universal)),
-        "rejected_rows": rejected_rows,
-        "rejection_reasons": {"invalid_log_distance_m": rejected_rows} if rejected_rows else {},
+        "rejected_rows": rejected_rows + blank_rows,
+        "rejection_reasons": rejection_reasons,
         "numeric_coercions": numeric_coercions,
         "unit_conversions": unit_conversions,
         "source_units": source_units,

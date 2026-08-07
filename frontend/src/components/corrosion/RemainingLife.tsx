@@ -4,6 +4,7 @@ import { remainingLifeRanking } from '../../lib/corrosion/analytics';
 import type { CorrosionFeature } from '../../lib/corrosion/analysis';
 import { Callout } from '../ds';
 import { SEVERITY_VAR, SeverityChip, VizFrame, useVizTooltip } from './vizPrimitives';
+import { maxBy } from '../../utils/numericRange.ts';
 
 interface Props {
   features: CorrosionFeature[];
@@ -35,7 +36,7 @@ export default function RemainingLife({ features, limitPct = 80, limit = 12 }: P
     );
   }
 
-  const worstYears = Math.max(...rows.map((entry) => entry.years), 1);
+  const worstYears = maxBy(rows, (entry) => entry.years, 1);
 
   return (
     <VizFrame

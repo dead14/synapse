@@ -150,9 +150,27 @@ test('summarizeComparison calculates persisted run metrics', () => {
         total: 3,
         matched: 2,
         unmatched: 1,
+        // The one-run-only split is what the dashboard reads; it used to come
+        // from a table the engine never writes.
+        onlyOld: 0,
+        onlyNew: 1,
         matchRate: 66.7,
         anomaliesFound: 3,
     });
+});
+
+test('summarizeComparison splits unmatched anomalies by the run they came from', () => {
+    const summary = summarizeComparison([
+        { 'Match Status': 'Matched' },
+        { 'Match Status': 'Only OLD' },
+        { 'Match Status': 'Only OLD' },
+        { 'Match Status': 'Only NEW' },
+        { 'Result Group': 'GW', 'Match Status': 'ONLY_OLD' },
+    ]);
+
+    assert.equal(summary.onlyOld, 2);
+    assert.equal(summary.onlyNew, 1);
+    assert.equal(summary.onlyOld + summary.onlyNew, summary.unmatched);
 });
 
 test('summarizeComparison counts only anomaly rows as anomalies', () => {

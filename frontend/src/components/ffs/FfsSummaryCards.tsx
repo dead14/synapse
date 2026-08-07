@@ -56,6 +56,11 @@ export default function FfsSummaryCards({
   const dataWarnings = items.filter((item) => {
     const depth = item.nominal.growthEvidence?.depth;
     return item.conservative.beyondDepthLimit ||
+      // A forecast projected past the wall is evaluated at 99.5 %WT, so its
+      // ERF and safe pressure belong to a shallower defect than the one
+      // projected. That substitution has to be visible, not implied.
+      item.forecast.depthClamped ||
+      item.conservative.depthClamped ||
       depth?.observation === 'new-only-zero-baseline-estimate' ||
       depth?.observation === 'apparent-decrease' ||
       depth?.observation === 'unavailable' ||

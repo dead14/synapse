@@ -23,6 +23,8 @@
  *   which introduces no twist: clock 12:00 stays clock 12:00 around the corner.
  */
 
+import { maxBy, maxOf, minOf } from '../../utils/numericRange.ts';
+
 export type Vec3 = [number, number, number];
 
 export interface PathFrame {
@@ -181,9 +183,9 @@ export function buildSpoolPath(
   const ys = frames.map((frame) => frame.origin[1]);
   const zs = frames.map((frame) => frame.origin[2]);
   const centre: Vec3 = [
-    (Math.min(...xs) + Math.max(...xs)) / 2,
-    (Math.min(...ys) + Math.max(...ys)) / 2,
-    (Math.min(...zs) + Math.max(...zs)) / 2,
+    (minOf(xs) + maxOf(xs)) / 2,
+    (minOf(ys) + maxOf(ys)) / 2,
+    (minOf(zs) + maxOf(zs)) / 2,
   ];
   const centred = frames.map((frame) => ({
     ...frame,
@@ -193,13 +195,15 @@ export function buildSpoolPath(
       frame.origin[2] - centre[2],
     ] as Vec3,
   }));
-  const extent = Math.max(
-    ...centred.map((frame) => Math.hypot(frame.origin[0], frame.origin[1], frame.origin[2])),
+  const extent = maxBy(
+    centred,
+    (frame) => Math.hypot(frame.origin[0], frame.origin[1], frame.origin[2]),
     1e-6,
   );
-  const extentAxial = Math.max(...centred.map((frame) => Math.abs(frame.origin[0])), 1e-6);
-  const extentLateral = Math.max(
-    ...centred.map((frame) => Math.hypot(frame.origin[1], frame.origin[2])),
+  const extentAxial = maxBy(centred, (frame) => Math.abs(frame.origin[0]), 1e-6);
+  const extentLateral = maxBy(
+    centred,
+    (frame) => Math.hypot(frame.origin[1], frame.origin[2]),
     0,
   );
 

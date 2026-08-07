@@ -1,9 +1,9 @@
 /**
- * Presentation and projection layer for the four engine tolerances.
+ * Presentation and projection layer for the engine tolerance gates.
  *
  * `matchingRules.ts` owns the wire contract (what actually reaches
  * `ToleranceConfig`). This module owns everything the Tolerances step needs to
- * *explain* those four numbers: bounds, copy, impact weighting, named profiles,
+ * *explain* them: bounds, copy, impact weighting, named profiles,
  * and a projection of what tightening or loosening them costs in review time.
  *
  * The projection is a model, not an engine run. See `projectMatchOutcome`.
@@ -12,11 +12,12 @@
 // `allowImportingTsExtensions` keeps Vite happy with the same specifier.
 import { RECOMMENDED_TOLERANCES, type ToleranceValues } from './matchingRules.ts';
 
-/** The four keys that carry a numeric slider. `use_us_gw_distance` is a gate. */
+/** The keys that carry a numeric slider. `use_us_gw_distance` is a gate. */
 export type ToleranceKey =
   | 'clock_tolerance'
   | 'us_gw_distance_tolerance'
   | 'ds_gw_distance_tolerance'
+  | 'gw_offset_tolerance'
   | 'length_tolerance';
 
 export type ImpactLevel = 'low' | 'medium';
@@ -90,6 +91,22 @@ export const TOLERANCE_SPECS: readonly ToleranceSpec[] = [
     characteristic: 0.18,
   },
   {
+    key: 'gw_offset_tolerance',
+    label: 'U/S weld offset tolerance',
+    unit: 'm',
+    min: 0.05,
+    max: 2,
+    step: 0.05,
+    precision: 2,
+    description:
+      'Hard gate on how far the two runs disagree about a feature\'s distance from its own '
+      + 'upstream girth weld, and the divisor of the GW penalty. Independent of the odometer '
+      + 'window above: a run whose odometer drifted still reports weld-relative distances well.',
+    impact: 'medium',
+    guidance: 'The strongest identity evidence in the record; keep it tighter than the odometer window.',
+    characteristic: 0.18,
+  },
+  {
     key: 'length_tolerance',
     label: 'Length tolerance',
     unit: 'mm',
@@ -139,6 +156,9 @@ export const TOLERANCE_PROFILES: readonly ToleranceProfile[] = [
       us_gw_distance_tolerance: 0.1,
       ds_gw_distance_tolerance: 0.1,
       use_us_gw_distance: true,
+      // Weld-relative distance survives an odometer disagreement, so this
+      // profile keeps it usable rather than tightening it with the window.
+      gw_offset_tolerance: 0.15,
       length_tolerance: 25,
     },
   },
@@ -151,6 +171,9 @@ export const TOLERANCE_PROFILES: readonly ToleranceProfile[] = [
       us_gw_distance_tolerance: 0.5,
       ds_gw_distance_tolerance: 0.5,
       use_us_gw_distance: true,
+      // Deliberately not widened with the odometer window: this is the gate
+      // that still separates two neighbouring pits once the window is loose.
+      gw_offset_tolerance: 0.3,
       length_tolerance: 120,
     },
   },

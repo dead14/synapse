@@ -781,6 +781,59 @@ class DtwEngineRegressionTests(unittest.TestCase):
             ["new-outside"],
         )
 
+    def _sparse_knot_payload(self):
+        """A tie-in whose accepted path skipped two welds out of every three."""
+        old_run = [self.weld(f"old-{index}", 100.0 + 12.0 * index) for index in range(10)]
+        new_run = [self.weld(f"new-{index}", 105.0 + 12.0 * index) for index in range(10)]
+        knots = [
+            {
+                "oldDistanceM": old_run[index]["dist"],
+                "newDistanceM": new_run[index]["dist"],
+                "oldId": old_run[index]["id"],
+                "newId": new_run[index]["id"],
+            }
+            for index in (0, 3, 6, 9)
+        ]
+        return {
+            "requestId": "tiein-segment-fill",
+            "oldRun": old_run,
+            "newRun": new_run,
+            "ota": 1.5,
+            "tieInDecision": {"status": "AUTO_ACCEPTED"},
+            "tieInTransform": {
+                "direction": "OLD_TO_NEW",
+                "model": "MONOTONIC_PIECEWISE_LINEAR",
+                "allowExtrapolation": False,
+                "domain": {
+                    "oldStartM": knots[0]["oldDistanceM"],
+                    "oldEndM": knots[-1]["oldDistanceM"],
+                    "newStartM": knots[0]["newDistanceM"],
+                    "newEndM": knots[-1]["newDistanceM"],
+                },
+                "knots": knots,
+            },
+        }
+
+    def test_welds_between_tiein_knots_are_matched_not_orphaned(self):
+        result = dtw_engine.process_request(self._sparse_knot_payload())
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["matchingMode"], "TIEIN_LOCKED")
+        # Every weld must be paired: the knots cover four of them and the
+        # segments between consecutive knots cover the other six.  Before the
+        # segment pass these six were reported as missing girth welds.
+        self.assertEqual(result["stats"]["matchedGws"], 10)
+        self.assertEqual(result["gwOrphans"], [])
+
+    def test_tiein_knots_are_never_reassigned_by_the_segment_pass(self):
+        result = dtw_engine.process_request(self._sparse_knot_payload())
+
+        pairs = {
+            (match["old_id"], match["new_id"]) for match in result["gwMatchesFinal"]
+        }
+        for index in (0, 3, 6, 9):
+            self.assertIn((f"old-{index}", f"new-{index}"), pairs)
+
 
 if __name__ == "__main__":
     unittest.main()

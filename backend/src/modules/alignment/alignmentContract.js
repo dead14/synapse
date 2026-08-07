@@ -236,9 +236,16 @@ function validateSectionsForPair(sections, gwMatchesFinal) {
         }
         const from = lockedPairs.map((pair) => Number(pair[fromKey]));
         const to = lockedPairs.map((pair) => Number(pair[toKey]));
-        let upper = from.findIndex((point) => point >= distance);
+        // Mirrors bisect_left + clamp in hungarian_engine.compile_sections.
+        // `findIndex` returns -1 past the last lock, and the old clamp order
+        // (`if (upper <= 0) upper = 1` before the `< 0` branch) turned that -1
+        // into the *first* segment while Python extrapolated from the last, so
+        // a boundary downstream of the final lock passed validation here and was
+        // then rejected by the engine as "boundary projection does not match
+        // locked GW evidence" — after the run had already been queued.
+        const found = from.findIndex((point) => point >= distance);
+        let upper = found === -1 ? from.length - 1 : found;
         if (upper <= 0) upper = 1;
-        if (upper < 0) upper = from.length - 1;
         const lower = upper - 1;
         const span = from[upper] - from[lower];
         if (!Number.isFinite(span) || span === 0) return null;
@@ -378,14 +385,24 @@ function normalizeCanonicalGwLocks(value) {
         const newId = pair?.new_id ?? pair?.newId;
         const oldOdometer = Number(pair?.old_odometer ?? pair?.oldVal ?? pair?.oldDist);
         const newOdometer = Number(pair?.new_odometer ?? pair?.newVal ?? pair?.newDist);
-        if (oldId === null || oldId === undefined || newId === null || newId === undefined
-            || !String(oldId).trim() || !String(newId).trim()
-            || !Number.isFinite(oldOdometer) || !Number.isFinite(newOdometer)) {
-            throw validationError('INVALID_CANONICAL_GW_LOCKS', 'Canonical GW locks must contain source identities and finite odometers');
+        // A vendor identifier is audit metadata, not identity. Several vendors
+        // ship weld tables with no ID column at all, and both tiein_transform.py
+        // and dtw_engine's reconciler are explicit about supporting that: source
+        // odometer plus strict order is the physical key. Demanding IDs here
+        // rejected the canonical locks the engine had just produced, so GW
+        // matching could never be saved for those files. The odometers are what
+        // must be finite.
+        if (!Number.isFinite(oldOdometer) || !Number.isFinite(newOdometer)) {
+            throw validationError('INVALID_CANONICAL_GW_LOCKS', 'Canonical GW locks must contain finite odometers on both runs');
         }
+        const identity = (value) => (
+            value === null || value === undefined || !String(value).trim()
+                ? null
+                : String(value)
+        );
         const normalized = {
-            old_id: String(oldId),
-            new_id: String(newId),
+            old_id: identity(oldId),
+            new_id: identity(newId),
             old_odometer: oldOdometer,
             new_odometer: newOdometer,
             type: 'GW',
@@ -778,11 +795,18 @@ function summarizeComparison(comparison) {
     const anomaliesFound = anomalyRows.length;
     const matched = anomalyRows.filter((row) => readMatchStatus(row) === 'matched').length;
     const unmatched = anomaliesFound - matched;
+    // The one-run-only split is recorded here because it is the only place the
+    // full comparison is in memory. The dashboard used to recompute it from
+    // `alignment_results`, a table nothing writes, so every panel read zero.
+    const onlyOld = anomalyRows.filter((row) => readMatchStatus(row) === 'only old').length;
+    const onlyNew = anomalyRows.filter((row) => readMatchStatus(row) === 'only new').length;
 
     return {
         total,
         matched,
         unmatched,
+        onlyOld,
+        onlyNew,
         matchRate: anomaliesFound ? Number(((matched / anomaliesFound) * 100).toFixed(1)) : 0,
         anomaliesFound,
     };

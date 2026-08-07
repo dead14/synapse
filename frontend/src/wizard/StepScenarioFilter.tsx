@@ -7,6 +7,7 @@ import {
   FiChevronLeft,
   FiChevronRight,
   FiClock,
+  FiGitCommit,
   FiFileText,
   FiMaximize2,
   FiRotateCcw,
@@ -62,6 +63,7 @@ const ROW_ICONS: Record<ToleranceKey, ReactNode> = {
   clock_tolerance: <FiClock aria-hidden="true" />,
   us_gw_distance_tolerance: <FiArrowUp aria-hidden="true" />,
   ds_gw_distance_tolerance: <FiArrowDown aria-hidden="true" />,
+  gw_offset_tolerance: <FiGitCommit aria-hidden="true" />,
   length_tolerance: <FiMaximize2 aria-hidden="true" />,
 };
 

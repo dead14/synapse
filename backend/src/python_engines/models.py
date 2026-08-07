@@ -124,13 +124,16 @@ class ILIFeature(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     run_id = Column(Integer, ForeignKey('survey_runs.id'), index=True)
     
-    # Core universal fields
+    # Core universal fields.  Neither log_distance_m nor feature_type carries a
+    # standalone index: every read path filters run_id first, so the composite
+    # ix_ili_features_run_distance and the partial anchor index serve them.  A
+    # global index on either only ever cost write throughput on the ingest COPY.
     feature_id = Column(String)
-    log_distance_m = Column(Float, index=True)
+    log_distance_m = Column(Float)
     joint_number = Column(Integer)
     dist_to_us_gw_m = Column(Float)
     joint_length_m = Column(Float)
-    feature_type = Column(String, index=True)
+    feature_type = Column(String)
     feature_identification = Column(String)
     dim_classification = Column(String)
     clock_position = Column(String)

@@ -18,6 +18,15 @@ export interface FfsConfig {
   pressureBasis?: FfsPressureBasis;
   /** Design-dossier figures used by the residual life assessment. */
   serviceLife?: FfsServiceLifeInputs;
+  /**
+   * The depth this project rejects at, as % of wall. Defaults to 80 %WT.
+   *
+   * Mirrors `FfsScreeningConfig.depthRejectionPct`, and exists so the nominal
+   * acceptance column and the remnant-life limit answer to the same line. It is
+   * an operator threshold, not a limit of B31G: para. 1.2(f) admits metal loss
+   * of any depth given justified sizing accuracy. See `B31G_DEPTH_LIMIT_RATIO`.
+   */
+  depthRejectionPct?: number;
 }
 
 export type FfsPressureBasis = 'maop' | 'mop' | 'current-operating' | 'other-required';
@@ -269,7 +278,18 @@ export type FfsPriority = 'High' | 'Medium' | 'Routine';
  * dimensions (as-reported, tolerance-adjusted, or grown forward in time).
  */
 export interface FfsTier {
+  /** The depth the kernel was evaluated at, capped just below full wall. */
   depthPct: number;
+  /**
+   * The depth this tier was asked for, before capping.
+   *
+   * A forecast can project past the wall. The kernel cannot report remaining
+   * strength there, so it is evaluated at 99.5 %WT — and every figure below then
+   * belongs to a shallower defect than the one requested. `depthClamped` says
+   * so, rather than letting a substituted geometry read as the answer.
+   */
+  requestedDepthPct: number;
+  depthClamped: boolean;
   lengthMm: number;
   dMm: number;
   z: number;

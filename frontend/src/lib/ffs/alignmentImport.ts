@@ -7,6 +7,7 @@ import type {
   FfsGrowthObservation,
   FfsSectionDesignFactor,
 } from './types.ts';
+import { maxOf, minOf } from '../../utils/numericRange.ts';
 
 export interface AlignmentEngineeringInputs {
   outerDiameterMm: number;
@@ -289,12 +290,21 @@ function deriveGrowthEvidence(
   wallMm: number,
   engineering: AlignmentEngineeringInputs,
   warnings: string[],
+  isClusteredMetalLoss: boolean,
 ): FfsGrowthEvidence {
   const oldSurveyYear = surveyYear(source['Run Year OLD']);
   const newSurveyYear = surveyYear(source['Run Year NEW']);
-  const intervalYears = oldSurveyYear !== null && newSurveyYear !== null && newSurveyYear > oldSurveyYear
-    ? newSurveyYear - oldSurveyYear
-    : null;
+  // The engine reports the interval it actually divided by, resolved from the
+  // inspection dates where the runs carry them. Re-deriving it from the two
+  // survey years rounds a 3.25-year interval to 4 and inflates the zero-baseline
+  // estimate accordingly; the year difference is only the fallback the engine
+  // itself falls back to.
+  const reportedInterval = finiteNumber(source['Growth Interval (y)']);
+  const intervalYears = reportedInterval !== null && reportedInterval > 0
+    ? reportedInterval
+    : (oldSurveyYear !== null && newSurveyYear !== null && newSurveyYear > oldSurveyYear
+      ? newSurveyYear - oldSurveyYear
+      : null);
   const reportedDepthPctPerYear = finiteNumber(source['Depth Growth (%WT/yr)']);
   const reportedLengthMmPerYear = finiteNumber(source['Length Growth (mm/yr)']);
   const matchStatus = text(source['Match/Unmatch'], '').toLowerCase();
@@ -302,17 +312,37 @@ function deriveGrowthEvidence(
   const hasOldFeature = present(source['Source Key OLD']) ||
     present(source['Identif. OLD']) ||
     present(source['Depth OLD (%WT)']);
-  const isNewOnly = !hasOldFeature && !markedMatched;
+  // A bypassed row is not a NEW-only defect. Clusters land in the bypass bucket
+  // with no OLD side and no "matched" status, which made them look NEW-only and
+  // earned them a zero-baseline growth estimate — while the disclosure printed
+  // beside them said they carry no run-pair growth rate at all. The vendor
+  // regroups the pits differently on every run, so there is no baseline to
+  // estimate from and no rate is derived.
+  const isNewOnly = !hasOldFeature && !markedMatched && !isClusteredMetalLoss;
 
   let depth: FfsGrowthComponentEvidence;
-  if (isNewOnly && intervalYears !== null) {
+  if (isClusteredMetalLoss && !markedMatched) {
+    depth = unavailableComponent(
+      'unavailable',
+      null,
+      engineering.fallbackDepthGrowthMmPerYear,
+      null,
+      'Clustered metal loss is excluded from run-pair matching, so no measured or '
+      + 'zero-baseline depth rate exists for it.',
+    );
+    warnings.push(
+      engineering.fallbackDepthGrowthMmPerYear > 0
+        ? 'Clustered metal loss carries no run-pair growth rate; the explicit fallback rate was used.'
+        : 'Clustered metal loss carries no run-pair growth rate; depth projection cannot be calculated.',
+    );
+  } else if (isNewOnly && intervalYears !== null) {
     const rate = roundedRate(((depthPct / 100) * wallMm) / intervalYears);
     depth = {
       observation: 'new-only-zero-baseline-estimate',
       analysisBasis: 'estimated',
       rawRateMmPerYear: null,
       analysisRateMmPerYear: rate,
-      formula: `(${depthPct} / 100 x ${wallMm} mm - 0 mm) / (${newSurveyYear} - ${oldSurveyYear}) y`,
+      formula: `(${depthPct} / 100 x ${wallMm} mm - 0 mm) / ${Number(intervalYears.toFixed(3))} y`,
       note: 'Estimated from an assumed zero-depth baseline at the OLD survey; not a measured run-pair CGR.',
     };
     warnings.push('NEW-only depth growth uses a disclosed zero-depth baseline estimate; it is not a measured run-pair CGR.');
@@ -446,8 +476,8 @@ export function alignmentSectionOptions(
     .map(({ section, featureCount, distances }) => ({
       section,
       featureCount,
-      startLd: distances.length ? Math.min(...distances) : 0,
-      endLd: distances.length ? Math.max(...distances) : 0,
+      startLd: minOf(distances),
+      endLd: maxOf(distances),
     }))
     .sort((a, b) => a.startLd - b.startLd || a.section.localeCompare(b.section));
 }
@@ -585,7 +615,12 @@ export function mapAlignmentRowsToFfs(
         `Reported at ${depth.toFixed(1)} %WT, past the 80 %WT project rejection line: assessed and reported, but the sizing accuracy and the effective corrosion rate must be justified before the result is relied on.`,
       );
     }
-    const growthEvidence = deriveGrowthEvidence(source, depth, wall, engineering, warnings);
+    // Same rule the alignment engine uses to keep merged groups out of matching,
+    // so FFS labels exactly the rows the engine refused to pair.
+    const isClusteredMetalLoss = isClusteredAlignmentRow(source);
+    const growthEvidence = deriveGrowthEvidence(
+      source, depth, wall, engineering, warnings, isClusteredMetalLoss,
+    );
     const depthGrowthMm = growthEvidence.depth.analysisRateMmPerYear ?? 0;
     // The column has to carry a finite number for the calculation contract, but
     // the evidence record is what downstream consumers read to decide whether
@@ -594,9 +629,6 @@ export function mapAlignmentRowsToFfs(
     const section = text(source['Section NEW'], text(source.Section));
     const { designFactor, source: designFactorSource } = resolveDesignFactor(section, engineering);
     const explicitSafetyFactor = engineering.safetyFactor ?? null;
-    // Same rule the alignment engine uses to keep merged groups out of matching,
-    // so FFS labels exactly the rows the engine refused to pair.
-    const isClusteredMetalLoss = isClusteredAlignmentRow(source);
     if (isClusteredMetalLoss) {
       warnings.push(
         'Reported as clustered metal loss: assessed as one merged defect and carrying no run-pair growth rate.',

@@ -9,6 +9,7 @@ const socketConfig = require('../../socket');
 const {
     markOwnedSessionCompleted,
     markOwnedSessionFailed,
+    saveAlignmentJobRows,
     updateAlignmentJob,
 } = require('./alignmentRepository');
 const {
@@ -125,9 +126,25 @@ function buildPairSessionConfig(sessionConfig, pair) {
         ))
         : [];
 
+    // A pair with no tie-in entry of its own must run with *no* transform, not
+    // with whichever transform happens to sit at the session root: spreading
+    // `pairTieIn` only when it exists still let the 2024→2026 transform displace
+    // the 2012 run. Every tie-in field is therefore rebound unconditionally.
+    const tieInFields = {
+        globalOffset: pairTieIn?.globalOffset ?? null,
+        tieInOffset: pairTieIn?.tieInOffset ?? null,
+        tieInTransform: pairTieIn?.tieInTransform ?? null,
+        tieInDecision: pairTieIn?.tieInDecision ?? null,
+        tieInEvidenceToken: pairTieIn?.tieInEvidenceToken ?? null,
+        tieInMethodVersion: pairTieIn?.tieInMethodVersion ?? null,
+        tieInExcludedRanges: pairTieIn?.tieInExcludedRanges ?? null,
+        partialRunEnabled: pairTieIn?.partialRunEnabled ?? false,
+    };
+
     return {
         ...sessionConfig,
         ...(pairTieIn || {}),
+        ...tieInFields,
         ...(pairGw
             ? {
                 gwMatchesFinal: pairGw.gwMatchesFinal,
@@ -198,15 +215,72 @@ function mergeMultiPairResults(pairResults, runPairs = []) {
     return merged;
 }
 
+/**
+ * Store one finished run and announce it.
+ *
+ * The comparison rows go to `alignment_job_rows`; `result_json` keeps only the
+ * execution metadata and the conservation audit.  Writing both the flat
+ * `comparison` array and the `groups` buckets into one JSONB column stored every
+ * row twice, and made each status poll, each reuse check and each result page
+ * de-TOAST and parse the whole document.
+ */
+async function finishAlignmentJob(job, sessionId, configFingerprint, engineResult, extra = {}) {
+    await emitProgress(job, 80, 'Normalizing alignment result');
+    const normalized = normalizeComparisonResult(engineResult);
+    await emitProgress(job, 88, 'Storing alignment rows');
+    const rowCount = await saveAlignmentJobRows(pool, job.id, normalized.comparison);
+    const resultPayload = {
+        sessionId,
+        engineVersion: job.data.engineVersion || ALIGNMENT_ENGINE_VERSION,
+        configFingerprint: configFingerprint || null,
+        rowCount,
+        // The audit is the only part of the engine's bucket output any consumer
+        // reads, so the buckets themselves are not stored a second time.
+        groups: { audit: normalized.groups?.audit ?? null },
+        ...extra,
+    };
+    await updateAlignmentJob(pool, job.id, {
+        state: 'completed',
+        progress: 100,
+        result: resultPayload,
+        rowCount,
+        completedAt: new Date(),
+        organizationId: job.data.organizationId,
+    });
+    await markOwnedSessionCompleted(
+        pool, sessionId, job.data.organizationId, summarizeComparison(normalized.comparison),
+    );
+    await job.updateProgress(100);
+    // The socket payload mirrors the polled response: a listener that receives
+    // the rows inline would defeat the paged read path it goes on to use.
+    socketConfig.getIO()?.to(`user_${job.data.userId}`).emit('alignment_complete', {
+        jobId: job.id, result: resultPayload,
+    });
+    return resultPayload;
+}
+
 async function processAlignmentJob(job) {
     const { sessionId, algorithm, configFingerprint } = job.data;
     await updateAlignmentJob(pool, job.id, { state: 'active', progress: 5, startedAt: new Date() });
     try {
         await emitProgress(job, 15, 'Alignment job started');
 
+        // Ownership was verified when the job was created, but a worker that
+        // reads the session by id alone would happily align another tenant's
+        // configuration if a job row were ever mis-addressed.
         const sessionRow = await pool.query(
-            'SELECT params_json FROM alignment_sessions WHERE id = $1', [sessionId],
+            `SELECT s.params_json
+             FROM alignment_sessions s
+             LEFT JOIN pipelines p ON p.id = s.pipeline_id
+             WHERE s.id = $1
+               AND COALESCE(s.organization_id, p.organization_id) = $2`,
+            [sessionId, job.data.organizationId],
         );
+        if (sessionRow.rows.length === 0) {
+            const error = new Error('Alignment session is not available for this organization');
+            error.code = 'ALIGNMENT_SESSION_NOT_FOUND';
+            throw error;
+        }
         const sessionConfig = sessionRow.rows[0]?.params_json || {};
         const runPairs = resolveRunPairs(sessionConfig);
         const isMultiPair = runPairs.length > 1
@@ -230,14 +304,7 @@ async function processAlignmentJob(job) {
             }
 
             const result = mergeMultiPairResults(pairResults, runPairs);
-            await emitProgress(job, 80, 'Normalizing alignment result');
-            const normalized = normalizeComparisonResult(result);
-            const resultPayload = {
-                comparison: normalized.comparison,
-                groups: normalized.groups,
-                sessionId,
-                engineVersion: job.data.engineVersion || ALIGNMENT_ENGINE_VERSION,
-                configFingerprint: configFingerprint || null,
+            return finishAlignmentJob(job, sessionId, configFingerprint, result, {
                 pairCount: runPairs.length,
                 runPairs: runPairs.map((p, i) => ({
                     index: i,
@@ -246,34 +313,12 @@ async function processAlignmentJob(job) {
                     oldYear: p.oldRun?.year,
                     newYear: p.newRun?.year,
                 })),
-            };
-            await updateAlignmentJob(pool, job.id, {
-                state: 'completed', progress: 100, result: resultPayload, completedAt: new Date(),
             });
-            await markOwnedSessionCompleted(pool, sessionId, job.data.organizationId, summarizeComparison(normalized.comparison));
-            await job.updateProgress(100);
-            socketConfig.getIO()?.to(`user_${job.data.userId}`).emit('alignment_complete', { jobId: job.id, result: resultPayload });
-            return resultPayload;
         }
 
         await emitProgress(job, 20, 'Loading canonical ILI data');
         const result = await runPythonAlignment(sessionId, algorithm);
-        await emitProgress(job, 80, 'Normalizing alignment result');
-        const normalized = normalizeComparisonResult(result);
-        const resultPayload = {
-            comparison: normalized.comparison,
-            groups: normalized.groups,
-            sessionId,
-            engineVersion: job.data.engineVersion || ALIGNMENT_ENGINE_VERSION,
-            configFingerprint: configFingerprint || null,
-        };
-        await updateAlignmentJob(pool, job.id, {
-            state: 'completed', progress: 100, result: resultPayload, completedAt: new Date(),
-        });
-        await markOwnedSessionCompleted(pool, sessionId, job.data.organizationId, summarizeComparison(normalized.comparison));
-        await job.updateProgress(100);
-        socketConfig.getIO()?.to(`user_${job.data.userId}`).emit('alignment_complete', { jobId: job.id, result: resultPayload });
-        return resultPayload;
+        return finishAlignmentJob(job, sessionId, configFingerprint, result);
     } catch (error) {
         const finalAttempt = (job.attemptsMade + 1) >= (job.opts.attempts || 1);
         await updateAlignmentJob(pool, job.id, {
@@ -281,6 +326,7 @@ async function processAlignmentJob(job) {
             errorCode: error.code || 'ALIGNMENT_FAILED',
             errorMessage: String(error.message || error),
             completedAt: finalAttempt ? new Date() : undefined,
+            organizationId: job.data.organizationId,
         });
         if (finalAttempt) await markOwnedSessionFailed(pool, sessionId, job.data.organizationId, error.message);
         throw error;

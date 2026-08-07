@@ -151,6 +151,8 @@ export function evaluateFfsScenario(
     horizonYears,
     iliDate: config.iliDate,
     service: config.serviceLife ?? EMPTY_SERVICE_LIFE,
+    // Same rejection line as the table this drawer was opened from.
+    depthLimitRatio: screening.depthRejectionPct / 100,
   });
 
   const result = displayed.result;

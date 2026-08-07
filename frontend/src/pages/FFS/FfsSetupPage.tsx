@@ -309,6 +309,9 @@ export default function FfsSetupPage() {
           designLifeYears: designLifeYears.trim() === '' ? null : Number(designLifeYears),
           commissioningYear: commissioningYear.trim() === '' ? null : Number(commissioningYear),
         },
+        // The nominal acceptance column and the remnant-life limit answer to the
+        // screening step's rejection line, not to a second hard-coded 80 %WT.
+        depthRejectionPct: screening.depthRejectionPct,
       };
 
       if (sourceMode === 'manual') {

@@ -124,20 +124,51 @@ test('the uniform growth basis does not leave the axial rate on the measured val
 
 /* ── Design life ───────────────────────────────────────────────────────── */
 
-test('remnant life is not reported above the original design life', () => {
+test('remnant life is not reported above the design life the line has left', () => {
   // 20 %WT on a 9.30 mm wall at 0.15 mm/y reaches the depth limit in 37.2 years,
-  // comfortably inside the horizon and comfortably past a 25-year design life.
+  // comfortably inside the horizon.  The cap is the design life *remaining* at
+  // the inspection, not the total the line was built for: commissioned in 2010
+  // with a 40-year design life, ~25.6 years are left at the 2024 ILI.
   const slow = row({ 'Max Depth [%]': '20', 'CR Depth [mm/y]': '0.15', 'CR Length [mm/y]': '0' });
   const uncapped = processRow(slow, { ...config, analysisHorizonYears: 100 });
+  const capped = processRow(slow, {
+    ...config,
+    analysisHorizonYears: 100,
+    serviceLife: { designLifeYears: 40, commissioningYear: 2010 },
+  });
+
+  assert.ok(uncapped.remnantLife.years !== null && uncapped.remnantLife.years > 30);
+  assert.ok(capped.remnantLife.years !== null);
+  assert.ok(Math.abs(capped.remnantLife.years! - 25.4) < 0.2);
+  assert.equal(capped.remnantLife.governingLimit, 'Original design life');
+  assert.equal(capped.remnantLife.designLifeCapApplied, true);
+});
+
+test('a line already past its design life is capped at no remaining design life', () => {
+  // Commissioned 1985 with a 25-year design life: the dossier ran out in 2010,
+  // so the 2024 inspection has none of it left. Comparing against the *total*
+  // design life instead reported 25 further years for a line 14 years past it.
+  const slow = row({ 'Max Depth [%]': '20', 'CR Depth [mm/y]': '0.15', 'CR Length [mm/y]': '0' });
   const capped = processRow(slow, {
     ...config,
     analysisHorizonYears: 100,
     serviceLife: { designLifeYears: 25, commissioningYear: 1985 },
   });
 
-  assert.ok(uncapped.remnantLife.years !== null && uncapped.remnantLife.years > 25);
-  assert.equal(capped.remnantLife.years, 25);
+  assert.equal(capped.remnantLife.years, 0);
   assert.equal(capped.remnantLife.governingLimit, 'Original design life');
+  assert.equal(capped.remnantLife.designLifeCapApplied, true);
+});
+
+test('without a commissioning year the total design life remains the bound', () => {
+  const slow = row({ 'Max Depth [%]': '20', 'CR Depth [mm/y]': '0.15', 'CR Length [mm/y]': '0' });
+  const capped = processRow(slow, {
+    ...config,
+    analysisHorizonYears: 100,
+    serviceLife: { designLifeYears: 25, commissioningYear: null },
+  });
+
+  assert.equal(capped.remnantLife.years, 25);
   assert.equal(capped.remnantLife.designLifeCapApplied, true);
 });
 

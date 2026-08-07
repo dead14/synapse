@@ -427,48 +427,92 @@ def calculate_dtw(old_gws, new_gws, ota_threshold, strict_penalty=False):
     return matches
 
 def linear_referencing(old_features, new_features, gw_matches):
+    """Interpolate non-GW feature positions between matched GW boundaries.
+
+    Walked as a single ordered sweep rather than re-scanning the whole feature
+    list once per segment.  The old form was O(segments x features): a run with
+    5,000 matched welds and 50,000 features spent a quarter of a billion
+    comparisons here, and it was the dominant cost of a large alignment.
+
+    Features upstream of the first matched weld and downstream of the last are
+    carried too.  They have no bounding pair to interpolate between, so the
+    offset of the nearest matched weld is applied and the record says which
+    boundary it was extrapolated from; previously they were dropped without a
+    trace, so anomalies past the final matched weld simply had no aligned
+    position at all.
     """
-    Interpolate positions of non-GW features based on matched GW boundaries.
-    """
-    # Create lookup dictionaries for quick access
-    old_gw_dists = { m['oldId']: m['oldDist'] for m in gw_matches }
-    new_gw_dists = { m['newId']: m['newDist'] for m in gw_matches }
-    
+    del new_features  # Positions come from the matched boundaries, not the run.
+
+    valid_matches = [m for m in gw_matches if m.get('status') == 'Match']
+    if not valid_matches:
+        return []
+
+    candidates = sorted(
+        (
+            feature for feature in old_features
+            if _alignment_feature_kind(feature) != 'weld'
+            and isinstance(feature.get('dist'), (int, float))
+            and math.isfinite(feature['dist'])
+        ),
+        key=lambda feature: feature['dist'],
+    )
+    if not candidates:
+        return []
+
     aligned_features = []
-    
-    # We will process the pipeline segment by segment (between matched GWs)
-    # Only use actual matches for linear referencing
-    valid_matches = [m for m in gw_matches if m['status'] == 'Match']
-    
-    for k in range(len(valid_matches) - 1):
-        match_start = valid_matches[k]
-        match_end = valid_matches[k+1]
-        
-        old_start = match_start['oldDist']
-        old_end = match_end['oldDist']
-        new_start = match_start['newDist']
-        new_end = match_end['newDist']
-        
+    cursor = 0
+    total = len(candidates)
+
+    first_old = valid_matches[0]['oldDist']
+    first_offset = valid_matches[0]['newDist'] - first_old
+    while cursor < total and candidates[cursor]['dist'] < first_old:
+        feature = candidates[cursor]
+        aligned_features.append({
+            **feature,
+            'alignedDist': feature['dist'] + first_offset,
+            'segmentStart': None,
+            'segmentEnd': first_old,
+            'extrapolated': True,
+        })
+        cursor += 1
+
+    for start_match, end_match in zip(valid_matches, valid_matches[1:]):
+        old_start = start_match['oldDist']
+        old_end = end_match['oldDist']
+        new_start = start_match['newDist']
+        new_end = end_match['newDist']
         old_len = old_end - old_start
         new_len = new_end - new_start
-        
-        # Find features in this segment
-        segment_features = [f for f in old_features if old_start <= f['dist'] < old_end and _alignment_feature_kind(f) != 'weld']
-        
-        for f in segment_features:
+
+        while cursor < total and candidates[cursor]['dist'] < old_end:
+            feature = candidates[cursor]
             if old_len > 0:
-                ratio = (f['dist'] - old_start) / old_len
-                mapped_dist = new_start + (ratio * new_len)
+                ratio = (feature['dist'] - old_start) / old_len
+                mapped_dist = new_start + ratio * new_len
             else:
                 mapped_dist = new_start
-                
             aligned_features.append({
-                **f,
+                **feature,
                 'alignedDist': mapped_dist,
                 'segmentStart': old_start,
-                'segmentEnd': old_end
+                'segmentEnd': old_end,
+                'extrapolated': False,
             })
-            
+            cursor += 1
+
+    last_old = valid_matches[-1]['oldDist']
+    last_offset = valid_matches[-1]['newDist'] - last_old
+    while cursor < total:
+        feature = candidates[cursor]
+        aligned_features.append({
+            **feature,
+            'alignedDist': feature['dist'] + last_offset,
+            'segmentStart': last_old,
+            'segmentEnd': None,
+            'extrapolated': True,
+        })
+        cursor += 1
+
     return aligned_features
 
 
@@ -667,6 +711,49 @@ def _tiein_locked_matches(knot_records, old_gws, new_gws):
         })
 
     return matches, unresolved
+
+
+def _match_between_locked_pairs(locked_matches, old_gws, new_gws, ota_threshold, strict_penalty):
+    """DTW the welds that fall strictly between consecutive locked pairs.
+
+    The locked pairs themselves are never re-examined; only the anchors the
+    tie-in path skipped over are offered to the matcher, inside the interval its
+    two bounding knots define. Outside the first and last knot there is no
+    bounding pair on one side, so those welds stay orphans rather than being
+    matched against an unbounded stretch of pipe.
+    """
+    ordered = sorted(
+        (match for match in locked_matches if match.get('status') == 'Match'),
+        key=lambda match: match['oldIndex'],
+    )
+    if len(ordered) < 2:
+        return []
+
+    consumed_old = {match['oldIndex'] for match in ordered}
+    consumed_new = {match['newIndex'] for match in ordered}
+    extra_matches = []
+
+    for start, end in zip(ordered, ordered[1:]):
+        segment_old = [
+            old_gws[index]
+            for index in range(start['oldIndex'] + 1, end['oldIndex'])
+            if index not in consumed_old
+        ]
+        segment_new = [
+            new_gws[index]
+            for index in range(start['newIndex'] + 1, end['newIndex'])
+            if index not in consumed_new
+        ]
+        if not segment_old or not segment_new:
+            continue
+        for match in _run_dtw_segment(segment_old, segment_new, ota_threshold, strict_penalty):
+            if match.get('status') == 'Match':
+                extra_matches.append(match)
+
+    # reconcile_gw_matches resolves every entry back to its source row by
+    # (id, distance), so the segment-local indexes these carry are replaced
+    # there; returning only genuine matches keeps the orphan set authoritative.
+    return extra_matches
 
 
 def _prepare_runs_in_master_space(data):
@@ -956,6 +1043,21 @@ def process_request(data):
                 "tieInExcludedOld": tie_in_excluded_old,
                 "tieInExcludedNew": tie_in_excluded_new,
             }
+        # Accepted knots are authoritative and stay exactly as resolved. Every
+        # weld *between* two knots still has to be matched, though: the tie-in
+        # DP may skip up to MAX_SKIP_ANCHORS anchors when it builds the overlap
+        # path, and those welds used to be dropped straight into the orphan set
+        # because DTW never ran at all in this mode. A pipeline whose knots
+        # covered every fourth weld therefore reported three quarters of its
+        # girth welds as unmatched. DTW now runs inside each knot-bounded
+        # segment, where the transform has already removed the global drift.
+        gw_matches.extend(_match_between_locked_pairs(
+            gw_matches, old_gws, new_gws, ota_threshold, strict_penalty,
+        ))
+        gw_matches.sort(key=lambda match: (
+            match.get('oldDist') is None,
+            float(match.get('oldDist') or 0.0),
+        ))
         matching_mode = "TIEIN_LOCKED"
     elif use_valve_anchor and len(valve_pairs) >= 2:
         for i in range(len(old_gws)):

@@ -315,6 +315,12 @@ def _prepare_anchor_columns(anchors):
 
 
 def _span_score(old_span, new_span, skipped_count):
+    """Scalar reference for ``_span_score_row``.
+
+    Not called by the DP, which is vectorised; ``test_tiein_engine`` pins the two
+    against each other so the vectorised arithmetic cannot drift from the rule
+    written here.
+    """
     if old_span <= 0.0 or new_span <= 0.0:
         return float("-inf")
     absolute_error = abs(old_span - new_span)
@@ -761,17 +767,34 @@ def _span_residual_quality(pairs):
 
 
 def _piecewise_knots(pairs):
+    """Knots for the published transform, strictly increasing on both axes.
+
+    Anchors are sorted by ``(dist, idx)``, so two fittings reported at an
+    identical chainage — a flange and a weld both at 0.000 m is the ordinary
+    case — produce two knots with the same ``oldDistanceM``. A piecewise
+    mapping through them is not a function, and ``validated_tiein_knot_records``
+    correctly refuses it. It refused it *after* publication, though: the
+    estimator returned a transform its own validator then rejected, and the
+    matcher ran with no mapping at all. Ties are collapsed here instead, keeping
+    the first of each so the ordinal pairing the DP established is preserved.
+    """
     preferred = [pair for pair in pairs if pair[0].type == "weld" and pair[1].type == "weld"]
     knots_source = preferred if len(preferred) >= 2 else pairs
-    return [
-        {
+
+    knots = []
+    for old_anchor, new_anchor in knots_source:
+        if knots and (
+            old_anchor.dist <= knots[-1]["oldDistanceM"]
+            or new_anchor.dist <= knots[-1]["newDistanceM"]
+        ):
+            continue
+        knots.append({
             "oldId": old_anchor.feature_id,
             "newId": new_anchor.feature_id,
             "oldDistanceM": old_anchor.dist,
             "newDistanceM": new_anchor.dist,
-        }
-        for old_anchor, new_anchor in knots_source
-    ]
+        })
+    return knots
 
 
 def _local_scale_range(knots):
@@ -908,6 +931,15 @@ def calculate_tiein_offset(old_features, new_features, excluded_ranges=None):
     provisional_offset = comparison_coordinates["provisionalOffsetM"]
 
     knots = _piecewise_knots(inlier_pairs)
+    if len(knots) < 2:
+        return {
+            "success": False,
+            "code": "INSUFFICIENT_STABLE_TIEIN_KNOTS",
+            "error": (
+                "The physical overlap does not contain two knots that increase "
+                "on both runs; anchors share a reported chainage."
+            ),
+        }
     span_quality = _span_residual_quality(inlier_pairs)
     scale_range = _local_scale_range(knots)
     maximum_offset_step = _maximum_offset_step(knots)

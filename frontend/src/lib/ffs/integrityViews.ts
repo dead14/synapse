@@ -16,6 +16,7 @@
 
 import { isInternal } from './statistics.ts';
 import type { FfsScreenedResult, FfsSeverity } from './types.ts';
+import { maxOf, minOf } from '../../utils/numericRange.ts';
 
 const SEVERITY_RANK: Record<FfsSeverity, number> = { pass: 0, review: 1, fail: 2 };
 
@@ -63,8 +64,8 @@ export function buildDistanceProfile(
   }
 
   const distances = items.map(distanceOf);
-  const minM = Math.min(...distances);
-  const maxM = Math.max(...distances);
+  const minM = minOf(distances);
+  const maxM = maxOf(distances);
   const span = maxM - minM || 1;
   const binWidthM = span / safeBinCount;
 
