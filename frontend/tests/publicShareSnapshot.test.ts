@@ -78,9 +78,11 @@ test('an FFS link with no readable date or result is refused rather than half-re
 });
 
 test('sharing refuses to publish a result larger than the link can carry', () => {
-  const results = Array.from({ length: 40_000 }, (_, index) => ({
+  // Past the 50 MB ceiling the API enforces. Built from a few very large values
+  // rather than many small ones so the test spends no time on structure.
+  const results = Array.from({ length: 55 }, (_, index) => ({
     key: `ffs:${index}`,
-    note: 'x'.repeat(200),
+    note: 'x'.repeat(1024 * 1024),
   }));
 
   assert.throws(
