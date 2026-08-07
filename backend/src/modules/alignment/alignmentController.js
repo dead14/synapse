@@ -989,7 +989,7 @@ exports.getIliResults = async (req, res) => {
             configFingerprint,
         });
         try {
-            await alignmentQueue.add('align-ili', {
+            const enqueuePromise = alignmentQueue.add('align-ili', {
                 jobId,
                 sessionId: resolvedSessionId,
                 organizationId: req.user.orgId,
@@ -998,6 +998,16 @@ exports.getIliResults = async (req, res) => {
                 engineVersion: ALIGNMENT_ENGINE_VERSION,
                 configFingerprint,
             }, { jobId });
+            
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => {
+                    const error = new Error('Queue unavailable (timeout)');
+                    error.code = 'QUEUE_UNAVAILABLE';
+                    reject(error);
+                }, 5000);
+            });
+
+            await Promise.race([enqueuePromise, timeoutPromise]);
         } catch (queueError) {
             // Mirrors enqueueIngestion: with Redis down the durable row would
             // otherwise stay 'queued' forever, and the reuse check above would
