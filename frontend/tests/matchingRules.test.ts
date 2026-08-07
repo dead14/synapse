@@ -29,6 +29,10 @@ test('combined scenario and tolerance settings persist the exact engine contract
     us_gw_distance_tolerance: 0.4,
     ds_gw_distance_tolerance: 0.6,
     use_us_gw_distance: false,
+    // A session saved before the weld-offset gate was separated from the
+    // odometer window inherits the window, which is exactly what the engine
+    // falls back to — so an existing session's results do not move.
+    gw_offset_tolerance: 0.4,
     length_tolerance: 75,
   });
   assert.equal(result.pairToleranceConfigs, undefined);

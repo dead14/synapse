@@ -84,36 +84,105 @@ def normalize_surface(val):
     if s in ("nan", "none", "-", "n/a", ""): return None
     return SURFACE_NORMALIZATION.get(s, val.strip().title())
 
+# Ordered token rules, applied after an exact dictionary hit and before any
+# substring or fuzzy fallback.
+#
+# The order is the whole point.  The previous implementation walked
+# FEATURE_TYPE_NORMALIZATION and returned on the first key that appeared
+# *anywhere* inside the label, in dictionary insertion order, so "Metal loss at
+# girth weld" hit the "weld" entry and was stored as a girth weld — promoting an
+# anomaly into a Tier-2 DTW anchor.  That directly contradicted the precedence
+# db_ingest.summarize_feature_counts already applied to the wizard's own intake
+# summary ("a metal loss near a weld remains an anomaly, never an anchor"), so
+# the counts on screen and the rows in the database disagreed.
+#
+# Metal loss and dents are therefore resolved first and on word boundaries; a
+# structural label only wins when no anomaly token is present.
+_FEATURE_TYPE_RULES = (
+    ("Metal Loss", re.compile(
+        r"\b(?:metal\s*loss|corrosion|corroded|corr|anomaly|anom|ml|cocl|"
+        r"pitting|pit|cluster|klaster|kluster|erosion|gouge|grooving)\b",
+    )),
+    ("Dent", re.compile(r"\b(?:dent|denp|dint|mechanical\s+damage|deformation)\b")),
+    ("Valve", re.compile(r"\b(?:valve|valv)\b")),
+    ("Tee", re.compile(r"\b(?:tee|branch\s+connection)\b")),
+    ("Offtake", re.compile(r"\b(?:offtake|off\s*take|offt)\b")),
+    ("Flange", re.compile(r"\b(?:flange|flanged|flng)\b")),
+    ("Bend", re.compile(r"\b(?:bend|elbow)\b")),
+    ("Anode", re.compile(r"\b(?:anode|anod)\b")),
+    ("Support", re.compile(r"\b(?:support|attachment)\b")),
+    ("Marker", re.compile(r"\b(?:marker|agm|magnet)\b")),
+    ("Casing", re.compile(r"\bcasing\b")),
+    ("Fitting", re.compile(r"\b(?:fitting|sleeve|clamp|repair|repa|comp|reducer|swage)\b")),
+    ("Recording", re.compile(r"\bdata\s+recording\b")),
+    # Weld sits last so it can never outrank an anomaly token in the same label.
+    ("Weld", re.compile(r"\b(?:weld|girth|chwt)\b")),
+)
+
+
+def _match_feature_type_rules(key):
+    for standard_name, pattern in _FEATURE_TYPE_RULES:
+        if pattern.search(key):
+            return standard_name
+    return None
+
+
+def _dictionary_substring_match(key):
+    """Longest dictionary key contained in the label, on word boundaries.
+
+    Length-ordered so "metal loss cluster" beats "ml", and the reversed
+    ``key in k`` direction is gone: a two-letter label used to match any
+    dictionary entry that happened to contain it.
+    """
+    for synonym in sorted(FEATURE_TYPE_NORMALIZATION, key=len, reverse=True):
+        if len(synonym) < 3:
+            continue
+        if re.search(rf"\b{re.escape(synonym)}\b", key):
+            return FEATURE_TYPE_NORMALIZATION[synonym]
+    return None
+
+
+def _normalize_type_label(value):
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return None
+    text = str(value).strip()
+    if text.lower() in ("nan", "none", "-", "n/a", ""):
+        return None
+    return text
+
+
 def normalize_feature_type(val, fallback_id=None):
-    raw = val
-    if raw is None or (isinstance(raw, float) and np.isnan(raw)):
-        raw = None
-    else:
-        raw = str(raw).strip()
-        if raw.lower() in ("nan", "none", "-", "n/a", ""):
-            raw = None
+    raw = _normalize_type_label(val)
     if raw:
-        key = raw.lower().strip()
-        key = re.sub(r"[\-_]+", " ", key)
+        key = re.sub(r"[\-_/]+", " ", raw.lower().strip())
+        key = re.sub(r"\s+", " ", key)
+        # The seeded dictionary is authoritative for an exact label: an operator
+        # who mapped a vendor code deliberately outranks every heuristic below.
         result = FEATURE_TYPE_NORMALIZATION.get(key)
-        if result: return result
-        for k, v in FEATURE_TYPE_NORMALIZATION.items():
-            if k in key or key in k: return v
+        if result:
+            return result
+        result = _match_feature_type_rules(key)
+        if result:
+            return result
+        result = _dictionary_substring_match(key)
+        if result:
+            return result
         # Handle small vendor spelling variations without changing unrelated labels.
         fuzzy = get_close_matches(key, FEATURE_TYPE_NORMALIZATION.keys(), n=1, cutoff=0.82)
         if fuzzy:
             return FEATURE_TYPE_NORMALIZATION[fuzzy[0]]
         return raw.title()
-    if fallback_id is not None:
-        try:
-            if not (isinstance(fallback_id, float) and np.isnan(fallback_id)):
-                    fb = re.sub(r"[\-_]+", " ", str(fallback_id).strip().lower())
-                    if fb and fb not in ("nan", "none", "-", "n/a", ""):
-                        r = FEATURE_TYPE_NORMALIZATION.get(fb)
-                        if r: return r
-                        fuzzy = get_close_matches(fb, FEATURE_TYPE_NORMALIZATION.keys(), n=1, cutoff=0.82)
-                        if fuzzy: return FEATURE_TYPE_NORMALIZATION[fuzzy[0]]
-        except: pass
+
+    fallback = _normalize_type_label(fallback_id)
+    if fallback:
+        fb = re.sub(r"[\-_/]+", " ", fallback.lower().strip())
+        fb = re.sub(r"\s+", " ", fb)
+        result = FEATURE_TYPE_NORMALIZATION.get(fb) or _match_feature_type_rules(fb)
+        if result:
+            return result
+        fuzzy = get_close_matches(fb, FEATURE_TYPE_NORMALIZATION.keys(), n=1, cutoff=0.82)
+        if fuzzy:
+            return FEATURE_TYPE_NORMALIZATION[fuzzy[0]]
     return "Other"
 
 def _autodetect_header(path, sheet, field_map, max_scan=8):

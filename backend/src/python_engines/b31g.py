@@ -228,7 +228,8 @@ def _years_to_erf_1(start_depth_pct, start_length_mm, wall_mm, od_mm, smys_mpa,
 def remnant_life(start_depth_pct, start_length_mm, wall_mm, od_mm, smys_mpa,
                  safety_factor, pressure_mpa, method, sa_mode="smys69",
                  depth_rate_mm_yr=0.0, length_rate_mm_yr=0.0,
-                 horizon_years=DEFAULT_HORIZON_YEARS, design_life_years=None):
+                 horizon_years=DEFAULT_HORIZON_YEARS, design_life_years=None,
+                 design_life_remaining_years=None):
     """The remnant-life record, mirroring `remnantLife.ts`.
 
     A limit beyond the analysis horizon is reported as not reached rather than
@@ -260,11 +261,22 @@ def remnant_life(start_depth_pct, start_length_mm, wall_mm, od_mm, smys_mpa,
     else:
         status = "not-reached-within-horizon" if has_growth_basis else "insufficient-growth-basis"
 
-    # The residual life assessment is not reported above the original design
-    # life. This caps a calculated figure; it never manufactures one.
+    # The residual life assessment is not reported above the design life the
+    # line has left at the inspection date. This caps a calculated figure; it
+    # never manufactures one.  Mirrors `computeRemnantLife` in remnantLife.ts:
+    # comparing against the *total* design life instead of the unconsumed
+    # remainder made the rule practically inert on any line more than a few
+    # years old, and quoted more life than the design dossier allows wherever it
+    # did bind.  Without a commissioning date the caller cannot supply the
+    # remainder, and the total stays the only defensible bound.
+    cap_years = design_life_remaining_years
+    if cap_years is None:
+        cap_years = design_life_years
+    elif cap_years < 0:
+        cap_years = 0.0
     design_life_cap_applied = False
-    if design_life_years and years is not None and years > design_life_years:
-        years = design_life_years
+    if cap_years is not None and years is not None and years > cap_years:
+        years = _round2(cap_years)
         governing_limit = "Original design life"
         design_life_cap_applied = True
 
@@ -285,7 +297,7 @@ def remnant_life(start_depth_pct, start_length_mm, wall_mm, od_mm, smys_mpa,
 def assess_feature(method, sa_mode, depth_pct, length_mm, wall_mm, od_mm, smys_mpa,
                    design_factor, pressure_mpa, cr_depth_mm_yr=0.0, cr_length_mm_yr=0.0,
                    safety_factor=None, horizon_years=DEFAULT_HORIZON_YEARS,
-                   design_life_years=None):
+                   design_life_years=None, design_life_remaining_years=None):
     """Full screening evaluation for one metal-loss feature.
 
     `safety_factor` is the para. 1.9 hydrotest-to-MAOP ratio where the
@@ -300,7 +312,7 @@ def assess_feature(method, sa_mode, depth_pct, length_mm, wall_mm, od_mm, smys_m
                       pressure_mpa, method, sa_mode)
     life = remnant_life(depth_pct, length_mm, wall_mm, od_mm, smys_mpa, resolved_sf,
                         pressure_mpa, method, sa_mode, cr_depth_mm_yr, cr_length_mm_yr,
-                        horizon_years, design_life_years)
+                        horizon_years, design_life_years, design_life_remaining_years)
 
     return {
         "depthMm": depth_mm,

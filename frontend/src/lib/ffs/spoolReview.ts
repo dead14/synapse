@@ -25,6 +25,7 @@ import type {
 } from './types.ts';
 import { findInteractions, growthApplicationFor } from './screening.ts';
 import { remnantSortValue } from './lifeProjection.ts';
+import { maxOf } from '../../utils/numericRange.ts';
 
 /** How the boundary of a spool was established. */
 export type FfsSpoolGrouping =
@@ -232,7 +233,7 @@ function summariseGrowth(
   const total = rates.reduce((sum, rate) => sum + rate, 0);
   return {
     meanMmPerYear: total / rates.length,
-    maxMmPerYear: Math.max(...rates),
+    maxMmPerYear: maxOf(rates),
     measuredCount,
     assumedCount,
     unavailableCount,
@@ -511,11 +512,11 @@ export function buildFfsSpools(
       clusterCount,
       internalCount,
       externalCount,
-      maxDepthPct: depths.length > 0 ? Math.max(...depths) : 0,
+      maxDepthPct: maxOf(depths),
       meanDepthPct: depths.length > 0
         ? depths.reduce((sum, value) => sum + value, 0) / depths.length
         : 0,
-      longestFeatureMm: lengths.length > 0 ? Math.max(...lengths) : 0,
+      longestFeatureMm: maxOf(lengths),
       totalMetalLossLengthMm,
       totalMetalLossAreaMm2,
       metalLossCoveragePct: lengthM !== null && lengthM > 0

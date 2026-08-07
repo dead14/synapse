@@ -25,6 +25,7 @@ import {
 } from './effectiveArea.ts';
 import { buildLocationZones } from './screening.ts';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from './types.ts';
+import { maxBy } from '../../utils/numericRange.ts';
 
 export interface FfsColonyAssessment {
   id: string;
@@ -99,7 +100,7 @@ export function buildColonyLevel2Assessments(
     if (!uniform) continue;
 
     const mergedLengthMm = built.profile[built.profile.length - 1].positionMm - built.profile[0].positionMm;
-    const maxDepthPct = Math.max(...zone.members.map((member) => member.nominal.maxDepthPct));
+    const maxDepthPct = maxBy(zone.members, (member) => member.nominal.maxDepthPct);
     const merged = evaluateB31g(
       (maxDepthPct / 100) * geometry.wallThickness,
       mergedLengthMm,

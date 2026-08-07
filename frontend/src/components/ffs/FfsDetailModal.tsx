@@ -615,6 +615,7 @@ export default function FfsDetailModal({
                       safe: n.safePressure,
                       erf: n.ERF,
                       severity: n.acceptance === 'Acceptable' ? ('pass' as const) : ('fail' as const),
+                      clampedFrom: null as number | null,
                     },
                     {
                       label: `Conservative — +${screening.depthTolerancePct}% WT, +${2 * screening.lengthToleranceMm} mm`,
@@ -623,6 +624,9 @@ export default function FfsDetailModal({
                       safe: item.conservative.safePressure,
                       erf: item.conservative.ERF,
                       severity: item.conservative.severity,
+                      clampedFrom: item.conservative.depthClamped
+                        ? item.conservative.requestedDepthPct
+                        : null,
                     },
                     {
                       label: `Forecast — ${screening.forecastYears} y at ${item.forecast.growthRateMmPerYear.toFixed(3)} mm/y (${growthAnalysisBasisLabel(item.forecast.growthAnalysisBasis)})`,
@@ -631,11 +635,27 @@ export default function FfsDetailModal({
                       safe: item.forecast.safePressure,
                       erf: item.forecast.ERF,
                       severity: item.forecast.severity,
+                      // A projection past the wall is evaluated at 99.5 %WT, so
+                      // every figure on this row belongs to a shallower defect
+                      // than the one projected. Say so on the row itself.
+                      clampedFrom: item.forecast.depthClamped
+                        ? item.forecast.requestedDepthPct
+                        : null,
                     },
                   ].map((tier) => (
                     <tr key={tier.label}>
                       <td className="font-medium">{tier.label}</td>
-                      <td className="text-right tabular-nums">{tier.depth.toFixed(1)}</td>
+                      <td className="text-right tabular-nums">
+                        {tier.depth.toFixed(1)}
+                        {tier.clampedFrom !== null && (
+                          <span
+                            className="ffs-detail__clamp-note"
+                            title={`Projected to ${tier.clampedFrom.toFixed(1)} %WT, past the wall. Evaluated at ${tier.depth.toFixed(1)} %WT — the figures on this row describe that shallower defect.`}
+                          >
+                            {' '}(capped from {tier.clampedFrom.toFixed(0)})
+                          </span>
+                        )}
+                      </td>
                       <td className="text-right tabular-nums">{tier.length.toFixed(0)}</td>
                       <td className="text-right tabular-nums">{fmt(tier.safe, 3)}</td>
                       <td className="text-right font-bold tabular-nums">{formatErf(tier.erf)}</td>

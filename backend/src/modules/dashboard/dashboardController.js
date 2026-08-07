@@ -40,44 +40,74 @@ exports.getDashboardStats = async (req, res) => {
         );
         const totalIliRuns = parseInt(totalRunsRes.rows[0].total) || 0;
 
+        // The alignment engine never writes `alignment_results` — it builds the
+        // ORM objects and discards them — so every panel below used to read an
+        // empty table and report zero. The per-session summary the worker
+        // records when a run completes is the authoritative count, and reading
+        // it costs one small scan instead of aggregating millions of rows.
+        const SESSION_SUMMARY = `s.params_json -> 'resultSummary'`;
+
         // 2. Feature Composition & Match Rate
         const compRes = await pool.query(
-            `SELECT r.match_status, COUNT(r.id) as count 
-             FROM alignment_results r
-             JOIN alignment_sessions s ON r.session_id = s.id
+            `SELECT status.match_status, SUM(status.count)::bigint AS count
+             FROM alignment_sessions s
              JOIN pipelines p ON s.pipeline_id = p.id
+             CROSS JOIN LATERAL (VALUES
+                 ('Matched',  COALESCE((${SESSION_SUMMARY} ->> 'matched')::numeric, 0)),
+                 ('Only OLD', COALESCE((${SESSION_SUMMARY} ->> 'onlyOld')::numeric, 0)),
+                 ('Only NEW', COALESCE((${SESSION_SUMMARY} ->> 'onlyNew')::numeric, 0))
+             ) AS status(match_status, count)
              WHERE p.organization_id = $1
-             GROUP BY r.match_status`,
+               AND ${SESSION_SUMMARY} IS NOT NULL
+             GROUP BY status.match_status`,
             [orgId]
         );
-        
+
         const composition = summarizeComposition(compRes.rows);
 
-        // 3. Growth Analysis Highlights (Top 5 Anomalies by depth_diff)
+        // 3. Growth Analysis Highlights (Top 5 matched anomalies by depth change).
+        // Read from the newest completed run of the organization only: the
+        // dashboard needs the current worst offenders, not a scan of every run
+        // ever stored.
         const growthRes = await pool.query(
-            `SELECT r.id, f.feature_id, f.joint_number, r.depth_diff, r.growth_flag
-             FROM alignment_results r
-             JOIN ili_features f ON r.feature_old_id = f.id
-             JOIN alignment_sessions s ON r.session_id = s.id
-             JOIN pipelines p ON s.pipeline_id = p.id
-             WHERE p.organization_id = $1 AND r.match_status = 'Matched' AND r.depth_diff IS NOT NULL
-             ORDER BY r.depth_diff DESC
+            `WITH latest AS (
+                 SELECT j.job_id
+                 FROM alignment_jobs j
+                 JOIN alignment_sessions s ON s.id = j.session_id
+                 JOIN pipelines p ON p.id = s.pipeline_id
+                 WHERE p.organization_id = $1 AND j.state = 'completed'
+                 ORDER BY j.completed_at DESC NULLS LAST, j.created_at DESC
+                 LIMIT 1
+             )
+             SELECT r.ordinal AS id,
+                    r.row_json ->> 'Feature ID NEW' AS feature_id,
+                    NULLIF(r.row_json ->> 'Joint No. NEW', '-') AS joint_number,
+                    (r.row_json ->> 'Depth NEW (%WT)')::numeric
+                        - (r.row_json ->> 'Depth OLD (%WT)')::numeric AS depth_diff,
+                    NULL AS growth_flag
+             FROM latest l
+             JOIN alignment_job_rows r ON r.job_id = l.job_id
+             WHERE r.row_json ->> 'Result Group' = 'ANOMALY'
+               AND r.row_json ->> 'Match/Unmatch' = 'Matched'
+               AND r.row_json ->> 'Depth NEW (%WT)' ~ '^-?[0-9]+(\\.[0-9]+)?$'
+               AND r.row_json ->> 'Depth OLD (%WT)' ~ '^-?[0-9]+(\\.[0-9]+)?$'
+             ORDER BY depth_diff DESC
              LIMIT 5`,
             [orgId]
         );
         const growthAnalysis = growthRes.rows.map(summarizeGrowthFinding);
 
-        // 4. Recent Alignment Jobs
+        // 4. Recent Alignment Jobs. Survey years come from the session's own
+        // summary: run_old_id / run_new_id are columns nothing ever populates,
+        // so joining through them always produced a null run label.
         const jobsRes = await pool.query(
             `SELECT s.id, p.name as pipeline, s.status, s.started_at, s.completed_at,
-                    old_run.survey_year AS old_year,
-                    new_run.survey_year AS new_year,
-                    (SELECT COUNT(*) FROM alignment_results WHERE session_id = s.id AND match_status = 'Matched') as matched,
-                    (SELECT COUNT(*) FROM alignment_results WHERE session_id = s.id) as total
+                    NULLIF(s.params_json #>> '{summaryData,oldRun,year}', '')::numeric AS old_year,
+                    NULLIF(s.params_json #>> '{summaryData,newRun,year}', '')::numeric AS new_year,
+                    COALESCE((${SESSION_SUMMARY} ->> 'matched')::numeric, 0) AS matched,
+                    COALESCE((${SESSION_SUMMARY} ->> 'anomaliesFound')::numeric, 0) AS total
              FROM alignment_sessions s
              JOIN pipelines p ON s.pipeline_id = p.id
-             LEFT JOIN survey_runs old_run ON old_run.id = s.run_old_id
-             LEFT JOIN survey_runs new_run ON new_run.id = s.run_new_id
              WHERE p.organization_id = $1
              ORDER BY s.started_at DESC
              LIMIT 5`,
@@ -88,11 +118,10 @@ exports.getDashboardStats = async (req, res) => {
         // 5. Measured monthly trend. Empty history remains empty; it is never fabricated.
         const trendRes = await pool.query(
             `SELECT date_trunc('month', s.completed_at) AS month,
-                    COUNT(r.id) FILTER (WHERE r.match_status = 'Matched') AS matched,
-                    COUNT(r.id) AS total
+                    SUM(COALESCE((${SESSION_SUMMARY} ->> 'matched')::numeric, 0)) AS matched,
+                    SUM(COALESCE((${SESSION_SUMMARY} ->> 'anomaliesFound')::numeric, 0)) AS total
              FROM alignment_sessions s
              JOIN pipelines p ON s.pipeline_id = p.id
-             LEFT JOIN alignment_results r ON r.session_id = s.id
              WHERE p.organization_id = $1
                AND s.completed_at IS NOT NULL
              GROUP BY date_trunc('month', s.completed_at)

@@ -32,6 +32,13 @@ import type { FfsLifeStatus } from './types.ts';
 /** Which set of dimensions the projection started from. */
 export type FfsRemnantLifeBasis = 'as-reported' | 'tolerance-adjusted';
 
+/**
+ * Which condition produced the reported figure.
+ *
+ * `'Depth = 80%'` is a stable identifier, not a label: the depth line it refers
+ * to is configurable, and `FfsRemnantLife.depthLimitPct` carries the value that
+ * was actually used. Display code must read that field rather than the token.
+ */
 export type FfsRemnantLimit = 'Depth = 80%' | 'ERF = 1' | 'Original design life';
 
 /** Design-dossier figures. Both are optional; neither is inferred. */
@@ -56,8 +63,10 @@ export interface FfsRemnantLife {
   governingLimit: FfsRemnantLimit | null;
   /** Calendar date the governing limit is reached, or null. */
   dueDateIso: string | null;
-  /** Years to the 80 %WT limit; null when depth growth never reaches it. */
+  /** Years to the depth rejection line; null when depth growth never reaches it. */
   depthLimitYears: number | null;
+  /** The depth rejection line this projection measured to, as % of wall. */
+  depthLimitPct: number;
   /** Years to ERF 1.0; null when the ratio never reaches it inside the horizon. */
   erfLimitYears: number | null;
   /** Depth this basis started from, as % of wall. */
@@ -94,6 +103,15 @@ export interface FfsRemnantLifeRequest {
   horizonYears: number;
   iliDate: Date;
   service: FfsServiceLifeInputs;
+  /**
+   * The depth, as a fraction of wall, this project rejects at.
+   *
+   * Defaults to the 80 %WT line. It is configurable because
+   * `FfsScreeningConfig.depthRejectionPct` is: an operator who screens at 70 %WT
+   * was still getting a remnant life measured to 80 %WT, so the governing limit
+   * on the report contradicted the acceptance column beside it.
+   */
+  depthLimitRatio?: number;
 }
 
 const BISECTION_STEPS = 60;
@@ -126,9 +144,10 @@ function yearsToDepthLimit(
   startDepthPct: number,
   wallThickness: number,
   depthRateMmPerYear: number,
+  depthLimitRatio: number = B31G_DEPTH_LIMIT_RATIO,
 ): number {
   const startDepthMm = (startDepthPct / 100) * wallThickness;
-  const limitMm = B31G_DEPTH_LIMIT_RATIO * wallThickness;
+  const limitMm = depthLimitRatio * wallThickness;
   if (startDepthMm >= limitMm) return 0;
   if (!(depthRateMmPerYear > 0)) return Number.POSITIVE_INFINITY;
   return (limitMm - startDepthMm) / depthRateMmPerYear;
@@ -186,7 +205,14 @@ export function computeRemnantLife(request: FfsRemnantLifeRequest): FfsRemnantLi
     startDepthPct, startLengthMm, depthRateMmPerYear, lengthRateMmPerYear,
   } = request;
 
-  const rawDepthLimit = yearsToDepthLimit(startDepthPct, geometry.wallThickness, depthRateMmPerYear);
+  const depthLimitRatio = Number.isFinite(request.depthLimitRatio)
+    && (request.depthLimitRatio as number) > 0
+    && (request.depthLimitRatio as number) <= 1
+    ? (request.depthLimitRatio as number)
+    : B31G_DEPTH_LIMIT_RATIO;
+  const rawDepthLimit = yearsToDepthLimit(
+    startDepthPct, geometry.wallThickness, depthRateMmPerYear, depthLimitRatio,
+  );
   const rawErfLimit = yearsToErf1(request);
 
   const depthLimitYears = rawDepthLimit <= horizonYears ? round2(rawDepthLimit) : null;
@@ -197,6 +223,17 @@ export function computeRemnantLife(request: FfsRemnantLifeRequest): FfsRemnantLi
     service.designLifeYears !== null && Number.isFinite(service.designLifeYears) && service.designLifeYears > 0
       ? service.designLifeYears
       : null;
+  // The cap is on life *remaining* from the inspection, so the comparable
+  // figure is the design life still unconsumed at the ILI date — not the total
+  // design life the line was built for. Comparing against the total meant a
+  // 40-year line inspected in its 36th year was capped at 40 more years, which
+  // is no cap at all; and where it did bind it quoted more life than the design
+  // dossier allows. Without a commissioning year the consumed share is unknown,
+  // so the total is retained as the only defensible bound.
+  const usage = designLifeUsage(service, iliDate);
+  const designLifeCapYears = designLifeYears === null
+    ? null
+    : (usage === null ? designLifeYears : Math.max(0, usage.designLifeRemainingYears));
 
   let years: number | null = null;
   let governingLimit: FfsRemnantLimit | null = null;
@@ -220,8 +257,8 @@ export function computeRemnantLife(request: FfsRemnantLifeRequest): FfsRemnantLi
   // no limit was reached, because that would turn "we did not find a limit"
   // into a dated service-life claim.
   let designLifeCapApplied = false;
-  if (designLifeYears !== null && years !== null && years > designLifeYears) {
-    years = designLifeYears;
+  if (designLifeCapYears !== null && years !== null && years > designLifeCapYears) {
+    years = round2(designLifeCapYears);
     governingLimit = 'Original design life';
     designLifeCapApplied = true;
   }
@@ -233,6 +270,7 @@ export function computeRemnantLife(request: FfsRemnantLifeRequest): FfsRemnantLi
     governingLimit,
     dueDateIso: years === null ? null : addYearsIso(iliDate, years),
     depthLimitYears,
+    depthLimitPct: depthLimitRatio * 100,
     erfLimitYears,
     startDepthPct,
     startLengthMm,

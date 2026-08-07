@@ -133,7 +133,10 @@ class ParserIngestTests(unittest.TestCase):
                 "offtakes": 1,
                 "bends": 1,
                 "others": 1,
-                "gw_anchors": 3,
+                # Welds, valves, tees and offtakes: dtw_engine normalises an
+                # offtake to a tee, so it is a Tier-1 anchor there and the
+                # intake summary must promise the same set.
+                "gw_anchors": 4,
                 "invalid_anchor_distances": 0,
             },
         )

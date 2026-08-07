@@ -151,7 +151,14 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
 
   const init = calcAtYear(config, geometry, dInit, length, crDepth, crLength, 0);
   const safePressure = init.safePressureMpa;
-  const depthLimitPct = B31G_DEPTH_LIMIT_RATIO * 100;
+  // The project rejection line, not an applicability limit of B31G. It has to
+  // be the same number the screening layer and the remnant-life search use, or
+  // the acceptance column contradicts the governing limit printed beside it.
+  const depthLimitPct = Number.isFinite(config.depthRejectionPct)
+    && (config.depthRejectionPct as number) > 0
+    && (config.depthRejectionPct as number) <= 100
+    ? (config.depthRejectionPct as number)
+    : B31G_DEPTH_LIMIT_RATIO * 100;
   // ERF 1.0 is the safe-pressure limit itself, so it is not acceptable. The
   // depth gate is the code's own applicability limit, not a project setting.
   const acceptance = (init.erf < 1 && maxDepthPct < depthLimitPct) ? 'Acceptable' : 'Un-Acceptable';
@@ -174,6 +181,7 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
     horizonYears,
     iliDate: config.iliDate,
     service: config.serviceLife ?? EMPTY_SERVICE_LIFE,
+    depthLimitRatio: depthLimitPct / 100,
   });
 
   const atFailure = remnantLife.years === null

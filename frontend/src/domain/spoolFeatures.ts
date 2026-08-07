@@ -21,6 +21,7 @@
 
 import { classifyFeatureKind, type FeatureKind } from './comparisonLanes.ts';
 import { parseClockToDegrees } from '../utils/clock.ts';
+import { maxOf, minOf } from '../utils/numericRange.ts';
 
 export type ComparisonRow = Record<string, unknown>;
 
@@ -314,7 +315,7 @@ export function buildSpoolModel(rows: readonly ComparisonRow[]): SpoolModel {
 
   const positions = [...features.map((feature) => feature.maM), ...welds.map((weld) => weld.maM)];
   const extentM = positions.length
-    ? { startM: Math.min(...positions), endM: Math.max(...positions) }
+    ? { startM: minOf(positions), endM: maxOf(positions) }
     : null;
 
   return { features, welds, currentRun, previousRun, hasComparison: sawPrevious, extentM };

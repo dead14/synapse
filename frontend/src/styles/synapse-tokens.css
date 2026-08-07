@@ -1329,6 +1329,15 @@
 
 /* Life projection cards */
 .ffs-detail__metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; }
+/* Marks a tier whose depth was capped at the wall before evaluation, so the
+   substituted geometry is visible next to the number it produced. */
+.ffs-detail__clamp-note {
+  color: var(--ds-color-warning-fg, #92400e);
+  font-size: 0.75em;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .ffs-detail__life-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
 @media (max-width: 640px) {
   .ffs-detail__metric-grid,

@@ -1,5 +1,6 @@
 import type { FfsScreenedResult } from './types.ts';
 import { lifeSortValue } from './lifeProjection.ts';
+import { maxOf, minOf } from '../../utils/numericRange.ts';
 
 /** A user-editable depth band used by the distribution table and charts. */
 export interface DepthBucket {
@@ -58,8 +59,8 @@ export function isInternal(item: FfsScreenedResult): boolean {
 export function buildLdBins(items: FfsScreenedResult[], binSizeM: number): LdBin[] {
   if (!items.length || binSizeM <= 0) return [];
   const distances = items.map(numericLd);
-  const min = Math.min(...distances);
-  const max = Math.max(...distances);
+  const min = minOf(distances);
+  const max = maxOf(distances);
   const first = Math.floor(min / binSizeM);
   const last = Math.floor(max / binSizeM);
 

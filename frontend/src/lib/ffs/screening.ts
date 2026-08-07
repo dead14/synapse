@@ -17,11 +17,20 @@ import type {
 import { buildFfsReportCase, type FfsReportContext } from './reportCase.ts';
 import { analysisHorizonYears, formatLifeProjection, lifeSortValue } from './lifeProjection.ts';
 import { computeRemnantLife, EMPTY_SERVICE_LIFE, type FfsRemnantLife } from './remnantLife.ts';
+import { maxBy } from '../../utils/numericRange.ts';
 
 /** Features closer together than this along the pipeline form one location zone. */
 const ZONE_GAP_M = 10;
 /** Depth at or above which a feature is treated as severe regardless of ERF. */
 const SEVERE_DEPTH_PCT = 70;
+/**
+ * How far downstream the pairwise interaction screen will look, in metres.
+ *
+ * B31G para. 1.12 interaction spacing is a few wall thicknesses; this bound is
+ * two orders of magnitude above that and exists only so a single mis-reported
+ * feature length cannot turn the scan into an all-pairs comparison.
+ */
+const INTERACTION_SCAN_REACH_CAP_M = 5;
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -179,13 +188,21 @@ function evaluateTier(
   growthRateMmPerYear: number,
   growthApplication?: FfsGrowthApplication,
 ): FfsTier {
+  // The kernel has no remaining strength to report past full wall, so the tier
+  // is evaluated at 99.5 %WT. A projected depth beyond the wall is a real
+  // result, though, and the numbers below then describe a shallower defect than
+  // the one requested — so the tier records that it was clamped and what it was
+  // asked for, instead of presenting a substituted geometry as the answer.
   const safeDepthPct = clamp(depthPct, 0, 99.5);
+  const depthClamped = depthPct > 99.5;
   const dMm = (safeDepthPct / 100) * nominal.wall;
   const safeLength = Math.max(0.001, lengthMm);
   const result = evaluateB31g(dMm, safeLength, geometryOf(nominal), config.method, config.modifiedSa);
 
   return {
     depthPct: safeDepthPct,
+    requestedDepthPct: depthPct,
+    depthClamped,
     lengthMm: safeLength,
     dMm,
     z: result.z,
@@ -258,6 +275,10 @@ function conservativeRemnantLife(
     horizonYears: analysisHorizonYears(config),
     iliDate: config.iliDate,
     service: config.serviceLife ?? EMPTY_SERVICE_LIFE,
+    // The same line `severityOf` rejects at. Leaving this on the hard-coded
+    // 80 %WT meant a project screening at 70 %WT read "fail" in the acceptance
+    // column while the governing limit beside it was still measured to 80.
+    depthLimitRatio: screening.depthRejectionPct / 100,
   });
 }
 
@@ -367,7 +388,7 @@ export function buildLocationZones(items: FfsScreenedResult[]): FfsLocationZone[
         members: current,
         startLd: numericLd(current[0]),
         endLd: numericLd(current[current.length - 1]),
-        worstErf: Math.max(...current.map((item) => item.conservative.ERF)),
+        worstErf: maxBy(current, (item) => item.conservative.ERF),
       });
     }
     current = [];
@@ -423,12 +444,22 @@ export function findInteractions(
   // The scan can only stop once the centre gap clears the *longest* feature in
   // the population. Cutting off on the current pair's lengths skipped a long
   // downstream anomaly whose near edge still fell inside the threshold.
-  const longestMm = sorted.reduce((max, item) => Math.max(max, item.nominal.length), 0);
+  //
+  // One very long record — a vendor-merged cluster reported at tens of metres —
+  // widens that window for every anchor and turns the scan quadratic, so the
+  // reach is capped. Anything past the cap is a colony assessment, not a
+  // pairwise interaction screen, and the cap is reported rather than silently
+  // applied.
+  const longestMm = maxBy(sorted, (item) => item.nominal.length);
+  const scanReachCapMm = INTERACTION_SCAN_REACH_CAP_M * 1000;
+  let truncatedScans = 0;
 
   for (let i = 0; i < sorted.length; i++) {
     const a = sorted[i];
     const thresholdMm = screening.interactionSpacingFactor * a.nominal.wall;
-    const scanLimitMm = thresholdMm + (a.nominal.length + longestMm) / 2;
+    const unboundedScanLimitMm = thresholdMm + (a.nominal.length + longestMm) / 2;
+    const scanLimitMm = Math.min(unboundedScanLimitMm, scanReachCapMm);
+    if (unboundedScanLimitMm > scanReachCapMm) truncatedScans += 1;
     for (let j = i + 1; j < sorted.length; j++) {
       const b = sorted[j];
       const centerGapMm = (numericLd(b) - numericLd(a)) * 1000;
@@ -473,6 +504,15 @@ export function findInteractions(
       });
     }
   }
+  if (truncatedScans > 0) {
+    // Never a silent truncation: a screen that stopped short must say so, or a
+    // shortened list reads as "no further interactions found".
+    console.warn(
+      `[ffs] Interaction screen reach capped at ${INTERACTION_SCAN_REACH_CAP_M} m for `
+      + `${truncatedScans} feature(s); a reported feature length exceeds the screen's scope. `
+      + 'Review those features as a colony instead.',
+    );
+  }
   return pairs;
 }
 
@@ -489,12 +529,13 @@ export function buildActionRegister(
   limit = 12,
 ): FfsAction[] {
   const reportCase = buildFfsReportCase(items, reportContext);
-  const ranked = reportCase.asManagedItems
-    .sort(
+  // Copied before sorting: `asManagedItems` belongs to the report case, and
+  // reordering it in place changed what every other consumer of that case saw.
+  const ranked = [...reportCase.asManagedItems].sort(
     (a, b) =>
       PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority] ||
       b.conservative.ERF - a.conservative.ERF,
-    );
+  );
 
   return ranked.slice(0, limit).map((target, i) => {
     let recommendation: string;

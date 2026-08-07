@@ -26,6 +26,7 @@
 
 import { foliasFactor, flowStress, normalizedLength, type B31gGeometry, type B31gMethod, type FlowStressMode } from './b31g.ts';
 import type { FfsScreenedResult } from './types.ts';
+import { maxBy } from '../../utils/numericRange.ts';
 
 /**
  * One measured station along the axis.
@@ -202,7 +203,7 @@ export function evaluateEffectiveArea(
     candidates: candidates.slice(0, keepCandidates),
     iterations,
     profileLengthMm: profile[profile.length - 1].positionMm - profile[0].positionMm,
-    maxDepthRatio: Math.max(...profile.map((point) => point.depthMm)) / wallThickness,
+    maxDepthRatio: maxBy(profile, (point) => point.depthMm) / wallThickness,
     valid: true,
     invalidReason: null,
   };

@@ -7,6 +7,7 @@ import bisect
 import math
 import re
 from dataclasses import dataclass
+from datetime import date
 from models import SessionLocal, ILIFeature, AlignmentResult, AlignmentSession
 from tiein_transform import prepare_transform, validated_tiein_knots
 
@@ -129,10 +130,14 @@ class HungarianAnomalyAlignmentEngine:
     """
 
     INF_COST = 1e9
-    # Dense matrix + Python DP is exact for small segments, but becomes
-    # unusable when both runs contain many anomalies. Large segments switch to
-    # a sparse distance-window solver below.
-    MAX_DENSE_ALIGNMENT_CELLS = int(os.getenv("MAX_DENSE_ALIGNMENT_CELLS", "250000"))
+    # Dense matrix + Python DP and the sparse Fenwick solver optimise exactly the
+    # same objective (maximum cardinality, then minimum cost) over exactly the
+    # same admissible pairs: `build_sparse_cost_edges` enumerates the distance
+    # window that `pair_cost` would gate on anyway. The dense path is therefore
+    # only worth taking while the matrix is small enough that building edge
+    # tuples costs more than filling it — at 250,000 cells it was several
+    # seconds of numpy scalar boxing per segment for no different answer.
+    MAX_DENSE_ALIGNMENT_CELLS = int(os.getenv("MAX_DENSE_ALIGNMENT_CELLS", "2000"))
 
     @staticmethod
     def _read_us_gw_distance(feature: dict):
@@ -530,10 +535,14 @@ class HungarianAnomalyAlignmentEngine:
             # years now disable growth output and raise MISSING_SURVEY_YEAR.
             self.run_1_year = self._run_year(old_run)
             self.run_2_year = self._run_year(new_run)
+            self._run_1_meta = old_run or {}
+            self._run_2_meta = new_run or {}
         else:
             self.swap_persisted_runs = False
             self.run_1_year = None
             self.run_2_year = None
+            self._run_1_meta = {}
+            self._run_2_meta = {}
 
     @staticmethod
     def _run_year(run: dict) -> int | None:
@@ -542,11 +551,39 @@ class HungarianAnomalyAlignmentEngine:
         except (TypeError, ValueError):
             return None
 
-    def _growth_year_span(self) -> int | None:
-        """Years between the runs, or None when either survey year is unknown."""
+    @staticmethod
+    def _run_date(run: dict):
+        """The inspection date a run reports, when it reports one."""
+        for key in ("inspectionDate", "iliDate", "surveyDate", "date", "uploadedAt"):
+            value = run.get(key) if isinstance(run, dict) else None
+            if value in (None, ""):
+                continue
+            text = str(value).strip()
+            # Accept a full ISO timestamp as well as a bare calendar date.
+            try:
+                return date.fromisoformat(text[:10])
+            except ValueError:
+                continue
+        return None
+
+    def _growth_year_span(self) -> float | None:
+        """Years between the two inspections, or None when it cannot be known.
+
+        Survey *years* are whole numbers, so a November 2019 run compared with a
+        February 2023 run measured a four-year interval for 3.25 years of actual
+        corrosion — a 23 % error carried into every growth rate, remnant life and
+        due date derived from it. Reported inspection dates are used whenever
+        both runs carry one; the year difference remains the fallback, because
+        many vendor exports record nothing finer.
+        """
+        old_date = self._run_date(getattr(self, "_run_1_meta", None) or {})
+        new_date = self._run_date(getattr(self, "_run_2_meta", None) or {})
+        if old_date is not None and new_date is not None:
+            span = (new_date - old_date).days / 365.25
+            return span if span > 0 else None
         if self.run_1_year is None or self.run_2_year is None:
             return None
-        return self.run_2_year - self.run_1_year
+        return float(self.run_2_year - self.run_1_year)
 
     def _missing_survey_year_warnings(self) -> list[dict]:
         """Result-payload warnings, in the physics_warnings entry style."""
@@ -1228,21 +1265,30 @@ class HungarianAnomalyAlignmentEngine:
             news = new_buckets.get(name)
             if not news:
                 continue
-            cost = np.full((len(olds), len(news)), self.INF_COST, dtype=float)
+            # Only pairs already inside the gate can ever be selected, so the
+            # candidate set is found by binary search on the sorted NEW
+            # distances rather than by filling an olds x news matrix. A line
+            # with 3,000 bends per run used to allocate nine million cells and
+            # run the pure-Python DP across all of them, which is what pushed
+            # large runs into ALIGNMENT_PROCESS_TIMEOUT.
+            new_distances = [float(feature["abs_distance_m"]) for feature in news]
+            edges = []
             for old_index, old_feature in enumerate(olds):
                 corrected = float(old_feature["abs_distance_m"]) + self._interpolate_offset(
                     float(old_feature["abs_distance_m"]), offset_table, offset_keys,
                 )
-                for new_index, new_feature in enumerate(news):
-                    separation = abs(float(new_feature["abs_distance_m"]) - corrected)
-                    if separation <= gate:
-                        # Distance is the whole cost: the ordering constraint is
-                        # already enforced by the solver, so the only thing left
-                        # to prefer is the closer of two otherwise equal options.
-                        cost[old_index, new_index] = separation
-            for old_index, new_index in self.solve_monotonic_assignment(cost):
-                if cost[old_index, new_index] >= self.INF_COST:
-                    continue
+                first = bisect.bisect_left(new_distances, corrected - gate)
+                last = bisect.bisect_right(new_distances, corrected + gate)
+                for new_index in range(first, last):
+                    # Distance is the whole cost: the ordering constraint is
+                    # already enforced by the solver, so the only thing left
+                    # to prefer is the closer of two otherwise equal options.
+                    edges.append(
+                        (old_index, new_index, abs(new_distances[new_index] - corrected))
+                    )
+            for old_index, new_index in self.solve_sparse_monotonic_assignment(
+                len(olds), len(news), edges,
+            ):
                 old_feature = olds[old_index]
                 new_feature = news[new_index]
                 pairs.append((old_feature, new_feature))
@@ -1260,11 +1306,12 @@ class HungarianAnomalyAlignmentEngine:
         return pairs, unmatched_old, unmatched_new
 
     @classmethod
-    def _partition_hungarian_features(cls, features: list[dict], locked_ids: set[str]):
+    def _partition_hungarian_features(cls, features: list[dict]):
         """Split Phase-2 input without re-emitting any Phase-1 GW feature."""
         # Phase ownership is determined by feature type, not identifier alone.
         # IDs are not guaranteed unique across vendor exports; filtering every
-        # row whose ID appears in a GW lock can silently remove an anomaly.
+        # row whose ID appears in a GW lock can silently remove an anomaly —
+        # which is why this takes no lock-id set at all.
         anomalies: list[dict] = []
         bypassed: list[dict] = []
         for feature in features:
@@ -1282,14 +1329,27 @@ class HungarianAnomalyAlignmentEngine:
         is pure overhead.
         """
         overrides = tolerance_overrides or {}
+        # `gw_offset_tolerance` gates the difference between the two runs'
+        # reported distance-to-upstream-weld.  It used to reuse
+        # `us_gw_distance_tolerance`, which is the *odometer* search window, so
+        # one slider silently governed two unrelated physical quantities: an
+        # engineer widening the odometer window to accept a drifted run also
+        # loosened the weld-relative gate that is the strongest identity
+        # evidence in the record.  It defaults to the odometer window so a saved
+        # session's numbers do not move until the value is set explicitly.
+        upstream_window = float(overrides.get(
+            "us_gw_distance_tolerance", self.us_gw_distance_tolerance
+        ))
         return {
             "w_gw": float(getattr(self, "w_gw", 3.0)),
             "w_clock": float(getattr(self, "w_clock", 2.0)),
             "w_length": float(getattr(self, "w_length", 1.0)),
             "w_width": float(getattr(self, "w_width", 0.5)),
             "clock_tolerance": float(overrides.get("clock_tolerance", self.clock_tolerance)),
-            "us_gw_distance_tolerance": float(overrides.get(
-                "us_gw_distance_tolerance", self.us_gw_distance_tolerance
+            "us_gw_distance_tolerance": upstream_window,
+            "gw_offset_tolerance": float(overrides.get(
+                "gw_offset_tolerance",
+                getattr(self, "gw_offset_tolerance", None) or upstream_window,
             )),
             "ds_gw_distance_tolerance": float(overrides.get(
                 "ds_gw_distance_tolerance", self.ds_gw_distance_tolerance
@@ -1326,11 +1386,13 @@ class HungarianAnomalyAlignmentEngine:
         if abs(signed_distance) > distance_tolerance:
             return self.INF_COST
 
-        us_distance_tolerance = settings["us_gw_distance_tolerance"]
+        gw_offset_tolerance = settings["gw_offset_tolerance"]
         use_us_gw_distance = settings["use_us_gw_distance"]
         base_cost = 0.0
 
-        # 1. GW Penalty
+        # 1. GW Penalty. Compares how far each run placed the feature from its
+        # own upstream weld — a weld-relative quantity, gated independently of
+        # the absolute odometer window above.
         gw1 = old_feature.get("dist_to_us_gw_m")
         gw2 = new_feature.get("dist_to_us_gw_m")
         if (
@@ -1341,10 +1403,10 @@ class HungarianAnomalyAlignmentEngine:
             return self.INF_COST
         if use_us_gw_distance and gw1 is not None and gw2 is not None:
             gw_distance_difference = abs(abs(gw1) - abs(gw2))
-            if gw_distance_difference > us_distance_tolerance:
+            if gw_distance_difference > gw_offset_tolerance:
                 return self.INF_COST
             base_cost += settings["w_gw"] * (
-                gw_distance_difference / max(us_distance_tolerance, 0.001)
+                gw_distance_difference / max(gw_offset_tolerance, 0.001)
             )
 
         # 2. Clock Penalty
@@ -1445,6 +1507,8 @@ class HungarianAnomalyAlignmentEngine:
             params_json.get("algorithm") == "dtw_hungarian_onedirection"
             and self.use_us_gw_distance
         )
+        if "gw_offset_tolerance" in tol_config:
+            self.gw_offset_tolerance = float(tol_config["gw_offset_tolerance"])
         if "length_tolerance" in tol_config:
             self.length_tolerance = float(tol_config["length_tolerance"])
         if "w_gw" in tol_config:
@@ -1517,10 +1581,6 @@ class HungarianAnomalyAlignmentEngine:
         if not compiled_sections.is_valid:
             raise ValueError("Invalid matching sections: " + "; ".join(compiled_sections.errors))
 
-        # Extract locked IDs from gwMatchesFinal ONLY
-        locked_run1_str = {str(p["old_id"]) for p in gw_matches_final if p.get("old_id")}
-        locked_run2_str = {str(p["new_id"]) for p in gw_matches_final if p.get("new_id")}
-
         print(f"      [Validation] Locked GWs (MatchesFinal): {len(gw_matches_final)}", file=sys.stderr)
         print(f"      [Validation] Orphans GWs: {len(gw_orphans)}", file=sys.stderr)
 
@@ -1528,12 +1588,8 @@ class HungarianAnomalyAlignmentEngine:
         # metal-loss rows, while genuine non-GW features may remain visible in
         # the bypass buckets.  This prevents unmatched GWs from appearing once
         # in gw_unmatched and a second time as Bypassed OLD/NEW.
-        anomalies_1, non_anomaly_old = self._partition_hungarian_features(
-            anomalies_1_all, locked_run1_str
-        )
-        anomalies_2, non_anomaly_new = self._partition_hungarian_features(
-            anomalies_2_all, locked_run2_str
-        )
+        anomalies_1, non_anomaly_old = self._partition_hungarian_features(anomalies_1_all)
+        anomalies_2, non_anomaly_new = self._partition_hungarian_features(anomalies_2_all)
 
         print(f"      [Validation] Valid Anomaly Candidates Run1: {len(anomalies_1)} (Out of {len(anomalies_1_all)})", file=sys.stderr)
         print(f"      [Validation] Valid Anomaly Candidates Run2: {len(anomalies_2)} (Out of {len(anomalies_2_all)})", file=sys.stderr)
@@ -1798,6 +1854,11 @@ class HungarianAnomalyAlignmentEngine:
                 "Bypass Reason": bypass_reason,
                 "Run Year OLD": self.run_1_year,
                 "Run Year NEW": self.run_2_year,
+                # The interval the rates above were divided by, in decimal
+                # years. Consumers must not re-derive it from the two survey
+                # years: those are whole numbers, and a Nov-2019 to Feb-2023
+                # pair is 3.25 years of corrosion reported as 4.
+                "Growth Interval (y)": year_span if year_span is not None else "-",
                 "Physics Warning": ", ".join(warning["code"] for warning in physics_warnings) or "-",
                 "physics_warnings": physics_warnings,
                 "Depth Growth (%WT/yr)": depth_growth if depth_growth is not None else "-",

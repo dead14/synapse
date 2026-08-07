@@ -12,6 +12,7 @@
 import { isInternal } from './statistics.ts';
 import { lifeSortValue } from './lifeProjection.ts';
 import type { FfsDesignFactorSource, FfsSafetyFactorSource, FfsScreenedResult } from './types.ts';
+import { maxBy, maxOf, maxOrNull as sharedMaxOrNull, minBy, minOf } from '../../utils/numericRange.ts';
 
 function sectionNameOf(item: FfsScreenedResult): string {
   const name = String(item.nominal.section ?? '').trim();
@@ -31,7 +32,7 @@ function groupBySection(items: FfsScreenedResult[]): Map<string, FfsScreenedResu
 
 /** Maximum of a set, or null when the set is empty. */
 function maxOrNull(values: number[]): number | null {
-  return values.length ? Math.max(...values) : null;
+  return sharedMaxOrNull(values);
 }
 
 export interface FfsSectionGrowthRow {
@@ -104,8 +105,8 @@ export function buildSectionGrowthSummary(items: FfsScreenedResult[]): FfsSectio
       ).length,
       shortestRemnantLifeYears: withLife[0]?.nominal.remnantLife.years ?? null,
       shortestRemnantLifeFeature: withLife[0] ?? null,
-      maxDepthPct: Math.max(...members.map((item) => item.nominal.maxDepthPct)),
-      minSafePressureMpa: Math.min(...members.map((item) => item.nominal.safePressure)),
+      maxDepthPct: maxBy(members, (item) => item.nominal.maxDepthPct),
+      minSafePressureMpa: minBy(members, (item) => item.nominal.safePressure),
       designFactors: [...new Set(members.map((item) => item.nominal.df))].sort((a, b) => a - b),
     });
   }
@@ -154,8 +155,8 @@ export function buildSectionDesignFactorSummary(
         safetyFactor: members[0].nominal.safetyFactor,
         safetyFactorSource: members[0].nominal.safetyFactorSource,
         featureCount: members.length,
-        startLd: distances.length ? Math.min(...distances) : 0,
-        endLd: distances.length ? Math.max(...distances) : 0,
+        startLd: minOf(distances),
+        endLd: maxOf(distances),
       };
     })
     .sort((a, b) => a.startLd - b.startLd || a.section.localeCompare(b.section));

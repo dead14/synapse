@@ -268,7 +268,7 @@ test('estimates NEW-only depth CGR from a disclosed zero baseline and survey int
     analysisBasis: 'estimated',
     rawRateMmPerYear: null,
     analysisRateMmPerYear: 1,
-    formula: '(40 / 100 x 10 mm - 0 mm) / (2024 - 2020) y',
+    formula: '(40 / 100 x 10 mm - 0 mm) / 4 y',
     note: 'Estimated from an assumed zero-depth baseline at the OLD survey; not a measured run-pair CGR.',
   });
   assert.equal(mapped.accepted[0].provenance.growthEvidence.intervalYears, 4);

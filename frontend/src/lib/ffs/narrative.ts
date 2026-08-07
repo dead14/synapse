@@ -14,6 +14,7 @@ import {
   createFfsReportContext,
   type FfsReportContext,
 } from './reportCase.ts';
+import { maxBy, maxOf, minOf } from '../../utils/numericRange.ts';
 
 export interface NarrativeTableColumn {
   header: string;
@@ -99,7 +100,7 @@ export function buildNarrative(
   const activeBelowThreshold = activeItems.filter(belowReviewThreshold);
   const activeEscalated = activeItems.filter((item) => item.conservative.severity !== 'pass');
   const activeMaxDepth = activeItems.length > 0
-    ? Math.max(...activeItems.map((item) => item.nominal.maxDepthPct))
+    ? maxBy(activeItems, (item) => item.nominal.maxDepthPct)
     : null;
   const belowThreshold = items.filter(belowReviewThreshold);
   const escalated = items.filter((item) => item.conservative.severity !== 'pass');
@@ -113,10 +114,10 @@ export function buildNarrative(
       lifeSortValue(a.nominal.remnantLife.years) - lifeSortValue(b.nominal.remnantLife.years),
   );
   const governing = byErf[0];
-  const maxDepth = Math.max(...items.map((item) => item.nominal.maxDepthPct));
+  const maxDepth = maxBy(items, (item) => item.nominal.maxDepthPct);
   const ldValues = items.map((item) => Number(item.nominal.ld)).filter(Number.isFinite);
-  const ldMin = Math.min(...ldValues);
-  const ldMax = Math.max(...ldValues);
+  const ldMin = minOf(ldValues);
+  const ldMax = maxOf(ldValues);
 
   // ── 1.0 Introduction ──────────────────────────────────────────────
   blocks.push({ kind: 'heading', level: 1, text: '1.0  Introduction' });

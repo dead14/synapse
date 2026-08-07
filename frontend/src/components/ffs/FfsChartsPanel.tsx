@@ -40,6 +40,7 @@ import SectionBandLegend from '../sections/SectionBandLegend';
 import { formatRemnantLife } from '../../lib/ffs/lifeProjection';
 import ChartCard, { ColorControl, SettingsSectionLabel, type PointShape } from './ChartCard';
 import { Callout } from './FfsPrimitives';
+import { maxBy } from '../../utils/numericRange.ts';
 
 ChartJS.register(
   BarElement,
@@ -1042,7 +1043,7 @@ export default function FfsChartsPanel({
                     label: 'ERF 1.00 — safe pressure limit',
                     data: [
                       { x: 0, y: 1 },
-                      { x: Math.max(...items.map((i) => Number(i.nominal.ld) || 0)) * 1.02, y: 1 },
+                      { x: maxBy(items, (i) => Number(i.nominal.ld) || 0) * 1.02, y: 1 },
                     ],
                     showLine: true,
                     borderColor: '#ef4444',
@@ -1055,7 +1056,7 @@ export default function FfsChartsPanel({
                     data: [
                       { x: 0, y: screening.reviewBandErf },
                       {
-                        x: Math.max(...items.map((i) => Number(i.nominal.ld) || 0)) * 1.02,
+                        x: maxBy(items, (i) => Number(i.nominal.ld) || 0) * 1.02,
                         y: screening.reviewBandErf,
                       },
                     ],
