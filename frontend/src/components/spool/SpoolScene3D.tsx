@@ -10,16 +10,18 @@
  * - Clock 12:00 is the frame's `up` and the angle increases towards `right`,
  *   which puts 3:00 on the right when the camera sits downstream. The frame is
  *   carried around bends without twist, so 12:00 stays 12:00 past the corner.
- * - One world unit is one metre. A 12 m spool is 12 units long and a 12" pipe
- *   is 0.324 units across, so what is on screen has the proportions of the pipe
- *   that was reported. Earlier revisions stretched every window onto a fixed
- *   10–40 unit stage, which made the same spool a different shape at every zoom
- *   level and left screen measurements meaningless.
+ * - Axial distance is true metres: one world unit is one metre, so a 12 m spool
+ *   is 12 units long and picking a second spool draws a pipe exactly twice as
+ *   long. Girth carries a constant exaggeration (GIRTH_EXAGGERATION) so
+ *   that a single spool reads as a pipe rather than a hair. Earlier revisions
+ *   stretched every window onto a fixed 10–40 unit stage, which squeezed one
+ *   spool and twenty into the same shape and left screen lengths meaningless.
  * - Anomalies are drawn as boxes cut into the shell, sized from the reported
  *   length (axial), width (circumferential) and depth (wall loss = depth%WT ×
- *   wall thickness). The width is a true arc only when an outside diameter is
- *   supplied; without one the patch keeps a nominal arc and the view says so
- *   rather than implying a measurement.
+ *   wall thickness). Clock extent is preserved as a true angle, so this pane and
+ *   the unrolled one agree on where a defect sits around the pipe. The width is
+ *   a true arc only when an outside diameter is supplied; without one the patch
+ *   keeps a nominal arc and the view says so rather than implying a measurement.
  *
  * Marker scale is a display multiplier, never a data change. Real ILI defects
  * on a 12 m spool are a few centimetres across and vanish at true scale, so the
@@ -172,14 +174,17 @@ function placeFeatures(
     const trueArc = arcWidthDeg(data.widthMm, odMm);
     const arcDeg = trueArc === null ? NOMINAL_ARC_DEG : trueArc * markerScale;
     const circWorld = Math.max(minPatch, (arcDeg * Math.PI / 180) * surfaceRadius);
-    // Depth is the wall the run says is gone. Without a wall thickness there is
-    // no depth to draw, so the box degenerates to a skin-thin patch.
+    // Depth is the wall the run says is gone. It is radial, so it carries the
+    // same girth exaggeration the shell does — otherwise a pit would read four
+    // times shallower against the drawn wall than it is against the real one.
+    // Without a wall thickness there is no depth to draw, so the box
+    // degenerates to a skin-thin patch.
     const wallLossMm = data.depthPct === null || data.wtMm === null
       ? 0
       : (data.depthPct / 100) * data.wtMm;
     const radialWorld = Math.max(
       scale.radius * 0.004,
-      (wallLossMm / 1000) * markerScale,
+      (wallLossMm / 1000) * scale.girth * markerScale,
     );
 
     const matrix = patchMatrix(frame, angle, axialWorld, circWorld, radialWorld, surfaceRadius);
@@ -826,7 +831,7 @@ export default function SpoolScene3D({
                 shell has been exaggerated, so the two are never confused. */}
             <p className="spool-scene__card-note">
               {view.markerScale === 1
-                ? 'Drawn at true size (1:1)'
+                ? 'Measured size · axial length drawn 1:1'
                 : `Measured size · drawn ×${view.markerScale} for visibility`}
             </p>
           </div>

@@ -48,6 +48,7 @@ import {
   type SpoolLayout,
 } from './spoolLayout.ts';
 import { DEPTH_PALETTE_LABEL, depthGradient, type DepthPalette } from './spoolPalette.ts';
+import { GIRTH_EXAGGERATION, NOMINAL_OD_MM } from './spoolScale.ts';
 import './spool.css';
 
 interface SpoolDetailViewProps {
@@ -127,9 +128,19 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
 
   const maximised = isMaximised(layout);
 
+  /**
+   * Maximise gives the whole window to the pipe; the same button gives it back.
+   *
+   * Restoring must never depend on remembering a previous layout. The layout is
+   * persisted, so re-opening the workspace after maximising starts collapsed
+   * with nothing remembered — and dragging a pane clears the memory too. Both
+   * left the button re-collapsing an already-collapsed layout, which reads as a
+   * button that does not respond. Falling back to the default sizes always
+   * gives the panels back.
+   */
   const toggleMaximise = () => {
-    if (maximised && restoreLayout) {
-      setLayout(restoreLayout);
+    if (maximised) {
+      setLayout(restoreLayout ?? DEFAULT_LAYOUT);
       setRestoreLayout(null);
     } else {
       setRestoreLayout(layout);
@@ -482,11 +493,12 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
                   <span>
                     {markerScale === 1 ? 'True to scale' : 'Visual exaggeration — dimensions in the panels stay as reported'}
                   </span>
-                  {/* The pipe itself is never exaggerated, so state the geometry
-                      it is drawn at: this is the actual spool, not a stage. */}
+                  {/* Length is never exaggerated, girth always is. Say which is
+                      which, so nobody reads a proportion off the picture that
+                      the pipe does not have. */}
                   <span className="spool-view__stage-truth">
-                    Pipe drawn 1:1 · {(stageEnd - stageStart).toFixed(2)} m of pipe ·{' '}
-                    {odMm === null ? '323.9 mm OD (nominal)' : `${odMm.toFixed(1)} mm OD`}
+                    Length 1:1 · {(stageEnd - stageStart).toFixed(2)} m of pipe · girth ×{GIRTH_EXAGGERATION} to read ·{' '}
+                    {odMm === null ? `${NOMINAL_OD_MM} mm OD (nominal)` : `${odMm.toFixed(1)} mm OD`}
                   </span>
                   {odMm === null && <span className="is-warn">Diameter and widths are nominal — set an outside diameter for true geometry</span>}
                 </div>
