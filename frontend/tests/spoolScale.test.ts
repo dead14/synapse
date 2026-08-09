@@ -5,10 +5,11 @@ import {
   GIRTH_EXAGGERATION,
   NOMINAL_OD_MM,
   axialTicks,
+  bendRadiusM,
   niceStep,
   sceneScale,
 } from '../src/components/spool/spoolScale.ts';
-import { buildSpoolPath } from '../src/components/spool/spoolPath.ts';
+import { bendArcLength, buildSpoolPath } from '../src/components/spool/spoolPath.ts';
 
 test('axial distance is true metres: a 12 m spool is 12 world units long', () => {
   // worldPerM is 1 in the pane, so the centreline length IS the master-axis
@@ -71,6 +72,39 @@ test('label height follows whichever dimension frames the view', () => {
   // label must not collapse towards zero and become unreadable.
   const stub = sceneScale(0.2, 323.9);
   assert.ok(stub.label > 0.2 * 0.022, `label ${stub.label}`);
+});
+
+test('a bend turns on the real radius, not the exaggerated one', () => {
+  // The arc an elbow consumes is odometer distance. Deriving it from the drawn
+  // radius made a 90 degrees bend eat four times the master axis it really
+  // does, which displaced every feature downstream of the turn.
+  const { trueRadius } = sceneScale(12, 323.9, { hasBend: true });
+  const arc = bendArcLength(90, bendRadiusM(trueRadius));
+
+  // 1.5 diameters of 323.9 mm pipe, quarter turn: 0.486 m radius -> 0.763 m.
+  assert.ok(Math.abs(arc - 0.7632) < 1e-3, `arc ${arc}`);
+
+  // The whole point: the turn fits inside a short spool instead of swallowing
+  // it. buildSpoolPath clamps an over-long arc to the window, which is what
+  // turned a 2.29 m window into one continuous curve.
+  assert.ok(arc < 2.29, `a 90 degrees bend must fit inside a 2.29 m window, got ${arc}`);
+});
+
+test('girth exaggeration backs off far enough for a bend to render', () => {
+  const straight = sceneScale(12, 323.9);
+  const bent = sceneScale(12, 323.9, { hasBend: true });
+
+  assert.equal(straight.girth, GIRTH_EXAGGERATION);
+  assert.ok(bent.girth < straight.girth, `bent girth ${bent.girth}`);
+
+  // The inner wall of the elbow must stay clear of the centre of the turn, or
+  // the shell folds through itself.
+  assert.ok(
+    bent.radius < bendRadiusM(bent.trueRadius),
+    `drawn radius ${bent.radius} must sit inside bend radius ${bendRadiusM(bent.trueRadius)}`,
+  );
+  // Still fatter than life, so a bent spool is legible too.
+  assert.ok(bent.girth > 1, `bent girth ${bent.girth}`);
 });
 
 test('axial ticks stay on the readable ladder at true scale', () => {

@@ -28,6 +28,29 @@ export const NOMINAL_OD_MM = 323.9;
  */
 export const GIRTH_EXAGGERATION = 4;
 
+/** Long-radius elbow: 1.5 diameters, the default for transmission pipe. */
+export const BEND_RADIUS_FACTOR = 3;
+
+/**
+ * How close a bend's centreline curve may come to the drawn shell before the
+ * pipe folds through itself. The inner wall of an elbow sits at
+ * (bend radius − pipe radius); at 0.8 it keeps a fifth of the bend radius as
+ * clearance, which reads as an elbow rather than a crease.
+ */
+const BEND_CLEARANCE = 0.8;
+
+/**
+ * The bend radius an elbow actually turns on, in true metres.
+ *
+ * This is a master-axis quantity: the arc it consumes is odometer distance, so
+ * it is derived from the pipe's real radius. Deriving it from the drawn radius
+ * made every bend consume the girth exaggeration's worth of extra arc and
+ * shifted every feature downstream of it.
+ */
+export function bendRadiusM(trueRadius: number): number {
+  return trueRadius * BEND_RADIUS_FACTOR;
+}
+
 /**
  * The scale the 3D pane draws at.
  *
@@ -51,13 +74,25 @@ export interface SceneScale {
   odKnown: boolean;
 }
 
-export function sceneScale(spanM: number, odMm: number | null): SceneScale {
+export function sceneScale(
+  spanM: number,
+  odMm: number | null,
+  { hasBend = false }: { hasBend?: boolean } = {},
+): SceneScale {
   const trueRadius = (odMm ?? NOMINAL_OD_MM) / 2000;
-  const radius = trueRadius * GIRTH_EXAGGERATION;
+  // A bend turns the centreline on a true-metre radius, because the arc it
+  // consumes is odometer distance. Fattening the shell past that radius would
+  // draw the inner wall through the centre of the turn, so a window with a bend
+  // in it takes as much exaggeration as the elbow can carry and no more. The
+  // factor is reported, so the picture always says what it is drawn at.
+  const girth = hasBend
+    ? Math.max(1, Math.min(GIRTH_EXAGGERATION, BEND_RADIUS_FACTOR * BEND_CLEARANCE))
+    : GIRTH_EXAGGERATION;
+  const radius = trueRadius * girth;
   return {
     radius,
     trueRadius,
-    girth: GIRTH_EXAGGERATION,
+    girth,
     spanM,
     // A long window is framed by its length, a short one by its girth; the
     // label has to stay readable in both, so it follows whichever dominates.
