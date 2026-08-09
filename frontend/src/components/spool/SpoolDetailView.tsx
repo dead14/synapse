@@ -482,7 +482,13 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
                   <span>
                     {markerScale === 1 ? 'True to scale' : 'Visual exaggeration — dimensions in the panels stay as reported'}
                   </span>
-                  {odMm === null && <span className="is-warn">Widths at nominal arc — set an outside diameter for true widths</span>}
+                  {/* The pipe itself is never exaggerated, so state the geometry
+                      it is drawn at: this is the actual spool, not a stage. */}
+                  <span className="spool-view__stage-truth">
+                    Pipe drawn 1:1 · {(stageEnd - stageStart).toFixed(2)} m of pipe ·{' '}
+                    {odMm === null ? '323.9 mm OD (nominal)' : `${odMm.toFixed(1)} mm OD`}
+                  </span>
+                  {odMm === null && <span className="is-warn">Diameter and widths are nominal — set an outside diameter for true geometry</span>}
                 </div>
               </>
             ) : (

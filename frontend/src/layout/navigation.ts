@@ -21,10 +21,8 @@ export const navigationGroups: NavigationGroup[] = [
     label: 'Data & alignment',
     items: [
       { label: 'ILI runs', path: '/runs', description: 'Vendor-agnostic inspection data and provenance' },
-      { label: 'Alignment', path: '/alignment', description: 'Tie-in, GW locking, matching, and conservation' },
-      { label: 'Run comparison', path: '/ili-comparison', description: 'Review matched and unmatched features' },
-      { label: 'Sectioning', path: '/ili-sectioning', description: 'Spatial partitioning on the master run' },
-      { label: 'Polyginesis timeline', path: '/integrity-timeline', description: 'Multi-run genealogy, growth, and confidence' },
+      { label: 'Alignments', path: '/alignment-history', description: 'Alignment sessions, their results, and FFS handoff' },
+      { label: 'Activity log', path: '/activity-logs', description: 'What each user did, in order' },
     ],
   },
   {
@@ -54,7 +52,6 @@ export const navigationGroups: NavigationGroup[] = [
       { label: 'Users', path: '/users', description: 'Organization members and access' },
       { label: 'Organizations', path: '/organizations', description: 'Tenant administration' },
       { label: 'Roles', path: '/roles', description: 'Permission boundaries' },
-      { label: 'Activity log', path: '/activity-logs', description: 'Auditable user activity' },
     ],
   },
 ];

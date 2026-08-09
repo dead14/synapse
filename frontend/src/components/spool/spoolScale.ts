@@ -5,6 +5,44 @@
  */
 
 /**
+ * Stand-in outside diameter — 12" NPS — used only until the reviewer supplies
+ * the real one. The 3D pane says so on screen rather than passing it off as
+ * known.
+ */
+export const NOMINAL_OD_MM = 323.9;
+
+/**
+ * The metric scale the 3D pane draws at: one world unit is one metre. A 12 m
+ * spool is 12 units long and a 12" pipe is 0.324 units across, so the shape on
+ * screen is the shape of the pipe and a measurement taken on it means something.
+ *
+ * An earlier revision stretched every window onto a fixed 10–40 unit stage,
+ * which made the same spool a different shape at every zoom level.
+ */
+export interface SceneScale {
+  /** Outside radius, in metres. */
+  radius: number;
+  /** Axial span of the window, in metres. */
+  spanM: number;
+  /** Text height in metres, sized to stay legible at framing distance. */
+  label: number;
+  /** False while the outside diameter is the nominal stand-in. */
+  odKnown: boolean;
+}
+
+export function sceneScale(spanM: number, odMm: number | null): SceneScale {
+  const radius = (odMm ?? NOMINAL_OD_MM) / 2000;
+  return {
+    radius,
+    spanM,
+    // A long window is framed by its length, a short one by its girth; the
+    // label has to stay readable in both, so it follows whichever dominates.
+    label: Math.max(spanM, radius * 10) * 0.022,
+    odKnown: odMm !== null,
+  };
+}
+
+/**
  * Tick spacing that lands on numbers an engineer reads without decoding: a
  * 1 / 2 / 2.5 / 5 ladder aiming for roughly eight labels across the window.
  */

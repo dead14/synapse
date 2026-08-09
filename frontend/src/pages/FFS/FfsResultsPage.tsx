@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import {
   FiActivity,
@@ -23,7 +23,8 @@ import FfsStatisticsPanel from '../../components/ffs/FfsStatisticsPanel';
 import FfsSummaryCards from '../../components/ffs/FfsSummaryCards';
 import ShareSnapshotButton from '../../components/sharing/ShareSnapshotButton';
 import { buildFfsShareState, type FfsShareState } from '../../lib/sharing/publicShareSnapshot';
-import { reviveFfsShareState } from '../../lib/ffs/shareState';
+import { reviveFfsShareState, type RevivedFfsShareState } from '../../lib/ffs/shareState';
+import { fetchFfsSession, saveFfsSession } from '../../lib/ffs/sessions';
 import { Callout, NumberField, Panel } from '../../components/ffs/FfsPrimitives';
 import { exportResultsWorkbook } from '../../lib/ffs/exports';
 import { methodProfileLabel, pressureBasisLabel } from '../../lib/ffs/assessmentProfile.ts';
@@ -102,7 +103,47 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
   const location = useLocation();
   const navigate = useNavigate();
   const shared = useMemo(() => reviveFfsShareState(sharedState), [sharedState]);
-  const state = (shared ?? (location.state as LocationState | null)) as LocationState | null;
+  const navigationState = (location.state as LocationState | null) ?? null;
+
+  // Re-opening a filed assessment: `/ffs/results?ffsSessionId=…` carries no
+  // navigation state, so the case is read back from the session instead.
+  const requestedSessionId = useMemo(
+    () => new URLSearchParams(location.search).get('ffsSessionId'),
+    [location.search],
+  );
+  const [storedState, setStoredState] = useState<RevivedFfsShareState | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [loadingSession, setLoadingSession] = useState(
+    () => Boolean(requestedSessionId) && !navigationState && !sharedState,
+  );
+  // Which session this case is filed as, so the page can say so and stop the
+  // save from firing twice for one assessment.
+  const [savedSessionId, setSavedSessionId] = useState<string | null>(requestedSessionId);
+  const saveAttempted = useRef(false);
+
+  useEffect(() => {
+    if (!requestedSessionId || navigationState || sharedState) return;
+    let cancelled = false;
+    setLoadingSession(true);
+    setSessionError(null);
+    fetchFfsSession(requestedSessionId)
+      .then((loaded) => {
+        if (cancelled) return;
+        if (!loaded) {
+          setSessionError('This FFS session carries no readable result.');
+          return;
+        }
+        setStoredState(loaded.state);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setSessionError(error instanceof Error ? error.message : 'The FFS session could not be loaded.');
+      })
+      .finally(() => { if (!cancelled) setLoadingSession(false); });
+    return () => { cancelled = true; };
+  }, [requestedSessionId, navigationState, sharedState]);
+
+  const state = (shared ?? navigationState ?? storedState) as LocationState | null;
 
   const [activeTab, setActiveTab] = useState<TabId>('results');
   const [selected, setSelected] = useState<FfsScreenedResult | null>(null);
@@ -197,6 +238,48 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
     : -1;
   const selectedItem = selectedIndex >= 0 ? screened[selectedIndex] : null;
 
+  /**
+   * File the assessment the first time it is rendered from a fresh run.
+   *
+   * A completed FFS run is evidence, and evidence that only exists in one
+   * browser tab is evidence nobody else can find. A failed save is reported but
+   * never blocks the workspace: the results on screen are valid either way.
+   */
+  useEffect(() => {
+    if (readOnly || shared || !navigationState || savedSessionId || saveAttempted.current) return;
+    if (!config || screened.length === 0) return;
+    saveAttempted.current = true;
+    saveFfsSession({
+      results,
+      config,
+      screening,
+      alignmentImport: navigationState.alignmentImport,
+      alignmentSessionId: navigationState.alignmentImport?.sessionId ?? null,
+      summary: {
+        pass: screened.filter((item) => item.conservative.severity === 'pass').length,
+        review: screened.filter((item) => item.conservative.severity === 'review').length,
+        fail: screened.filter((item) => item.conservative.severity === 'fail').length,
+      },
+    })
+      .then(setSavedSessionId)
+      .catch((error: unknown) => {
+        setSessionError(
+          error instanceof Error
+            ? `The assessment could not be filed as a session: ${error.message}`
+            : 'The assessment could not be filed as a session.',
+        );
+      });
+  }, [readOnly, shared, navigationState, savedSessionId, config, screened, results, screening]);
+
+  if (loadingSession) {
+    return (
+      <div className="syn-page syn-ui-kit">
+        <PageMeta title="FFS session" description="Loading a filed fitness-for-service assessment" />
+        <Callout tone="info">Loading the filed FFS assessment…</Callout>
+      </div>
+    );
+  }
+
   if (!state || !config || !reportContext || !reportCase) {
     // A shared link that carries nothing renderable must not bounce the reader
     // into the authenticated setup page they have no access to.
@@ -205,6 +288,16 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
         <Callout tone="warn">
           This shared assessment carries no readable result. Ask the Synapse owner for a new link.
         </Callout>
+      );
+    }
+    // A session that was asked for by id and could not be read is a different
+    // failure from arriving with no case at all, and must not look like one.
+    if (requestedSessionId) {
+      return (
+        <div className="syn-page syn-ui-kit">
+          <PageMeta title="FFS session" description="Filed fitness-for-service assessment" />
+          <Callout tone="warn">{sessionError ?? 'This FFS session could not be opened.'}</Callout>
+        </div>
       );
     }
     return <Navigate to="/ffs" replace />;
@@ -235,7 +328,11 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
             {config.iliDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} ·{' '}
             {results.length.toLocaleString()} features
             {state.alignmentImport && ' · imported from alignment'}
+            {savedSessionId && ` · FFS session ${savedSessionId}`}
           </p>
+          {sessionError && (
+            <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">{sessionError}</p>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

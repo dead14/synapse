@@ -142,6 +142,27 @@ test('inspection run serialization preserves measured parser evidence without in
     assert.deepEqual(run.workflow, {
         stage: 'runcomp',
         alignmentSessionId: 77,
+        ffsSessionId: null,
+        downloadAvailable: true,
+    });
+});
+
+test('a filed FFS assessment is reported as its own session', () => {
+    const run = serializeInspectionRun({
+        id: 9,
+        pipeline_id: 3,
+        pipeline_name: 'North Line',
+        row_count: '10',
+        workflow_stage: 'assessed',
+        workflow_session_id: 77,
+        workflow_ffs_session_id: 12,
+        ingestion_audit: { accepted_rows: 10, rejected_rows: 0 },
+    });
+
+    assert.deepEqual(run.workflow, {
+        stage: 'assessed',
+        alignmentSessionId: 77,
+        ffsSessionId: 12,
         downloadAvailable: true,
     });
 });

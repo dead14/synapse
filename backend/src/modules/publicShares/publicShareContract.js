@@ -221,4 +221,8 @@ module.exports = {
     parseCreateShare,
     parseShareFilters,
     parseSnapshot,
+    // Saved FFS sessions store the same frozen case a published link does, and
+    // must strip the same prototype-polluting keys under the same bounds. One
+    // implementation, so the two can never drift into different guarantees.
+    sanitizeState,
 };

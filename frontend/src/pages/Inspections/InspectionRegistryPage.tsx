@@ -29,6 +29,7 @@ import {
   waitForAlignmentExport,
   type AlignmentExportJob,
 } from '../../utils/alignmentExport';
+import { downloadFfsSessionReport } from '../../lib/ffs/sessions';
 
 type RegistryResponse = { items?: unknown; nextCursor?: unknown };
 
@@ -57,31 +58,51 @@ function statusLabel(status: InspectionRun['evidence']['status']) {
   return 'Evidence unavailable';
 }
 
+type WorkflowTone = 'idle' | 'progress' | 'ready' | 'assessed';
+
+/**
+ * What this run's workflow offers, as one description the row renders.
+ *
+ * Each stage has exactly one primary action — the next thing to do with the run
+ * — and the session links beside it are secondary. Deriving them here keeps the
+ * row from re-deciding the workflow in JSX.
+ */
 function workflowPresentation(run: InspectionRun) {
   const sessionId = run.workflow.alignmentSessionId;
-  const isFfs = run.workflow.stage === 'ffs' && sessionId !== null;
-  const isRuncomp = run.workflow.stage === 'runcomp' && sessionId !== null;
-  const isAlignment = run.workflow.stage === 'alignment' && sessionId !== null;
-  
-  let label = 'Imported';
-  let href = '/alignment';
-  let action = 'Start alignment';
+  const ffsSessionId = run.workflow.ffsSessionId;
+  const sessionHref = sessionId === null ? null : `/ili-comparison?sessionId=${sessionId}`;
 
-  if (isFfs) {
-    label = 'FFS review ready';
-    href = `/ili-comparison?sessionId=${sessionId}`;
-    action = 'View Runcomp';
-  } else if (isRuncomp) {
-    label = 'Runcomp ready';
-    href = `/ili-comparison?sessionId=${sessionId}`;
-    action = 'Open Runcomp';
-  } else if (isAlignment) {
-    label = 'Alignment in progress';
-    href = `/ili-comparison?sessionId=${sessionId}`;
-    action = 'View progress';
-  }
+  const stages: Record<InspectionRun['workflow']['stage'], { label: string; note: string; tone: WorkflowTone }> = {
+    imported: { label: 'Imported', note: 'Not yet aligned', tone: 'idle' },
+    alignment: { label: 'Alignment running', note: 'Session in progress', tone: 'progress' },
+    runcomp: { label: 'Alignment complete', note: 'Result ready to review', tone: 'ready' },
+    ffs: { label: 'Released to FFS', note: 'Features selected, not yet assessed', tone: 'ready' },
+    assessed: { label: 'FFS assessed', note: `Assessment filed as session ${ffsSessionId}`, tone: 'assessed' },
+  };
+  const stage = stages[run.workflow.stage];
 
-  return { label, href, action, isFfs, sessionId };
+  // Without a session there is nothing to open, so the primary action is to
+  // start one — which is also true of a stage that claims otherwise but lost
+  // its session id.
+  const primary = sessionHref === null
+    ? { label: 'Start alignment', href: '/alignment' }
+    : { label: 'Open session', href: sessionHref };
+
+  return {
+    ...stage,
+    primary,
+    sessionId,
+    sessionHref,
+    ffsSessionId,
+    // A filed assessment opens its own session; features merely released to FFS
+    // open the setup page so the assessment can be run.
+    ffsHref: ffsSessionId !== null
+      ? `/ffs/results?ffsSessionId=${ffsSessionId}`
+      : run.workflow.stage === 'ffs' && sessionId !== null
+        ? `/ffs?sessionId=${sessionId}`
+        : null,
+    ffsLabel: ffsSessionId !== null ? 'Open FFS session' : 'Run FFS',
+  };
 }
 
 export default function InspectionRegistryPage() {
@@ -99,6 +120,7 @@ export default function InspectionRegistryPage() {
   const [profile, setProfile] = useState<InspectionProfile | null>(null);
   const [profileRunId, setProfileRunId] = useState<number | null>(null);
   const [downloadingSessionId, setDownloadingSessionId] = useState<number | null>(null);
+  const [downloadingFfsId, setDownloadingFfsId] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function loadRuns({ append = false, cursor = null }: { append?: boolean; cursor?: string | null } = {}) {
@@ -180,6 +202,29 @@ export default function InspectionRegistryPage() {
       await loadRuns();
     } catch (caughtError) {
       setError((caughtError as Error).message || 'Failed to delete inspection run.');
+    }
+  }
+
+  /**
+   * The FFS workbook for a filed assessment.
+   *
+   * It is built in the browser from the stored case by the same builder the
+   * results workspace uses, so the file pulled from the registry is the file the
+   * engineer would have exported from the assessment itself.
+   */
+  async function downloadFfsReport(run: InspectionRun) {
+    const ffsSessionId = run.workflow.ffsSessionId;
+    if (ffsSessionId === null) return;
+    setDownloadingFfsId(ffsSessionId);
+    setError(null);
+    try {
+      await downloadFfsSessionReport(String(ffsSessionId));
+    } catch (caughtError) {
+      setError(caughtError instanceof Error
+        ? caughtError.message
+        : 'The FFS report could not be prepared.');
+    } finally {
+      setDownloadingFfsId(null);
     }
   }
 
@@ -293,22 +338,78 @@ export default function InspectionRegistryPage() {
                     <td><span className={statusClass(run.evidence.status)}><span className="syn-dot" />{statusLabel(run.evidence.status)}</span><small>{run.evidence.acceptedRows.toLocaleString('en-GB')} accepted · {run.evidence.rejectedRows} rejected</small></td>
                     <td><strong>{run.provenance.parserVersion || 'Not recorded'}</strong><small>{run.provenance.sourceSha256 ? `${run.provenance.sourceSha256.slice(0, 12)}…` : 'Source fingerprint unavailable'}</small></td>
                     <td>
-                      <div className="syn-registry-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                        <strong>{workflow.label}</strong>
-                        <Link to={workflow.href} className="syn-button syn-button--outline syn-button--sm">{workflow.action}</Link>
-                        {workflow.isFfs && workflow.sessionId !== null && (
-                          <Link to={`/ffs?sessionId=${workflow.sessionId}`} className="syn-button syn-button--solid syn-button--sm" style={{ backgroundColor: '#10b981', color: 'white' }}>Open FFS</Link>
+                      <div className="syn-registry-workflow">
+                        <div className={`syn-registry-stage syn-registry-stage--${workflow.tone}`}>
+                          <strong>{workflow.label}</strong>
+                          <small>{workflow.note}</small>
+                        </div>
+
+                        {/* Where this run can be opened. */}
+                        <div className="syn-registry-actions">
+                          <Link
+                            to={workflow.primary.href}
+                            className="syn-btn syn-btn--solid syn-btn--sm"
+                          >
+                            {workflow.primary.label}
+                          </Link>
+                          {workflow.ffsHref && (
+                            <Link
+                              to={workflow.ffsHref}
+                              className="syn-btn syn-btn--outline syn-btn--sm"
+                            >
+                              {workflow.ffsLabel}
+                            </Link>
+                          )}
+                        </div>
+
+                        {/* What this run can hand over. */}
+                        {(run.workflow.downloadAvailable || workflow.ffsSessionId !== null) && (
+                          <div className="syn-registry-actions">
+                            {run.workflow.downloadAvailable && (
+                              <SynButton
+                                variant="outline"
+                                size="sm"
+                                type="button"
+                                disabled={downloadingSessionId === run.workflow.alignmentSessionId}
+                                onClick={() => void downloadRuncomp(run)}
+                              >
+                                <FiDownload aria-hidden="true" />
+                                {downloadingSessionId === run.workflow.alignmentSessionId
+                                  ? 'Preparing…'
+                                  : 'Alignment report'}
+                              </SynButton>
+                            )}
+                            {workflow.ffsSessionId !== null && (
+                              <SynButton
+                                variant="outline"
+                                size="sm"
+                                type="button"
+                                disabled={downloadingFfsId === workflow.ffsSessionId}
+                                onClick={() => void downloadFfsReport(run)}
+                              >
+                                <FiDownload aria-hidden="true" />
+                                {downloadingFfsId === workflow.ffsSessionId
+                                  ? 'Preparing…'
+                                  : 'FFS report'}
+                              </SynButton>
+                            )}
+                          </div>
                         )}
-                        <SynButton variant="outline" size="sm" type="button" onClick={() => void showProfile(run.id)}>{profileRunId === run.id ? 'Hide profile' : 'Profile'}</SynButton>
-                        {run.workflow.downloadAvailable && (
-                          <SynButton variant="outline" size="sm" type="button" disabled={downloadingSessionId === run.workflow.alignmentSessionId} onClick={() => void downloadRuncomp(run)}>
-                            <FiDownload aria-hidden="true" />
-                            {downloadingSessionId === run.workflow.alignmentSessionId ? 'Preparing...' : 'Download'}
+
+                        <div className="syn-registry-actions syn-registry-actions--quiet">
+                          <SynButton variant="ghost" size="sm" type="button" onClick={() => void showProfile(run.id)}>
+                            {profileRunId === run.id ? 'Hide profile' : 'Profile'}
                           </SynButton>
-                        )}
-                        <SynButton variant="outline" size="sm" type="button" onClick={() => void deleteRun(run.id)} style={{ color: '#ef4444', borderColor: '#ef4444' }}>
-                          <FiTrash2 aria-hidden="true" /> Delete
-                        </SynButton>
+                          <SynButton
+                            variant="ghost"
+                            size="sm"
+                            type="button"
+                            className="syn-registry-delete"
+                            onClick={() => void deleteRun(run.id)}
+                          >
+                            <FiTrash2 aria-hidden="true" /> Delete
+                          </SynButton>
+                        </div>
                       </div>
                     </td>
                   </tr>

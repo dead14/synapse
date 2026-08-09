@@ -15,8 +15,16 @@ export type InspectionEvidence = {
 };
 
 export type InspectionWorkflow = {
-  stage: 'imported' | 'alignment' | 'runcomp' | 'ffs';
+  /**
+   * `ffs` means features were released to fitness-for-service; `assessed` means
+   * an FFS run was completed and filed as its own session. Only the latter can
+   * produce an FFS report.
+   */
+  stage: 'imported' | 'alignment' | 'runcomp' | 'ffs' | 'assessed';
   alignmentSessionId: number | null;
+  /** The newest filed FFS assessment for this run's alignment session. */
+  ffsSessionId: number | null;
+  /** A completed alignment result the workbook can be built from. */
   downloadAvailable: boolean;
 };
 
@@ -92,7 +100,9 @@ function normalizeStatus(value: unknown): InspectionEvidence['status'] {
 }
 
 function normalizeWorkflowStage(value: unknown): InspectionWorkflow['stage'] {
-  return value === 'alignment' || value === 'runcomp' || value === 'ffs' ? value : 'imported';
+  return value === 'alignment' || value === 'runcomp' || value === 'ffs' || value === 'assessed'
+    ? value
+    : 'imported';
 }
 
 function normalizeInspectionRun(value: unknown): InspectionRun {
@@ -129,7 +139,8 @@ function normalizeInspectionRun(value: unknown): InspectionRun {
     workflow: {
       stage,
       alignmentSessionId,
-      downloadAvailable: (stage === 'runcomp' || stage === 'ffs')
+      ffsSessionId: nullableNonNegativeInteger(workflow.ffsSessionId),
+      downloadAvailable: (stage === 'runcomp' || stage === 'ffs' || stage === 'assessed')
         && workflow.downloadAvailable === true
         && alignmentSessionId !== null,
     },

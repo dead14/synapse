@@ -101,8 +101,13 @@ function countWarnings(warnings) {
     }, 0);
 }
 
+/**
+ * How far a survey run has travelled. `ffs` means features were released to
+ * fitness-for-service; `assessed` means an FFS run was completed and filed as
+ * its own session, which is the only state that can produce an FFS report.
+ */
 function workflowStage(value) {
-    return value === 'alignment' || value === 'runcomp' || value === 'ffs'
+    return value === 'alignment' || value === 'runcomp' || value === 'ffs' || value === 'assessed'
         ? value
         : 'imported';
 }
@@ -152,7 +157,10 @@ function serializeInspectionRun(row = {}) {
         workflow: {
             stage,
             alignmentSessionId: asNonNegativeInteger(row.workflow_session_id),
-            downloadAvailable: stage === 'runcomp' || stage === 'ffs',
+            ffsSessionId: asNonNegativeInteger(row.workflow_ffs_session_id),
+            // The alignment workbook needs a completed alignment; the FFS
+            // workbook needs a filed assessment. They are offered separately.
+            downloadAvailable: stage === 'runcomp' || stage === 'ffs' || stage === 'assessed',
         },
     };
 }

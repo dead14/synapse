@@ -12,12 +12,19 @@ async function listOwnedInspectionRuns(pool, orgId, { limit, beforeId }) {
                 sr.survey_year, sr.vendor, sr.source_file, sr.source_object_key, sr.source_sha256,
                 sr.uploaded_at, sr.row_count, sr.parser_version,
                 sr.schema_version, sr.ingestion_audit,
-                workflow.workflow_stage, workflow.workflow_session_id
+                workflow.workflow_stage, workflow.workflow_session_id,
+                workflow.workflow_ffs_session_id
          FROM survey_runs sr
          JOIN pipelines p ON p.id = sr.pipeline_id
          LEFT JOIN LATERAL (
              SELECT s.id AS workflow_session_id,
+                    ffs.id AS workflow_ffs_session_id,
                     CASE
+                        -- A saved assessment outranks a released selection:
+                        -- "features were released to FFS" and "an FFS run was
+                        -- completed and filed" are different states, and the
+                        -- registry offers a different action for each.
+                        WHEN ffs.id IS NOT NULL THEN 'assessed'
                         WHEN EXISTS (
                             SELECT 1 FROM ffs_candidates c
                             WHERE c.session_id = s.id AND c.selected = true
@@ -33,9 +40,18 @@ async function listOwnedInspectionRuns(pool, orgId, { limit, beforeId }) {
                     END AS workflow_stage
              FROM alignment_sessions s
              LEFT JOIN pipelines session_pipeline ON session_pipeline.id = s.pipeline_id
+             LEFT JOIN LATERAL (
+                 SELECT f.id
+                 FROM ffs_sessions f
+                 WHERE f.alignment_session_id = s.id
+                   AND f.organization_id = $1
+                 ORDER BY f.created_at DESC, f.id DESC
+                 LIMIT 1
+             ) ffs ON true
              WHERE (s.run_old_id = sr.id OR s.run_new_id = sr.id)
                AND COALESCE(s.organization_id, session_pipeline.organization_id) = $1
              ORDER BY CASE
+                 WHEN ffs.id IS NOT NULL THEN 4
                  WHEN EXISTS (SELECT 1 FROM ffs_candidates c WHERE c.session_id = s.id AND c.selected = true) THEN 3
                  WHEN EXISTS (SELECT 1 FROM alignment_jobs j WHERE j.session_id = s.id AND j.organization_id = $1 AND j.state = 'completed') THEN 2
                  WHEN s.status = 'in_progress' THEN 1

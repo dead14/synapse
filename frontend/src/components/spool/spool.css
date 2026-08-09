@@ -210,6 +210,7 @@
 }
 
 .spool-view__stage-scale .is-warn { color: #fbbf24; }
+.spool-view__stage-truth { color: #7dd3fc; font-variant-numeric: tabular-nums; }
 
 .spool-view__measure {
   position: absolute;
@@ -612,6 +613,13 @@
 .spool-scene__card dl > div { display: flex; justify-content: space-between; gap: 0.5rem; }
 .spool-scene__card dt { color: #94a3b8; }
 .spool-scene__card dd { margin: 0; font-weight: 600; }
+.spool-scene__card-note {
+  margin: 0.3125rem 0 0;
+  padding-top: 0.25rem;
+  border-top: 1px solid rgb(255 255 255 / 18%);
+  color: #94a3b8;
+  font-size: 0.625rem;
+}
 
 @media (width <= 1100px) {
   .spool-view__lower { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
