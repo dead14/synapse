@@ -19,7 +19,12 @@ import {
   type InterventionEvent,
 } from './utils/interventions';
 import { createPipelineExportData } from './utils/alignmentExport';
-import { resolveAlignmentSessionId } from './utils/alignmentSession';
+import {
+  LAST_SESSION_STORAGE_KEY,
+  forgetUnusableStoredSession,
+  isAlignmentSessionId,
+  resolveAlignmentSessionId,
+} from './utils/alignmentSession';
 
 const DefectVisualizer = lazy(() => import('./DefectVisualizer'));
 
@@ -130,7 +135,7 @@ export default function IliComparisonPage({
     search: location.search,
     storedSessionId: sharedSessionId
       ? ''
-      : localStorage.getItem('synapse_last_session_id'),
+      : localStorage.getItem(LAST_SESSION_STORAGE_KEY),
   });
 
   // A chain result concatenates every pair's rows. Without a way to isolate one
@@ -155,7 +160,19 @@ export default function IliComparisonPage({
 
     const loadData = async () => {
       try {
-        if (!requestedSessionId) throw new Error('Session ID not found. Select a pipeline first.');
+        if (!requestedSessionId) {
+          throw new Error('No alignment session selected. Open one from ILI runs, or start an alignment.');
+        }
+        // An id that cannot address a session is caught here rather than sent to
+        // the API, which would answer with a bare "Invalid session ID" that says
+        // nothing about which session or what to do about it.
+        if (!isAlignmentSessionId(requestedSessionId)) {
+          forgetUnusableStoredSession();
+          throw new Error(
+            `"${requestedSessionId}" is not an alignment session reference. `
+            + 'Open a session from ILI runs, or start an alignment.',
+          );
+        }
         setSessionId(requestedSessionId);
         setLoading(true);
         setIsProcessing(true);
@@ -434,6 +451,14 @@ export default function IliComparisonPage({
         {error && (
           <div role="alert" className="syn-alert syn-alert--danger">
             <div>{error}</div>
+            {/* Without a session there is nothing on this page to act on, so the
+                alert carries the way out rather than leaving a dead screen. */}
+            {!readOnly && !sessionId && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Link to="/runs" className="syn-btn syn-btn--solid syn-btn--sm">Go to ILI runs</Link>
+                <Link to="/alignment" className="syn-btn syn-btn--outline syn-btn--sm">Start an alignment</Link>
+              </div>
+            )}
           </div>
         )}
 

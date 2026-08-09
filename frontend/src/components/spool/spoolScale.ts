@@ -12,32 +12,56 @@
 export const NOMINAL_OD_MM = 323.9;
 
 /**
- * The metric scale the 3D pane draws at: one world unit is one metre. A 12 m
- * spool is 12 units long and a 12" pipe is 0.324 units across, so the shape on
- * screen is the shape of the pipe and a measurement taken on it means something.
+ * How much wider than life the pipe is drawn.
  *
- * An earlier revision stretched every window onto a fixed 10–40 unit stage,
- * which made the same spool a different shape at every zoom level.
+ * At true proportions a transmission spool is a hair: 12 m of 12" pipe is 37
+ * diameters long, which renders as a line you cannot read metal off. So the
+ * girth — and only the girth — is exaggerated by this constant, which brings a
+ * single spool to a legible ~9:1 and leaves a 30" pipe visibly fatter than an
+ * 8" one, because every diameter is exaggerated by the same amount.
+ *
+ * It is deliberately a constant rather than something fitted to the window. The
+ * axis stays true metres, so selecting two spools draws a pipe exactly twice as
+ * long as one spool — which is the whole point of the picture. A factor that
+ * adapted to the span would squeeze every selection back to the same shape and
+ * throw that away, which is what the old fixed 10–40 unit stage did.
+ */
+export const GIRTH_EXAGGERATION = 4;
+
+/**
+ * The scale the 3D pane draws at.
+ *
+ * Axial distance is true metres — one world unit is one metre — so length on
+ * screen is proportional to length on the pipe and the ruler is exact. Radial
+ * and circumferential size carries {@link GIRTH_EXAGGERATION}, stated on
+ * screen, so the spool reads as a pipe rather than a thread.
  */
 export interface SceneScale {
-  /** Outside radius, in metres. */
+  /** Outside radius as drawn, in world units (metres × girth exaggeration). */
   radius: number;
-  /** Axial span of the window, in metres. */
+  /** Outside radius as measured, in metres. What the readouts must quote. */
+  trueRadius: number;
+  /** The multiplier between the two, for the on-screen statement. */
+  girth: number;
+  /** Axial span of the window, in metres. Never exaggerated. */
   spanM: number;
-  /** Text height in metres, sized to stay legible at framing distance. */
+  /** Text height in world units, sized to stay legible at framing distance. */
   label: number;
   /** False while the outside diameter is the nominal stand-in. */
   odKnown: boolean;
 }
 
 export function sceneScale(spanM: number, odMm: number | null): SceneScale {
-  const radius = (odMm ?? NOMINAL_OD_MM) / 2000;
+  const trueRadius = (odMm ?? NOMINAL_OD_MM) / 2000;
+  const radius = trueRadius * GIRTH_EXAGGERATION;
   return {
     radius,
+    trueRadius,
+    girth: GIRTH_EXAGGERATION,
     spanM,
     // A long window is framed by its length, a short one by its girth; the
     // label has to stay readable in both, so it follows whichever dominates.
-    label: Math.max(spanM, radius * 10) * 0.022,
+    label: Math.max(spanM, radius * 6) * 0.022,
     odKnown: odMm !== null,
   };
 }
