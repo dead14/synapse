@@ -6,9 +6,18 @@
  * the app uses, so this view does not become a fourth design language.
  */
 
+/* A flex column, not a fixed grid of rows.
+ *
+ * The chrome above the body is conditional — the fittings strip only exists
+ * when the window contains a valve, a flange or a bend. A four-track grid
+ * (header / toolbar / body / footer) therefore handed the `1fr` track to the
+ * fittings strip as soon as one appeared and pushed the body onto an implicit
+ * auto row, which collapsed the 3D stage to its content height and left a tall
+ * empty band where the pipe should be. Flex sizing does not care how many
+ * pieces of chrome there are. */
 .spool-view {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
@@ -16,6 +25,12 @@
   color: var(--ds-ink);
   font-family: var(--ds-font);
   font-size: var(--ds-t-sm);
+}
+
+.spool-view__header,
+.spool-view__toolbar,
+.spool-view__footer {
+  flex: 0 0 auto;
 }
 
 /* ── Header ───────────────────────────────────────────────────────────── */
@@ -122,6 +137,7 @@
    owns the split, not this file. */
 .spool-view__body {
   display: grid;
+  flex: 1 1 auto;
   min-height: 0;
 }
 

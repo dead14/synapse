@@ -48,7 +48,7 @@ import {
   type SpoolLayout,
 } from './spoolLayout.ts';
 import { DEPTH_PALETTE_LABEL, depthGradient, type DepthPalette } from './spoolPalette.ts';
-import { GIRTH_EXAGGERATION, NOMINAL_OD_MM } from './spoolScale.ts';
+import { NOMINAL_OD_MM, sceneScale } from './spoolScale.ts';
 import './spool.css';
 
 interface SpoolDetailViewProps {
@@ -266,6 +266,12 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
 
   const stageStart = filters.maStartM;
   const stageEnd = Math.max(filters.maStartM + 0.01, filters.maEndM);
+  // The same scale the 3D pane draws at, so the overlay quotes the factor
+  // actually used rather than the unclamped constant.
+  const stageScale = useMemo(
+    () => sceneScale(stageEnd - stageStart, odMm, { hasBend: bendCount > 0 }),
+    [stageEnd, stageStart, odMm, bendCount],
+  );
 
   return (
     <Modal
@@ -497,7 +503,9 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
                       which, so nobody reads a proportion off the picture that
                       the pipe does not have. */}
                   <span className="spool-view__stage-truth">
-                    Length 1:1 · {(stageEnd - stageStart).toFixed(2)} m of pipe · girth ×{GIRTH_EXAGGERATION} to read ·{' '}
+                    Length 1:1 · {(stageEnd - stageStart).toFixed(2)} m of pipe · girth ×
+                    {Number(stageScale.girth.toFixed(1))} to read
+                    {bendCount > 0 && ' (limited by the bend)'} ·{' '}
                     {odMm === null ? `${NOMINAL_OD_MM} mm OD (nominal)` : `${odMm.toFixed(1)} mm OD`}
                   </span>
                   {odMm === null && <span className="is-warn">Diameter and widths are nominal — set an outside diameter for true geometry</span>}

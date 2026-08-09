@@ -39,7 +39,7 @@ import {
   type SpoolFeature,
 } from '../../domain/spoolFeatures.ts';
 import { depthRgb, STATUS_COLOR, type DepthPalette } from './spoolPalette.ts';
-import { axialTicks, sceneScale, type SceneScale } from './spoolScale.ts';
+import { axialTicks, bendRadiusM, sceneScale, type SceneScale } from './spoolScale.ts';
 import { bendArcLength, buildSpoolPath, type PathFrame, type SpoolPath, type Vec3 } from './spoolPath.ts';
 import type { SpoolFitting } from './spoolFittings.ts';
 
@@ -84,8 +84,6 @@ interface SpoolScene3DProps {
 const NOMINAL_ARC_DEG = 8;
 /** Drawn size for a defect the run reported without a length or a width. */
 const NOMINAL_PATCH_MM = 25;
-/** Long-radius elbow: 1.5 diameters, the default for transmission pipe. */
-const BEND_RADIUS_FACTOR = 3;
 const SHELL_SEGMENTS = 64;
 
 function vec(v: Vec3): THREE.Vector3 {
@@ -316,11 +314,14 @@ function PipeShell({
 function FittingBodies({
   path,
   radius,
+  trueRadius,
   fittings,
   clippingPlanes,
 }: {
   path: SpoolPath;
   radius: number;
+  /** Real outside radius, for anything measured along the master axis. */
+  trueRadius: number;
   fittings: SpoolFitting[];
   clippingPlanes: THREE.Plane[];
 }) {
@@ -396,9 +397,9 @@ function FittingBodies({
 
         if (fitting.kind !== 'bend' || fitting.angleDeg === null) return null;
         // A bend is the shell itself; what is drawn here is where it starts and
-        // ends, so the reviewer can see which metal is in the curve. World units
-        // are metres, so the arc length is already a master-axis distance.
-        const halfArcM = bendArcLength(fitting.angleDeg, radius * BEND_RADIUS_FACTOR) / 2;
+        // ends, so the reviewer can see which metal is in the curve. The arc is
+        // odometer distance, so it comes off the real radius, not the drawn one.
+        const halfArcM = bendArcLength(fitting.angleDeg, bendRadiusM(trueRadius)) / 2;
         return (
           <group key={fitting.key}>
             {[-halfArcM, halfArcM].map((offset, index) => (
@@ -689,22 +690,31 @@ export default function SpoolScene3D({
   measurePicks,
 }: SpoolScene3DProps) {
   const spanM = Math.max(0.01, endM - startM);
-  // One world unit is one metre, so the centreline is built at true length: a
+  const bends = useMemo(
+    () => fittings.filter((fitting) => fitting.kind === 'bend' && fitting.angleDeg !== null),
+    [fittings],
+  );
+  // Axial distance is true metres, so the centreline is built at true length: a
   // 12 m spool is 12 units of pipe, not a fixed stage the window is squeezed on.
-  const scale = useMemo(() => sceneScale(spanM, odMm), [spanM, odMm]);
+  // A bend caps how far the girth can be exaggerated before the elbow folds.
+  const scale = useMemo(
+    () => sceneScale(spanM, odMm, { hasBend: bends.length > 0 }),
+    [spanM, odMm, bends.length],
+  );
   const radius = scale.radius;
 
   const path = useMemo(
-    () => buildSpoolPath(startM, endM, 1, fittings
-      .filter((fitting) => fitting.kind === 'bend' && fitting.angleDeg !== null)
-      .map((fitting) => ({
-        key: fitting.key,
-        maM: fitting.maM,
-        angleDeg: fitting.angleDeg as number,
-        rollDeg: fitting.rollDeg,
-        radius: radius * BEND_RADIUS_FACTOR,
-      }))),
-    [startM, endM, radius, fittings],
+    () => buildSpoolPath(startM, endM, 1, bends.map((fitting) => ({
+      key: fitting.key,
+      maM: fitting.maM,
+      angleDeg: fitting.angleDeg as number,
+      rollDeg: fitting.rollDeg,
+      // The arc an elbow consumes is odometer distance, so it turns on the real
+      // radius. Using the drawn one made a bend eat the girth exaggeration's
+      // worth of extra master axis and displaced every feature after it.
+      radius: bendRadiusM(scale.trueRadius),
+    }))),
+    [startM, endM, scale.trueRadius, bends],
   );
 
   const currentPatches = useMemo(
@@ -769,6 +779,7 @@ export default function SpoolScene3D({
         <FittingBodies
           path={path}
           radius={radius}
+          trueRadius={scale.trueRadius}
           fittings={fittings}
           clippingPlanes={clippingPlanes}
         />

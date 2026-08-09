@@ -55,6 +55,33 @@ function buildRows() {
     });
   }
 
+  // Furniture. Without at least one fitting the harness never renders the
+  // fittings strip or a bent shell, which is how a layout bug that only appears
+  // with a fitting present reached production unseen.
+  const fittings: Array<[string, number]> = [
+    ['45 deg Bend', START_M + 4.1],
+    ['Flange', START_M + 7.4],
+    ['Valve', START_M + 9.8],
+  ];
+  fittings.forEach(([featureType, distance], index) => {
+    rows.push({
+      'Identif. OLD': `F-${300 + index}`,
+      'Identif. NEW': `F-${300 + index}`,
+      'Feature Type OLD': featureType,
+      'Feature Type NEW': featureType,
+      'Log Dist OLD (m)': distance - 0.01,
+      'Log Dist NEW (m)': distance,
+      'Original Log Dist OLD (m)': distance - 0.3,
+      'Original Log Dist NEW (m)': distance,
+      "O'Clock OLD": clock(9),
+      "O'Clock NEW": clock(9),
+      'Result Group': 'Anomaly',
+      match_status: 'Matched',
+      'Run Year OLD': 2023,
+      'Run Year NEW': 2026,
+    });
+  });
+
   const types = ['Metal Loss', 'Metal Loss', 'Metal Loss', 'Dent', 'Crack-like'];
 
   for (let index = 0; index < 34; index += 1) {
