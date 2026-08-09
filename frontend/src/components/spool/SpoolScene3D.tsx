@@ -10,14 +10,21 @@
  * - Clock 12:00 is the frame's `up` and the angle increases towards `right`,
  *   which puts 3:00 on the right when the camera sits downstream. The frame is
  *   carried around bends without twist, so 12:00 stays 12:00 past the corner.
- * - Anomaly patches are drawn as tangent planes on the shell, sized from the
- *   reported length (axial) and width (circumferential). The width is a true
- *   arc only when an outside diameter is supplied; without one the patch keeps
- *   a nominal arc and the view says so rather than implying a measurement.
+ * - One world unit is one metre. A 12 m spool is 12 units long and a 12" pipe
+ *   is 0.324 units across, so what is on screen has the proportions of the pipe
+ *   that was reported. Earlier revisions stretched every window onto a fixed
+ *   10–40 unit stage, which made the same spool a different shape at every zoom
+ *   level and left screen measurements meaningless.
+ * - Anomalies are drawn as boxes cut into the shell, sized from the reported
+ *   length (axial), width (circumferential) and depth (wall loss = depth%WT ×
+ *   wall thickness). The width is a true arc only when an outside diameter is
+ *   supplied; without one the patch keeps a nominal arc and the view says so
+ *   rather than implying a measurement.
  *
  * Marker scale is a display multiplier, never a data change. Real ILI defects
  * on a 12 m spool are a few centimetres across and vanish at true scale, so the
- * pane exaggerates by default and states the factor on screen.
+ * pane exaggerates by default and states the factor on screen. The numbers in
+ * the hover card are always the measured ones.
  */
 
 import { useEffect, useMemo, useRef } from 'react';
@@ -30,7 +37,7 @@ import {
   type SpoolFeature,
 } from '../../domain/spoolFeatures.ts';
 import { depthRgb, STATUS_COLOR, type DepthPalette } from './spoolPalette.ts';
-import { axialTicks } from './spoolScale.ts';
+import { axialTicks, sceneScale, type SceneScale } from './spoolScale.ts';
 import { bendArcLength, buildSpoolPath, type PathFrame, type SpoolPath, type Vec3 } from './spoolPath.ts';
 import type { SpoolFitting } from './spoolFittings.ts';
 
@@ -72,16 +79,12 @@ interface SpoolScene3DProps {
   measurePicks: SpoolFeature[];
 }
 
-const RADIUS = 2.0;
 const NOMINAL_ARC_DEG = 8;
-const MIN_PATCH = 0.05;
+/** Drawn size for a defect the run reported without a length or a width. */
+const NOMINAL_PATCH_MM = 25;
 /** Long-radius elbow: 1.5 diameters, the default for transmission pipe. */
 const BEND_RADIUS_FACTOR = 3;
 const SHELL_SEGMENTS = 64;
-
-function worldLength(spanM: number): number {
-  return Math.min(40, Math.max(10, spanM * 1.2));
-}
 
 function vec(v: Vec3): THREE.Vector3 {
   return new THREE.Vector3(v[0], v[1], v[2]);
@@ -93,21 +96,32 @@ function surfaceNormal(frame: PathFrame, angleRad: number): THREE.Vector3 {
     .addScaledVector(vec(frame.right), Math.sin(angleRad));
 }
 
-/** Basis for a tangent patch on the shell at (frame, clock angle). */
+/**
+ * Basis for a metal-loss box on the shell at (frame, clock angle).
+ *
+ * The box is a real excavation, not a decal: local X is the reported axial
+ * length, local Y the reported circumferential width, and local Z the depth the
+ * run measured into the wall. It is positioned so its outer face lies on the
+ * shell and its floor sits at the remaining wall thickness, which is what makes
+ * a shallow 10 %WT patch and a deep 60 %WT pit look different from each other.
+ */
 function patchMatrix(
   frame: PathFrame,
   angleRad: number,
   axialSize: number,
   circSize: number,
-  radius: number,
+  radialSize: number,
+  surfaceRadius: number,
 ): THREE.Matrix4 {
   const normal = surfaceNormal(frame, angleRad);
   const axial = vec(frame.tangent).multiplyScalar(axialSize);
   const circumferential = vec(frame.up).multiplyScalar(Math.sin(angleRad))
     .addScaledVector(vec(frame.right), -Math.cos(angleRad))
     .multiplyScalar(circSize);
-  const matrix = new THREE.Matrix4().makeBasis(axial, circumferential, normal);
-  matrix.setPosition(vec(frame.origin).addScaledVector(normal, radius));
+  const matrix = new THREE.Matrix4().makeBasis(
+    axial, circumferential, normal.clone().multiplyScalar(radialSize),
+  );
+  matrix.setPosition(vec(frame.origin).addScaledVector(normal, surfaceRadius - radialSize / 2));
   return matrix;
 }
 
@@ -130,13 +144,17 @@ function placeFeatures(
   features: SpoolFeature[],
   side: 'current' | 'previous',
   path: SpoolPath,
-  spanM: number,
+  scale: SceneScale,
   odMm: number | null,
   palette: DepthPalette,
   markerScale: number,
 ): PlacedPatch[] {
-  const worldPerM = path.length / spanM;
-  const radius = side === 'current' ? RADIUS * 1.004 : RADIUS * 1.001;
+  // The world is metric, so a reported millimetre is a reported millimetre: the
+  // only conversion is mm → m. Nothing is stretched to fit the picture.
+  const surfaceRadius = scale.radius * (side === 'current' ? 1.002 : 1.0005);
+  // A defect smaller than this is drawn at this size instead of disappearing
+  // into a sub-pixel sliver. It is a floor on the drawing, not on the data.
+  const minPatch = scale.spanM * 0.0015;
   const placed: PlacedPatch[] = [];
 
   features.forEach((feature) => {
@@ -147,26 +165,35 @@ function placeFeatures(
     const angle = (clockDeg * Math.PI) / 180;
     const frame = path.frameAt(maM);
 
-    const axialWorld = data.lengthMm === null
-      ? MIN_PATCH * 2
-      : Math.max(MIN_PATCH, (data.lengthMm / 1000) * worldPerM * markerScale);
+    const lengthMm = data.lengthMm ?? NOMINAL_PATCH_MM;
+    const axialWorld = Math.max(minPatch, (lengthMm / 1000) * markerScale);
     // Exaggerate a real arc, never the nominal fallback: multiplying a made-up
     // width is what smears the patches into circumferential streaks.
     const trueArc = arcWidthDeg(data.widthMm, odMm);
     const arcDeg = trueArc === null ? NOMINAL_ARC_DEG : trueArc * markerScale;
-    const circWorld = Math.max(MIN_PATCH, (arcDeg * Math.PI / 180) * radius);
+    const circWorld = Math.max(minPatch, (arcDeg * Math.PI / 180) * surfaceRadius);
+    // Depth is the wall the run says is gone. Without a wall thickness there is
+    // no depth to draw, so the box degenerates to a skin-thin patch.
+    const wallLossMm = data.depthPct === null || data.wtMm === null
+      ? 0
+      : (data.depthPct / 100) * data.wtMm;
+    const radialWorld = Math.max(
+      scale.radius * 0.004,
+      (wallLossMm / 1000) * markerScale,
+    );
 
-    const matrix = patchMatrix(frame, angle, axialWorld, circWorld, radius);
+    const matrix = patchMatrix(frame, angle, axialWorld, circWorld, radialWorld, surfaceRadius);
     const [r, g, b] = side === 'current'
       ? depthRgb(data.depthPct, palette)
       : [120, 130, 148];
 
+    // The outline traces the mouth of the excavation, which is its outer face.
     const corner = (dx: number, dy: number): [number, number, number] => {
-      const point = new THREE.Vector3(dx, dy, 0.02).applyMatrix4(matrix);
+      const point = new THREE.Vector3(dx, dy, 0.55).applyMatrix4(matrix);
       return [point.x, point.y, point.z];
     };
     const anchorPoint = vec(frame.origin)
-      .addScaledVector(surfaceNormal(frame, angle), radius * 1.02);
+      .addScaledVector(surfaceNormal(frame, angle), scale.radius * 1.06);
 
     placed.push({
       feature,
@@ -189,7 +216,7 @@ function placeFeatures(
  * a shell and a defect drawn from two different frames is exactly the drift
  * this workspace exists to prevent.
  */
-function useShellGeometry(path: SpoolPath, cutaway: boolean): THREE.BufferGeometry {
+function useShellGeometry(path: SpoolPath, radius: number, cutaway: boolean): THREE.BufferGeometry {
   return useMemo(() => {
     const thetaStart = cutaway ? Math.PI / 2 : 0;
     const thetaLength = cutaway ? Math.PI : Math.PI * 2;
@@ -203,7 +230,7 @@ function useShellGeometry(path: SpoolPath, cutaway: boolean): THREE.BufferGeomet
       for (let step = 0; step <= SHELL_SEGMENTS; step += 1) {
         const angle = thetaStart + (step / SHELL_SEGMENTS) * thetaLength;
         const normal = surfaceNormal(frame, angle);
-        const point = vec(frame.origin).addScaledVector(normal, RADIUS);
+        const point = vec(frame.origin).addScaledVector(normal, radius);
         positions.push(point.x, point.y, point.z);
         normals.push(normal.x, normal.y, normal.z);
         uvs.push(ringIndex / Math.max(1, rings.length - 1), step / SHELL_SEGMENTS);
@@ -226,21 +253,23 @@ function useShellGeometry(path: SpoolPath, cutaway: boolean): THREE.BufferGeomet
     geometry.setIndex(indices);
     geometry.computeBoundingSphere();
     return geometry;
-  }, [path, cutaway]);
+  }, [path, radius, cutaway]);
 }
 
 function PipeShell({
   path,
+  radius,
   welds,
   view,
   clippingPlanes,
 }: {
   path: SpoolPath;
+  radius: number;
   welds: Array<{ id: string; maM: number }>;
   view: SceneViewOptions;
   clippingPlanes: THREE.Plane[];
 }) {
-  const geometry = useShellGeometry(path, view.cutaway);
+  const geometry = useShellGeometry(path, radius, view.cutaway);
   useEffect(() => () => geometry.dispose(), [geometry]);
 
   return (
@@ -262,7 +291,7 @@ function PipeShell({
       {/* Girth welds: a raised bead the eye can count spools by. */}
       {welds.map((weld) => (
         <mesh key={weld.id} matrixAutoUpdate={false} matrix={ringMatrix(path.frameAt(weld.maM))}>
-          <torusGeometry args={[RADIUS * 1.008, RADIUS * 0.028, 12, 72]} />
+          <torusGeometry args={[radius * 1.008, radius * 0.028, 12, 72]} />
           <meshStandardMaterial color="#94a3b8" metalness={0.85} roughness={0.35} clippingPlanes={clippingPlanes} />
         </mesh>
       ))}
@@ -281,13 +310,13 @@ function PipeShell({
  */
 function FittingBodies({
   path,
+  radius,
   fittings,
-  worldPerM,
   clippingPlanes,
 }: {
   path: SpoolPath;
+  radius: number;
   fittings: SpoolFitting[];
-  worldPerM: number;
   clippingPlanes: THREE.Plane[];
 }) {
   return (
@@ -303,24 +332,24 @@ function FittingBodies({
           ).setPosition(vec(frame.origin));
           const wheel = new THREE.Matrix4().makeBasis(
             vec(frame.tangent), new THREE.Vector3().crossVectors(stem, vec(frame.tangent)), stem,
-          ).setPosition(vec(frame.origin).addScaledVector(stem, RADIUS * 2.3));
+          ).setPosition(vec(frame.origin).addScaledVector(stem, radius * 2.3));
           return (
             <group key={fitting.key}>
               <mesh matrixAutoUpdate={false} matrix={body}>
-                <cylinderGeometry args={[RADIUS * 1.35, RADIUS * 1.35, RADIUS * 1.1, 24, 1, false]} />
+                <cylinderGeometry args={[radius * 1.35, radius * 1.35, radius * 1.1, 24, 1, false]} />
                 <meshStandardMaterial color="#a855f7" metalness={0.5} roughness={0.4} transparent opacity={0.42} clippingPlanes={clippingPlanes} />
               </mesh>
               <mesh
                 matrixAutoUpdate={false}
                 matrix={new THREE.Matrix4().makeBasis(
                   vec(frame.tangent), stem, new THREE.Vector3().crossVectors(vec(frame.tangent), stem),
-                ).setPosition(vec(frame.origin).addScaledVector(stem, RADIUS * 1.6))}
+                ).setPosition(vec(frame.origin).addScaledVector(stem, radius * 1.6))}
               >
-                <cylinderGeometry args={[RADIUS * 0.09, RADIUS * 0.09, RADIUS * 1.6, 12]} />
+                <cylinderGeometry args={[radius * 0.09, radius * 0.09, radius * 1.6, 12]} />
                 <meshStandardMaterial color="#c4b5fd" metalness={0.6} roughness={0.35} clippingPlanes={clippingPlanes} />
               </mesh>
               <mesh matrixAutoUpdate={false} matrix={wheel}>
-                <torusGeometry args={[RADIUS * 0.45, RADIUS * 0.06, 10, 32]} />
+                <torusGeometry args={[radius * 0.45, radius * 0.06, 10, 32]} />
                 <meshStandardMaterial color="#c4b5fd" metalness={0.6} roughness={0.35} clippingPlanes={clippingPlanes} />
               </mesh>
             </group>
@@ -335,16 +364,16 @@ function FittingBodies({
             <group key={fitting.key}>
               <mesh
                 matrixAutoUpdate={false}
-                matrix={basis.clone().setPosition(vec(frame.origin).addScaledVector(branch, RADIUS * 0.9))}
+                matrix={basis.clone().setPosition(vec(frame.origin).addScaledVector(branch, radius * 0.9))}
               >
-                <cylinderGeometry args={[RADIUS * 0.55, RADIUS * 0.55, RADIUS * 1.8, 20, 1, true]} />
+                <cylinderGeometry args={[radius * 0.55, radius * 0.55, radius * 1.8, 20, 1, true]} />
                 <meshStandardMaterial color="#38bdf8" metalness={0.35} roughness={0.5} side={THREE.DoubleSide} transparent opacity={0.5} clippingPlanes={clippingPlanes} />
               </mesh>
               <mesh
                 matrixAutoUpdate={false}
-                matrix={basis.clone().setPosition(vec(frame.origin).addScaledVector(branch, RADIUS * 1.8))}
+                matrix={basis.clone().setPosition(vec(frame.origin).addScaledVector(branch, radius * 1.8))}
               >
-                <cylinderGeometry args={[RADIUS * 0.75, RADIUS * 0.75, RADIUS * 0.12, 20]} />
+                <cylinderGeometry args={[radius * 0.75, radius * 0.75, radius * 0.12, 20]} />
                 <meshStandardMaterial color="#7dd3fc" metalness={0.5} roughness={0.4} clippingPlanes={clippingPlanes} />
               </mesh>
             </group>
@@ -354,7 +383,7 @@ function FittingBodies({
         if (fitting.kind === 'flange') {
           return (
             <mesh key={fitting.key} matrixAutoUpdate={false} matrix={ringMatrix(frame)}>
-              <torusGeometry args={[RADIUS * 1.12, RADIUS * 0.12, 12, 40]} />
+              <torusGeometry args={[radius * 1.12, radius * 0.12, 12, 40]} />
               <meshStandardMaterial color="#fbbf24" metalness={0.7} roughness={0.35} clippingPlanes={clippingPlanes} />
             </mesh>
           );
@@ -362,8 +391,9 @@ function FittingBodies({
 
         if (fitting.kind !== 'bend' || fitting.angleDeg === null) return null;
         // A bend is the shell itself; what is drawn here is where it starts and
-        // ends, so the reviewer can see which metal is in the curve.
-        const halfArcM = bendArcLength(fitting.angleDeg, RADIUS * BEND_RADIUS_FACTOR) / 2 / worldPerM;
+        // ends, so the reviewer can see which metal is in the curve. World units
+        // are metres, so the arc length is already a master-axis distance.
+        const halfArcM = bendArcLength(fitting.angleDeg, radius * BEND_RADIUS_FACTOR) / 2;
         return (
           <group key={fitting.key}>
             {[-halfArcM, halfArcM].map((offset, index) => (
@@ -372,7 +402,7 @@ function FittingBodies({
                 matrixAutoUpdate={false}
                 matrix={ringMatrix(path.frameAt(fitting.maM + offset))}
               >
-                <torusGeometry args={[RADIUS * 1.02, RADIUS * 0.035, 10, 48]} />
+                <torusGeometry args={[radius * 1.02, radius * 0.035, 10, 48]} />
                 <meshStandardMaterial color="#fb923c" metalness={0.6} roughness={0.4} clippingPlanes={clippingPlanes} />
               </mesh>
             ))}
@@ -399,7 +429,9 @@ function PatchLayer({
   interactive: boolean;
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
-  const geometry = useMemo(() => new THREE.PlaneGeometry(1, 1), []);
+  // A box, not a plane: metal loss has a depth, and a decal on the shell cannot
+  // show the difference between a 10 %WT patch and a 60 %WT pit.
+  const geometry = useMemo(() => new THREE.BoxGeometry(1, 1, 1), []);
   const material = useMemo(() => new THREE.MeshStandardMaterial({
     side: THREE.DoubleSide,
     roughness: 0.5,
@@ -453,9 +485,18 @@ function PatchLayer({
 
 // ─── Decorations ────────────────────────────────────────────────────────────
 
-/** The ruler follows the pipe, so it still reads under a bent spool. */
-function AxialRuler({ path, startM, endM }: { path: SpoolPath; startM: number; endM: number }) {
-  const offset = -RADIUS * 1.85;
+/**
+ * The ruler follows the pipe, so it still reads under a bent spool.
+ *
+ * At true scale a transmission pipe is a long thin cylinder, so the labels are
+ * necessarily large next to its girth. They are pushed clear of the shell by
+ * their own height rather than by a fraction of the radius, which keeps them
+ * off the metal at every diameter.
+ */
+function AxialRuler({
+  path, scale, startM, endM,
+}: { path: SpoolPath; scale: SceneScale; startM: number; endM: number }) {
+  const offset = -(scale.radius + scale.label * 1.9);
   const rail = useMemo(
     () => path.frames.map((frame) => {
       const point = vec(frame.origin).addScaledVector(vec(frame.up), offset);
@@ -468,59 +509,66 @@ function AxialRuler({ path, startM, endM }: { path: SpoolPath; startM: number; e
     [path, startM, endM],
   );
   const midpoint = path.frameAt((startM + endM) / 2);
-  const label = vec(midpoint.origin).addScaledVector(vec(midpoint.up), offset - 0.78);
+  const label = vec(midpoint.origin).addScaledVector(vec(midpoint.up), offset - scale.label * 2.8);
 
   return (
     <group>
       <Line points={rail} color="#7c8899" lineWidth={1} />
       {ticks.map(({ m, frame }) => {
         const base = vec(frame.origin).addScaledVector(vec(frame.up), offset);
-        const top = vec(frame.origin).addScaledVector(vec(frame.up), offset + 0.16);
-        const text = vec(frame.origin).addScaledVector(vec(frame.up), offset - 0.32);
+        const top = vec(frame.origin).addScaledVector(vec(frame.up), offset + scale.label * 0.6);
+        const text = vec(frame.origin).addScaledVector(vec(frame.up), offset - scale.label * 1.2);
         return (
           <group key={m}>
             <Line points={[[base.x, base.y, base.z], [top.x, top.y, top.z]]} color="#94a3b8" lineWidth={1} />
-            <Text position={[text.x, text.y, text.z]} fontSize={0.26} color="#cbd5e1" anchorX="center" anchorY="middle">
+            <Text position={[text.x, text.y, text.z]} fontSize={scale.label} color="#cbd5e1" anchorX="center" anchorY="middle">
               {`${Number.isInteger(m) ? m : m.toFixed(1)} m`}
             </Text>
           </group>
         );
       })}
-      <Text position={[label.x, label.y, label.z]} fontSize={0.28} color="#94a3b8" anchorX="center" anchorY="middle">
+      <Text position={[label.x, label.y, label.z]} fontSize={scale.label * 1.05} color="#94a3b8" anchorX="center" anchorY="middle">
         Master Axis (m)
       </Text>
     </group>
   );
 }
 
-function ClockRing({ frame }: { frame: PathFrame }) {
+function ClockRing({ frame, scale }: { frame: PathFrame; scale: SceneScale }) {
   const points = useMemo(() => {
     const ring: Array<[number, number, number]> = [];
     for (let step = 0; step <= 72; step += 1) {
       const angle = (step / 72) * Math.PI * 2;
       const point = vec(frame.origin)
-        .addScaledVector(surfaceNormal(frame, angle), RADIUS * 1.12)
-        .addScaledVector(vec(frame.tangent), 0.05);
+        .addScaledVector(surfaceNormal(frame, angle), scale.radius * 1.12)
+        .addScaledVector(vec(frame.tangent), scale.radius * 0.025);
       ring.push([point.x, point.y, point.z]);
     }
     return ring;
-  }, [frame]);
+  }, [frame, scale.radius]);
 
   const labels: Array<[string, number]> = [['12:00', 0], ['3:00', 90], ['6:00', 180], ['9:00', 270]];
 
   return (
     <group>
-      <Line points={points} color="#cbd5e1" lineWidth={1} dashed dashSize={0.12} gapSize={0.1} />
+      <Line
+        points={points}
+        color="#cbd5e1"
+        lineWidth={1}
+        dashed
+        dashSize={scale.radius * 0.06}
+        gapSize={scale.radius * 0.05}
+      />
       {labels.map(([label, deg]) => {
         const angle = (deg * Math.PI) / 180;
         const point = vec(frame.origin)
-          .addScaledVector(surfaceNormal(frame, angle), RADIUS * 1.34)
-          .addScaledVector(vec(frame.tangent), 0.1);
+          .addScaledVector(surfaceNormal(frame, angle), scale.radius * 1.2 + scale.label)
+          .addScaledVector(vec(frame.tangent), scale.radius * 0.05);
         return (
           <Text
             key={label}
             position={[point.x, point.y, point.z]}
-            fontSize={0.3}
+            fontSize={scale.label}
             color="#e2e8f0"
             anchorX="center"
             anchorY="middle"
@@ -533,22 +581,25 @@ function ClockRing({ frame }: { frame: PathFrame }) {
   );
 }
 
-function CrossSectionRing({ frame }: { frame: PathFrame }) {
+function CrossSectionRing({ frame, radius }: { frame: PathFrame; radius: number }) {
   const points = useMemo(() => {
     const ring: Array<[number, number, number]> = [];
     for (let step = 0; step <= 96; step += 1) {
       const angle = (step / 96) * Math.PI * 2;
-      const point = vec(frame.origin).addScaledVector(surfaceNormal(frame, angle), RADIUS);
+      const point = vec(frame.origin).addScaledVector(surfaceNormal(frame, angle), radius);
       ring.push([point.x, point.y, point.z]);
     }
     return ring;
-  }, [frame]);
+  }, [frame, radius]);
   return <Line points={points} color="#f8fafc" lineWidth={2} />;
 }
 
 // ─── Camera ─────────────────────────────────────────────────────────────────
 
-function CameraRig({ command, path }: { command: CameraCommand; path: SpoolPath }) {
+function CameraRig({
+  command, path, scale,
+}: { command: CameraCommand; path: SpoolPath; scale: SceneScale }) {
+  const radius = scale.radius;
   const camera = useThree((state) => state.camera);
   // `controls` is typed as a bare EventDispatcher until a controls implementation
   // registers itself; OrbitControls is the one mounted here, hence the narrowing.
@@ -566,11 +617,13 @@ function CameraRig({ command, path }: { command: CameraCommand; path: SpoolPath 
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * (perspective.aspect || 1));
     // A straight spool is framed by its length; a bent one also has to fit the
     // span the turn puts across the axis, which a girth-only guess would clip.
-    const forLength = (path.extentAxial + RADIUS) / Math.tan(hFov / 2);
-    const forGirth = (path.extentLateral + RADIUS * 1.9) / Math.tan(vFov / 2);
+    // The ruler and its labels hang below the shell, so the vertical fit has to
+    // clear them too or the metre marks sit outside the frame.
+    const forLength = (path.extentAxial + radius) / Math.tan(hFov / 2);
+    const forGirth = (path.extentLateral + radius * 1.2 + scale.label * 4.5) / Math.tan(vFov / 2);
     const distance = Math.max(forLength, forGirth) * 1.06;
     // Down the axis only the diameter has to fit, so that view sits far closer.
-    const axialDistance = Math.max(forGirth * 0.6, RADIUS * 4);
+    const axialDistance = Math.max(forGirth * 0.6, radius * 4);
 
     const directions: Record<CameraPreset, [number, number, number, number]> = {
       home: [0.44, 0.32, 0.84, distance],
@@ -581,8 +634,8 @@ function CameraRig({ command, path }: { command: CameraCommand; path: SpoolPath 
       'look-along': [-1, 0.08, 0.002, axialDistance],
     };
     const positions = Object.fromEntries(
-      Object.entries(directions).map(([preset, [x, y, z, radius]]) => {
-        const direction = new THREE.Vector3(x, y, z).normalize().multiplyScalar(radius);
+      Object.entries(directions).map(([preset, [x, y, z, dollyDistance]]) => {
+        const direction = new THREE.Vector3(x, y, z).normalize().multiplyScalar(dollyDistance);
         return [preset, [direction.x, direction.y, direction.z] as [number, number, number]];
       }),
     ) as Record<CameraPreset, [number, number, number]>;
@@ -594,7 +647,10 @@ function CameraRig({ command, path }: { command: CameraCommand; path: SpoolPath 
       const offset = camera.position.clone().sub(target);
       const factor = command.zoom > 0 ? 0.8 : 1.25;
       const next = offset.multiplyScalar(factor);
-      const clamped = Math.min(Math.max(next.length(), path.extent * 0.36), path.extent * 8);
+      const clamped = Math.min(
+        Math.max(next.length(), radius * 1.15),
+        Math.max(path.extent * 8, radius * 40),
+      );
       camera.position.copy(target.clone().add(next.setLength(clamped)));
     } else {
       const [x, y, z] = positions[command.preset];
@@ -628,35 +684,37 @@ export default function SpoolScene3D({
   measurePicks,
 }: SpoolScene3DProps) {
   const spanM = Math.max(0.01, endM - startM);
-  const length = worldLength(spanM);
-  const worldPerM = length / spanM;
+  // One world unit is one metre, so the centreline is built at true length: a
+  // 12 m spool is 12 units of pipe, not a fixed stage the window is squeezed on.
+  const scale = useMemo(() => sceneScale(spanM, odMm), [spanM, odMm]);
+  const radius = scale.radius;
 
   const path = useMemo(
-    () => buildSpoolPath(startM, endM, worldPerM, fittings
+    () => buildSpoolPath(startM, endM, 1, fittings
       .filter((fitting) => fitting.kind === 'bend' && fitting.angleDeg !== null)
       .map((fitting) => ({
         key: fitting.key,
         maM: fitting.maM,
         angleDeg: fitting.angleDeg as number,
         rollDeg: fitting.rollDeg,
-        radius: RADIUS * BEND_RADIUS_FACTOR,
+        radius: radius * BEND_RADIUS_FACTOR,
       }))),
-    [startM, endM, worldPerM, fittings],
+    [startM, endM, radius, fittings],
   );
 
   const currentPatches = useMemo(
-    () => placeFeatures(features, 'current', path, spanM, odMm, palette, view.markerScale),
-    [features, path, spanM, odMm, palette, view.markerScale],
+    () => placeFeatures(features, 'current', path, scale, odMm, palette, view.markerScale),
+    [features, path, scale, odMm, palette, view.markerScale],
   );
 
   const previousPatches = useMemo(
     () => (view.showPrevious
       ? placeFeatures(
         features.filter((feature) => feature.previous.present),
-        'previous', path, spanM, odMm, palette, view.markerScale,
+        'previous', path, scale, odMm, palette, view.markerScale,
       )
       : []),
-    [features, view.showPrevious, path, spanM, odMm, palette, view.markerScale],
+    [features, view.showPrevious, path, scale, odMm, palette, view.markerScale],
   );
 
   const selectedPatch = currentPatches.find((patch) => patch.feature.key === selectedKey)
@@ -685,7 +743,14 @@ export default function SpoolScene3D({
     // preserveDrawingBuffer keeps the frame readable after compositing, which is
     // what the snapshot button needs in order to hand back a PNG.
     <Canvas
-      camera={{ position: [length * 0.42, RADIUS * 2.6, length * 0.75], fov: 42, near: 0.1, far: 500 }}
+      camera={{
+        position: [spanM * 0.42, radius * 2.6 + scale.label * 2, spanM * 0.75],
+        fov: 42,
+        // The near plane has to sit inside the pipe wall, or zooming in to read a
+        // pit clips the very metal the reviewer is trying to see.
+        near: Math.max(0.002, radius * 0.02),
+        far: Math.max(200, spanM * 40),
+      }}
       gl={{ localClippingEnabled: true, antialias: true, preserveDrawingBuffer: true }}
       onPointerMissed={() => { if (!measureMode) onSelect(null); }}
       style={{ background: 'transparent' }}
@@ -694,12 +759,12 @@ export default function SpoolScene3D({
       <directionalLight position={[8, 14, 10]} intensity={1.35} />
       <directionalLight position={[-10, -6, -8]} intensity={0.45} color="#93c5fd" />
 
-      <PipeShell path={path} welds={welds} view={view} clippingPlanes={clippingPlanes} />
+      <PipeShell path={path} radius={radius} welds={welds} view={view} clippingPlanes={clippingPlanes} />
       {view.showFittings && (
         <FittingBodies
           path={path}
+          radius={radius}
           fittings={fittings}
-          worldPerM={worldPerM}
           clippingPlanes={clippingPlanes}
         />
       )}
@@ -714,18 +779,31 @@ export default function SpoolScene3D({
       />
 
       {selectedPatch && (
-        <Line points={selectedPatch.corners} color="#ffffff" lineWidth={2} dashed dashSize={0.09} gapSize={0.07} />
+        <Line
+          points={selectedPatch.corners}
+          color="#ffffff"
+          lineWidth={2}
+          dashed
+          dashSize={radius * 0.05}
+          gapSize={radius * 0.04}
+        />
       )}
-      {view.crossSection && crossSectionFrame && <CrossSectionRing frame={crossSectionFrame} />}
+      {view.crossSection && crossSectionFrame && (
+        <CrossSectionRing frame={crossSectionFrame} radius={radius} />
+      )}
       {measurePoints.length === 2 && (
         <Line points={measurePoints} color="#fbbf24" lineWidth={2} />
       )}
 
-      <AxialRuler path={path} startM={startM} endM={endM} />
-      <ClockRing frame={path.frameAt(endM)} />
+      <AxialRuler path={path} scale={scale} startM={startM} endM={endM} />
+      <ClockRing frame={path.frameAt(endM)} scale={scale} />
 
       {labelFeature && labelPatch && (
-        <Html position={labelPatch.anchor} distanceFactor={length * 0.9} zIndexRange={[40, 0]}>
+        <Html
+          position={labelPatch.anchor}
+          distanceFactor={Math.max(spanM, radius * 12) * 0.9}
+          zIndexRange={[40, 0]}
+        >
           <div className="spool-scene__card">
             <div className="spool-scene__card-head">
               <strong>{labelFeature.id}</strong>
@@ -744,12 +822,27 @@ export default function SpoolScene3D({
                 <dd>{labelFeature.current.remainingWtMm === null ? '—' : `${labelFeature.current.remainingWtMm.toFixed(1)} mm`}</dd>
               </div>
             </dl>
+            {/* These are the measured dimensions. Say so whenever the box on the
+                shell has been exaggerated, so the two are never confused. */}
+            <p className="spool-scene__card-note">
+              {view.markerScale === 1
+                ? 'Drawn at true size (1:1)'
+                : `Measured size · drawn ×${view.markerScale} for visibility`}
+            </p>
           </div>
         </Html>
       )}
 
-      <CameraRig command={command} path={path} />
-      <OrbitControls makeDefault enableDamping dampingFactor={0.08} minDistance={path.extent * 0.3} maxDistance={path.extent * 8} />
+      <CameraRig command={command} path={path} scale={scale} />
+      {/* Close enough to sit on the wall and read one pit, far enough to see the
+          whole spool — both bounded by the pipe's real size, not by a stage. */}
+      <OrbitControls
+        makeDefault
+        enableDamping
+        dampingFactor={0.08}
+        minDistance={radius * 1.15}
+        maxDistance={Math.max(path.extent * 8, radius * 40)}
+      />
     </Canvas>
   );
 }

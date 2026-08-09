@@ -134,11 +134,13 @@ export default function App() {
             <Route path="/pipeline-risk" element={<RiskWhatIfPage />} />
             <Route path="/direct-assessment" element={<DirectAssessmentPage />} />
             <Route path="/submission" element={<SubmissionAdditionalInfoPage />} />
+            {/* The audit trail is org-scoped by the API itself, so every member of
+                the organization may read their own team's activity. */}
+            <Route path="/activity-logs" element={<ActivityLogs />} />
             <Route element={<RequireRole roles={ADMIN_ROLES} />}>
               <Route path="/users" element={<UserList />} />
               <Route path="/users/add" element={<AddUser />} />
               <Route path="/roles" element={<Roles />} />
-              <Route path="/activity-logs" element={<ActivityLogs />} />
               <Route path="/organizations" element={<Organizations />} />
             </Route>
             <Route element={<RequireRole roles={MASTER_ADMIN_ROLES} />}>

@@ -438,8 +438,10 @@ export default function IliComparisonPage({
         )}
 
         {isProcessing ? (
-          <div className="syn-panel mt-2">
-            <JobProgressBar progress={jobProgress} message={jobMessage} />
+          <div className="result-processing-shell">
+            <div className="syn-panel result-processing-card">
+              <JobProgressBar progress={jobProgress} message={jobMessage} />
+            </div>
           </div>
         ) : (
           <div className="mt-1 flex flex-col gap-2">

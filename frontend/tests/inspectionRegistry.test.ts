@@ -40,7 +40,7 @@ test('normalizes canonical inspection evidence without inventing provenance', ()
   assert.equal(page.items[0].evidence.rejectedRows, 2);
   assert.equal(page.items[0].provenance.sourceSha256, 'a'.repeat(64));
   assert.deepEqual(page.items[0].workflow, {
-    stage: 'runcomp', alignmentSessionId: 44, downloadAvailable: true,
+    stage: 'runcomp', alignmentSessionId: 44, ffsSessionId: null, downloadAvailable: true,
   });
   assert.equal(page.nextCursor, '3');
 
@@ -50,6 +50,31 @@ test('normalizes canonical inspection evidence without inventing provenance', ()
     parserVersion: null,
     schemaVersion: null,
   });
+});
+
+test('a filed FFS assessment is carried through as its own session', () => {
+  const [assessed] = normalizeInspectionPage({
+    items: [{
+      id: 7,
+      pipelineId: 1,
+      pipelineName: 'North Line',
+      workflow: {
+        stage: 'assessed', alignmentSessionId: 44, ffsSessionId: 12, downloadAvailable: true,
+      },
+    }],
+  }).items;
+
+  assert.deepEqual(assessed.workflow, {
+    stage: 'assessed', alignmentSessionId: 44, ffsSessionId: 12, downloadAvailable: true,
+  });
+
+  // An unknown stage is still refused, and an assessment id is never invented.
+  const [unknown] = normalizeInspectionPage({
+    items: [{ id: 8, workflow: { stage: 'ffs-maybe', ffsSessionId: 'twelve', downloadAvailable: true } }],
+  }).items;
+  assert.equal(unknown.workflow.stage, 'imported');
+  assert.equal(unknown.workflow.ffsSessionId, null);
+  assert.equal(unknown.workflow.downloadAvailable, false);
 });
 
 test('registry summary only aggregates measured non-negative values', () => {
