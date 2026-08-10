@@ -3,6 +3,7 @@ import { FiAlertTriangle, FiArrowLeft, FiArrowRight, FiCheckCircle, FiDatabase, 
 
 import { buildDataReview } from '../domain/alignmentReview';
 import { Badge, Button, Callout } from '../components/ds';
+import GwDistanceGeneratorPanel from './GwDistanceGeneratorPanel';
 
 interface StepDataSummaryProps {
   onNext: (data?: any) => void;
@@ -117,6 +118,27 @@ export default function StepDataSummary({ onNext, onBack, config }: StepDataSumm
     }).sort((left, right) => right.total - left.total || left.type.localeCompare(right.type));
   }, [masterRun.rawFeatures, historicalRun.rawFeatures]);
 
+  // Every distinct persisted run in the session, master and historical alike.
+  // De-duplicated by run id because a chain session lists the same run as the
+  // NEW side of one pair and the OLD side of the next, and generating twice
+  // over one run is wasted work on an idempotent write.
+  const generatorRuns = useMemo(() => {
+    const candidates = [
+      { run: summary.newRun, label: 'Master run' },
+      { run: summary.oldRun, label: 'Historical run' },
+      ...(summary.historicalRuns ?? []).map((run: any, index: number) => ({
+        run, label: `Historical run ${index + 1}`,
+      })),
+    ];
+    const seen = new Map<number, { runId: number; label: string }>();
+    for (const { run, label } of candidates) {
+      const runId = Number(run?.runId);
+      if (!Number.isSafeInteger(runId) || runId <= 0 || seen.has(runId)) continue;
+      seen.set(runId, { runId, label: run?.name ? `${label} · ${run.name}` : label });
+    }
+    return [...seen.values()];
+  }, [summary.newRun, summary.oldRun, summary.historicalRuns]);
+
   const hasQualityWarning = masterRun.invalidAnchorDistances > 0 || historicalRun.invalidAnchorDistances > 0;
   const invalidAnchorCount = masterRun.invalidAnchorDistances + historicalRun.invalidAnchorDistances;
   const continueReview = () => {
@@ -164,6 +186,12 @@ export default function StepDataSummary({ onNext, onBack, config }: StepDataSumm
             <header><div><p>Feature inventory</p><h3 id="data-inventory-title">Coverage by extracted class</h3></div><span>{(masterRun.rawFeatures.length + historicalRun.rawFeatures.length).toLocaleString()} source records</span></header>
             {inventory.length === 0 ? <div className="alignment-review-inventory__empty"><FiLayers aria-hidden="true" />Detailed source rows are unavailable; aggregate counts above remain persisted for this session.</div> : <div className="alignment-review-inventory__table-wrap"><table><thead><tr><th>Feature class</th><th>NEW</th><th>OLD</th><th>Total</th><th>Fields</th></tr></thead><tbody>{inventory.map((row) => <tr key={row.type}><th scope="row">{row.type}</th><td>{row.master.toLocaleString()}</td><td>{row.historical.toLocaleString()}</td><td>{row.total.toLocaleString()}</td><td>{row.populated}</td></tr>)}</tbody></table></div>}
           </section>
+
+          {/* One panel per persisted run: the generator reads and writes the
+              run's own features, and each run has its own girth welds. */}
+          {generatorRuns.map((run) => (
+            <GwDistanceGeneratorPanel key={run.runId} runId={run.runId} label={run.label} />
+          ))}
 
           <label className="alignment-review-acknowledgement"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span><strong>I reviewed the extracted evidence.</strong><small>This acknowledgement is saved with the alignment session and used as the review record for this run pair.</small></span></label>
         </>

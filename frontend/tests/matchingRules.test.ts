@@ -29,6 +29,12 @@ test('combined scenario and tolerance settings persist the exact engine contract
     us_gw_distance_tolerance: 0.4,
     ds_gw_distance_tolerance: 0.6,
     use_us_gw_distance: false,
+    // The old unchecked box meant "ignore weld-relative distance", so the
+    // source selector has to resolve to `off` rather than to the `auto` default.
+    // Reading it any other way would switch a saved session's gates back on.
+    us_gw_distance_source: 'off',
+    // Absent from a saved session means the matcher that existed at the time.
+    anomaly_matcher: 'hungarian',
     // A session saved before the weld-offset gate was separated from the
     // odometer window inherits the window, which is exactly what the engine
     // falls back to — so an existing session's results do not move.

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 from models import SessionLocal, ILIFeature, AlignmentResult, AlignmentSession
 from tiein_transform import prepare_transform, validated_tiein_knots
+import gw_distance_derivation as gw_derivation
 
 
 class EmptyDatasetError(RuntimeError):
@@ -63,6 +64,18 @@ FITTING_CLASS_PATTERNS = (
 # looser than the anomaly gate: the sequence and the class carry the identity
 # here, and the distance is only a guard against pairing across a whole section.
 DEFAULT_FITTING_DISTANCE_TOLERANCE_M = 10.0
+
+# How the weld-relative distance is obtained.  ``uploaded`` is the historical
+# behaviour; ``off`` is the historical unchecked box.  The two new modes exist
+# because a pipetally that never carried the column is not the same thing as one
+# an engineer chose to ignore — see ``_resolve_us_gw_distance_policy``.
+US_GW_DISTANCE_SOURCES = ("uploaded", "auto", "derived", "off")
+DEFAULT_US_GW_DISTANCE_SOURCE = "uploaded"
+
+# Under ``auto``, the fraction of a run's anomalies that must carry a vendor
+# reading before the vendor column is trusted for that comparison.  Below it,
+# *both* runs are re-derived: see the provenance rule in the same method.
+DEFAULT_US_GW_VENDOR_COVERAGE = 0.9
 
 
 def _coerce_distance(value):
@@ -130,6 +143,11 @@ class HungarianAnomalyAlignmentEngine:
     """
 
     INF_COST = 1e9
+    # Stamped on every anomaly pair this engine produces.  An alternative
+    # matcher stamps its own, and the two never appear on the same row: a cost
+    # and a posterior probability are different claims and must not be read as
+    # one number.
+    MATCH_METHOD = "HUNGARIAN"
     # Dense matrix + Python DP and the sparse Fenwick solver optimise exactly the
     # same objective (maximum cardinality, then minimum cost) over exactly the
     # same admissible pairs: `build_sparse_cost_edges` enumerates the distance
@@ -739,6 +757,11 @@ class HungarianAnomalyAlignmentEngine:
                 "feature_type": feature.feature_type,
                 "feature_identification": feature.feature_identification,
                 "dist_to_us_gw_m": feature.dist_to_us_gw_m,
+                # What the U/S GW distance generator produced for this run, if
+                # it has been run. Carried separately so the policy can prefer
+                # the value an engineer reviewed and accepted over one this
+                # process would compute again from the same inputs.
+                "dist_to_us_gw_derived_m": feature.dist_to_us_gw_derived_m,
                 "joint_length_m": feature.joint_length_m,
                 "clock_position": feature.clock_position,
                 "wall_thickness_mm": feature.wall_thickness_mm,
@@ -894,6 +917,17 @@ class HungarianAnomalyAlignmentEngine:
                     "length_mm": length,
                     "width_mm": width,
                     "dist_to_us_gw_m": dist_gw,
+                    # Provenance travels with the value from here on: a derived
+                    # reading and a vendor reading are both usable, but only if
+                    # a reviewer can see which one the match was built on.
+                    "dist_to_us_gw_source": (
+                        gw_derivation.VENDOR_SOURCE if dist_gw is not None else None
+                    ),
+                    # Persisted output of the standalone generator, when the run
+                    # has been through it.  Read only in `derived` mode.
+                    "pregenerated_us_gw_m": _coerce_distance(
+                        f.get("dist_to_us_gw_derived_m")
+                    ),
                     "clock_position": clock,
                     "originalType": str(f.get("feature_type") or f.get("originalType") or "").lower(),
                     "raw": f
@@ -1079,6 +1113,38 @@ class HungarianAnomalyAlignmentEngine:
         return {"isConserved": is_conserved, "old": old_audit, "new": new_audit}
 
     @staticmethod
+    def _match_evidence_fields(evidence: dict | None) -> dict:
+        """The columns that explain one pair, and only the ones that apply to it.
+
+        A tolerance-gated pair has a cost and no probability; a probabilistic
+        pair has a posterior and no cost.  Both columns exist on every row so the
+        table has a stable schema, but a row never carries a value in both — a
+        cost of 0.8 and a confidence of 99.3 % are answers to different questions
+        and putting them side by side invites reading one as the other.
+        """
+        fields = {
+            "Match Method": "-",
+            "Match Cost": "-",
+            "Match Confidence (%)": "-",
+            "Match Log Bayes Factor": "-",
+            # Consumed by the results panel's evidence drawer, not rendered as a
+            # table column: `isAlignmentDisplayMetadata` hides it.
+            "match_evidence": None,
+        }
+        if not evidence:
+            return fields
+        fields["Match Method"] = evidence.get("method", "-")
+        fields["match_evidence"] = evidence
+        if evidence.get("solverCost") is not None:
+            fields["Match Cost"] = round(float(evidence["solverCost"]), 6)
+        posterior = evidence.get("posterior")
+        if posterior is not None:
+            fields["Match Confidence (%)"] = round(float(posterior) * 100.0, 2)
+        if evidence.get("logBayesFactor") is not None:
+            fields["Match Log Bayes Factor"] = round(float(evidence["logBayesFactor"]), 3)
+        return fields
+
+    @staticmethod
     def _result_distance_fields(old_feature, new_feature):
         def distances(feature):
             if not feature:
@@ -1200,6 +1266,163 @@ class HungarianAnomalyAlignmentEngine:
         matrix; they differ only in how an unconsumed one is reported.
         """
         return cls._is_dtw_anchor_feature(feature) or cls._is_structural_feature(feature)
+
+    # Circumferential joint welds only — the reference derivation measures from,
+    # and narrower than ``_is_gw_feature``, which also accepts bends and valves.
+    # Delegated rather than reimplemented so the standalone generator and this
+    # engine can never disagree about what counts as a girth weld.
+    _is_girth_weld_feature = staticmethod(gw_derivation.is_girth_weld_feature)
+
+    @staticmethod
+    def _apply_derived_us_gw(features: list[dict], predicate) -> dict:
+        """Put one run onto derived weld-relative distances.
+
+        Values the standalone generator already produced and persisted win: an
+        engineer previewed and accepted those, and reading them means the run
+        matches on exactly the numbers that were reviewed rather than on a
+        second computation nobody looked at.  The two agree by construction —
+        both come from ``gw_distance_derivation`` over the same odometer — so
+        this is about provenance, not about the arithmetic differing.
+
+        Anything the generator did not cover (a run that never went through it,
+        a feature ingested since) is derived here and counted separately, so the
+        audit distinguishes "reviewed" from "computed just now".
+        """
+        # Vendor readings are cleared first.  This mode's contract is that the
+        # whole run is on derived provenance; leaving a vendor value in place
+        # for a feature the generator missed would silently mix the two
+        # conventions inside one run.
+        for feature in features:
+            if predicate(feature):
+                continue
+            pregenerated = feature.get("pregenerated_us_gw_m")
+            feature["dist_to_us_gw_m"] = pregenerated
+            feature["dist_to_us_gw_source"] = (
+                gw_derivation.DERIVED_SOURCE if pregenerated is not None else None
+            )
+
+        pregenerated_count = sum(
+            1 for feature in features
+            if not predicate(feature) and feature.get("dist_to_us_gw_m") is not None
+        )
+        # overwrite=False so the generator's reviewed values are left alone and
+        # only the gaps are filled.
+        stats = gw_derivation.derive_us_gw_distances(features, predicate, overwrite=False)
+        stats["fromGenerator"] = pregenerated_count
+        stats["derivedInEngine"] = stats["derived"]
+        # `keptVendor` counts values this pass did not touch, which here are the
+        # generator's, not a vendor's. Renaming it in the audit avoids reporting
+        # derived numbers as vendor ones.
+        stats.pop("keptVendor", None)
+        stats["derived"] = pregenerated_count + stats["derivedInEngine"]
+        return stats
+
+    def _resolve_us_gw_distance_policy(
+        self,
+        old_features: list[dict],
+        new_features: list[dict],
+        tol_config: dict,
+    ) -> dict:
+        """Decide where the weld-relative distance comes from, for both runs at once.
+
+        The rule that matters is *provenance consistency*.  A vendor measures to
+        the weld centreline; this code measures to whatever odometer the weld
+        feature was reported at, and the two differ by a fixed bias per run.
+        Comparing a vendor value on OLD against a derived value on NEW would feed
+        that bias straight into the strongest identity gate the matcher has.  So
+        derivation is never applied to one run alone: either both runs keep their
+        vendor column, or both are re-derived from their own girth welds.
+
+        Modes:
+          ``uploaded``  vendor column only — the historical behaviour.
+          ``auto``      vendor when both runs report it well, derived otherwise.
+          ``derived``   always compute from the odometer, ignoring the column.
+          ``off``       no weld-relative evidence at all.
+        """
+        requested = str(
+            tol_config.get("us_gw_distance_source")
+            or (
+                DEFAULT_US_GW_DISTANCE_SOURCE
+                if tol_config.get("use_us_gw_distance", True) is not False
+                # A session saved before this setting existed carries only the
+                # old checkbox, and an unchecked box meant "ignore it".
+                else "off"
+            )
+        ).strip().lower()
+        if requested not in US_GW_DISTANCE_SOURCES:
+            requested = DEFAULT_US_GW_DISTANCE_SOURCE
+
+        try:
+            minimum_coverage = float(tol_config.get(
+                "us_gw_distance_min_coverage", DEFAULT_US_GW_VENDOR_COVERAGE,
+            ))
+        except (TypeError, ValueError):
+            minimum_coverage = DEFAULT_US_GW_VENDOR_COVERAGE
+
+        predicate = self._is_girth_weld_feature
+        old_coverage = gw_derivation.vendor_coverage(old_features, predicate)
+        new_coverage = gw_derivation.vendor_coverage(new_features, predicate)
+
+        # Measured once here because this is the only pass that holds both
+        # complete feature lists and already has the girth-weld predicate in
+        # hand.  A matcher that needs to know how long a joint is on this line
+        # reads it rather than assuming 12 m.
+        self.median_joint_length_m = (
+            gw_derivation.median_joint_length(new_features, predicate)
+            or gw_derivation.median_joint_length(old_features, predicate)
+        )
+
+        resolved = requested
+        reason = None
+        if requested == "auto":
+            both_reported = (
+                old_coverage["coverage"] >= minimum_coverage
+                and new_coverage["coverage"] >= minimum_coverage
+            )
+            resolved = "uploaded" if both_reported else "derived"
+            reason = (
+                "both runs report the vendor column"
+                if both_reported
+                else (
+                    "vendor coverage is "
+                    f"{old_coverage['coverage']:.0%} OLD / {new_coverage['coverage']:.0%} NEW, "
+                    f"below the {minimum_coverage:.0%} threshold"
+                )
+            )
+
+        derivation = {"old": None, "new": None}
+        if resolved == "derived":
+            derivation["old"] = self._apply_derived_us_gw(old_features, predicate)
+            derivation["new"] = self._apply_derived_us_gw(new_features, predicate)
+
+        self.use_us_gw_distance = resolved != "off"
+        audit = {
+            "requestedMode": requested,
+            "resolvedMode": resolved,
+            "reason": reason,
+            "minimumVendorCoverage": minimum_coverage,
+            "old": {**old_coverage, "derivation": derivation["old"]},
+            "new": {**new_coverage, "derivation": derivation["new"]},
+        }
+        if resolved == "derived":
+            derived_total = sum(
+                (derivation[side] or {}).get("derived", 0) for side in ("old", "new")
+            )
+            no_upstream = sum(
+                (derivation[side] or {}).get("noUpstreamWeld", 0) for side in ("old", "new")
+            )
+            print(
+                f"[GW Distance] Derived {derived_total} weld-relative distance(s) "
+                f"from the odometer; {no_upstream} feature(s) have no upstream girth weld.",
+                file=sys.stderr,
+            )
+            if not (derivation["old"] or {}).get("girthWelds") or not (derivation["new"] or {}).get("girthWelds"):
+                audit["warning"] = (
+                    "One or both runs report no girth welds, so no weld-relative "
+                    "distance could be derived for that run."
+                )
+                print(f"[WARN] {audit['warning']}", file=sys.stderr)
+        return audit
 
     @classmethod
     def _fitting_class(cls, feature: dict) -> str | None:
@@ -1462,6 +1685,218 @@ class HungarianAnomalyAlignmentEngine:
 
         return cost
 
+    def explain_pair_cost(
+        self,
+        old_feature: dict,
+        new_feature: dict,
+        corrected_distance: float,
+        settings: dict,
+        solver_cost: float,
+    ) -> dict:
+        """Readable breakdown of one selected pair's cost.
+
+        Reporting only, and only for pairs the solver actually chose — a few
+        hundred per run rather than the hundreds of thousands ``pair_cost``
+        scores.  It re-derives each term instead of instrumenting the hot path,
+        so ``solverCost`` is carried alongside as the authoritative number and
+        any disagreement between the two is stated rather than smoothed over.
+        """
+        channels = []
+
+        signed_distance = new_feature["abs_distance_m"] - corrected_distance
+        directional_tolerance = (
+            settings["ds_gw_distance_tolerance"]
+            if signed_distance >= 0
+            else settings["us_gw_distance_tolerance"]
+        )
+        # Channels carry numbers only.  This object is stored once per matched
+        # row, so a sentence here is a sentence repeated tens of thousands of
+        # times in the results table; the wording lives in the drawer that
+        # renders it.  `gateOnly` is what the drawer needs to say that the
+        # odometer window admits or rejects a pair without costing it anything.
+        channels.append({
+            "name": "Odometer",
+            "unit": "m",
+            "observed": signed_distance,
+            "tolerance": directional_tolerance,
+            "weight": None,
+            "penalty": 0.0,
+            "gateOnly": True,
+        })
+
+        gw_old = old_feature.get("dist_to_us_gw_m")
+        gw_new = new_feature.get("dist_to_us_gw_m")
+        if settings["use_us_gw_distance"] and gw_old is not None and gw_new is not None:
+            difference = abs(abs(gw_old) - abs(gw_new))
+            tolerance = settings["gw_offset_tolerance"]
+            channels.append({
+                "name": "U/S weld distance",
+                "unit": "m",
+                "observed": difference,
+                "tolerance": tolerance,
+                "weight": settings["w_gw"],
+                "penalty": settings["w_gw"] * (difference / max(tolerance, 0.001)),
+            })
+
+        clock_difference = self._clock_diff(
+            old_feature.get("clock_position"), new_feature.get("clock_position"),
+        )
+        if clock_difference is not None:
+            tolerance = settings["clock_tolerance"]
+            channels.append({
+                "name": "Clock",
+                "unit": "deg",
+                "observed": clock_difference,
+                "tolerance": tolerance,
+                "weight": settings["w_clock"],
+                "penalty": settings["w_clock"] * (clock_difference / max(tolerance, 1.0)),
+            })
+
+        old_length, new_length = old_feature.get("length_mm"), new_feature.get("length_mm")
+        if old_length is not None and new_length is not None:
+            difference = abs(old_length - new_length)
+            tolerance = settings["length_tolerance"]
+            channels.append({
+                "name": "Length",
+                "unit": "mm",
+                "observed": difference,
+                "tolerance": tolerance,
+                "weight": settings["w_length"],
+                "penalty": settings["w_length"] * (difference / max(tolerance, 1.0)),
+            })
+
+        old_width, new_width = old_feature.get("width_mm"), new_feature.get("width_mm")
+        if old_width is not None and new_width is not None:
+            difference = min(abs(old_width - new_width), 200.0)
+            channels.append({
+                "name": "Width",
+                "unit": "mm",
+                "observed": abs(old_width - new_width),
+                "tolerance": 200.0,
+                "weight": settings["w_width"],
+                "penalty": settings["w_width"] * (difference / 200.0),
+            })
+
+        breakdown_total = sum(channel["penalty"] for channel in channels)
+        evidence = {
+            "method": self.MATCH_METHOD,
+            "objective": "minimum total cost, maximum pairs, no crossing",
+            "solverCost": float(solver_cost),
+            "breakdownTotal": breakdown_total,
+            "channels": channels,
+        }
+        if abs(breakdown_total - float(solver_cost)) > 1e-6:
+            evidence["note"] = (
+                "The itemised penalties do not reproduce the solver's cost; "
+                "trust solverCost and report this run."
+            )
+        return evidence
+
+    def _matcher_audit(self) -> dict:
+        """Matcher-specific summary for the result audit block.
+
+        The tolerance-gated matcher's whole configuration is the gate set, so
+        that is what it reports.  An alternative matcher overrides this with its
+        own; nothing merges the two.
+        """
+        settings = self.resolve_cost_settings(None)
+        return {
+            "gates": {
+                key: settings[key]
+                for key in (
+                    "us_gw_distance_tolerance",
+                    "ds_gw_distance_tolerance",
+                    "gw_offset_tolerance",
+                    "clock_tolerance",
+                    "length_tolerance",
+                    "use_us_gw_distance",
+                    "require_us_gw_distance",
+                )
+            },
+            "weights": {
+                key: settings[key] for key in ("w_gw", "w_clock", "w_length", "w_width")
+            },
+        }
+
+    def match_segment(
+        self,
+        seg_id: int,
+        seg_anomalies_1: list[dict],
+        seg_anomalies_2: list[dict],
+        offset_table: list[tuple[float, float]],
+        offset_keys: list[float] | None = None,
+        segment_tolerances: dict | None = None,
+    ) -> tuple[list[tuple[int, int, dict]], dict]:
+        """Pair the anomalies of one GW-bounded segment.
+
+        The seam an alternative matcher plugs into: everything before it (data
+        loading, GW locks, segmentation) and everything after it (buckets,
+        conservation audit, reporting) is shared, and only the choice of pairs
+        differs.  Returns the accepted ``(old_index, new_index, evidence)``
+        triples plus a per-segment audit block.
+
+        This implementation is the tolerance-gated one and is unchanged: a dense
+        matrix on small segments, a sparse edge list on large ones, both solved
+        for maximum cardinality then minimum cost, and any pair that reached
+        ``INF_COST`` dropped.
+        """
+        settings = self.resolve_cost_settings(segment_tolerances)
+        segment_cells = len(seg_anomalies_1) * len(seg_anomalies_2)
+        if segment_cells > self.MAX_DENSE_ALIGNMENT_CELLS:
+            print(
+                f"      [Optimization] Sparse matching for segment {seg_id}: "
+                f"{len(seg_anomalies_1):,} x {len(seg_anomalies_2):,} candidates",
+                file=sys.stderr,
+            )
+            sparse_edges = self.build_sparse_cost_edges(
+                seg_anomalies_1, seg_anomalies_2, offset_table, offset_keys, segment_tolerances,
+            )
+            ordered_pairs = self.solve_sparse_monotonic_assignment(
+                len(seg_anomalies_1), len(seg_anomalies_2), sparse_edges,
+            )
+            selected_costs = {
+                (old_index, new_index): cost
+                for old_index, new_index, cost in sparse_edges
+            }
+            cost_matrix = None
+            candidates_considered = len(sparse_edges)
+        else:
+            cost_matrix = self.build_cost_matrix(
+                seg_anomalies_1, seg_anomalies_2, offset_table, offset_keys, segment_tolerances,
+            )
+            ordered_pairs = self.solve_monotonic_assignment(cost_matrix)
+            selected_costs = None
+            candidates_considered = segment_cells
+
+        accepted: list[tuple[int, int, dict]] = []
+        for old_index, new_index in ordered_pairs:
+            # THRESHOLD GATE: drop any pair whose cost reached INF_COST.
+            pair_cost = (
+                selected_costs.get((old_index, new_index), self.INF_COST)
+                if selected_costs is not None
+                else cost_matrix[old_index][new_index]
+            )
+            if pair_cost >= self.INF_COST:
+                continue
+            old_feature = seg_anomalies_1[old_index]
+            corrected = old_feature["abs_distance_m"] + self._interpolate_offset(
+                old_feature["abs_distance_m"], offset_table, offset_keys,
+            )
+            accepted.append((old_index, new_index, self.explain_pair_cost(
+                old_feature, seg_anomalies_2[new_index], corrected, settings, float(pair_cost),
+            )))
+
+        audit = {
+            "segment": seg_id,
+            "method": self.MATCH_METHOD,
+            "oldCount": len(seg_anomalies_1),
+            "newCount": len(seg_anomalies_2),
+            "candidatesConsidered": candidates_considered,
+            "matched": len(accepted),
+            "solver": "sparse" if selected_costs is not None else "dense",
+        }
+        return accepted, audit
+
     def perform_alignment(self) -> list[AlignmentResult]:
         print(f"\n{'='*60}")
         print(f"ILI Strict Phase-3 Anomaly Hungarian Alignment: {self.run_1_year} -> {self.run_2_year}")
@@ -1502,7 +1937,13 @@ class HungarianAnomalyAlignmentEngine:
             self.us_gw_distance_tolerance = float(tol_config["us_gw_distance_tolerance"])
         if "ds_gw_distance_tolerance" in tol_config:
             self.ds_gw_distance_tolerance = float(tol_config["ds_gw_distance_tolerance"])
-        self.use_us_gw_distance = tol_config.get("use_us_gw_distance", True) is not False
+        # Resolves where the weld-relative distance comes from and, when the
+        # pipetally never carried the column, derives it from the odometer for
+        # both runs.  It owns `self.use_us_gw_distance` from here on, so the
+        # requirement below has to be computed after it.
+        self.us_gw_distance_audit = self._resolve_us_gw_distance_policy(
+            anomalies_1_all, anomalies_2_all, tol_config,
+        )
         self.require_us_gw_distance = (
             params_json.get("algorithm") == "dtw_hungarian_onedirection"
             and self.use_us_gw_distance
@@ -1642,8 +2083,13 @@ class HungarianAnomalyAlignmentEngine:
         # unique, so reconstructing an output row from feature_old_id/new_id
         # can otherwise select a different source record.
         result_features: dict[int, tuple[dict | None, dict | None]] = {}
+        # Why each pair was accepted, keyed the same way as the source features.
+        # Kept beside the result rather than inside it because AlignmentResult is
+        # the persisted database shape and this is reporting evidence.
+        result_evidence: dict[int, dict | None] = {}
+        segment_audits: list[dict] = []
 
-        def append_result(f1, f2, status, odo_diff=None):
+        def append_result(f1, f2, status, odo_diff=None, evidence=None):
             result = AlignmentResult(
                 session_id=self.session_id,
                 feature_old_id=safe_int(f1["id"]) if f1 else None,
@@ -1653,6 +2099,7 @@ class HungarianAnomalyAlignmentEngine:
             )
             results.append(result)
             result_features[id(result)] = (f1, f2)
+            result_evidence[id(result)] = evidence
         total_matched = 0
         total_new = 0
         total_missing = 0
@@ -1691,61 +2138,30 @@ class HungarianAnomalyAlignmentEngine:
                     total_missing += 1
                 continue
 
-            segment_cells = len(seg_anomalies_1) * len(seg_anomalies_2)
             segment_tolerances = section.get("tolerances") if section else None
-            if segment_cells > self.MAX_DENSE_ALIGNMENT_CELLS:
-                print(
-                    f"      [Optimization] Sparse matching for segment {seg_id}: "
-                    f"{len(seg_anomalies_1):,} x {len(seg_anomalies_2):,} candidates",
-                    file=sys.stderr,
-                )
-                sparse_edges = self.build_sparse_cost_edges(
-                    seg_anomalies_1,
-                    seg_anomalies_2,
-                    offset_table,
-                    offset_keys,
-                    segment_tolerances,
-                )
-                ordered_pairs = self.solve_sparse_monotonic_assignment(
-                    len(seg_anomalies_1), len(seg_anomalies_2), sparse_edges,
-                )
-                selected_costs = {
-                    (old_index, new_index): cost
-                    for old_index, new_index, cost in sparse_edges
-                }
-            else:
-                cost_matrix = self.build_cost_matrix(
-                    seg_anomalies_1,
-                    seg_anomalies_2,
-                    offset_table,
-                    offset_keys,
-                    segment_tolerances,
-                )
-                ordered_pairs = self.solve_monotonic_assignment(cost_matrix)
-                selected_costs = None
+            accepted_pairs, segment_audit = self.match_segment(
+                seg_id,
+                seg_anomalies_1,
+                seg_anomalies_2,
+                offset_table,
+                offset_keys,
+                segment_tolerances,
+            )
+            segment_audits.append(segment_audit)
 
             matched_1 = set()
             matched_2 = set()
 
-            for i, j in ordered_pairs:
-                # THRESHOLD GATE: drop any pair whose cost reached INF_COST.
-                pair_cost = (
-                    selected_costs.get((i, j), self.INF_COST)
-                    if selected_costs is not None
-                    else cost_matrix[i][j]
-                )
-                if pair_cost >= self.INF_COST:
-                    continue
-
+            for i, j, evidence in accepted_pairs:
                 f1 = seg_anomalies_1[i]
                 f2 = seg_anomalies_2[j]
                 matched_1.add(i)
                 matched_2.add(j)
                 total_matched += 1
-                
+
                 odo_diff = float(f2["abs_distance_m"] - f1["abs_distance_m"])
 
-                append_result(f1, f2, "Matched", odo_diff)
+                append_result(f1, f2, "Matched", odo_diff, evidence)
 
             for i, f1 in enumerate(seg_anomalies_1):
                 if i not in matched_1:
@@ -1811,7 +2227,7 @@ class HungarianAnomalyAlignmentEngine:
                 consumed.add(selected.get("source_key"))
             return selected
         
-        def format_row(old_id_val, new_id_val, status, result_group, odo_diff=None, old_feature=None, new_feature=None, old_odometer=None, new_odometer=None, consumed_old=None, consumed_new=None):
+        def format_row(old_id_val, new_id_val, status, result_group, odo_diff=None, old_feature=None, new_feature=None, old_odometer=None, new_odometer=None, consumed_old=None, consumed_new=None, evidence=None):
             f1 = old_feature or find_feature(old_features_by_id, old_id_val, old_odometer, consumed_old)
             f2 = new_feature or find_feature(new_features_by_id, new_id_val, new_odometer, consumed_new)
             physics_warnings = self._physics_warnings(f1, f2)
@@ -1845,6 +2261,7 @@ class HungarianAnomalyAlignmentEngine:
             if any(feature and self._is_cluster_feature(feature) for feature in (f1, f2)):
                 bypass_reason = CLUSTER_BYPASS_REASON
             return {
+                **self._match_evidence_fields(evidence),
                 "session_id": self.session_id,
                 "feature_old_id": safe_int(old_id_val) if old_id_val else None,
                 "feature_new_id": safe_int(new_id_val) if new_id_val else None,
@@ -1883,6 +2300,11 @@ class HungarianAnomalyAlignmentEngine:
                 "Joint No. NEW": f2.get("raw", {}).get("joint_number") if f2 else "-",
                 "Dist GW OLD (m)": f1.get("dist_to_us_gw_m") if f1 else "-",
                 "Dist GW NEW (m)": f2.get("dist_to_us_gw_m") if f2 else "-",
+                # "vendor" or "derived".  A derived value was computed here from
+                # the odometer and the run's own girth welds; the reviewer needs
+                # to know that before treating it as a reported measurement.
+                "Dist GW Source OLD": (f1.get("dist_to_us_gw_source") or "-") if f1 else "-",
+                "Dist GW Source NEW": (f2.get("dist_to_us_gw_source") or "-") if f2 else "-",
                 "Joint Len OLD (m)": f1.get("raw", {}).get("joint_length_m") if f1 else "-",
                 "Joint Len NEW (m)": f2.get("raw", {}).get("joint_length_m") if f2 else "-",
                 "Feature Type OLD": f1.get("originalType") if f1 else "-",
@@ -2033,7 +2455,7 @@ class HungarianAnomalyAlignmentEngine:
                 result_group = "ANOMALY"
             row = format_row(
                 r.feature_old_id, r.feature_new_id, r.match_status, result_group, r.odo_diff,
-                old_feature=f1, new_feature=f2
+                old_feature=f1, new_feature=f2, evidence=result_evidence.get(id(r)),
             )
             if r.match_status == "Matched":
                 anomaly_matched.append(row)
@@ -2086,6 +2508,16 @@ class HungarianAnomalyAlignmentEngine:
         # Warnings live inside `audit` (an object): Node's
         # normalizeComparisonResult flattens every top-level array into the
         # comparison table, so a top-level warnings list would become rows.
+        # Everything a reviewer needs to reproduce the matching decision: which
+        # matcher ran, where the weld-relative distances came from, and what each
+        # segment did.  Lives inside `audit` because Node flattens every
+        # top-level array in this payload into the comparison table.
+        json_output["audit"]["matcher"] = {
+            "method": self.MATCH_METHOD,
+            "segments": segment_audits,
+            **self._matcher_audit(),
+        }
+        json_output["audit"]["usGwDistance"] = getattr(self, "us_gw_distance_audit", None)
         run_warnings = self._missing_survey_year_warnings()
         json_output["audit"]["warnings"] = run_warnings
         for warning in run_warnings:

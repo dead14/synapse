@@ -156,6 +156,8 @@ export const TOLERANCE_PROFILES: readonly ToleranceProfile[] = [
       us_gw_distance_tolerance: 0.1,
       ds_gw_distance_tolerance: 0.1,
       use_us_gw_distance: true,
+      us_gw_distance_source: 'auto',
+      anomaly_matcher: 'hungarian',
       // Weld-relative distance survives an odometer disagreement, so this
       // profile keeps it usable rather than tightening it with the window.
       gw_offset_tolerance: 0.15,
@@ -171,6 +173,8 @@ export const TOLERANCE_PROFILES: readonly ToleranceProfile[] = [
       us_gw_distance_tolerance: 0.5,
       ds_gw_distance_tolerance: 0.5,
       use_us_gw_distance: true,
+      us_gw_distance_source: 'auto',
+      anomaly_matcher: 'hungarian',
       // Deliberately not widened with the odometer window: this is the gate
       // that still separates two neighbouring pits once the window is loose.
       gw_offset_tolerance: 0.3,
@@ -179,16 +183,23 @@ export const TOLERANCE_PROFILES: readonly ToleranceProfile[] = [
   },
 ] as const;
 
+/** The non-numeric settings that are part of a tolerance set's identity. */
+const CHOICE_KEYS = ['use_us_gw_distance', 'us_gw_distance_source', 'anomaly_matcher'] as const;
+
+function sameChoices(left: ToleranceValues, right: ToleranceValues): boolean {
+  return CHOICE_KEYS.every((key) => left[key] === right[key]);
+}
+
 export function matchProfile(values: ToleranceValues): ToleranceProfile | null {
   return TOLERANCE_PROFILES.find((profile) => (
     TOLERANCE_SPECS.every((spec) => profile.values[spec.key] === values[spec.key])
-    && profile.values.use_us_gw_distance === values.use_us_gw_distance
+    && sameChoices(profile.values, values)
   )) ?? null;
 }
 
 export function sameTolerances(left: ToleranceValues, right: ToleranceValues): boolean {
   return TOLERANCE_SPECS.every((spec) => left[spec.key] === right[spec.key])
-    && left.use_us_gw_distance === right.use_us_gw_distance;
+    && sameChoices(left, right);
 }
 
 function clampToSpec(spec: ToleranceSpec, value: number): number {
@@ -241,6 +252,12 @@ export interface MatchProjection {
   confidence: number;
   /** Geometric mean of the four gate pass fractions, 0–1. Higher = looser. */
   looseness: number;
+  /**
+   * False when the selected matcher has no distance gates, which makes every
+   * number above meaningless rather than merely approximate. The projection
+   * models gate pass fractions; a matcher without gates has none to model.
+   */
+  gatesApply: boolean;
 }
 
 /**
@@ -275,6 +292,18 @@ export function projectMatchOutcome(
   input: ProjectionInput,
   assumptions: ProjectionAssumptions = DEFAULT_ASSUMPTIONS,
 ): MatchProjection {
+  // An absent value means a session saved before the matcher choice existed,
+  // which ran the gated matcher — the same fallback `toleranceValues` and the
+  // backend registry apply. Only an explicit non-gated matcher suppresses this.
+  if (values.anomaly_matcher && values.anomaly_matcher !== 'hungarian') {
+    // Not a zero and not a guess: this matcher has no gates for the model to
+    // reason about, so it reports that rather than a number the engineer would
+    // read as a prediction.
+    return {
+      candidatePairs: 0, reviewHours: 0, confidence: 0, looseness: 0, gatesApply: false,
+    };
+  }
+
   const fractions = TOLERANCE_SPECS.map((spec) => {
     // A disabled upstream gate rejects nothing, so it removes no candidates.
     if (spec.key === 'us_gw_distance_tolerance' && !values.use_us_gw_distance) return 1;
@@ -289,7 +318,7 @@ export function projectMatchOutcome(
   const reviewHours = (candidatePairs * assumptions.secondsPerPair) / 3600;
   const confidence = Math.min(99, Math.max(55, CONFIDENCE_CEILING - looseness * CONFIDENCE_SPREAD));
 
-  return { candidatePairs, reviewHours, confidence, looseness };
+  return { candidatePairs, reviewHours, confidence, looseness, gatesApply: true };
 }
 
 /** Anomaly counts for the pair being tuned, or null when intake has not run. */

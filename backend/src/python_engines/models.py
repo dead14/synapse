@@ -132,6 +132,14 @@ class ILIFeature(Base):
     log_distance_m = Column(Float)
     joint_number = Column(Integer)
     dist_to_us_gw_m = Column(Float)
+    # Computed by the U/S GW distance generator, never by a vendor.  Held apart
+    # from the column above because they are different measurements: a vendor
+    # measures to the weld centreline, this measures to the odometer the weld
+    # feature was reported at.  Keeping both means a reviewer can always tell a
+    # surveyed number from a derived one, and the original survives a re-run.
+    dist_to_us_gw_derived_m = Column(Float)
+    #: Odometer of the girth weld the derived value was measured from.
+    us_gw_reference_m = Column(Float)
     joint_length_m = Column(Float)
     feature_type = Column(String)
     feature_identification = Column(String)
@@ -148,6 +156,28 @@ class ILIFeature(Base):
 
     # Relationships
     run = relationship("SurveyRun", back_populates="features")
+
+
+class RunGwDistanceGeneration(Base):
+    """What the U/S GW distance generator did to one run, and when.
+
+    One row per run: re-running replaces it, because only the current state of
+    ``ILIFeature.dist_to_us_gw_derived_m`` is meaningful and a history of
+    superseded passes would only invite reading a stale one.
+    """
+
+    __tablename__ = 'run_gw_distance_generation'
+
+    run_id = Column(Integer, ForeignKey('survey_runs.id'), primary_key=True)
+    generated_at = Column(DateTime, default=datetime.utcnow)
+    girth_welds = Column(Integer, nullable=False)
+    derived_count = Column(Integer, nullable=False)
+    no_upstream_weld_count = Column(Integer, nullable=False)
+    unreadable_distance_count = Column(Integer, nullable=False)
+    vendor_reported_count = Column(Integer, nullable=False)
+    feature_count = Column(Integer, nullable=False)
+    median_joint_length_m = Column(Float)
+    generated_by = Column(Integer, ForeignKey('users.id'))
 
 class AlignmentSession(Base):
     __tablename__ = 'alignment_sessions'

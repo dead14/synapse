@@ -17,6 +17,7 @@ const {
     summarizeComparison,
 } = require('./alignmentContract');
 const { ALIGNMENT_ENGINE_VERSION, alignmentProcessTimeoutMs } = require('./alignmentExecution');
+const { resolveAnomalyMatcher } = require('./anomalyMatchers');
 const { pairKeyOf } = require('./runPairIdentity');
 const { pythonExecutable, pythonSpawnOptions, killPythonProcess } = require('../../config/python');
 
@@ -43,7 +44,7 @@ function emitProgress(job, progress, message) {
     });
 }
 
-async function runPythonAlignment(sessionId, algorithm, pairConfig = null) {
+async function runPythonAlignment(sessionId, algorithm, pairConfig = null, matcher = null) {
     // mkdtemp gives this run a private, unpredictable directory instead of
     // guessable file names in the shared tmp dir (mirrors
     // objectStorage.createWorkerTempPath).
@@ -60,11 +61,14 @@ async function runPythonAlignment(sessionId, algorithm, pairConfig = null) {
     if (pairConfigFile) await fs.writeFile(pairConfigFile, JSON.stringify(pairConfig), 'utf8');
     try {
         const result = await new Promise((resolve, reject) => {
+            // `manual` and `phylogenetic` own Phase 1 and Phase 2 together. For
+            // everything else the girth-weld phase is fixed and only the anomaly
+            // matcher varies, which is what the registry resolves.
             const engineScript = algorithm === 'manual'
                 ? 'src/python_engines/manual_alignment_engine.py'
                 : algorithm === 'phylogenetic'
                     ? 'src/python_engines/phylogenetic_engine.py'
-                    : 'src/python_engines/hungarian_engine.py';
+                    : (matcher?.engineScript || 'src/python_engines/hungarian_engine.py');
             const child = spawn(pythonExecutable, [engineScript, String(sessionId)], pythonSpawnOptions({
                 cwd: path.join(__dirname, '../../..'),
                 env: {
@@ -292,6 +296,11 @@ async function processAlignmentJob(job) {
             for (let i = 0; i < runPairs.length; i++) {
                 const pair = runPairs[i];
                 const pairProgress = 20 + Math.round((i / runPairs.length) * 55);
+                // Resolved per pair, not once for the job: a pair may carry its
+                // own tolerance configuration, and that is where the matcher
+                // choice lives.
+                const pairSessionConfig = buildPairSessionConfig(sessionConfig, pair);
+                const pairMatcher = resolveAnomalyMatcher(pairSessionConfig, algorithm);
                 await emitProgress(
                     job, pairProgress,
                     `Aligning pair ${i + 1}/${runPairs.length}: ${pair.oldRun?.year || '?'} → ${pair.newRun?.year || '?'}`,
@@ -299,7 +308,8 @@ async function processAlignmentJob(job) {
                 pairResults.push(await runPythonAlignment(
                     sessionId,
                     algorithm,
-                    buildPairSessionConfig(sessionConfig, pair),
+                    pairSessionConfig,
+                    pairMatcher,
                 ));
             }
 
@@ -316,8 +326,9 @@ async function processAlignmentJob(job) {
             });
         }
 
+        const matcher = resolveAnomalyMatcher(sessionConfig, algorithm);
         await emitProgress(job, 20, 'Loading canonical ILI data');
-        const result = await runPythonAlignment(sessionId, algorithm);
+        const result = await runPythonAlignment(sessionId, algorithm, null, matcher);
         return finishAlignmentJob(job, sessionId, configFingerprint, result);
     } catch (error) {
         const finalAttempt = (job.attemptsMade + 1) >= (job.opts.attempts || 1);

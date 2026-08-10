@@ -1,8 +1,54 @@
+/**
+ * Which matcher pairs the metal loss once the girth welds are locked.
+ *
+ * A second axis from `algorithm`, which chooses the weld-locking phase. Keep in
+ * step with `ANOMALY_MATCHERS` in `backend/src/modules/alignment/anomalyMatchers.js`;
+ * that registry is what maps an id to an engine script.
+ */
+export const ANOMALY_MATCHERS = [
+  {
+    id: 'hungarian',
+    label: 'Tolerance gates',
+    hint: 'Pairs must fall inside the windows below. The right choice when the two runs agree on chainage.',
+  },
+  {
+    id: 'bayesian_drift',
+    label: 'Bayesian drift matching',
+    hint: 'No distance window: finds the displacement the section actually has, then pairs on weight of evidence. Use when the welds locked but the metal loss did not.',
+  },
+] as const;
+
+export type AnomalyMatcher = (typeof ANOMALY_MATCHERS)[number]['id'];
+
+/**
+ * Where the distance-to-upstream-girth-weld reading comes from.
+ *
+ * `derived` computes it from the odometer and the run's own girth welds, which
+ * is the only option available when the pipetally never carried the column.
+ * Derivation always applies to both runs at once — see the provenance rule in
+ * `hungarian_engine._resolve_us_gw_distance_policy`.
+ */
+export const US_GW_DISTANCE_SOURCES = [
+  { id: 'uploaded', label: 'Uploaded column', hint: 'Use the vendor’s reported distance only.' },
+  { id: 'auto', label: 'Auto', hint: 'Use the vendor column when both runs report it, otherwise derive from log distance.' },
+  { id: 'derived', label: 'Derive from log distance', hint: 'Always compute from the odometer and the run’s own girth welds.' },
+  { id: 'off', label: 'Do not use', hint: 'Ignore weld-relative distance entirely.' },
+] as const;
+
+export type UsGwDistanceSource = (typeof US_GW_DISTANCE_SOURCES)[number]['id'];
+
 export type ToleranceValues = {
   clock_tolerance: number;
   us_gw_distance_tolerance: number;
   ds_gw_distance_tolerance: number;
+  /**
+   * Legacy gate. Kept on the wire because saved sessions carry it and the
+   * engine still reads it as the fallback for `us_gw_distance_source`, but the
+   * source selector is what the wizard now edits.
+   */
   use_us_gw_distance: boolean;
+  us_gw_distance_source: UsGwDistanceSource;
+  anomaly_matcher: AnomalyMatcher;
   /**
    * Permitted difference between the two runs' reported distance to their own
    * upstream girth weld.
@@ -21,6 +67,8 @@ export const RECOMMENDED_TOLERANCES: ToleranceValues = {
   us_gw_distance_tolerance: 0.2,
   ds_gw_distance_tolerance: 0.2,
   use_us_gw_distance: true,
+  us_gw_distance_source: 'auto',
+  anomaly_matcher: 'hungarian',
   gw_offset_tolerance: 0.2,
   length_tolerance: 50,
 };
@@ -30,13 +78,35 @@ function finiteOr(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return allowed.includes(value as T) ? (value as T) : fallback;
+}
+
 export function toleranceValues(source: any, legacyDistance: unknown): ToleranceValues {
   const distance = finiteOr(legacyDistance, RECOMMENDED_TOLERANCES.us_gw_distance_tolerance);
+  // A session saved before the source selector existed carries only the old
+  // checkbox, and an unchecked box meant "ignore weld-relative distance".
+  // Reading it as `auto` would silently switch that session's gates back on —
+  // so a saved config keeps the checkbox's meaning, and only a session with no
+  // saved tolerances at all gets the recommended default.
+  const legacySource = source == null
+    ? RECOMMENDED_TOLERANCES.us_gw_distance_source
+    : (source.use_us_gw_distance === false ? 'off' : 'uploaded');
   return {
     clock_tolerance: finiteOr(source?.clock_tolerance, RECOMMENDED_TOLERANCES.clock_tolerance),
     us_gw_distance_tolerance: finiteOr(source?.us_gw_distance_tolerance, distance),
     ds_gw_distance_tolerance: finiteOr(source?.ds_gw_distance_tolerance, distance),
     use_us_gw_distance: source?.use_us_gw_distance !== false,
+    us_gw_distance_source: oneOf(
+      source?.us_gw_distance_source,
+      US_GW_DISTANCE_SOURCES.map((item) => item.id),
+      legacySource,
+    ),
+    anomaly_matcher: oneOf(
+      source?.anomaly_matcher,
+      ANOMALY_MATCHERS.map((item) => item.id),
+      'hungarian',
+    ),
     // Sessions saved before this gate was separated carry no value; the engine
     // falls back to the odometer window for exactly the same reason.
     gw_offset_tolerance: finiteOr(
@@ -56,6 +126,16 @@ export function defaultMatchingRules(config: any): {
       config?.distThresh ?? config?.scenario?.distThresh,
     ),
   };
+}
+
+/**
+ * Keeps the legacy boolean in step with the source selector before the values
+ * go on the wire. The engine falls back to the boolean for sessions that
+ * predate the selector, so leaving the two disagreeing would make an old reader
+ * and a new one draw opposite conclusions from the same saved config.
+ */
+export function normalizeToleranceValues(values: ToleranceValues): ToleranceValues {
+  return { ...values, use_us_gw_distance: values.us_gw_distance_source !== 'off' };
 }
 
 export function buildMatchingRulesConfig({
@@ -85,9 +165,12 @@ export function buildMatchingRulesConfig({
     // rules step owns that key and spreading `undefined` here would erase it.
     scenario: undefined,
     distThresh: undefined,
-    ToleranceConfig: primary,
+    ToleranceConfig: normalizeToleranceValues(primary),
     pairToleranceConfigs: perPairEnabled && pairs.length > 0
-      ? Object.fromEntries(pairs.map((pair) => [pair.key, byPair[pair.key] ?? shared]))
+      ? Object.fromEntries(pairs.map((pair) => [
+        pair.key,
+        normalizeToleranceValues(byPair[pair.key] ?? shared),
+      ]))
       : undefined,
   };
 }
