@@ -15,9 +15,11 @@ import {
   depthGrowthMmPerYear,
   isClusteredAlignmentRow,
   MASTER_AXIS_COLUMN,
+  MATCH_EVIDENCE_KEY,
   sortAlignmentRowsByMasterAxis,
   summarizeConservationAudit,
 } from './utils/alignmentDisplay';
+import MatchEvidenceDrawer, { type MatchEvidence } from './components/comparison/MatchEvidenceDrawer';
 import ShareSnapshotButton from './components/sharing/ShareSnapshotButton';
 import { buildAlignmentShareState } from './lib/sharing/publicShareSnapshot';
 import { sectionNameForComparisonRow } from './wizard/matchingSections';
@@ -477,6 +479,11 @@ export default function ResultsPanel({
     }
     setDraggedColumn(null);
   };
+  // The per-pair calculation behind a matched row, opened from the row itself.
+  // Held as its own state rather than folded into row selection: selecting a row
+  // drives the charts and the intervention controls, and a reviewer reading the
+  // arithmetic should not disturb either.
+  const [evidenceRow, setEvidenceRow] = useState<any | null>(null);
   const [colWidths, setColWidths] = useState<Record<string, number>>({});
   const [sortConfig, setSortConfig] = useState<{key: string, direction: 'asc'|'desc'} | null>(null);
   const [filterConfig, setFilterConfig] = useState<Record<string, string>>({});
@@ -1445,6 +1452,16 @@ export default function ResultsPanel({
                                         ) : '-'
                                       ) : val
                                     ) : ''}
+                                    {col === 'Match/Unmatch' && row[MATCH_EVIDENCE_KEY] && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => { e.stopPropagation(); setEvidenceRow(row); }}
+                                        className="ml-1 inline-block align-middle rounded border border-slate-300 bg-white px-1 text-[9px] font-bold text-slate-700 opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
+                                        aria-label={`Show the calculation behind the match between ${String(row['Identif. OLD'] ?? '')} and ${String(row['Identif. NEW'] ?? '')}`}
+                                      >
+                                        Why?
+                                      </button>
+                                    )}
                                     {col === actionColumn && isReassignableSource && movableSide && (
                                       <button
                                         type="button"
@@ -1570,6 +1587,14 @@ export default function ResultsPanel({
             </div>
           )}
           
+          {evidenceRow && (
+            <MatchEvidenceDrawer
+              evidence={evidenceRow[MATCH_EVIDENCE_KEY] as MatchEvidence}
+              title={`${String(evidenceRow['Identif. OLD'] ?? '—')} → ${String(evidenceRow['Identif. NEW'] ?? '—')}`}
+              onClose={() => setEvidenceRow(null)}
+            />
+          )}
+
           {radioFilter !== 'Chart' && (
             <PaginationFooter
               totalRows={sortedData.length}

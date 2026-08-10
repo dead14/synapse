@@ -25,6 +25,11 @@ const {
     loadOwnedRunAnchors,
 } = require('./anchorRepository');
 const {
+    findGenerationRecord,
+    findOwnedRun,
+    runGwDistanceGenerator,
+} = require('./gwDistanceGenerator');
+const {
     validateDtwPayload,
     validateMatchingSections,
     validateAlignmentReview,
@@ -1062,6 +1067,72 @@ exports.deletePipelineRun = async (req, res) => {
     } catch (err) {
         console.error('Delete pipeline run error:', err);
         return res.status(500).json({ error: 'Failed to delete pipeline run' });
+    }
+};
+
+/**
+ * Preview what the U/S girth weld distance generator would produce for a run.
+ *
+ * Writes nothing. The engineer reads the counts and the worked samples, checks
+ * a couple against the pipetally, and only then applies — which is the point of
+ * generating this column at all: a derived measurement nobody inspected is not
+ * better than a blank one.
+ */
+exports.previewGwDistance = async (req, res) => {
+    const runId = parsePositiveId(req.params.id);
+    if (!runId) return res.status(400).json({ error: 'Invalid run ID' });
+
+    try {
+        const run = await findOwnedRun(pool, runId, req.user.orgId);
+        if (!run) return res.status(404).json({ error: 'Run not found' });
+
+        const [preview, lastGeneration] = await Promise.all([
+            runGwDistanceGenerator(runId, { apply: false }),
+            findGenerationRecord(pool, runId),
+        ]);
+        return res.json({ ...preview, lastGeneration });
+    } catch (error) {
+        if (error.code === 'GW_GENERATION_REJECTED') {
+            return res.status(422).json({ error: error.message, code: error.code });
+        }
+        console.error('GW distance preview error:', error);
+        return res.status(500).json({
+            error: 'Failed to preview the U/S GW distance generation',
+            code: error.code || 'GW_GENERATION_FAILED',
+        });
+    }
+};
+
+/**
+ * Generate and persist the derived U/S girth weld distance for a run.
+ *
+ * The vendor column is never touched: the result lands in
+ * `ili_features.dist_to_us_gw_derived_m` alongside the girth weld it was
+ * measured from. Whether a comparison then *uses* it is a separate decision,
+ * owned by `us_gw_distance_source` in the session's tolerance config.
+ */
+exports.generateGwDistance = async (req, res) => {
+    const runId = parsePositiveId(req.params.id);
+    if (!runId) return res.status(400).json({ error: 'Invalid run ID' });
+
+    try {
+        const run = await findOwnedRun(pool, runId, req.user.orgId);
+        if (!run) return res.status(404).json({ error: 'Run not found' });
+
+        const result = await runGwDistanceGenerator(runId, {
+            apply: true,
+            generatedBy: req.user.id,
+        });
+        return res.json({ ...result, lastGeneration: await findGenerationRecord(pool, runId) });
+    } catch (error) {
+        if (error.code === 'GW_GENERATION_REJECTED') {
+            return res.status(422).json({ error: error.message, code: error.code });
+        }
+        console.error('GW distance generation error:', error);
+        return res.status(500).json({
+            error: 'Failed to generate the U/S GW distance',
+            code: error.code || 'GW_GENERATION_FAILED',
+        });
     }
 };
 

@@ -487,6 +487,7 @@ class HungarianTieInOffsetTests(unittest.TestCase):
             feature_type="Girth Weld",
             feature_identification="GW-7",
             dist_to_us_gw_m=0.0,
+            dist_to_us_gw_derived_m=None,
             joint_length_m=12.0,
             clock_position="12:00",
             wall_thickness_mm=10.0,
