@@ -408,6 +408,76 @@ test('validateMatchingSections accepts explicit side-qualified unmatched GW boun
     }));
 });
 
+test('validateMatchingSections accepts a boundary downstream of the last locked GW', () => {
+    // The wizard extrapolates the counterpart itself, so the two formulas have to
+    // agree past the final lock. Pinning the number here and in
+    // frontend/tests/sectionBoundaries.test.ts is what keeps them mirrored.
+    const locked = [
+        { old_id: 'o1', new_id: 'n1', old_odometer: 0, new_odometer: 0 },
+        { old_id: 'o2', new_id: 'n2', old_odometer: 10, new_odometer: 12 },
+        { old_id: 'o3', new_id: 'n3', old_odometer: 20, new_odometer: 23 },
+    ];
+
+    assert.doesNotThrow(() => validateMatchingSections({
+        gwMatchesFinal: locked,
+        matchingSections: [{
+            name: 'Tail',
+            startGwKey: 'o3::n3::20.000000::23.000000',
+            endGwKey: 'UNMATCHED::NEW::ny::30.000000',
+            endBoundary: {
+                key: 'UNMATCHED::NEW::ny::30.000000',
+                side: 'NEW',
+                label: 'ny',
+                oldId: null,
+                newId: 'ny',
+                oldDistance: 10 + ((30 - 12) / (23 - 12)) * (20 - 10),
+                newDistance: 30,
+                sourceDistance: 30,
+            },
+            policy: 'MATCH',
+        }],
+    }));
+});
+
+test('validateMatchingSections names the rule a boundary broke', () => {
+    const locked = [
+        { old_id: 'o1', new_id: 'n1', old_odometer: 0, new_odometer: 1 },
+        { old_id: 'o2', new_id: 'n2', old_odometer: 10, new_odometer: 12 },
+    ];
+    const section = (endBoundary) => ({
+        gwMatchesFinal: locked,
+        matchingSections: [{
+            name: 'Named',
+            startGwKey: 'o1::n1::0.000000::1.000000',
+            endGwKey: endBoundary?.key ?? 'UNMATCHED::NEW::gone::9.000000',
+            ...(endBoundary ? { endBoundary } : {}),
+            policy: 'MATCH',
+        }],
+    });
+
+    assert.throws(() => validateMatchingSections(section(null)), /not in the locked list/);
+    assert.throws(() => validateMatchingSections(section({
+        key: 'UNMATCHED::NEW::nx::9.000000',
+        side: 'NEW',
+        label: 'nx',
+        oldId: null,
+        newId: 'nx',
+        oldDistance: -1,
+        newDistance: 9,
+        sourceDistance: 9,
+    })), /projects outside the aligned range/);
+    assert.throws(() => validateMatchingSections(section({
+        key: 'UNMATCHED::NEW::nx::9.000000',
+        side: 'NEW',
+        label: 'nx',
+        oldId: null,
+        newId: 'nx',
+        oldDistance: 999,
+        newDistance: 9,
+        sourceDistance: 9,
+    })), /projection that does not match the locked GW evidence/);
+});
+
 test('validateMatchingSections rejects a tampered unmatched boundary projection', () => {
     const locked = [
         { old_id: 'o1', new_id: 'n1', old_odometer: 0, new_odometer: 1 },

@@ -5,21 +5,12 @@ import { pathToFileURL } from "node:url";
 
 const HIGH_SEVERITIES = new Set(["high", "critical"]);
 
-// Temporary, narrowly-scoped exception. GitHub's reviewed advisory says this
-// affects only unstable React Server Components APIs. Synapse is a client-side
-// BrowserRouter application and does not use those APIs. The exception expires
-// quickly so a published patched release must replace it.
-export const ALLOWLIST = new Map([
-  [
-    "GHSA-QWWW-VCR4-C8H2",
-    {
-      packages: new Set(["react-router", "react-router-dom"]),
-      severity: "high",
-      expires: "2026-08-09",
-      reason: "Unstable RSC APIs are not used by the Synapse SPA.",
-    },
-  ],
-]);
+// Empty on purpose: every high finding in a production dependency blocks the
+// build. GHSA-QWWW-VCR4-C8H2 lived here until react-router 7.18.2 shipped the
+// patch, which is what an entry is for — a narrowly-scoped, dated exception
+// held only until a fixed release exists. Anything added here needs `expires`
+// close enough that it cannot outlive the upgrade that removes it.
+export const ALLOWLIST = new Map();
 
 function advisoryIdFromUrl(url) {
   const match = String(url ?? "").match(/GHSA-[a-z0-9-]+/i);
@@ -55,7 +46,9 @@ function isExpired(expires, now) {
   return Number.isNaN(deadline.getTime()) || now > deadline;
 }
 
-export function assessAudit(report, now = new Date()) {
+// `allowlist` is injectable so the exception machinery stays under test even
+// when the production list is empty, which is its healthy state.
+export function assessAudit(report, now = new Date(), allowlist = ALLOWLIST) {
   const vulnerabilities = report?.vulnerabilities ?? {};
   const blocked = [];
   const allowed = [];
@@ -73,7 +66,7 @@ export function assessAudit(report, now = new Date()) {
     }
 
     for (const advisoryId of advisoryIds) {
-      const rule = ALLOWLIST.get(advisoryId);
+      const rule = allowlist.get(advisoryId);
       if (!rule) {
         reasons.push(`${advisoryId} is not allowlisted`);
         continue;

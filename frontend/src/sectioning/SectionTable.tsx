@@ -41,8 +41,10 @@ export default function SectionTable({ sections, boundaries, sectionTypes, onEdi
             <tbody>
               {sections.map((section) => {
                 const resolved = resolveSectionDistances(section, boundaries);
-                const start = section.startBoundary ?? boundaryByKey.get(section.startGwKey);
-                const end = section.endBoundary ?? boundaryByKey.get(section.endGwKey);
+                // Derived first, same as resolveSectionDistances: a boundary the
+                // current locks produce supersedes whatever the section stored.
+                const start = boundaryByKey.get(section.startGwKey) ?? section.startBoundary;
+                const end = boundaryByKey.get(section.endGwKey) ?? section.endBoundary;
                 const length = (resolved.newEndM ?? 0) - (resolved.newStartM ?? 0);
                 return (
                   <tr key={section.id}>
