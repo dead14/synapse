@@ -56,6 +56,33 @@ test('an unmatched OLD GW becomes selectable without inventing a NEW identity', 
   assert.equal(boundary?.newDistance, 18);
 });
 
+test('a GW past the last lock extrapolates from the last segment, like the contract does', () => {
+  // Three locks, because with two every segment is the last one and the wizard
+  // agreed with the contract by accident. The pipe stretches on both sides of
+  // the final lock, so the segment picked here decides the projection.
+  const chain: LockedGwPair[] = [
+    { key: 'A', oldId: 'OLD-A', newId: 'NEW-A', oldDistance: 0, newDistance: 0 },
+    { key: 'B', oldId: 'OLD-B', newId: 'NEW-B', oldDistance: 10, newDistance: 12 },
+    { key: 'C', oldId: 'OLD-C', newId: 'NEW-C', oldDistance: 20, newDistance: 23 },
+  ];
+
+  const boundary = sectionBoundaryForFeature(feature({ id: 'NEW-Y', dist: 30 }), chain);
+
+  assert.equal(boundary?.oldDistance, 10 + ((30 - 12) / (23 - 12)) * (20 - 10));
+  // What extrapolating from the first segment used to produce, and what
+  // validateMatchingSections then rejected as invalid boundary evidence.
+  assert.notEqual(boundary?.oldDistance, 25);
+});
+
+test('a GW whose projection runs off the other run is not offered as a boundary', () => {
+  const offset: LockedGwPair[] = [
+    { key: 'A', oldId: 'OLD-A', newId: 'NEW-A', oldDistance: 0, newDistance: 50 },
+    { key: 'B', oldId: 'OLD-B', newId: 'NEW-B', oldDistance: 10, newDistance: 60 },
+  ];
+
+  assert.equal(sectionBoundaryForFeature(feature({ id: 'NEW-Z', dist: 0 }), offset), null);
+});
+
 test('boundary collection keeps matched NEW markers and optional unmatched markers without duplicates', () => {
   const matched = feature({
     id: 'NEW-A',

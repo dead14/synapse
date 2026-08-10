@@ -253,6 +253,44 @@ function validateSectionsForPair(sections, gwMatchesFinal) {
     };
     const compiled = [];
     const validPolicies = new Set(['MATCH', 'BYPASS', 'REVIEW']);
+    // Reported one rule at a time. Collapsed into a single condition, every one of
+    // these failures read as "invalid boundary evidence", which says nothing about
+    // whether the section pointed at a GW that is no longer locked, projected off
+    // the end of the line, or carried a projection the wizard computed with a
+    // formula that no longer matches this one.
+    const boundaryEvidenceReason = (boundary, key) => {
+        if (!isRecord(boundary)) return 'is missing — its GW is not in the locked list';
+        const side = String(boundary.side ?? '').toUpperCase();
+        if (!['OLD', 'NEW'].includes(side)) return 'must name the OLD or NEW side';
+
+        const oldDistance = Number(boundary.oldDistance);
+        const newDistance = Number(boundary.newDistance);
+        const sourceDistance = Number(boundary.sourceDistance);
+        const sourceId = side === 'OLD' ? boundary.oldId : boundary.newId;
+        const oppositeId = side === 'OLD' ? boundary.newId : boundary.oldId;
+        if (!String(sourceId ?? '').trim()
+            || (oppositeId !== null && oppositeId !== undefined && String(oppositeId).trim() !== '')) {
+            return 'must identify exactly one run\'s GW';
+        }
+        if (![oldDistance, newDistance, sourceDistance].every((value) => Number.isFinite(value) && value >= 0)) {
+            return 'projects outside the aligned range';
+        }
+        const measuredDistance = side === 'OLD' ? oldDistance : newDistance;
+        if (Math.abs(sourceDistance - measuredDistance) > 1e-6) {
+            return `disagrees with its measured ${side} position`;
+        }
+        const expectedKey = `UNMATCHED::${side}::${String(sourceId ?? '')}::${sourceDistance.toFixed(6)}`;
+        if (boundary.key !== key || key !== expectedKey) return 'has a key that does not match its evidence';
+
+        const projectedDistance = side === 'OLD'
+            ? projectDistance(oldDistance, 'old_odometer', 'new_odometer')
+            : projectDistance(newDistance, 'new_odometer', 'old_odometer');
+        const suppliedProjection = side === 'OLD' ? newDistance : oldDistance;
+        if (projectedDistance === null || Math.abs(projectedDistance - suppliedProjection) > 1e-6) {
+            return 'has a projection that does not match the locked GW evidence';
+        }
+        return null;
+    };
     const resolveBoundary = (section, edge, sectionIndex) => {
         const key = String(section?.[`${edge}GwKey`] ?? '');
         const locked = lockedByKey.get(key);
@@ -264,34 +302,14 @@ function validateSectionsForPair(sections, gwMatchesFinal) {
         }
 
         const boundary = section?.[`${edge}Boundary`];
-        const side = String(boundary?.side ?? '').toUpperCase();
-        const oldDistance = Number(boundary?.oldDistance);
-        const newDistance = Number(boundary?.newDistance);
-        const sourceDistance = Number(boundary?.sourceDistance);
-        const sourceId = side === 'OLD' ? boundary?.oldId : boundary?.newId;
-        const oppositeId = side === 'OLD' ? boundary?.newId : boundary?.oldId;
-        const measuredDistance = side === 'OLD' ? oldDistance : newDistance;
-        const projectedDistance = side === 'OLD'
-            ? projectDistance(oldDistance, 'old_odometer', 'new_odometer')
-            : projectDistance(newDistance, 'new_odometer', 'old_odometer');
-        const suppliedProjection = side === 'OLD' ? newDistance : oldDistance;
-        const expectedKey = `UNMATCHED::${side}::${String(sourceId ?? '')}::${sourceDistance.toFixed(6)}`;
-        if (!isRecord(boundary)
-            || !['OLD', 'NEW'].includes(side)
-            || !String(sourceId ?? '').trim()
-            || (oppositeId !== null && oppositeId !== undefined && String(oppositeId).trim() !== '')
-            || ![oldDistance, newDistance, sourceDistance].every((value) => Number.isFinite(value) && value >= 0)
-            || Math.abs(sourceDistance - measuredDistance) > 1e-6
-            || projectedDistance === null
-            || Math.abs(projectedDistance - suppliedProjection) > 1e-6
-            || boundary.key !== key
-            || key !== expectedKey) {
+        const reason = boundaryEvidenceReason(boundary, key);
+        if (reason) {
             throw validationError(
                 'INVALID_MATCHING_SECTIONS',
-                `Section ${sectionIndex + 1} has invalid ${edge} boundary evidence`,
+                `Section ${sectionIndex + 1} ${edge} boundary ${reason}`,
             );
         }
-        return { oldDistance, newDistance };
+        return { oldDistance: Number(boundary.oldDistance), newDistance: Number(boundary.newDistance) };
     };
 
     for (const [sectionIndex, section] of sections.entries()) {

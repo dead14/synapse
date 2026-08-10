@@ -77,6 +77,9 @@ export function normalizeLockedGws(pairs: any[]): LockedGwPair[] {
 
 type BoundaryLike = LockedGwPair | SectionBoundary;
 
+/** The tolerance `validateMatchingSections` compares boundary evidence with. */
+const EVIDENCE_TOLERANCE = 1e-6;
+
 function unmatchedBoundary(boundary: BoundaryLike): SectionBoundary | undefined {
   return 'side' in boundary && boundary.side !== 'MATCHED' ? boundary : undefined;
 }
@@ -86,10 +89,63 @@ function boundaryFor(
   edge: 'start' | 'end',
   boundaries: BoundaryLike[],
 ): BoundaryLike | undefined {
-  const explicit = edge === 'start' ? section.startBoundary : section.endBoundary;
-  if (explicit) return explicit;
   const key = edge === 'start' ? section.startGwKey : section.endGwKey;
-  return boundaries.find((boundary) => boundary.key === key);
+  // The supplied list is rebuilt from the GW locks currently in play, so it wins
+  // over whatever the section carries: a boundary stored by an older client holds
+  // a projection the contract no longer agrees with, and keeping it would only
+  // surface as a rejected save two steps later.
+  const derived = boundaries.find((boundary) => boundary.key === key);
+  if (derived) return derived;
+  return edge === 'start' ? section.startBoundary : section.endBoundary;
+}
+
+/**
+ * The boundary rules `validateMatchingSections` enforces in
+ * `backend/src/modules/alignment/alignmentContract.js`, mirrored so a section the
+ * contract would reject is caught while the engineer is still on the step and can
+ * re-pick the weld. Returns a fragment to be prefixed with the edge name.
+ */
+export function boundaryEvidenceError(boundary: BoundaryLike): string | null {
+  const unmatched = unmatchedBoundary(boundary);
+  if (!unmatched) return null;
+  const side = unmatched.side;
+  if (side === 'MATCHED') return null;
+
+  const sourceId = side === 'OLD' ? unmatched.oldId : unmatched.newId;
+  const oppositeId = side === 'OLD' ? unmatched.newId : unmatched.oldId;
+  const measured = side === 'OLD' ? unmatched.oldDistance : unmatched.newDistance;
+
+  if (!String(sourceId ?? '').trim() || String(oppositeId ?? '').trim()) {
+    return 'boundary must identify exactly one run\'s GW';
+  }
+  const distances = [unmatched.oldDistance, unmatched.newDistance, unmatched.sourceDistance];
+  if (!distances.every((value) => Number.isFinite(value) && value >= 0)) {
+    return 'boundary projects outside the aligned range — pick a GW inside the locked span';
+  }
+  if (Math.abs(unmatched.sourceDistance - measured) > EVIDENCE_TOLERANCE) {
+    return `boundary distance disagrees with its measured ${side} position`;
+  }
+  if (unmatched.key !== `UNMATCHED::${side}::${sourceId}::${unmatched.sourceDistance.toFixed(6)}`) {
+    return 'boundary key does not match its evidence';
+  }
+  return null;
+}
+
+/**
+ * True when the section still carries evidence that no current boundary matches.
+ * GW matching can be re-run after sections exist, and the stored projection then
+ * describes locks that are gone.
+ */
+function isStaleEvidence(
+  section: MatchingSection,
+  edge: 'start' | 'end',
+  boundaries: BoundaryLike[],
+): boolean {
+  const explicit = edge === 'start' ? section.startBoundary : section.endBoundary;
+  // An empty list means the GW evidence has not arrived yet, not that the lock
+  // went away — do not accuse a section while the step is still loading.
+  if (!explicit || boundaries.length === 0) return false;
+  return !boundaries.some((boundary) => boundary.key === explicit.key);
 }
 
 export function validateSectionOrder(sections: MatchingSection[], boundaries: BoundaryLike[]): string | null {
@@ -103,6 +159,15 @@ export function validateSectionOrder(sections: MatchingSection[], boundaries: Bo
     const start = boundaryFor(section, 'start', boundaries);
     const end = boundaryFor(section, 'end', boundaries);
     if (!start || !end) return `${section.name}: boundary evidence is unavailable.`;
+    for (const edge of ['start', 'end'] as const) {
+      if (isStaleEvidence(section, edge, boundaries)) {
+        return `${section.name}: the ${edge} GW is no longer in the lock list — re-pick this boundary.`;
+      }
+    }
+    const startError = boundaryEvidenceError(start);
+    if (startError) return `${section.name}: start ${startError}.`;
+    const endError = boundaryEvidenceError(end);
+    if (endError) return `${section.name}: end ${endError}.`;
     if (start.newDistance >= end.newDistance || start.oldDistance >= end.oldDistance) {
       return `${section.name}: End GW must come after Start GW on OLD and NEW.`;
     }
@@ -227,6 +292,11 @@ export function resolveSectionDistances(
   if (!start || !end) return section;
   return {
     ...section,
+    // Rewriting the evidence from the resolved boundary is what lets a session
+    // saved with a stale projection heal itself on the next save instead of
+    // being rejected by the contract forever.
+    startBoundary: unmatchedBoundary(start),
+    endBoundary: unmatchedBoundary(end),
     startM: start.newDistance,
     endM: end.newDistance,
     newStartM: start.newDistance,

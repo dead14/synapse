@@ -6,6 +6,7 @@ import {
   resolveSectionDistances,
   saveSectionRange,
   sectionNameForComparisonRow,
+  validateSectionOrder,
   type SectionBoundary,
   type LockedGwPair,
   type MatchingSection,
@@ -83,6 +84,78 @@ test('an explicit unmatched boundary can create and resolve a section range', ()
   assert.equal(resolved.newStartM, 10);
   assert.equal(resolved.newEndM, 15);
   assert.equal(resolved.oldEndM, 15);
+});
+
+test('a stale stored projection is replaced by the boundary the current locks produce', () => {
+  // What a session saved by a client whose projection disagreed with the
+  // contract looks like: the right GW, the wrong counterpart distance.
+  const stale: MatchingSection = {
+    id: 'tie-in',
+    name: 'Tie-in',
+    policy: 'MATCH',
+    startGwKey: 'B',
+    endGwKey: 'UNMATCHED::NEW::NEW-X::15.000000',
+    endBoundary: {
+      key: 'UNMATCHED::NEW::NEW-X::15.000000',
+      side: 'NEW',
+      label: 'NEW-X',
+      oldId: null,
+      newId: 'NEW-X',
+      oldDistance: 999,
+      newDistance: 15,
+      sourceDistance: 15,
+    },
+  };
+
+  assert.equal(validateSectionOrder([stale], boundaries), null);
+  assert.equal(resolveSectionDistances(stale, boundaries).endBoundary?.oldDistance, 15);
+});
+
+test('a section bounded by a GW that is no longer locked names the edge to re-pick', () => {
+  const orphaned: MatchingSection = {
+    id: 'orphan',
+    name: 'Orphan',
+    policy: 'MATCH',
+    startGwKey: 'B',
+    endGwKey: 'UNMATCHED::NEW::GONE::40.000000',
+    endBoundary: {
+      key: 'UNMATCHED::NEW::GONE::40.000000',
+      side: 'NEW',
+      label: 'GONE',
+      oldId: null,
+      newId: 'GONE',
+      oldDistance: 40,
+      newDistance: 40,
+      sourceDistance: 40,
+    },
+  };
+
+  assert.match(validateSectionOrder([orphaned], boundaries) ?? '', /end GW is no longer in the lock list/);
+});
+
+test('a boundary that projects off the aligned range is rejected before it can be saved', () => {
+  const offRange: MatchingSection = {
+    id: 'off-range',
+    name: 'Off range',
+    policy: 'MATCH',
+    startGwKey: 'A',
+    endGwKey: 'UNMATCHED::OLD::OLD-Y::5.000000',
+    endBoundary: {
+      key: 'UNMATCHED::OLD::OLD-Y::5.000000',
+      side: 'OLD',
+      label: 'OLD-Y',
+      oldId: 'OLD-Y',
+      newId: null,
+      oldDistance: 5,
+      newDistance: -12,
+      sourceDistance: 5,
+    },
+  };
+
+  assert.match(
+    validateSectionOrder([offRange], [...boundaries, offRange.endBoundary!]) ?? '',
+    /projects outside the aligned range/,
+  );
 });
 
 test('assigns unmatched OLD and NEW features to the section whose side-specific range they cross', () => {

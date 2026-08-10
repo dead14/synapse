@@ -5,12 +5,19 @@ function interpolate(value: number, from: number[], to: number[]): number | null
   if (from.length === 0 || from.length !== to.length) return null;
   if (from.length === 1) return value + (to[0] - from[0]);
 
-  let upper = from.findIndex((point) => point >= value);
+  // Mirrors projectDistance in alignmentContract.js and project_distance in
+  // hungarian_engine.py. Past the last lock `findIndex` returns -1, and clamping
+  // that with `upper <= 0` first extrapolated from the *first* segment while both
+  // backends extrapolate from the last — so the counterpart saved here never
+  // matched the one the contract recomputed, and the session was rejected with
+  // "invalid boundary evidence" at save time. The old `upper < 0` line below the
+  // clamp was dead code and could never repair it.
+  const found = from.findIndex((point) => point >= value);
+  let upper = found === -1 ? from.length - 1 : found;
   if (upper <= 0) upper = 1;
-  if (upper < 0) upper = from.length - 1;
   const lower = upper - 1;
   const span = from[upper] - from[lower];
-  if (span === 0) return null;
+  if (!Number.isFinite(span) || span === 0) return null;
   const ratio = (value - from[lower]) / span;
   return to[lower] + ratio * (to[upper] - to[lower]);
 }
@@ -52,7 +59,11 @@ export function sectionBoundaryForFeature(
 
   const side = feature.runRole === 'HISTORICAL' ? 'OLD' : 'NEW';
   const counterpart = projectedDistance(feature.dist, side, locks);
-  if (counterpart === null || !Number.isFinite(counterpart)) return null;
+  // A negative counterpart means the GW sits so far outside the locked range that
+  // the projection runs off the other run entirely. The contract rejects those,
+  // so they must not be offerable as boundaries in the first place.
+  if (counterpart === null || !Number.isFinite(counterpart) || counterpart < 0) return null;
+  if (!Number.isFinite(feature.dist) || feature.dist < 0) return null;
   return {
     key: `UNMATCHED::${side}::${feature.id}::${feature.dist.toFixed(6)}`,
     side,

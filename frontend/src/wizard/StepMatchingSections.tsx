@@ -214,8 +214,8 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
 
   const displaySections = useMemo<SectionDef[]>(() => sections.map((section) => {
     const resolved = resolveSectionDistances(section, allBoundaries);
-    const startBoundary = section.startBoundary ?? allBoundaries.find((boundary) => boundary.key === section.startGwKey);
-    const endBoundary = section.endBoundary ?? allBoundaries.find((boundary) => boundary.key === section.endGwKey);
+    const startBoundary = allBoundaries.find((boundary) => boundary.key === section.startGwKey) ?? section.startBoundary;
+    const endBoundary = allBoundaries.find((boundary) => boundary.key === section.endGwKey) ?? section.endBoundary;
     const visibleGws = [...features.gws, ...features.historicalLanes.flatMap((lane) => lane.gws)];
     const startFeature = visibleGws.find((gw) => sectionBoundaryForFeature(gw, lockedGws)?.key === section.startGwKey);
     const endFeature = visibleGws.find((gw) => sectionBoundaryForFeature(gw, lockedGws)?.key === section.endGwKey);
