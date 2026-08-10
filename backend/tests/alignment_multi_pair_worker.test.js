@@ -146,3 +146,39 @@ test('each pair may carry its own anomaly tolerances', () => {
     });
     assert.deepEqual(untouched.ToleranceConfig, { clock_tolerance: 15, length_tolerance: 50 });
 });
+
+test('an end-to-end strategy cannot be redirected by a saved matcher choice', () => {
+    const { ANOMALY_MATCHERS } = require('../src/modules/alignment/anomalyMatchers');
+    const bayesian = ANOMALY_MATCHERS.bayesian_drift;
+
+    // manual, phylogenetic and aurora_ili lock the welds and pair the anomalies
+    // in one engine. Honouring a matcher choice for them would hand the run to
+    // a script that cannot read its configuration, and the result would look
+    // perfectly plausible while coming from the wrong algorithm.
+    for (const [algorithm, script] of Object.entries({
+        manual: 'src/python_engines/manual_alignment_engine.py',
+        phylogenetic: 'src/python_engines/phylogenetic_engine.py',
+        aurora_ili: 'src/python_engines/aurora_engine.py',
+    })) {
+        assert.equal(__testables.resolveEngineScript(algorithm, null), script, algorithm);
+        assert.equal(__testables.resolveEngineScript(algorithm, bayesian), script, algorithm);
+    }
+});
+
+test('a girth-weld strategy runs whichever anomaly matcher was chosen', () => {
+    const { ANOMALY_MATCHERS } = require('../src/modules/alignment/anomalyMatchers');
+
+    assert.equal(
+        __testables.resolveEngineScript('dtw_hungarian_onedirection', ANOMALY_MATCHERS.bayesian_drift),
+        'src/python_engines/bayesian_engine.py',
+    );
+    assert.equal(
+        __testables.resolveEngineScript('dtw_hungarian_onedirection', ANOMALY_MATCHERS.hungarian),
+        'src/python_engines/hungarian_engine.py',
+    );
+    // No matcher resolved at all still runs Phase 2, on the tolerance gates.
+    assert.equal(
+        __testables.resolveEngineScript('dtw_hungarian_onedirection', null),
+        'src/python_engines/hungarian_engine.py',
+    );
+});

@@ -15,7 +15,7 @@ test('strategy capabilities expose only validated production execution paths', (
         .map((capability) => capability.id)
         .sort();
 
-    assert.deepEqual(availableIds, ['dtw_hungarian_onedirection', 'manual', 'phylogenetic']);
+    assert.deepEqual(availableIds, ['aurora_ili', 'dtw_hungarian_onedirection', 'manual', 'phylogenetic']);
     for (const capability of capabilities.filter((item) => item.available)) {
         assert.equal(capability.validated, true);
         assert.equal(capability.executionEndpoint, '/api/ili-results');
@@ -50,6 +50,16 @@ test('mock-backed strategies remain unavailable while phylogenetic aliases resol
     }
 });
 
+test('aurora aliases resolve to the validated universal engine', () => {
+    for (const requested of ['aurora_ili', 'AURORA', 'aurora-pcr', 'aurora universal', 'ili_aurora']) {
+        const capability = getAlignmentStrategyCapability(requested);
+        assert.equal(capability.id, 'aurora_ili', requested);
+        assert.equal(capability.available, true, requested);
+        assert.equal(capability.validated, true, requested);
+        assert.equal(capability.executionEndpoint, '/api/ili-results', requested);
+    }
+});
+
 test('missing and unknown strategies fail closed', () => {
     assert.equal(getAlignmentStrategyCapability(undefined).id, 'dtw_hungarian');
     assert.equal(getAlignmentStrategyCapability(undefined).available, false);
@@ -69,6 +79,6 @@ test('legacy run rejection has a stable machine code and frontend-readable contr
     assert.match(rejection.error, /not available/i);
     assert.deepEqual(
         rejection.availableStrategies.map((item) => item.id).sort(),
-        ['dtw_hungarian_onedirection', 'manual', 'phylogenetic'],
+        ['aurora_ili', 'dtw_hungarian_onedirection', 'manual', 'phylogenetic'],
     );
 });

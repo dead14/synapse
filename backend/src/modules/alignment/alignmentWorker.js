@@ -21,6 +21,30 @@ const { resolveAnomalyMatcher } = require('./anomalyMatchers');
 const { pairKeyOf } = require('./runPairIdentity');
 const { pythonExecutable, pythonSpawnOptions, killPythonProcess } = require('../../config/python');
 
+// Strategies that own Phase 1 and Phase 2 together, keyed by their engine.
+// Everything else takes a fixed girth-weld phase and varies only the anomaly
+// matcher, which `anomalyMatchers.js` resolves — so these are exactly the
+// strategies a matcher choice must not be able to redirect.
+const END_TO_END_ENGINE_SCRIPTS = Object.freeze({
+    manual: 'src/python_engines/manual_alignment_engine.py',
+    phylogenetic: 'src/python_engines/phylogenetic_engine.py',
+    aurora_ili: 'src/python_engines/aurora_engine.py',
+});
+
+/**
+ * Which Python engine runs this job.
+ *
+ * An end-to-end strategy wins over the matcher registry: it locks the welds and
+ * pairs the anomalies in one engine, so honouring a saved matcher choice here
+ * would hand the run to a script that cannot read its configuration — and
+ * would produce a plausible-looking result from the wrong algorithm.
+ */
+function resolveEngineScript(algorithm, matcher) {
+    return END_TO_END_ENGINE_SCRIPTS[algorithm]
+        || matcher?.engineScript
+        || 'src/python_engines/hungarian_engine.py';
+}
+
 const alignmentQueue = new Queue('ili-alignment', {
     connection,
     defaultJobOptions: {
@@ -61,14 +85,7 @@ async function runPythonAlignment(sessionId, algorithm, pairConfig = null, match
     if (pairConfigFile) await fs.writeFile(pairConfigFile, JSON.stringify(pairConfig), 'utf8');
     try {
         const result = await new Promise((resolve, reject) => {
-            // `manual` and `phylogenetic` own Phase 1 and Phase 2 together. For
-            // everything else the girth-weld phase is fixed and only the anomaly
-            // matcher varies, which is what the registry resolves.
-            const engineScript = algorithm === 'manual'
-                ? 'src/python_engines/manual_alignment_engine.py'
-                : algorithm === 'phylogenetic'
-                    ? 'src/python_engines/phylogenetic_engine.py'
-                    : (matcher?.engineScript || 'src/python_engines/hungarian_engine.py');
+            const engineScript = resolveEngineScript(algorithm, matcher);
             const child = spawn(pythonExecutable, [engineScript, String(sessionId)], pythonSpawnOptions({
                 cwd: path.join(__dirname, '../../..'),
                 env: {
@@ -358,5 +375,10 @@ module.exports = {
     alignmentQueue,
     processAlignmentJob,
     startAlignmentWorker,
-    __testables: { resolveRunPairs, buildPairSessionConfig, mergeMultiPairResults },
+    __testables: {
+        resolveRunPairs,
+        buildPairSessionConfig,
+        mergeMultiPairResults,
+        resolveEngineScript,
+    },
 };

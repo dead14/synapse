@@ -4,6 +4,7 @@ import {
   nextAlignmentProgress,
 } from './alignmentProgress';
 import { fetchPublicShareResultPage } from '../lib/sharing/publicShareClient';
+import type { AuroraArtifacts } from '../domain/auroraEvidence';
 
 export {
   ALIGNMENT_RESULT_PAGE_SIZE,
@@ -40,6 +41,13 @@ export interface ConservationAudit {
   new?: ConservationSideAudit;
   isConserved?: boolean;
   pairs?: ConservationAudit[];
+  /**
+   * AURORA-ILI stage artifacts, present only for that strategy.  They ride
+   * inside the audit because the alignment contract flattens every top-level
+   * array of the engine payload into the comparison table, which would turn an
+   * artifact list into result rows.
+   */
+  aurora?: AuroraArtifacts;
 }
 
 export interface AlignmentFetchResult {

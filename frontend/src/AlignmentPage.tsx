@@ -7,6 +7,7 @@ import StepUploadILI from './wizard/StepUploadILI';
 import StepTieInConfig from './wizard/StepTieInConfig';
 import StepMatchingSections from './wizard/StepMatchingSections';
 import StepFeatureRules from './wizard/StepFeatureRules';
+import AuroraStepNote from './wizard/AuroraStepNote';
 import { FiAlertTriangle, FiPlusCircle, FiX } from 'react-icons/fi';
 import { apiFetch, ApiError } from './utils/api';
 import ConfirmDialog from './components/common/ConfirmDialog';
@@ -218,6 +219,12 @@ export default function AlignmentPage() {
 
         {/* Wizard Steps Rendering */}
         <div className="alignment-content w-full">
+          {wizardConfig.algorithm === 'aurora_ili' && step > 0 && (
+            <div className="mb-3">
+              <AuroraStepNote stepId={currentStep?.id} />
+            </div>
+          )}
+
           {stepsList[step]?.id === 'upload' && (
             <StepUploadILI onNext={handleNext} />
           )}

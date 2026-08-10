@@ -27,10 +27,20 @@ const STRATEGY_LABELS: Record<string, string> = {
   traditional_hungarian: 'Traditional Hungarian',
   manual: 'Manual Algorithm',
   phylogenetic: 'Phylogenetic Algorithm',
+  aurora_ili: 'AURORA-ILI Universal Registration',
+};
+
+const STRATEGY_HINTS: Record<string, string> = {
+  aurora_ili:
+    'Registers the structure first, rebuilds local coordinates, then resolves features. '
+    + 'It estimates local odometer drift and clock rotation instead of widening tolerances, '
+    + 'and reports 1:1, 1:N, N:1 and region-only correspondence separately. Use it across '
+    + 'vendors, tool generations or runs with a large drift.',
 };
 
 const STRATEGY_ORDER = [
   'dtw_hungarian_onedirection',
+  'aurora_ili',
   'dtw_hungarian',
   'traditional_hungarian',
   'manual',
@@ -46,7 +56,9 @@ const UNAVAILABLE_REASONS: Record<string, string> = {
 // known to accept.  Guessing optimistically here would recreate the dead end
 // this list exists to prevent: the wizard would take the operator through
 // every remaining step before the execution endpoint rejects the choice.
-const FALLBACK_AVAILABLE = new Set(['dtw_hungarian_onedirection', 'manual', 'phylogenetic']);
+const FALLBACK_AVAILABLE = new Set([
+  'dtw_hungarian_onedirection', 'manual', 'phylogenetic', 'aurora_ili',
+]);
 
 function strategyLabel(capability: StrategyCapability): string {
   const name = STRATEGY_LABELS[capability.id] || capability.id;
@@ -575,6 +587,11 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                   ))}
                 </select>
               </div>
+              {STRATEGY_HINTS[algorithm] && (
+                <p className="ds-muted" style={{ fontSize: 'var(--ds-t-xs)', margin: 0, maxWidth: '46rem' }}>
+                  {STRATEGY_HINTS[algorithm]}
+                </p>
+              )}
               {algorithm !== 'phylogenetic' && (
                 <div className="flex items-center gap-2">
                   <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-600">

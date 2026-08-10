@@ -7,6 +7,11 @@ import { executionContextLines, executionResultLines } from './executionReport';
 
 import { Button, Callout, Panel, PanelBody, PanelHeader } from '../components/ds';
 
+// Strategies executed through the queued result pipeline rather than the
+// legacy /api/run endpoint.  Must stay in step with the capability table in
+// alignmentStrategyCapabilities.js, which is the server's own gate.
+const RESULT_PIPELINE_STRATEGIES = ['dtw_hungarian_onedirection', 'manual', 'phylogenetic', 'aurora_ili'];
+
 interface StepExecutionProps {
   onBack: () => void;
   config: any;
@@ -31,7 +36,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
     completedRef.current = false;
 
     if (config.sessionStatus === 'completed'
-      && !['dtw_hungarian_onedirection', 'manual', 'phylogenetic'].includes(configuredAlgorithm)) {
+      && !RESULT_PIPELINE_STRATEGIES.includes(configuredAlgorithm)) {
       setTerminalLines([
         ...contextLines,
         'DONE The previous alignment session already completed. Results are ready.',
@@ -104,7 +109,7 @@ export default function StepExecution({ onBack, config }: StepExecutionProps) {
         requestController = new AbortController();
         requestTimeout = setTimeout(() => requestController?.abort(), 15000);
         const algorithm = config.algorithm || config.summaryData?.algorithm || 'dtw_hungarian';
-        const usesResultPipeline = ['dtw_hungarian_onedirection', 'manual', 'phylogenetic'].includes(algorithm);
+        const usesResultPipeline = RESULT_PIPELINE_STRATEGIES.includes(algorithm);
         const data = await apiFetch<{ success?: boolean; jobId?: string; error?: string }>(
           usesResultPipeline
             ? `/api/ili-results?sessionId=${encodeURIComponent(String(config.sessionId))}`
