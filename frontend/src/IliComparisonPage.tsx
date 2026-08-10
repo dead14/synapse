@@ -19,6 +19,7 @@ import {
   type InterventionEvent,
 } from './utils/interventions';
 import { createPipelineExportData } from './utils/alignmentExport';
+import { collectAuroraArtifacts } from './domain/auroraEvidence';
 import {
   LAST_SESSION_STORAGE_KEY,
   forgetUnusableStoredSession,
@@ -27,6 +28,9 @@ import {
 } from './utils/alignmentSession';
 
 const DefectVisualizer = lazy(() => import('./DefectVisualizer'));
+// Only AURORA runs carry these artifacts, so the panel is loaded on demand
+// rather than shipped to every session that opens a comparison.
+const AuroraEvidencePanel = lazy(() => import('./components/comparison/AuroraEvidencePanel'));
 
 const LoadingSpinner = ({ label }: { label: string }) => (
   <div className="flex flex-col items-center justify-center gap-3 py-12 text-gray-400">
@@ -141,6 +145,9 @@ export default function IliComparisonPage({
   // A chain result concatenates every pair's rows. Without a way to isolate one
   // transition they read as a single undifferentiated comparison.
   const pairLabels = useMemo(() => runPairLabels(includedData), [includedData]);
+  // Present only for AURORA runs; every other strategy leaves this empty and
+  // the page renders exactly as it always has.
+  const auroraArtifacts = useMemo(() => collectAuroraArtifacts(audit), [audit]);
   // Interventions address rows by index into `data`, so a filtered view has to
   // carry the mapping back — otherwise reassigning a match while a pair is
   // selected would rewrite whichever unrelated rows sit at those offsets.
@@ -487,6 +494,20 @@ export default function IliComparisonPage({
                   Corrosion Analysis →
                 </Link>
               </div>
+            )}
+
+            {/* AURORA registration evidence. Every other strategy renders the
+                page exactly as before — the panel appears only when the run
+                that produced these rows was an AURORA run. */}
+            {auroraArtifacts.length > 0 && (
+              <Suspense fallback={<LoadingSpinner label="Loading registration evidence..." />}>
+                {auroraArtifacts.map((artifacts, index) => (
+                  <AuroraEvidencePanel
+                    key={artifacts.summary.pairLabel || index}
+                    artifacts={artifacts}
+                  />
+                ))}
+              </Suspense>
             )}
 
             {/* Run pair filter */}

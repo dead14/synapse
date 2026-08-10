@@ -20,6 +20,16 @@ const { ALIGNMENT_ENGINE_VERSION, alignmentProcessTimeoutMs } = require('./align
 const { pairKeyOf } = require('./runPairIdentity');
 const { pythonExecutable, pythonSpawnOptions, killPythonProcess } = require('../../config/python');
 
+// Which engine each strategy runs.  A table rather than a chain of ternaries
+// because every one of these emits the same bucket contract, so adding a
+// strategy is a one-line change here and nowhere else in the worker.
+const ENGINE_SCRIPTS = Object.freeze({
+    manual: 'src/python_engines/manual_alignment_engine.py',
+    phylogenetic: 'src/python_engines/phylogenetic_engine.py',
+    aurora_ili: 'src/python_engines/aurora_engine.py',
+    default: 'src/python_engines/hungarian_engine.py',
+});
+
 const alignmentQueue = new Queue('ili-alignment', {
     connection,
     defaultJobOptions: {
@@ -60,11 +70,7 @@ async function runPythonAlignment(sessionId, algorithm, pairConfig = null) {
     if (pairConfigFile) await fs.writeFile(pairConfigFile, JSON.stringify(pairConfig), 'utf8');
     try {
         const result = await new Promise((resolve, reject) => {
-            const engineScript = algorithm === 'manual'
-                ? 'src/python_engines/manual_alignment_engine.py'
-                : algorithm === 'phylogenetic'
-                    ? 'src/python_engines/phylogenetic_engine.py'
-                    : 'src/python_engines/hungarian_engine.py';
+            const engineScript = ENGINE_SCRIPTS[algorithm] || ENGINE_SCRIPTS.default;
             const child = spawn(pythonExecutable, [engineScript, String(sessionId)], pythonSpawnOptions({
                 cwd: path.join(__dirname, '../../..'),
                 env: {

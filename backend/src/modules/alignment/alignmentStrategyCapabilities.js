@@ -46,6 +46,18 @@ const ALIGNMENT_STRATEGY_CAPABILITIES = Object.freeze({
         executionMethod: 'GET',
         reasonCode: null,
     }),
+    // AURORA-ILI: structural registration first, then local coordinate
+    // reconstruction, then correspondence.  It registers its own structure, so
+    // it does not depend on the GW simulator having been run — operator GW
+    // locks, when present, are read as one more anchor rather than as truth.
+    aurora_ili: freezeCapability({
+        id: 'aurora_ili',
+        available: true,
+        validated: true,
+        executionEndpoint: '/api/ili-results',
+        executionMethod: 'GET',
+        reasonCode: null,
+    }),
 });
 
 const STRATEGY_ALIASES = Object.freeze({
@@ -60,6 +72,10 @@ const STRATEGY_ALIASES = Object.freeze({
     polyginesis: 'phylogenetic',
     polygenesis: 'phylogenetic',
     filogenesis: 'phylogenetic',
+    aurora: 'aurora_ili',
+    aurora_pcr: 'aurora_ili',
+    aurora_universal: 'aurora_ili',
+    ili_aurora: 'aurora_ili',
 });
 
 function normalizeStrategyId(value) {
