@@ -116,6 +116,19 @@ export, the corrosion review and the FFS intake need no strategy branch:
 Every input source key appears exactly once; `audit.isConserved` is checked in
 tests, not assumed.
 
+Rows also carry the shared match-evidence columns: `Match Method` is
+`AURORA_ILI` and `Match Confidence (%)` is the calibrated probability.
+`Match Cost` and `Match Log Bayes Factor` stay empty because AURORA has
+neither, and no `match_evidence` payload is attached — the evidence drawer
+renders either a tolerance-cost breakdown or a posterior breakdown, and AURORA's
+evidence is neither. Its explanation lives in the AURORA columns and in the
+registration evidence panel.
+
+AURORA is deliberately *not* registered in `anomalyMatchers.js`. That registry
+picks the Phase-2 matcher for a run whose girth-weld phase is already fixed;
+AURORA owns both phases, so it is dispatched by `resolveEngineScript` in the
+worker, which lets an end-to-end strategy win over any saved matcher choice.
+
 Extra columns: `AURORA Group ID`, `AURORA Match Type`, `AURORA PJID`,
 `AURORA Confidence Class`, `AURORA P(match)`, `AURORA Evidence Score`,
 `AURORA Ambiguity Margin`,

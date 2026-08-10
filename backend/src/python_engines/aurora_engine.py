@@ -52,6 +52,11 @@ _MISSING_EVIDENCE_CLASSES = frozenset({GIRTH_WELD, VALVE, TEE_OFFTAKE})
 
 _EMPTY = "-"
 
+# Names the method that produced each row, alongside HUNGARIAN and
+# BAYESIAN_DRIFT.  Kept in step with MATCH_METHOD_LABELS in
+# frontend/src/utils/alignmentDisplay.ts.
+MATCH_METHOD = "AURORA_ILI"
+
 
 def _value(record: dict | None, *keys):
     if not record:
@@ -161,8 +166,33 @@ class AuroraRowBuilder:
             "Comment OLD": _value(old_record, "comment"),
             "Comment NEW": _value(new_record, "comment"),
         }
+        row.update(self._match_method_columns(aurora))
         row.update(self._aurora_columns(aurora))
         return row
+
+    @staticmethod
+    def _match_method_columns(aurora: dict | None) -> dict:
+        """The shared match-evidence columns, filled in AURORA's own terms.
+
+        The schema is stable across matchers so the table has one shape, but a
+        row never carries a value in a column that means nothing for it: AURORA
+        has no tolerance cost and no Bayes factor, and putting a number under
+        either heading would invite reading it as the quantity that heading
+        names.  ``match_evidence`` is deliberately absent — the drawer renders
+        either a cost breakdown or a posterior breakdown, and AURORA's evidence
+        is neither.  Its explanation lives in the AURORA columns and in the
+        registration evidence panel.
+        """
+        probability = (aurora or {}).get("probability")
+        return {
+            "Match Method": MATCH_METHOD if aurora else _EMPTY,
+            "Match Cost": _EMPTY,
+            "Match Confidence (%)": (
+                round(float(probability) * 100.0, 2)
+                if isinstance(probability, (int, float)) else _EMPTY
+            ),
+            "Match Log Bayes Factor": _EMPTY,
+        }
 
     @staticmethod
     def _aurora_columns(aurora: dict | None) -> dict:

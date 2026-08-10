@@ -17,18 +17,33 @@ const {
     summarizeComparison,
 } = require('./alignmentContract');
 const { ALIGNMENT_ENGINE_VERSION, alignmentProcessTimeoutMs } = require('./alignmentExecution');
+const { resolveAnomalyMatcher } = require('./anomalyMatchers');
 const { pairKeyOf } = require('./runPairIdentity');
 const { pythonExecutable, pythonSpawnOptions, killPythonProcess } = require('../../config/python');
 
-// Which engine each strategy runs.  A table rather than a chain of ternaries
-// because every one of these emits the same bucket contract, so adding a
-// strategy is a one-line change here and nowhere else in the worker.
-const ENGINE_SCRIPTS = Object.freeze({
+// Strategies that own Phase 1 and Phase 2 together, keyed by their engine.
+// Everything else takes a fixed girth-weld phase and varies only the anomaly
+// matcher, which `anomalyMatchers.js` resolves — so these are exactly the
+// strategies a matcher choice must not be able to redirect.
+const END_TO_END_ENGINE_SCRIPTS = Object.freeze({
     manual: 'src/python_engines/manual_alignment_engine.py',
     phylogenetic: 'src/python_engines/phylogenetic_engine.py',
     aurora_ili: 'src/python_engines/aurora_engine.py',
-    default: 'src/python_engines/hungarian_engine.py',
 });
+
+/**
+ * Which Python engine runs this job.
+ *
+ * An end-to-end strategy wins over the matcher registry: it locks the welds and
+ * pairs the anomalies in one engine, so honouring a saved matcher choice here
+ * would hand the run to a script that cannot read its configuration — and
+ * would produce a plausible-looking result from the wrong algorithm.
+ */
+function resolveEngineScript(algorithm, matcher) {
+    return END_TO_END_ENGINE_SCRIPTS[algorithm]
+        || matcher?.engineScript
+        || 'src/python_engines/hungarian_engine.py';
+}
 
 const alignmentQueue = new Queue('ili-alignment', {
     connection,
@@ -53,7 +68,7 @@ function emitProgress(job, progress, message) {
     });
 }
 
-async function runPythonAlignment(sessionId, algorithm, pairConfig = null) {
+async function runPythonAlignment(sessionId, algorithm, pairConfig = null, matcher = null) {
     // mkdtemp gives this run a private, unpredictable directory instead of
     // guessable file names in the shared tmp dir (mirrors
     // objectStorage.createWorkerTempPath).
@@ -70,7 +85,7 @@ async function runPythonAlignment(sessionId, algorithm, pairConfig = null) {
     if (pairConfigFile) await fs.writeFile(pairConfigFile, JSON.stringify(pairConfig), 'utf8');
     try {
         const result = await new Promise((resolve, reject) => {
-            const engineScript = ENGINE_SCRIPTS[algorithm] || ENGINE_SCRIPTS.default;
+            const engineScript = resolveEngineScript(algorithm, matcher);
             const child = spawn(pythonExecutable, [engineScript, String(sessionId)], pythonSpawnOptions({
                 cwd: path.join(__dirname, '../../..'),
                 env: {
@@ -298,6 +313,11 @@ async function processAlignmentJob(job) {
             for (let i = 0; i < runPairs.length; i++) {
                 const pair = runPairs[i];
                 const pairProgress = 20 + Math.round((i / runPairs.length) * 55);
+                // Resolved per pair, not once for the job: a pair may carry its
+                // own tolerance configuration, and that is where the matcher
+                // choice lives.
+                const pairSessionConfig = buildPairSessionConfig(sessionConfig, pair);
+                const pairMatcher = resolveAnomalyMatcher(pairSessionConfig, algorithm);
                 await emitProgress(
                     job, pairProgress,
                     `Aligning pair ${i + 1}/${runPairs.length}: ${pair.oldRun?.year || '?'} → ${pair.newRun?.year || '?'}`,
@@ -305,7 +325,8 @@ async function processAlignmentJob(job) {
                 pairResults.push(await runPythonAlignment(
                     sessionId,
                     algorithm,
-                    buildPairSessionConfig(sessionConfig, pair),
+                    pairSessionConfig,
+                    pairMatcher,
                 ));
             }
 
@@ -322,8 +343,9 @@ async function processAlignmentJob(job) {
             });
         }
 
+        const matcher = resolveAnomalyMatcher(sessionConfig, algorithm);
         await emitProgress(job, 20, 'Loading canonical ILI data');
-        const result = await runPythonAlignment(sessionId, algorithm);
+        const result = await runPythonAlignment(sessionId, algorithm, null, matcher);
         return finishAlignmentJob(job, sessionId, configFingerprint, result);
     } catch (error) {
         const finalAttempt = (job.attemptsMade + 1) >= (job.opts.attempts || 1);
@@ -353,5 +375,10 @@ module.exports = {
     alignmentQueue,
     processAlignmentJob,
     startAlignmentWorker,
-    __testables: { resolveRunPairs, buildPairSessionConfig, mergeMultiPairResults },
+    __testables: {
+        resolveRunPairs,
+        buildPairSessionConfig,
+        mergeMultiPairResults,
+        resolveEngineScript,
+    },
 };

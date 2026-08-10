@@ -31,9 +31,13 @@ import {
 } from '../components/ds';
 import { primaryRunPair, resolveRunPairs } from '../domain/runPairs';
 import {
+  ANOMALY_MATCHERS,
   buildMatchingRulesConfig,
   defaultMatchingRules,
+  US_GW_DISTANCE_SOURCES,
+  type AnomalyMatcher,
   type ToleranceValues,
+  type UsGwDistanceSource,
 } from './matchingRules';
 import {
   buildProjectionColumns,
@@ -232,6 +236,11 @@ export default function StepScenarioFilter({ onNext, onBack, config }: StepScena
 
   const activeProfile = matchProfile(current);
   const isDirty = !sameTolerances(current, defaults.shared);
+  // The Bayesian matcher has no distance windows, so every numeric gate below —
+  // and the projection built from them — describes a matcher that is not going
+  // to run. They are disabled rather than hidden: the values stay saved, and
+  // switching back restores exactly the set that was there before.
+  const gatesApply = current.anomaly_matcher === 'hungarian';
 
   const projectionInput = useMemo(() => projectionInputFrom(config?.summaryData), [config?.summaryData]);
   const columns = useMemo(
@@ -324,6 +333,81 @@ export default function StepScenarioFilter({ onNext, onBack, config }: StepScena
         </Panel>
       )}
 
+      {/* Anomaly matcher --------------------------------------------------- */}
+      <Panel>
+        <PanelHeader
+          plain
+          eyebrow="Phase 2"
+          title="Anomaly matcher"
+          subtitle="How metal loss is paired once the girth welds are locked. The weld phase itself is unaffected."
+        />
+        <PanelBody className="ds-stack">
+          <div className="ds-row">
+            {ANOMALY_MATCHERS.map((matcher) => (
+              <Button
+                key={matcher.id}
+                size="sm"
+                variant={current.anomaly_matcher === matcher.id ? 'primary' : 'secondary'}
+                aria-pressed={current.anomaly_matcher === matcher.id}
+                onClick={() => patch({ anomaly_matcher: matcher.id as AnomalyMatcher })}
+              >
+                {matcher.label}
+              </Button>
+            ))}
+          </div>
+          <p className="tol-row__desc">
+            {ANOMALY_MATCHERS.find((matcher) => matcher.id === current.anomaly_matcher)?.hint}
+          </p>
+          {!gatesApply && (
+            <Callout tone="info" icon={<FiShield aria-hidden="true" />}>
+              Bayesian drift matching uses no distance window. It measures the displacement this
+              section actually has, estimates its own noise from the data, and accepts a pair only
+              when the evidence favours “same defect” over coincidence — reporting a posterior
+              probability and a per-channel calculation for every pair it accepts. The tolerances
+              below are kept but not applied.
+            </Callout>
+          )}
+        </PanelBody>
+      </Panel>
+
+      {/* Weld-relative distance source ------------------------------------- */}
+      <Panel>
+        <PanelHeader
+          plain
+          eyebrow="Evidence"
+          title="U/S girth weld distance"
+          subtitle="The strongest identity evidence in the record, and the one a pipetally most often omits."
+        />
+        <PanelBody className="ds-stack">
+          <Select
+            small
+            aria-label="Source of the upstream girth weld distance"
+            value={current.us_gw_distance_source}
+            onChange={(event) => patch({
+              us_gw_distance_source: event.target.value as UsGwDistanceSource,
+            })}
+          >
+            {US_GW_DISTANCE_SOURCES.map((source) => (
+              <option key={source.id} value={source.id}>{source.label}</option>
+            ))}
+          </Select>
+          <p className="tol-row__desc">
+            {US_GW_DISTANCE_SOURCES.find(
+              (source) => source.id === current.us_gw_distance_source,
+            )?.hint}
+          </p>
+          {current.us_gw_distance_source !== 'uploaded' && current.us_gw_distance_source !== 'off' && (
+            <Callout tone="info" icon={<FiGitCommit aria-hidden="true" />}>
+              A derived distance is the feature’s own odometer minus the odometer of the last girth
+              weld before it, measured in the run’s native chainage. Derivation is applied to both
+              runs together or to neither: a vendor measures to the weld centreline and this
+              measures to the reported weld position, so mixing the two would feed a fixed bias into
+              the comparison. Every result row records which source it used.
+            </Callout>
+          )}
+        </PanelBody>
+      </Panel>
+
       {/* Tolerances + projection ----------------------------------------- */}
       <div className="tol-layout">
         <div className="ds-stack">
@@ -341,18 +425,21 @@ export default function StepScenarioFilter({ onNext, onBack, config }: StepScena
                   key={spec.key}
                   spec={spec}
                   value={current[spec.key]}
-                  disabled={spec.key === 'us_gw_distance_tolerance' && !current.use_us_gw_distance}
+                  disabled={
+                    !gatesApply
+                    || (
+                      spec.key === 'us_gw_distance_tolerance'
+                      && current.us_gw_distance_source === 'off'
+                    )
+                  }
                   onChange={(value) => patch({ [spec.key]: value } as Partial<ToleranceValues>)}
                 >
                   {spec.key === 'us_gw_distance_tolerance' && (
-                    <label className="tol-row__checkbox">
-                      <input
-                        type="checkbox"
-                        checked={current.use_us_gw_distance}
-                        onChange={(event) => patch({ use_us_gw_distance: event.target.checked })}
-                      />
-                      <span>Use uploaded U/S GW distance</span>
-                    </label>
+                    <p className="tol-row__desc">
+                      Source: <strong>{US_GW_DISTANCE_SOURCES.find(
+                        (source) => source.id === current.us_gw_distance_source,
+                      )?.label}</strong> — set above.
+                    </p>
                   )}
                 </ToleranceRow>
               ))}
@@ -373,7 +460,14 @@ export default function StepScenarioFilter({ onNext, onBack, config }: StepScena
             subtitle="How stricter or looser tolerances change match yield and review effort."
           />
           <PanelBody className="ds-stack">
-            {!columns || !baseline ? (
+            {!gatesApply ? (
+              <p className="tol-preview__empty">
+                This projection models how many candidates each distance gate lets through. The
+                selected matcher has no gates, so there is nothing to project: it reports a
+                posterior probability per accepted pair instead, calculated from the run’s own
+                measured spread once the alignment has been executed.
+              </p>
+            ) : !columns || !baseline ? (
               <p className="tol-preview__empty">
                 Feature counts for this run pair are not available, so the projection cannot be
                 calculated. Complete the data review step first.

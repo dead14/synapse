@@ -14,9 +14,32 @@ const RUN_PAIR_SOURCE_KEYS = ['pair_index', 'pair_key', 'pair_label', 'pair_old_
 export const RUN_PAIR_COLUMN = 'Run Pair';
 export const MASTER_AXIS_COLUMN = 'Master Axis (m)';
 
+/**
+ * The per-pair calculation the engine attached to a matched row: an object, not
+ * a cell value. It is read by the evidence drawer and kept out of the table,
+ * where it would render as `[object Object]` in a column nobody can sort.
+ */
+export const MATCH_EVIDENCE_KEY = 'match_evidence';
+
+/**
+ * How a result row names the matcher that produced it. Keep in step with
+ * `MATCH_METHOD` on each engine class and with `ANOMALY_MATCHERS` in
+ * `backend/src/modules/alignment/anomalyMatchers.js`.
+ *
+ * AURORA is not in that registry: it is not a Phase-2 matcher that a
+ * girth-weld run can be pointed at, it owns both phases. It appears here
+ * anyway because a result row still has to say what produced it.
+ */
+export const MATCH_METHOD_LABELS: Record<string, string> = {
+  HUNGARIAN: 'Tolerance gates (Hungarian)',
+  BAYESIAN_DRIFT: 'Bayesian drift matching',
+  AURORA_ILI: 'AURORA-ILI universal registration',
+};
+
 const DISPLAY_METADATA_COLUMNS = new Set([
   ...Object.values(ORIGINAL_DISTANCE_COLUMN),
   ...RUN_PAIR_SOURCE_KEYS,
+  MATCH_EVIDENCE_KEY,
 ]);
 
 /** Rows carrying a readable `Run Pair` value, or the input untouched when the
