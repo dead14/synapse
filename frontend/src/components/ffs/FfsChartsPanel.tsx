@@ -565,7 +565,16 @@ export default function FfsChartsPanel({
     ...extra,
   });
 
-  /** Builds the internal/external dataset pair for a scatter chart. */
+  /**
+   * Builds the internal/external dataset pair for a scatter chart.
+   *
+   * The marker shrinks on a large population. A four-pixel dot is right for a
+   * few hundred anomalies; at ten thousand it is both the frame cost — that is
+   * ten thousand filled arcs per chart per redraw — and a solid ink smear that
+   * paints over the envelope curves and threshold lines the chart is drawn to
+   * compare against. Smaller marks cost less and read as a density.
+   */
+  const markerRadius = heavy ? 2 : 4;
   const scatterDatasets = (data: SplitScatter, style: ScatterStyle, labels = ['Internal', 'External']) =>
     [
       {
@@ -575,8 +584,8 @@ export default function FfsChartsPanel({
         borderColor: style.internalColor,
         borderWidth: style.outlineOnly ? 1.5 : 0.5,
         pointStyle: style.internalShape,
-        radius: 4,
-        hoverRadius: 7,
+        radius: markerRadius,
+        hoverRadius: markerRadius + 3,
       },
       {
         label: `${labels[1]} (${data.external.length})`,
@@ -585,8 +594,8 @@ export default function FfsChartsPanel({
         borderColor: style.externalColor,
         borderWidth: style.outlineOnly ? 1.5 : 0.5,
         pointStyle: style.externalShape,
-        radius: 4,
-        hoverRadius: 7,
+        radius: markerRadius,
+        hoverRadius: markerRadius + 3,
       },
     ].filter((dataset) => dataset.data.length > 0);
 

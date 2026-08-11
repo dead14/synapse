@@ -14,7 +14,7 @@ import type {
   FfsSeverity,
   FfsTier,
 } from './types.ts';
-import { buildFfsReportCase, type FfsReportContext } from './reportCase.ts';
+import { buildFfsReportCase, type FfsReportCase, type FfsReportContext } from './reportCase.ts';
 import { analysisHorizonYears, formatLifeProjection, lifeSortValue } from './lifeProjection.ts';
 import { computeRemnantLife, EMPTY_SERVICE_LIFE, type FfsRemnantLife } from './remnantLife.ts';
 import { maxBy } from '../../utils/numericRange.ts';
@@ -527,8 +527,14 @@ export function buildActionRegister(
   screening: FfsScreeningConfig,
   reportContext: FfsReportContext,
   limit = 12,
+  /**
+   * The already-built case, when the caller has one. Building it is a dozen
+   * passes over the population, so a panel that holds one should not pay for a
+   * second — and two independently built cases are two chances to disagree.
+   */
+  prebuiltCase?: FfsReportCase,
 ): FfsAction[] {
-  const reportCase = buildFfsReportCase(items, reportContext);
+  const reportCase = prebuiltCase ?? buildFfsReportCase(items, reportContext);
   // Copied before sorting: `asManagedItems` belongs to the report case, and
   // reordering it in place changed what every other consumer of that case saw.
   const ranked = [...reportCase.asManagedItems].sort(

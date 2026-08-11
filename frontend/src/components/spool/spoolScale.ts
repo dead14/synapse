@@ -101,6 +101,96 @@ export function sceneScale(
   };
 }
 
+// ─── Drawn defect size ──────────────────────────────────────────────────────
+
+/** Drawn arc for a defect whose width cannot be turned into a real angle. */
+export const NOMINAL_ARC_DEG = 8;
+/** Drawn size for a defect the run reported without a length or a width. */
+export const NOMINAL_PATCH_MM = 25;
+
+/**
+ * Ceilings on how large the marker magnification may draw one defect.
+ *
+ * The magnification exists so a two-centimetre pit is visible on a twelve-metre
+ * spool. Applied without a ceiling it also multiplies the features that were
+ * already large, and the result is not a bigger patch but a shape that has left
+ * the pipe: a 60 mm box on an 8" line covers a third of the circumference, and
+ * six times that is 340 degrees of arc drawn as one flat plate metres across —
+ * a slab hanging in space that the reviewer reads as a broken picture, because
+ * it is one.
+ *
+ * So magnification may lift a patch up to these ceilings and no further. A
+ * feature whose measured extent already exceeds one keeps its measured extent —
+ * clamping a real 300-degree cluster down to 90 would be a lie about the metal,
+ * where declining to magnify it is only a decision about drawing.
+ */
+export const MAX_DRAWN_ARC_DEG = 90;
+const MAX_DRAWN_AXIAL_SHARE = 0.25;
+/** A patch may not eat more of the wall than this, or it exits the bore. */
+const MAX_DRAWN_RADIAL_SHARE = 0.6;
+
+/**
+ * Circumferential extent to draw a defect at, in degrees.
+ *
+ * `trueArcDeg` is null when the outside diameter is unknown, in which case the
+ * views draw a nominal band. That band is never magnified: multiplying a
+ * made-up width is what smears the patches into circumferential streaks.
+ */
+export function drawnArcDeg(
+  trueArcDeg: number | null,
+  markerScale: number,
+  nominalArcDeg: number = NOMINAL_ARC_DEG,
+): number {
+  if (trueArcDeg === null || !Number.isFinite(trueArcDeg)) return nominalArcDeg;
+  // A defect cannot wrap further than the pipe it is on.
+  const measured = Math.min(Math.max(trueArcDeg, 0), 360);
+  const magnified = measured * Math.max(1, markerScale);
+  return Math.min(magnified, Math.max(measured, MAX_DRAWN_ARC_DEG));
+}
+
+/** Axial extent to draw a defect at, in metres, inside a window of `spanM`. */
+export function drawnAxialM(
+  lengthMm: number | null,
+  markerScale: number,
+  spanM: number,
+  nominalMm: number = NOMINAL_PATCH_MM,
+): number {
+  const measured = Math.max(0, (lengthMm ?? nominalMm)) / 1000;
+  const magnified = measured * Math.max(1, markerScale);
+  const ceiling = Math.max(measured, Math.max(0, spanM) * MAX_DRAWN_AXIAL_SHARE);
+  return Math.min(magnified, ceiling);
+}
+
+/** Radial extent to draw wall loss at, in world units, on a pipe of `radius`. */
+export function drawnRadialM(
+  wallLossMm: number,
+  markerScale: number,
+  radius: number,
+  girth: number,
+): number {
+  const magnified = (Math.max(0, wallLossMm) / 1000) * girth * Math.max(1, markerScale);
+  return Math.min(Math.max(magnified, radius * 0.004), radius * MAX_DRAWN_RADIAL_SHARE);
+}
+
+/**
+ * True when the ceilings above actually bit for this pair of extents, so the
+ * pane can say the magnification was not applied in full rather than quietly
+ * showing a factor it did not use.
+ */
+export function drawnSizeIsCapped(
+  trueArcDeg: number | null,
+  lengthMm: number | null,
+  markerScale: number,
+  spanM: number,
+): boolean {
+  if (markerScale <= 1) return false;
+  const arcCapped = trueArcDeg !== null && Number.isFinite(trueArcDeg)
+    && drawnArcDeg(trueArcDeg, markerScale) < Math.min(trueArcDeg, 360) * markerScale - 1e-9;
+  const axialCapped = drawnAxialM(lengthMm, markerScale, spanM)
+    < ((lengthMm ?? NOMINAL_PATCH_MM) / 1000) * markerScale - 1e-9;
+  return arcCapped || axialCapped;
+}
+
 /**
  * Tick spacing that lands on numbers an engineer reads without decoding: a
  * 1 / 2 / 2.5 / 5 ladder aiming for roughly eight labels across the window.

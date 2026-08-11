@@ -261,10 +261,9 @@ Four places, or the UI and the engine will disagree about what ran:
 
 ## Project Structure
 
-- `backend/src/python_engines/gw_distance_derivation.py`: weld-relative distance, pure
-- `backend/src/python_engines/gw_distance_generator.py`: the per-run generator CLI
-- `backend/src/modules/alignment/gwDistanceGenerator.js`: spawn + run ownership
-- `frontend/src/wizard/GwDistanceGeneratorPanel.tsx`: preview and apply, per run
+- `backend/src/python_engines/gw_distance_derivation.py`: weld-relative distance, pure.
+  Derivation happens inside the run, driven by `us_gw_distance_source` in the
+  Tolerances step; there is no separate per-run generate-and-persist step.
 - `backend/src/python_engines/bayesian_matcher.py`: the probability model, pure
 - `backend/src/python_engines/bayesian_engine.py`: adapts run features into it
 - `backend/src/python_engines/hungarian_engine.py`: shared pipeline, `match_segment` seam

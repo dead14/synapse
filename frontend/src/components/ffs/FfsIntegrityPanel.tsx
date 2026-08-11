@@ -1,5 +1,4 @@
 import { useMemo } from 'react';
-import { buildErfProfile } from '../../lib/ffs/chartData';
 import {
   buildActionRegister,
   buildLocationZones,
@@ -7,11 +6,11 @@ import {
   findInteractions,
   formatLife,
 } from '../../lib/ffs/screening';
-import { buildClockRose, buildDistanceProfile } from '../../lib/ffs/integrityViews';
+import { buildClockRose, buildDistanceProfile, buildErfBands } from '../../lib/ffs/integrityViews';
 import { buildColonyLevel2Assessments } from '../../lib/ffs/colonyAssessment';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig, FfsSeverity } from '../../lib/ffs/types';
 import { analysisHorizonYears } from '../../lib/ffs/lifeProjection';
-import { buildFfsReportCase, type FfsReportContext } from '../../lib/ffs/reportCase';
+import type { FfsReportCase, FfsReportContext } from '../../lib/ffs/reportCase';
 import { Callout, Panel, PanelHeader, PriorityLabel, Stat, formatErf } from './FfsPrimitives';
 
 const SEVERITY_FILL: Record<FfsSeverity, string> = {
@@ -268,9 +267,21 @@ function ClockRoseChart({
   );
 }
 
+const ERF_BAND_COUNT = 180;
+const TIER_COLOR = { nominal: '#10b981', conservative: '#f59e0b', forecast: '#8b5cf6' } as const;
+
 /**
- * Spatial ERF profile drawn as an SVG. Stems connect each feature's nominal
- * value to its forecast so the rate of change reads spatially.
+ * Spatial ERF profile: the worst value in each stretch of line, one curve per
+ * tier, over the spread the forecast opens up.
+ *
+ * Two things this drawing has to survive. The first is population size — see
+ * {@link buildErfBands}; a mark per feature per tier is tens of thousands of
+ * SVG nodes and the tab stops responding. The second is a healthy line. On a
+ * population whose worst ERF is 0.23 a fixed axis anchored at 1.00 flattens
+ * every curve onto the baseline, and the reader concludes the chart is broken
+ * rather than that the pipe is fine. So the axis follows the data, and the
+ * acceptance line is drawn when it is on scale and stated in words when it is
+ * not — which is itself the answer to "how close are we".
  */
 function ErfProfileChart({
   items,
@@ -281,27 +292,50 @@ function ErfProfileChart({
   screening: FfsScreeningConfig;
   onSelect: (item: FfsScreenedResult) => void;
 }) {
-  const profile = useMemo(() => buildErfProfile(items), [items]);
+  const profile = useMemo(() => buildErfBands(items, ERF_BAND_COUNT), [items]);
   const width = 1000;
   const height = 320;
   const margin = { top: 18, right: 24, bottom: 42, left: 56 };
   const plotW = width - margin.left - margin.right;
   const plotH = height - margin.top - margin.bottom;
 
-  if (!profile.length) return null;
+  if (!profile.bands.length) return null;
 
-  const ldMin = profile[0].ld;
-  const ldMax = profile[profile.length - 1].ld;
-  const ldSpan = ldMax - ldMin || 1;
-  // Collapsed features carry an infinite ERF; the axis is scaled on the finite
-  // population and those points clamp to the top of the plot.
-  const maxErf = Math.max(1.25, ...profile.map((p) => p.forecast).filter(Number.isFinite)) * 1.08;
+  const { bands, minM, maxM } = profile;
+  const ldSpan = maxM - minM || 1;
+  // Headroom over the highest plotted value, with the review band always in
+  // frame so the screening decision has something to sit against. A collapsed
+  // feature has no finite ERF to scale on, so its presence pulls the acceptance
+  // line into the domain instead.
+  const maxErf = Math.max(
+    profile.peakErf * 1.14,
+    screening.reviewBandErf * 1.2,
+    profile.unboundedCount > 0 ? 1.15 : 0,
+    0.05,
+  );
 
-  const xOf = (ld: number) => margin.left + ((ld - ldMin) / ldSpan) * plotW;
+  const xOf = (ld: number) => margin.left + ((ld - minM) / ldSpan) * plotW;
   const yOf = (erf: number) => margin.top + plotH - (Math.min(erf, maxErf) / maxErf) * plotH;
 
   const yTicks = Array.from({ length: 6 }, (_, i) => (maxErf * i) / 5);
-  const xTicks = Array.from({ length: 7 }, (_, i) => ldMin + (ldSpan * i) / 6);
+  const xTicks = Array.from({ length: 7 }, (_, i) => minM + (ldSpan * i) / 6);
+  const bandWidth = Math.max(1, plotW / bands.length);
+
+  const line = (pick: (band: (typeof bands)[number]) => number) =>
+    bands.map((band, index) => `${index === 0 ? 'M' : 'L'} ${xOf(band.midM).toFixed(2)} ${yOf(pick(band)).toFixed(2)}`).join(' ');
+
+  // The forecast envelope: worst down the top, best back along the bottom.
+  const envelope = [
+    ...bands.map((band, index) => `${index === 0 ? 'M' : 'L'} ${xOf(band.midM).toFixed(2)} ${yOf(band.forecastMax).toFixed(2)}`),
+    ...[...bands].reverse().map((band) => `L ${xOf(band.midM).toFixed(2)} ${yOf(band.forecastMin).toFixed(2)}`),
+    'Z',
+  ].join(' ');
+
+  const thresholds = [
+    { value: screening.reviewBandErf, color: '#f59e0b', label: 'Review band' },
+    { value: 1, color: '#ef4444', label: 'ERF 1.00' },
+  ].filter((line) => line.value <= maxErf);
+  const acceptanceOffScale = maxErf < 1;
 
   return (
     <div className="overflow-x-auto">
@@ -309,7 +343,7 @@ function ErfProfileChart({
         viewBox={`0 0 ${width} ${height}`}
         className="block h-auto w-full min-w-[640px]"
         role="img"
-        aria-label="Estimated repair factor against log distance, showing nominal, conservative, and forecast values"
+        aria-label={`Estimated repair factor against log distance, showing the worst nominal, conservative, and forecast value in each of ${bands.length} stretches`}
       >
         <title>ERF profile along the pipeline</title>
 
@@ -346,72 +380,78 @@ function ErfProfileChart({
           </text>
         ))}
 
-        {/* Threshold lines */}
-        {[
-          { value: screening.reviewBandErf, color: '#f59e0b', label: 'Review band' },
-          { value: 1, color: '#ef4444', label: 'ERF 1.00' },
-        ].map((line) => (
-          <g key={line.label}>
+        {/* Threshold lines, drawn only where they fall inside the axis. */}
+        {thresholds.map((threshold) => (
+          <g key={threshold.label}>
             <line
               x1={margin.left}
-              y1={yOf(line.value)}
+              y1={yOf(threshold.value)}
               x2={width - margin.right}
-              y2={yOf(line.value)}
-              stroke={line.color}
+              y2={yOf(threshold.value)}
+              stroke={threshold.color}
               strokeWidth="1.5"
               strokeDasharray="6 4"
             />
             <text
               x={width - margin.right - 4}
-              y={yOf(line.value) - 5}
+              y={yOf(threshold.value) - 5}
               textAnchor="end"
-              fill={line.color}
+              fill={threshold.color}
               className="text-[9px] font-semibold"
             >
-              {line.label}
+              {threshold.label}
             </text>
           </g>
         ))}
 
-        {/* Stems from nominal to forecast */}
-        {profile.map((point) => (
-          <line
-            key={`stem-${point.item.key}`}
-            x1={xOf(point.ld)}
-            y1={yOf(point.nominal)}
-            x2={xOf(point.ld)}
-            y2={yOf(point.forecast)}
-            className="stroke-slate-300 dark:stroke-slate-600"
-            strokeWidth="1"
-          />
-        ))}
+        {/* Forecast spread, then the worst-in-stretch curve for each tier. */}
+        <path d={envelope} fill={TIER_COLOR.forecast} opacity="0.14" />
+        <path d={line((band) => band.forecastMax)} fill="none" stroke={TIER_COLOR.forecast} strokeWidth="1.6" strokeLinejoin="round" />
+        <path d={line((band) => band.conservativeMax)} fill="none" stroke={TIER_COLOR.conservative} strokeWidth="1.6" strokeLinejoin="round" />
+        <path d={line((band) => band.nominalMax)} fill="none" stroke={TIER_COLOR.nominal} strokeWidth="1.6" strokeLinejoin="round" />
 
-        {/* Three tiers, forecast underneath so nominal stays readable */}
-        {(
-          [
-            { key: 'forecast' as const, color: '#8b5cf6', r: 4 },
-            { key: 'conservative' as const, color: '#f59e0b', r: 3.4 },
-            { key: 'nominal' as const, color: '#10b981', r: 3.2 },
-          ]
-        ).map((series) =>
-          profile.map((point) => (
+        {/* Every feature that is not screened as a pass keeps its own mark. */}
+        {profile.notable.map((item) => {
+          const ld = Number(item.nominal.ld);
+          return (
             <circle
-              key={`${series.key}-${point.item.key}`}
-              cx={xOf(point.ld)}
-              cy={yOf(point[series.key])}
-              r={series.r}
-              fill={series.color}
+              key={`notable-${item.key}-${item.index}`}
+              cx={xOf(Number.isFinite(ld) ? ld : 0)}
+              cy={yOf(Number.isFinite(item.forecast.ERF) ? item.forecast.ERF : maxErf)}
+              r={3.4}
+              fill={SEVERITY_FILL[item.conservative.severity]}
               stroke="#fff"
               strokeWidth="1"
               className="cursor-pointer"
-              onClick={() => onSelect(point.item)}
+              onClick={() => onSelect(item)}
             >
               <title>
-                LD {point.ld.toLocaleString()} m · {series.key} ERF {point[series.key].toFixed(3)}
+                LD {ld.toLocaleString(undefined, { maximumFractionDigits: 1 })} m · conservative ERF{' '}
+                {formatErf(item.conservative.ERF)} · forecast {formatErf(item.forecast.ERF)}
               </title>
             </circle>
-          )),
-        )}
+          );
+        })}
+
+        {/* One hit target per stretch, so a click anywhere opens its worst feature. */}
+        {bands.map((band) => (
+          <rect
+            key={`hit-${band.index}`}
+            x={xOf(band.midM) - bandWidth / 2}
+            y={margin.top}
+            width={bandWidth}
+            height={plotH}
+            fill="transparent"
+            className="cursor-pointer"
+            onClick={() => onSelect(band.worst)}
+          >
+            <title>
+              {Math.round(band.startM).toLocaleString()}–{Math.round(band.endM).toLocaleString()} m ·{' '}
+              {band.count.toLocaleString()} feature(s) · worst nominal {formatErf(band.nominalMax)} ·
+              conservative {formatErf(band.conservativeMax)} · forecast {formatErf(band.forecastMax)}
+            </title>
+          </rect>
+        ))}
 
         {/* Axis labels */}
         <text
@@ -432,6 +472,16 @@ function ErfProfileChart({
           Log distance [m]
         </text>
       </svg>
+
+      <p className="mt-1.5 text-[10px] leading-snug text-slate-400 dark:text-slate-500">
+        Worst value in each of {bands.length} stretches of{' '}
+        {Math.round((maxM - minM) / bands.length).toLocaleString()} m; the shaded band is the spread
+        of forecast values inside each stretch. {profile.notable.length.toLocaleString()} escalated
+        feature{profile.notable.length === 1 ? '' : 's'} drawn individually
+        {profile.notableOmitted > 0 && `, ${profile.notableOmitted.toLocaleString()} further not marked`}
+        {acceptanceOffScale && '. Every feature is below ERF 1.00, so the acceptance line is off this axis'}
+        {profile.unboundedCount > 0 && `. ${profile.unboundedCount.toLocaleString()} feature(s) carry no finite forecast ERF and are plotted at the top of the axis`}.
+      </p>
     </div>
   );
 }
@@ -445,12 +495,20 @@ export default function FfsIntegrityPanel({
   config,
   screening,
   reportContext,
+  reportCase,
   onSelect,
 }: {
   items: FfsScreenedResult[];
   config: FfsConfig;
   screening: FfsScreeningConfig;
   reportContext: FfsReportContext;
+  /**
+   * Built once by the workspace and handed down. Assembling it is a dozen
+   * passes over the whole population, and this panel used to trigger two more
+   * of them — one here and one inside the action register — for a case the page
+   * above had already built.
+   */
+  reportCase: FfsReportCase;
   onSelect: (item: FfsScreenedResult) => void;
 }) {
   const kpis = useMemo(() => buildKpis(items), [items]);
@@ -463,13 +521,9 @@ export default function FfsIntegrityPanel({
     () => buildColonyLevel2Assessments(items, screening, config),
     [items, screening, config],
   );
-  const reportCase = useMemo(
-    () => buildFfsReportCase(items, reportContext),
-    [items, reportContext],
-  );
   const actions = useMemo(
-    () => buildActionRegister(items, screening, reportContext),
-    [items, screening, reportContext],
+    () => buildActionRegister(items, screening, reportContext, undefined, reportCase),
+    [items, screening, reportContext, reportCase],
   );
   const horizonYears = analysisHorizonYears(config);
 

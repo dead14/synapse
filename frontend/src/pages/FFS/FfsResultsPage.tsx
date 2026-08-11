@@ -649,6 +649,7 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
               config={config}
               screening={screening}
               reportContext={reportContext}
+              reportCase={reportCase}
               onSelect={setSelected}
             />
           )}
