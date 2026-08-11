@@ -3,12 +3,18 @@ import test from 'node:test';
 
 import {
   GIRTH_EXAGGERATION,
+  MAX_DRAWN_ARC_DEG,
   NOMINAL_OD_MM,
   axialTicks,
   bendRadiusM,
+  drawnArcDeg,
+  drawnAxialM,
+  drawnRadialM,
+  drawnSizeIsCapped,
   niceStep,
   sceneScale,
 } from '../src/components/spool/spoolScale.ts';
+import { arcWidthDeg } from '../src/domain/spoolFeatures.ts';
 import { bendArcLength, buildSpoolPath } from '../src/components/spool/spoolPath.ts';
 
 test('axial distance is true metres: a 12 m spool is 12 world units long', () => {
@@ -110,4 +116,65 @@ test('girth exaggeration backs off far enough for a bend to render', () => {
 test('axial ticks stay on the readable ladder at true scale', () => {
   assert.equal(niceStep(12), 2);
   assert.deepEqual(axialTicks(6.5, 18.5), [8, 10, 12, 14, 16, 18]);
+});
+
+test('marker magnification cannot draw a patch off the pipe it sits on', () => {
+  // The failure this guards. An 8" line is 638 mm around, so a 100 mm wide box
+  // already covers 56 degrees of it. Multiplied by the pane's default 6x that
+  // is 339 degrees — nearly a full wrap — and the flat plate the scene used to
+  // draw for it was metres across, hanging in space beside the pipe with the
+  // camera inside it.
+  const trueArc = arcWidthDeg(100, 203.2) as number;
+  assert.ok(trueArc > 55 && trueArc < 57, `true arc ${trueArc}`);
+  assert.ok(trueArc * 6 > 300, 'the unclamped product is what used to be drawn');
+
+  const drawn = drawnArcDeg(trueArc, 6);
+  assert.equal(drawn, MAX_DRAWN_ARC_DEG);
+  assert.ok(drawn <= 360, 'a defect can never wrap further than the pipe');
+});
+
+test('magnification still lifts a small defect, and never shrinks a real one', () => {
+  // What the magnification is for: a 6 mm pit on an 8" line is under 2 degrees
+  // and invisible at true scale, so it is allowed the full factor.
+  const small = arcWidthDeg(6, 203.2) as number;
+  assert.ok(Math.abs(drawnArcDeg(small, 6) - small * 6) < 1e-9, 'small defects magnify in full');
+
+  // And a genuinely wide cluster keeps its measured extent rather than being
+  // clamped down to the ceiling, which would understate the metal loss.
+  const wide = arcWidthDeg(600, 203.2) as number;
+  assert.ok(wide > MAX_DRAWN_ARC_DEG, `measured arc ${wide}`);
+  assert.equal(drawnArcDeg(wide, 6), Math.min(wide, 360));
+
+  // A width with no diameter behind it draws a nominal band, unmagnified: a
+  // made-up width multiplied six times is a made-up width smeared six times.
+  assert.equal(drawnArcDeg(null, 6), 8);
+});
+
+test('an axial length may not be magnified past a quarter of the window', () => {
+  // A 2 m vendor-merged cluster on a 12 m spool is 12 m long at 6x — the patch
+  // swallows the whole drawing and the spool underneath it.
+  assert.equal(drawnAxialM(2000, 6, 12), 3);
+  // Short features still get the full factor.
+  assert.ok(Math.abs(drawnAxialM(50, 6, 12) - 0.3) < 1e-9);
+  // A cluster longer than the ceiling keeps its measured length.
+  assert.equal(drawnAxialM(9000, 6, 12), 9);
+});
+
+test('wall loss is drawn inside the wall, however large the magnification', () => {
+  const scale = sceneScale(12, 203.2);
+  // 5 mm of loss, exaggerated with the girth and then by 16x, would otherwise
+  // reach past the centreline and turn the pit inside out.
+  const deep = drawnRadialM(5, 16, scale.radius, scale.girth);
+  assert.ok(deep < scale.radius, `drawn depth ${deep} must stay inside radius ${scale.radius}`);
+  // A run with no wall thickness has no depth to draw, but the patch still has
+  // to be thick enough to see.
+  assert.ok(drawnRadialM(0, 6, scale.radius, scale.girth) > 0);
+});
+
+test('the pane reports when the ceilings bit, rather than claiming the factor', () => {
+  const wide = arcWidthDeg(100, 203.2);
+  assert.equal(drawnSizeIsCapped(wide, 40, 6, 12), true);
+  assert.equal(drawnSizeIsCapped(arcWidthDeg(6, 203.2), 40, 6, 12), false);
+  // At true scale nothing is magnified, so nothing can be capped.
+  assert.equal(drawnSizeIsCapped(wide, 40, 1, 12), false);
 });

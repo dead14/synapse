@@ -13,7 +13,7 @@ import { useMemo, type RefObject } from 'react';
 import type { SpoolFeature } from '../../domain/spoolFeatures.ts';
 import { arcWidthDeg } from '../../domain/spoolFeatures.ts';
 import { depthColor, STATUS_COLOR, type DepthPalette } from './spoolPalette.ts';
-import { axialTicks } from './spoolScale.ts';
+import { axialTicks, drawnArcDeg, drawnAxialM } from './spoolScale.ts';
 
 interface SpoolUnrolled2DProps {
   features: SpoolFeature[];
@@ -76,11 +76,12 @@ export default function SpoolUnrolled2D({
     const data = feature[side];
     const maM = data.maM ?? feature.maM;
     const clockDeg = data.clockDeg ?? feature.clockDeg;
-    const axialM = ((data.lengthMm ?? 0) / 1000) * markerScale;
+    // Both panes ask the same helper how large to draw a defect, so the two
+    // pictures of one piece of metal cannot disagree about its size — including
+    // about where the marker magnification stops.
+    const axialM = drawnAxialM(data.lengthMm, markerScale, spanM, 0);
     const boxWidth = Math.max(MIN_BOX, (axialM / spanM) * plotWidth);
-    // Same rule as the 3D patches: only a true arc gets the exaggeration.
-    const trueArc = arcWidthDeg(data.widthMm, odMm);
-    const arcDeg = trueArc === null ? 8 : trueArc * markerScale;
+    const arcDeg = drawnArcDeg(arcWidthDeg(data.widthMm, odMm), markerScale);
     const boxHeight = Math.max(MIN_BOX, (arcDeg / 360) * PLOT_HEIGHT);
     return {
       x: toX(maM) - boxWidth / 2,

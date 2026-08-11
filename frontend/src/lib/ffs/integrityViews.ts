@@ -104,6 +104,143 @@ export function buildDistanceProfile(
   return { bins, minM, maxM, peakCount, binWidthM };
 }
 
+export interface ErfBand {
+  index: number;
+  startM: number;
+  endM: number;
+  midM: number;
+  count: number;
+  nominalMax: number;
+  conservativeMax: number;
+  /** Highest finite forecast in the band, and the lowest, for the envelope. */
+  forecastMax: number;
+  forecastMin: number;
+  /** The feature a click on this stretch should open — the worst one in it. */
+  worst: FfsScreenedResult;
+}
+
+export interface ErfBandProfile {
+  bands: ErfBand[];
+  minM: number;
+  maxM: number;
+  /** Highest finite ERF anywhere in the population, across all three tiers. */
+  peakErf: number;
+  /** Features whose forecast ERF is not finite; they are counted, not plotted. */
+  unboundedCount: number;
+  /**
+   * Features drawn individually on top of the bands, worst first. Everything
+   * that is not screened as a pass earns its own mark; the rest is the band.
+   */
+  notable: FfsScreenedResult[];
+  /** How many notable features were left out of `notable` by the cap. */
+  notableOmitted: number;
+}
+
+/**
+ * The ERF profile as bands rather than one mark per feature.
+ *
+ * A mark per feature is a thousand SVG nodes per tier on a real population —
+ * thirty or forty thousand elements on the page, each with its own tooltip and
+ * click handler. That does not draw a denser picture, it draws the same solid
+ * smear the schematic used to, and it does it at a frame rate that makes the
+ * whole tab feel broken.
+ *
+ * Binning along the line keeps what the profile is for: the highest ERF in each
+ * stretch, tier by tier, and the spread the forecast opens up. Individual marks
+ * are reserved for the features that are not screened as passes, which are the
+ * only ones a reader clicks anyway.
+ */
+export function buildErfBands(
+  items: readonly FfsScreenedResult[],
+  binCount: number,
+  notableLimit = 400,
+): ErfBandProfile {
+  const safeBinCount = Math.max(1, Math.floor(binCount));
+  if (items.length === 0) {
+    return {
+      bands: [], minM: 0, maxM: 0, peakErf: 0, unboundedCount: 0, notable: [], notableOmitted: 0,
+    };
+  }
+
+  const distances = items.map(distanceOf);
+  const minM = minOf(distances);
+  const maxM = maxOf(distances);
+  const span = maxM - minM || 1;
+  const binWidthM = span / safeBinCount;
+
+  const buckets = new Map<number, FfsScreenedResult[]>();
+  items.forEach((item, index) => {
+    const raw = Math.floor(((distances[index] - minM) / span) * safeBinCount);
+    const bin = Math.min(safeBinCount - 1, Math.max(0, raw));
+    const existing = buckets.get(bin);
+    if (existing) existing.push(item);
+    else buckets.set(bin, [item]);
+  });
+
+  let peakErf = 0;
+  let unboundedCount = 0;
+  const bands: ErfBand[] = [];
+
+  for (const [index, members] of [...buckets.entries()].sort((a, b) => a[0] - b[0])) {
+    let nominalMax = 0;
+    let conservativeMax = 0;
+    let forecastMax = 0;
+    let forecastMin = Infinity;
+    let worst = members[0];
+
+    for (const item of members) {
+      const nominal = finiteErf(item.nominal.ERF);
+      const conservative = finiteErf(item.conservative.ERF);
+      const forecast = finiteErf(item.forecast.ERF);
+      if (!Number.isFinite(item.forecast.ERF)) unboundedCount += 1;
+      nominalMax = Math.max(nominalMax, nominal);
+      conservativeMax = Math.max(conservativeMax, conservative);
+      forecastMax = Math.max(forecastMax, forecast);
+      forecastMin = Math.min(forecastMin, forecast);
+      const better = SEVERITY_RANK[item.conservative.severity] - SEVERITY_RANK[worst.conservative.severity];
+      if (better > 0 || (better === 0 && item.conservative.ERF > worst.conservative.ERF)) worst = item;
+    }
+
+    peakErf = Math.max(peakErf, nominalMax, conservativeMax, forecastMax);
+    bands.push({
+      index,
+      startM: minM + index * binWidthM,
+      endM: minM + (index + 1) * binWidthM,
+      midM: minM + (index + 0.5) * binWidthM,
+      count: members.length,
+      nominalMax,
+      conservativeMax,
+      forecastMax,
+      forecastMin: Number.isFinite(forecastMin) ? forecastMin : 0,
+      worst,
+    });
+  }
+
+  const escalated = items
+    .filter((item) => item.conservative.severity !== 'pass' || item.forecast.severity !== 'pass')
+    .sort((a, b) => finiteErf(b.forecast.ERF) - finiteErf(a.forecast.ERF)
+      || b.conservative.ERF - a.conservative.ERF);
+
+  return {
+    bands,
+    minM,
+    maxM,
+    peakErf,
+    unboundedCount,
+    notable: escalated.slice(0, notableLimit),
+    notableOmitted: Math.max(0, escalated.length - notableLimit),
+  };
+}
+
+/**
+ * A collapsed feature carries an infinite ERF. It is counted and reported, but
+ * it cannot set an axis, so the plotted value falls back to zero and the caller
+ * states the count separately.
+ */
+function finiteErf(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
 export interface ClockSector {
   /** 0 is 12 o'clock, increasing clockwise. */
   hour: number;

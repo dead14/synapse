@@ -15,7 +15,8 @@
 import { Suspense, lazy, useMemo, useState } from 'react';
 import { FiMaximize2, FiRotateCw } from 'react-icons/fi';
 
-import type { SpoolFeature } from '../../domain/spoolFeatures';
+import { arcWidthDeg, type SpoolFeature } from '../../domain/spoolFeatures';
+import { drawnSizeIsCapped } from '../spool/spoolScale';
 import type { CameraPreset } from '../spool/SpoolScene3D';
 import SpoolUnrolled2D from '../spool/SpoolUnrolled2D';
 import { collectSpoolFittings } from '../spool/spoolFittings';
@@ -54,6 +55,18 @@ export default function FfsSpoolGeometryPanes({
     [geometry],
   );
   const [markerScale, setMarkerScale] = useState(6);
+  // The magnification is bounded so a patch cannot be drawn off the pipe it
+  // sits on. When that bound bites, the pane says so instead of claiming a
+  // factor it did not apply.
+  const magnificationCapped = useMemo(
+    () => geometry.features.some((feature) => drawnSizeIsCapped(
+      arcWidthDeg(feature.current.widthMm, geometry.odMm),
+      feature.current.lengthMm,
+      markerScale,
+      geometry.endM - geometry.startM,
+    )),
+    [geometry, markerScale],
+  );
   const [hovered, setHovered] = useState<SpoolFeature | null>(null);
   const [command, setCommand] = useState({ preset: 'home' as CameraPreset, nonce: 0 });
 
@@ -92,8 +105,14 @@ export default function FfsSpoolGeometryPanes({
           {geometry.odMm === null
             ? 'No outer diameter on these rows — width drawn nominal'
             : `Arcs on OD ${geometry.odMm} mm`}
-          {markerScale > 1 && `, magnified ${markerScale}× for display`}
+          {markerScale > 1 && `, magnified up to ${markerScale}× for display`}
         </span>
+        {magnificationCapped && (
+          <span>
+            Features already large enough to read are drawn nearer their measured size, so no
+            patch leaves the pipe.
+          </span>
+        )}
         {!geometry.weldBounded && (
           <span className="text-amber-600 dark:text-amber-400">
             No girth-weld boundary for this group; the frame is the span of the features.

@@ -29,7 +29,6 @@ const alignDtwLimiter = strictRouteLimiter('align-dtw', 'RATE_LIMIT_ALIGN_DTW_MA
 const tieInOffsetLimiter = strictRouteLimiter('estimate-tiein-offset', 'RATE_LIMIT_TIEIN_OFFSET_MAX', 30);
 const iliResultsLimiter = strictRouteLimiter('ili-results', 'RATE_LIMIT_ILI_RESULTS_MAX', 60);
 const exportExcelLimiter = strictRouteLimiter('export-excel', 'RATE_LIMIT_EXPORT_EXCEL_MAX', 10);
-const gwDistanceLimiter = strictRouteLimiter('gw-distance', 'RATE_LIMIT_GW_DISTANCE_MAX', 20);
 
 const allowedExtensions = new Set(['.csv', '.xlsx']);
 const allowedMimeTypes = new Set([
@@ -67,13 +66,6 @@ router.get('/wizard/resume', authMiddleware, alignmentController.resumeWizardSta
 router.get('/wizard/session/:id', authMiddleware, alignmentController.getWizardSession);
 router.get('/pipeline-runs', authMiddleware, alignmentController.getPipelineRuns);
 router.delete('/pipeline-runs/:id', authMiddleware, alignmentController.deletePipelineRun);
-
-// U/S girth weld distance generator. GET previews (writes nothing), POST
-// persists. Both spawn a Python pass over the whole run, so they carry the same
-// strict budget as the other engine-backed endpoints.
-router.get('/runs/:id/gw-distance', authMiddleware, gwDistanceLimiter, alignmentController.previewGwDistance);
-router.post('/runs/:id/gw-distance', authMiddleware, gwDistanceLimiter, alignmentController.generateGwDistance);
-
 
 router.get('/ili-results', authMiddleware, iliResultsLimiter, alignmentController.getIliResults);
 router.get('/results/:runId', authMiddleware, alignmentController.getAlignmentResults);
