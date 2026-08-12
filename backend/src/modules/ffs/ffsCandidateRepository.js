@@ -52,22 +52,45 @@ async function listFfsCandidates(pool, sessionId, orgId) {
 /**
  * Every `Source Key NEW` present in the session's latest completed alignment
  * job. A review may only reference keys that exist in that result.
+ *
+ * A completed run keeps its rows in `alignment_job_rows` and leaves only
+ * execution metadata in `result_json` (migration 012). Reading the comparison
+ * array alone therefore answered "no keys at all" for every run written since,
+ * and the Corrosion Analysis handoff rejected the entire released population as
+ * foreign to its own result. Runs completed before that migration still carry
+ * their rows inside `result_json`, so both shapes are read here — the same
+ * split every other result reader uses, keyed on `row_count`.
  */
 async function listResultSourceKeys(pool, sessionId, orgId) {
     const result = await pool.query(
         `WITH completed AS (
-            SELECT result_json
+            SELECT job_id, result_json, row_count
             FROM alignment_jobs
             WHERE session_id = $1
               AND organization_id = $2
               AND state = 'completed'
             ORDER BY completed_at DESC NULLS LAST, created_at DESC
             LIMIT 1
+         ),
+         persisted AS (
+            SELECT r.row_json->>'Source Key NEW' AS source_key
+            FROM completed c
+            JOIN alignment_job_rows r ON r.job_id = c.job_id
+            WHERE c.row_count IS NOT NULL
+         ),
+         legacy AS (
+            SELECT item.value->>'Source Key NEW' AS source_key
+            FROM completed c
+            CROSS JOIN LATERAL jsonb_array_elements(
+                COALESCE(c.result_json->'comparison', '[]'::jsonb)
+            ) AS item(value)
+            WHERE c.row_count IS NULL
          )
-         SELECT DISTINCT item.value->>'Source Key NEW' AS source_key
-         FROM completed c
-         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.result_json->'comparison', '[]'::jsonb)) AS item(value)
-         WHERE COALESCE(item.value->>'Source Key NEW', '-') <> '-'`,
+         SELECT DISTINCT source_key
+         FROM (SELECT source_key FROM persisted
+               UNION ALL
+               SELECT source_key FROM legacy) keys
+         WHERE COALESCE(source_key, '-') <> '-'`,
         [sessionId, orgId],
     );
     return new Set(result.rows.map((row) => row.source_key).filter(Boolean));

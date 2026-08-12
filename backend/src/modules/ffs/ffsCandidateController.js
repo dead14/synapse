@@ -106,10 +106,17 @@ exports.saveCandidates = async (req, res) => {
             items: payload.items,
         });
 
+        // The same shape the GET answers with. Omitting the gate made the page
+        // that had just saved a review read `reviewable: undefined`, put the
+        // "this session cannot be released to FFS" warning on screen with no
+        // reason, and disable the very button that had worked a moment before.
+        // Gate A was cleared above, so this save is releasable by definition.
         return res.json({
             sessionId,
             signature,
             stale: false,
+            reviewable: true,
+            reason: null,
             selectedCount: items.filter((item) => item.selected).length,
             items,
         });

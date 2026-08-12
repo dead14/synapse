@@ -24,6 +24,7 @@ import {
   LAST_SESSION_STORAGE_KEY,
   forgetUnusableStoredSession,
   isAlignmentSessionId,
+  parseAlignmentShareReference,
   resolveAlignmentSessionId,
 } from './utils/alignmentSession';
 
@@ -107,8 +108,11 @@ export default function IliComparisonPage({
   const sharedId = shareAccess?.id;
   const sharedToken = shareAccess?.accessToken;
   // A shared link is opened by its own reference, so the viewer never falls back
-  // to a session ID left in their browser from an unrelated pipeline.
-  const sharedSessionId = shareAccess?.sourceRef;
+  // to a session ID left in their browser from an unrelated pipeline. The
+  // reference names either the released run or its session; only the latter can
+  // address a session, and neither is needed to read the rows.
+  const shareReference = parseAlignmentShareReference(shareAccess?.sourceRef);
+  const sharedSessionId = shareReference?.kind === 'session' ? shareReference.id : '';
   const [baseData, setBaseData] = useState<ComparisonRow[]>([]);
   const [interventions, setInterventions] = useState<InterventionEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -137,10 +141,14 @@ export default function IliComparisonPage({
   const requestedSessionId = resolveAlignmentSessionId({
     sharedSessionId,
     search: location.search,
-    storedSessionId: sharedSessionId
+    storedSessionId: shareAccess
       ? ''
       : localStorage.getItem(LAST_SESSION_STORAGE_KEY),
   });
+  // What this render of the page is looking at. A share is identified by the
+  // link itself, so the read-only view stays keyed to the published result even
+  // when the link names a run rather than a session.
+  const resultIdentity = shareAccess ? `${shareAccess.id}:${shareAccess.sourceRef}` : requestedSessionId;
 
   // A chain result concatenates every pair's rows. Without a way to isolate one
   // transition they read as a single undifferentiated comparison.
@@ -167,20 +175,30 @@ export default function IliComparisonPage({
 
     const loadData = async () => {
       try {
-        if (!requestedSessionId) {
-          throw new Error('No alignment session selected. Open one from ILI runs, or start an alignment.');
+        // A published link is read through its own endpoint, against the run it
+        // was created from. It carries no session the recipient could open, and
+        // it must never fall through to the session checks below — the id there
+        // belongs to the author, not to the link.
+        if (shareAccess) {
+          if (!shareReference) {
+            throw new Error('This shared link does not name an alignment result to open.');
+          }
+        } else {
+          if (!requestedSessionId) {
+            throw new Error('No alignment session selected. Open one from ILI runs, or start an alignment.');
+          }
+          // An id that cannot address a session is caught here rather than sent to
+          // the API, which would answer with a bare "Invalid session ID" that says
+          // nothing about which session or what to do about it.
+          if (!isAlignmentSessionId(requestedSessionId)) {
+            forgetUnusableStoredSession();
+            throw new Error(
+              `"${requestedSessionId}" is not an alignment session reference. `
+              + 'Open a session from ILI runs, or start an alignment.',
+            );
+          }
         }
-        // An id that cannot address a session is caught here rather than sent to
-        // the API, which would answer with a bare "Invalid session ID" that says
-        // nothing about which session or what to do about it.
-        if (!isAlignmentSessionId(requestedSessionId)) {
-          forgetUnusableStoredSession();
-          throw new Error(
-            `"${requestedSessionId}" is not an alignment session reference. `
-            + 'Open a session from ILI runs, or start an alignment.',
-          );
-        }
-        setSessionId(requestedSessionId);
+        setSessionId(shareAccess ? '' : requestedSessionId);
         setLoading(true);
         setIsProcessing(true);
         setError(null);
@@ -548,7 +566,7 @@ export default function IliComparisonPage({
               <div className="shrink-0">
                 <Suspense fallback={<LoadingSpinner label="Loading comparison chart..." />}>
                   <DefectVisualizer
-                    key={`${requestedSessionId}:${pairFilter ?? 'all'}`}
+                    key={`${resultIdentity}:${pairFilter ?? 'all'}`}
                     data={visibleData}
                     selectedRowIdx={selectedRowIdx}
                     onSelectRowIdx={setSelectedRowIdx}
