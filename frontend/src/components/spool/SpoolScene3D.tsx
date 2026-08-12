@@ -33,7 +33,7 @@
  * hover card are always the measured ones.
  */
 
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, Line, Text, Html } from '@react-three/drei';
 import * as THREE from 'three';
@@ -636,7 +636,7 @@ function AxialRuler({
         );
       })}
       <Text position={[label.x, label.y, label.z]} fontSize={scale.label * 1.05} color="#94a3b8" anchorX="center" anchorY="middle">
-        Master Axis (m)
+        Log distance, aligned (m)
       </Text>
     </group>
   );
@@ -713,13 +713,17 @@ function CameraRig({
   // registers itself; OrbitControls is the one mounted here, hence the narrowing.
   const controls = useThree((state) => state.controls) as unknown as
     { target: THREE.Vector3; update: () => void } | null;
+  // The stage is drag-sized and can be maximised, so the pane this pipe is
+  // framed for changes size while the scene is mounted.
+  const size = useThree((state) => state.size);
 
-  useEffect(() => {
-    if (!controls) return;
-
-    // Frame the spool from the viewport it actually has: a wide stage needs a
-    // nearer camera than a narrow one for the same pipe, and guessing a fixed
-    // distance is what leaves the pipe either a sliver or clipped at the ends.
+  /**
+   * How far back the camera has to sit to frame the spool in the viewport it
+   * *currently* has: a wide stage needs a nearer camera than a narrow one for
+   * the same pipe, and guessing a fixed distance is what leaves the pipe either
+   * a sliver or clipped at the ends.
+   */
+  const fitDistances = useCallback(() => {
     const perspective = camera as THREE.PerspectiveCamera;
     const vFov = ((perspective.fov ?? 42) * Math.PI) / 180;
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * (perspective.aspect || 1));
@@ -729,10 +733,27 @@ function CameraRig({
     // clear them too or the metre marks sit outside the frame.
     const forLength = (path.extentAxial + radius) / Math.tan(hFov / 2);
     const forGirth = (path.extentLateral + radius * 1.2 + scale.label * 4.5) / Math.tan(vFov / 2);
-    const distance = Math.max(forLength, forGirth) * 1.06;
-    // Down the axis only the diameter has to fit, so that view sits far closer.
-    const axialDistance = Math.max(forGirth * 0.6, radius * 4);
+    return {
+      distance: Math.max(forLength, forGirth) * 1.06,
+      // Down the axis only the diameter has to fit, so that view sits far closer.
+      axialDistance: Math.max(forGirth * 0.6, radius * 4),
+    };
+  }, [camera, path, radius, scale.label]);
 
+  /**
+   * The framing distance the camera was last placed at, and for which preset.
+   *
+   * Maximising the stage changes the layout and asks for a re-frame in the same
+   * React commit, so the effect below runs against the aspect ratio the canvas
+   * had *before* the resize — the fit is computed for the old pane. The resize
+   * effect then corrects it against the pane that actually exists.
+   */
+  const lastFit = useRef<{ preset: CameraPreset; distance: number } | null>(null);
+
+  useEffect(() => {
+    if (!controls) return;
+
+    const { distance, axialDistance } = fitDistances();
     const directions: Record<CameraPreset, [number, number, number, number]> = {
       home: [0.44, 0.32, 0.84, distance],
       top: [0.001, 1, 0.002, distance],
@@ -760,14 +781,49 @@ function CameraRig({
         Math.max(path.extent * 8, radius * 40),
       );
       camera.position.copy(target.clone().add(next.setLength(clamped)));
+      lastFit.current = null;
     } else {
       const [x, y, z] = positions[command.preset];
       camera.position.set(x, y, z);
       controls.target.set(0, 0, 0);
+      lastFit.current = {
+        preset: command.preset,
+        distance: command.preset === 'look-along' ? axialDistance : distance,
+      };
     }
     camera.updateProjectionMatrix();
     controls.update();
-  }, [camera, controls, command, path]);
+  }, [camera, controls, command, path, radius, fitDistances]);
+
+  /**
+   * Re-frame when the stage changes size.
+   *
+   * Without this, maximising the view framed the pipe for the small pane it was
+   * leaving and restoring framed it for the large one — the pipe came back
+   * either a sliver or, far more visibly, ballooning off both edges of the
+   * stage. The correction is a ratio rather than a reset so an engineer who has
+   * orbited or dollied in keeps their view; only its distance is rescaled to
+   * the pane that now exists.
+   */
+  useEffect(() => {
+    if (!controls) return;
+    const previous = lastFit.current;
+    if (!previous) return;
+    const { distance, axialDistance } = fitDistances();
+    const refitted = previous.preset === 'look-along' ? axialDistance : distance;
+    if (!Number.isFinite(refitted) || refitted <= 0 || previous.distance <= 0) return;
+    const ratio = refitted / previous.distance;
+    if (Math.abs(ratio - 1) < 1e-3) return;
+
+    const offset = camera.position.clone().sub(controls.target);
+    if (offset.lengthSq() === 0) return;
+    camera.position.copy(controls.target.clone().add(offset.multiplyScalar(ratio)));
+    lastFit.current = { preset: previous.preset, distance: refitted };
+    camera.updateProjectionMatrix();
+    controls.update();
+    // `size` is the trigger; everything else is read through the memoised fit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size.width, size.height]);
 
   return null;
 }
@@ -934,7 +990,7 @@ export default function SpoolScene3D({
               <div><dt>Clock</dt><dd>{labelFeature.clockLabel}</dd></div>
               <div><dt>Length</dt><dd>{labelFeature.current.lengthMm ?? '—'} mm</dd></div>
               <div><dt>Width</dt><dd>{labelFeature.current.widthMm ?? '—'} mm</dd></div>
-              <div><dt>Max depth</dt><dd>{labelFeature.current.depthPct ?? '—'} %WT</dd></div>
+              <div><dt>Max. depth</dt><dd>{labelFeature.current.depthPct ?? '—'} %t</dd></div>
               <div>
                 <dt>Remaining WT</dt>
                 <dd>{labelFeature.current.remainingWtMm === null ? '—' : `${labelFeature.current.remainingWtMm.toFixed(1)} mm`}</dd>

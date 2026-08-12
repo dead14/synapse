@@ -228,12 +228,18 @@ function classifyStatus(
   return current.present ? 'new' : 'prev-only';
 }
 
+/**
+ * POF 100 §7.5 asks a run comparison to report matched, new and missed
+ * features; Appendix 8 writes the outcome as "Corrosion matched", "New
+ * corrosion". "Not aligned" is ours — POF has no word for a feature the engine
+ * declined to pair (a vendor-merged cluster, above all).
+ */
 export const STATUS_LABEL: Record<SpoolMatchStatus, string> = {
-  'matched-no-growth': 'Matched (No Growth)',
-  'matched-growth': 'Matched (Growth)',
-  new: 'New (Not in Previous)',
-  'prev-only': 'Not Reported (Prev Only)',
-  bypassed: 'Bypassed (Not Aligned)',
+  'matched-no-growth': 'Matched — no growth',
+  'matched-growth': 'Matched — growth',
+  new: 'New in this run',
+  'prev-only': 'Missed in this run',
+  bypassed: 'Not aligned',
 };
 
 /**

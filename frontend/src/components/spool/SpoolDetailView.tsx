@@ -286,7 +286,7 @@ export default function SpoolDetailView({ rows, range, onClose, onSelectRowIdx }
         <div>
           <h2 id="spool-detail-title">Spool Detail View</h2>
           <p>
-            Master axis {stageStart.toFixed(2)} m to {stageEnd.toFixed(2)} m · picked on {range.laneLabel}
+            Log distance, aligned {stageStart.toFixed(2)} m to {stageEnd.toFixed(2)} m · picked on {range.laneLabel}
           </p>
         </div>
 

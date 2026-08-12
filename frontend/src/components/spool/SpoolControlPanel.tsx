@@ -34,12 +34,13 @@ interface SpoolControlPanelProps {
   hasComparison: boolean;
 }
 
+/** POF 100 §2.2 / §2.4 anomaly names, in POF's own sentence case. */
 const CLASS_LABEL: Record<SpoolFeatureClass, string> = {
-  weld: 'Girth Welds',
-  'metal-loss': 'Metal Loss',
+  weld: 'Girth welds',
+  'metal-loss': 'Metal loss',
   dent: 'Dents',
-  'crack-like': 'Crack-like Features',
-  other: 'Other Features',
+  'crack-like': 'Crack and crack-like',
+  other: 'Other features',
 };
 
 const CLASS_ORDER: SpoolFeatureClass[] = ['weld', 'metal-loss', 'dent', 'crack-like', 'other'];
@@ -167,7 +168,9 @@ export default function SpoolControlPanel({
           </select>
         </Row>
 
-        <Row label="Internal / External">
+        {/* POF 100 Appendix 2 calls this "Surface location", with Internal,
+            External, Mid wall and Not applicable as its only values. */}
+        <Row label="Surface location">
           <select
             className="ds-select ds-select--sm"
             value={filters.surface}
@@ -186,14 +189,15 @@ export default function SpoolControlPanel({
             onChange={(event) => setFilter('depthBand', event.target.value as SpoolFilters['depthBand'])}
           >
             <option value="all">All</option>
-            <option value="lt20">Below 20 %WT</option>
-            <option value="20-40">20 – 40 %WT</option>
-            <option value="40-60">40 – 60 %WT</option>
-            <option value="gte60">60 %WT and above</option>
+            {/* Depth as a percentage of wall thickness is %t in POF 100. */}
+            <option value="lt20">Below 20 %t</option>
+            <option value="20-40">20 – 40 %t</option>
+            <option value="40-60">40 – 60 %t</option>
+            <option value="gte60">60 %t and above</option>
           </select>
         </Row>
 
-        <Row label="Match status">
+        <Row label="Run comparison">
           <select
             className="ds-select ds-select--sm"
             value={filters.status}
@@ -250,13 +254,15 @@ export default function SpoolControlPanel({
         </div>
 
         <div className="spool-rail__range">
-          <span className="spool-rail__label">Master axis (m)</span>
+          {/* POF 100 names the coordinate "Log distance"; "aligned" says this is
+              the newest run's, with the older runs projected onto it. */}
+          <span className="spool-rail__label">Log distance, aligned [m]</span>
           <div className="spool-rail__range-pair">
             <input
               className="ds-input ds-input--sm"
               type="number"
               step="0.01"
-              aria-label="Master axis window start"
+              aria-label="Aligned log distance window start"
               value={filters.maStartM}
               min={extent.startM}
               max={filters.maEndM}
@@ -267,7 +273,7 @@ export default function SpoolControlPanel({
               className="ds-input ds-input--sm"
               type="number"
               step="0.01"
-              aria-label="Master axis window end"
+              aria-label="Aligned log distance window end"
               value={filters.maEndM}
               min={filters.maStartM}
               max={extent.endM}
@@ -277,7 +283,7 @@ export default function SpoolControlPanel({
           <input
             className="spool-rail__slider"
             type="range"
-            aria-label="Master axis window end slider"
+            aria-label="Aligned log distance window end slider"
             min={extent.startM}
             max={extent.endM}
             step={(extent.endM - extent.startM) / 200 || 0.01}

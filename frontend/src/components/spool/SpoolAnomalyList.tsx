@@ -126,15 +126,16 @@ export default function SpoolAnomalyList({
         <table className="ds-table ds-table--clickable">
           <thead>
             <tr>
-              <th scope="col">ID</th>
-              <th scope="col">Type</th>
-              {header('maM', 'MA (m)')}
-              <th scope="col">Clock</th>
-              <th scope="col" className="ds-table__num">Length (mm)</th>
-              {header('depth', 'Max depth (%WT)')}
+              {/* POF 100 Appendix 2 / Appendix 8 column titles. */}
+              <th scope="col">Feature no.</th>
+              <th scope="col">Feature identification</th>
+              {header('maM', 'Log distance [m]')}
+              <th scope="col">Clock position</th>
+              <th scope="col" className="ds-table__num">Length [mm]</th>
+              {header('depth', 'Max. depth [%t]')}
               {header('erf', 'ERF')}
-              <th scope="col">Match status</th>
-              {header('growth', 'Growth (Δ%WT)')}
+              <th scope="col">Run comparison</th>
+              {header('growth', 'Depth growth [Δ%t]')}
             </tr>
           </thead>
           <tbody ref={bodyRef}>

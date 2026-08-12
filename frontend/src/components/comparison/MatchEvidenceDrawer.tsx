@@ -105,6 +105,15 @@ export type MatchEvidence = {
   sectionPermutationTrials?: number;
 };
 
+/**
+ * Tailwind's `border-*` utilities carry no colour of their own here, and the
+ * grey literals this drawer used to hardcode turned invisible the moment the app
+ * was switched to the dark theme. The rules are drawn from the design tokens
+ * instead, inline so they cannot lose a cascade fight with a utility class.
+ */
+const HAIRLINE = { borderColor: 'var(--ds-line)' } as const;
+const HAIRLINE_STRONG = { borderColor: 'var(--ds-line-strong)' } as const;
+
 function decimals(value: unknown, places = 3): string {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed.toFixed(places) : '—';
@@ -124,14 +133,14 @@ function CostEvidence({ evidence }: { evidence: MatchEvidence }) {
   const channels = evidence.channels ?? [];
   return (
     <div className="ds-stack">
-      <p className="text-sm text-gray-600">
+      <p className="text-sm ds-muted">
         This pair was chosen by the tolerance-gated matcher. Every channel below had to fall inside
         its gate for the pair to be admitted at all; the penalties then decide which admissible set
         of pairs is cheapest overall. A lower cost is a better fit — it is not a probability.
       </p>
       <table className="w-full text-left text-xs border-collapse">
         <thead>
-          <tr className="border-b border-gray-200">
+          <tr className="border-b" style={HAIRLINE_STRONG}>
             <th className="py-1.5 pr-2 font-semibold">Channel</th>
             <th className="py-1.5 pr-2 font-semibold">Observed</th>
             <th className="py-1.5 pr-2 font-semibold">Gate</th>
@@ -141,10 +150,10 @@ function CostEvidence({ evidence }: { evidence: MatchEvidence }) {
         </thead>
         <tbody>
           {channels.map((channel) => (
-            <tr key={channel.name} className="border-b border-gray-100 align-top">
+            <tr key={channel.name} className="border-b align-top" style={HAIRLINE}>
               <td className="py-1.5 pr-2">
                 <strong>{channel.name}</strong>
-                <p className="text-[10px] text-gray-500">
+                <p className="text-[10px] ds-muted">
                   {COST_CHANNEL_NOTES[channel.name]
                     ?? (channel.gateOnly ? '' : COST_CHANNEL_FORMULA)}
                 </p>
@@ -168,7 +177,7 @@ function CostEvidence({ evidence }: { evidence: MatchEvidence }) {
       {evidence.note && (
         <p className="text-xs" style={{ color: 'var(--syn-warning)' }}>{evidence.note}</p>
       )}
-      <p className="text-[11px] text-gray-500">
+      <p className="text-[11px] ds-muted">
         Objective: {evidence.objective ?? '—'}. Depth is deliberately excluded from pair selection
         and evaluated afterwards as a physics check.
       </p>
@@ -187,16 +196,16 @@ function BayesianEvidence({ evidence }: { evidence: MatchEvidence }) {
 
   return (
     <div className="ds-stack">
-      <p className="text-sm text-gray-600">
+      <p className="text-sm ds-muted">
         This pair was chosen by evidence, not by a window. Each channel reports how much more likely
         its reading is if these are the same defect than if they are two unrelated defects that
         happen to lie near each other. The contributions add up, and the total is then weighed
         against every rival candidate on both sides.
       </p>
 
-      <div className="rounded border border-gray-200 p-3 text-xs">
+      <div className="rounded border p-3 text-xs" style={HAIRLINE}>
         <strong className="block mb-1">Step 1 — the displacement this section actually has</strong>
-        <p className="text-gray-600">
+        <p className="ds-muted">
           Every OLD defect proposed a displacement to every NEW defect
           ({(drift.voteCandidates ?? 0).toLocaleString()} proposals). The densest agreement was
           at <strong>{decimals(drift.shiftM)} m</strong>
@@ -211,7 +220,7 @@ function BayesianEvidence({ evidence }: { evidence: MatchEvidence }) {
         <strong className="block mb-1 text-xs">Step 2 — evidence, channel by channel</strong>
         <table className="w-full text-left text-xs border-collapse">
           <thead>
-            <tr className="border-b border-gray-200">
+            <tr className="border-b" style={HAIRLINE_STRONG}>
               <th className="py-1.5 pr-2 font-semibold">Channel</th>
               <th className="py-1.5 pr-2 font-semibold">Observed</th>
               <th className="py-1.5 pr-2 font-semibold">Spread (σ)</th>
@@ -223,13 +232,12 @@ function BayesianEvidence({ evidence }: { evidence: MatchEvidence }) {
             {channels.map((channel) => (
               <tr
                 key={channel.name}
-                className={`border-b border-gray-100 align-top${
-                  channel.informative === false ? ' text-gray-400' : ''
-                }`}
+                className={`border-b align-top${channel.informative === false ? ' opacity-60' : ''}`}
+                style={HAIRLINE}
               >
                 <td className="py-1.5 pr-2">
                   <strong>{channel.name}</strong>
-                  <p className="text-[10px] text-gray-500">{bayesianChannelNote(channel)}</p>
+                  <p className="text-[10px] ds-muted">{bayesianChannelNote(channel)}</p>
                 </td>
                 <td className="py-1.5 pr-2">{decimals(channel.observed)} {channel.unit}</td>
                 <td className="py-1.5 pr-2">{decimals(channel.spread)} {channel.unit}</td>
@@ -243,7 +251,7 @@ function BayesianEvidence({ evidence }: { evidence: MatchEvidence }) {
             ))}
           </tbody>
           <tfoot>
-            <tr className="border-t border-gray-200">
+            <tr className="border-t" style={HAIRLINE_STRONG}>
               <td className="py-1.5 pr-2" colSpan={3}>Channels combined</td>
               <td className="py-1.5 pr-2">{decimals(channelTotal, 2)}</td>
               <td className="py-1.5">{oddsFromLog(channelTotal)}</td>
@@ -262,7 +270,7 @@ function BayesianEvidence({ evidence }: { evidence: MatchEvidence }) {
             </tr>
           </tfoot>
         </table>
-        <p className="text-[11px] text-gray-500 mt-1">
+        <p className="text-[11px] ds-muted mt-1">
           Accepted because the total exceeds
           {' '}{decimals(evidence.acceptThresholdLogBayesFactor, 2)} — that is, because "same defect"
           explains the evidence better than coincidence does. Depth is excluded: it is the growth
@@ -271,9 +279,9 @@ function BayesianEvidence({ evidence }: { evidence: MatchEvidence }) {
         </p>
       </div>
 
-      <div className="rounded border border-gray-200 p-3 text-xs">
+      <div className="rounded border p-3 text-xs" style={HAIRLINE}>
         <strong className="block mb-1">Step 3 — against the competition</strong>
-        <p className="text-gray-600">
+        <p className="ds-muted">
           The OLD defect had <strong>{evidence.rivals?.old ?? 0}</strong> rival partner(s) and the
           NEW defect had <strong>{evidence.rivals?.new ?? 0}</strong>. Normalising against them —
           and against the standing option that there is no match at all — gives
@@ -288,9 +296,9 @@ function BayesianEvidence({ evidence }: { evidence: MatchEvidence }) {
       </div>
 
       {evidence.sectionPermutationTrials ? (
-        <div className="rounded border border-gray-200 p-3 text-xs">
+        <div className="rounded border p-3 text-xs" style={HAIRLINE}>
           <strong className="block mb-1">Step 4 — Monte-Carlo calibration of the section</strong>
-          <p className="text-gray-600">
+          <p className="ds-muted">
             The section was re-matched against {evidence.sectionPermutationTrials} synthetic runs of
             the same defect count and the same attribute distributions, with the association between
             them destroyed. Fraction that produced evidence at least this strong:
@@ -299,7 +307,7 @@ function BayesianEvidence({ evidence }: { evidence: MatchEvidence }) {
           </p>
         </div>
       ) : (
-        <p className="text-[11px] text-gray-500">
+        <p className="text-[11px] ds-muted">
           Monte-Carlo calibration did not run for this section (disabled, or the section exceeds the
           permutation budget).
         </p>
@@ -321,11 +329,11 @@ export default function MatchEvidenceDrawer({
   const isBayesian = method === 'BAYESIAN_DRIFT';
 
   return (
-    <Modal onClose={onClose} ariaLabel="Match evidence" panelClassName="max-w-3xl w-full">
+    <Modal onClose={onClose} ariaLabel="Match evidence" panelClassName="ds-dialog max-w-3xl">
       <div className="p-5 ds-stack">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-[11px] uppercase tracking-wider text-gray-500 flex items-center gap-1">
+            <p className="ds-muted text-[11px] uppercase tracking-wider flex items-center gap-1">
               {isBayesian ? <FiActivity aria-hidden="true" /> : <FiShield aria-hidden="true" />}
               {MATCH_METHOD_LABELS[method] ?? method ?? 'Match evidence'}
               {evidence.segment !== undefined && <> · segment {evidence.segment}</>}
@@ -336,7 +344,7 @@ export default function MatchEvidenceDrawer({
             type="button"
             onClick={onClose}
             aria-label="Close match evidence"
-            className="rounded p-1 text-gray-500 hover:bg-gray-100"
+            className="ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon"
           >
             <FiX aria-hidden="true" />
           </button>
