@@ -14,6 +14,7 @@ import {
   type LaneFeature,
   type PlacedFeature,
 } from '../../domain/comparisonLanes.ts';
+import { POF_COMPONENT_LABEL, POF_RUN_COMPARISON_STATUS } from '../../domain/pof100.ts';
 
 export interface SpoolRange {
   startM: number;
@@ -83,13 +84,18 @@ const MIN_BOX_PX = 3;
 /**
  * Each kind of pipe furniture gets its own colour and a short tag, because the
  * reviewer's question about them is "what is it", not "how deep is it".
+ *
+ * The tags are the POF 100 Appendix 2 abbreviations for the same components
+ * (VALV, TEE/OFFT, BENB/BENE, FLG) so a reviewer reading this lane next to the
+ * contractor's pipe tally sees the same letters; the names come from the shared
+ * POF glossary.
  */
 const FITTING_STYLE: Partial<Record<FeatureKind, { color: string; tag: string; label: string }>> = {
-  valve: { color: '#7c3aed', tag: 'VLV', label: 'Valve' },
-  tee: { color: '#0891b2', tag: 'TEE', label: 'Tee / offtake' },
-  bend: { color: '#ea580c', tag: 'BEND', label: 'Bend' },
-  flange: { color: '#4d7c0f', tag: 'FLG', label: 'Flange' },
-  fitting: { color: '#be123c', tag: 'FIT', label: 'Other fitting' },
+  valve: { color: '#7c3aed', tag: 'VALV', label: POF_COMPONENT_LABEL.valve },
+  tee: { color: '#0891b2', tag: 'TEE', label: POF_COMPONENT_LABEL.tee },
+  bend: { color: '#ea580c', tag: 'BEND', label: POF_COMPONENT_LABEL.bend },
+  flange: { color: '#4d7c0f', tag: 'FLG', label: POF_COMPONENT_LABEL.flange },
+  fitting: { color: '#be123c', tag: 'COMP', label: POF_COMPONENT_LABEL.fitting },
 };
 
 function fittingStyle(kind: FeatureKind) {
@@ -104,13 +110,7 @@ const STATUS_COLOR: Record<string, string> = {
   single: '#475467',
 };
 
-const STATUS_LABEL: Record<string, string> = {
-  persistent: 'Carried over',
-  new: 'New vs previous run',
-  lost: 'Gone in next run',
-  transient: 'Appeared and gone',
-  single: 'No neighbour run',
-};
+const STATUS_LABEL = POF_RUN_COMPARISON_STATUS;
 
 function depthColor(depthPct: number | null): string {
   if (depthPct === null) return '#94a3b8';
@@ -560,7 +560,7 @@ export default function LaneTimeline({
               className={`syn-btn syn-btn--sm ${colorMode === mode ? 'syn-btn--ink' : 'syn-btn--outline'}`}
               style={{ minHeight: '1.6rem', fontSize: '0.66rem' }}
             >
-              {mode === 'status' ? 'Match status' : 'Depth %WT'}
+              {mode === 'status' ? 'Run comparison' : 'Depth %t'}
             </button>
           ))}
         </div>
@@ -930,7 +930,7 @@ export default function LaneTimeline({
                     role="button"
                     tabIndex={0}
                     style={{ cursor: 'pointer' }}
-                    aria-label={`Clustered metal loss ${feature.id} of ${lane.label} at ${formatMeters(feature.rawM)}, clock ${feature.clockLabel}, not aligned across runs`}
+                    aria-label={`Clustered anomaly ${feature.id} of ${lane.label} at ${formatMeters(feature.rawM)}, clock position ${feature.clockLabel}, not aligned across runs`}
                     onClick={(event) => { event.stopPropagation(); onFeatureClick(feature, lane, event); }}
                     onKeyDown={(event) => {
                       if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -1101,7 +1101,9 @@ export default function LaneTimeline({
               {STATUS_LABEL[status]}
             </span>
           ))
-          : ([['≤10 %WT', 5], ['10–25 %WT', 20], ['25–50 %WT', 40], ['>50 %WT', 60]] as Array<[string, number]>).map(([label, depth]) => (
+          // Depth as a percentage of wall thickness is written %t in POF 100
+          // (§2.7, Appendix 2 "d (peak)"), not %WT.
+          : ([['≤10 %t', 5], ['10–25 %t', 20], ['25–50 %t', 40], ['>50 %t', 60]] as Array<[string, number]>).map(([label, depth]) => (
             <span key={label} className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--syn-ink-soft)' }}>
               <svg width="12" height="9"><rect x="0" y="1.5" width="12" height="6" fill={depthColor(depth)} fillOpacity="0.82" stroke={depthColor(depth)} strokeWidth="0.8" /></svg>
               {label}
@@ -1113,7 +1115,7 @@ export default function LaneTimeline({
         </span>
         <span className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--syn-ink-soft)' }}>
           <svg width="12" height="9"><rect x="0" y="1.5" width="12" height="6" fill="var(--syn-muted)" fillOpacity="0.3" stroke="var(--syn-muted)" strokeWidth="0.9" strokeDasharray="3 2" /></svg>
-          Clustered metal loss (own strip, never aligned)
+          Clustered anomalies (own strip, never aligned)
         </span>
         <span className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--syn-ink-soft)' }}>
           <svg width="12" height="9"><line x1="6" y1="0" x2="6" y2="9" stroke="var(--syn-line-strong)" strokeWidth="1.4" /></svg>

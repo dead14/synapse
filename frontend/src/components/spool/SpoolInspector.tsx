@@ -80,9 +80,9 @@ function RunColumn({ label, side }: { label: string; side: SpoolSide }) {
       <dl>
         <div><dt>ID</dt><dd>{side.id ?? '–'}</dd></div>
         <div><dt>Reported LD</dt><dd>{num(side.reportedM, 3, ' m')}</dd></div>
-        <div><dt>Master axis</dt><dd>{num(side.maM, 3, ' m')}</dd></div>
+        <div><dt>Log distance, aligned</dt><dd>{num(side.maM, 3, ' m')}</dd></div>
         <div><dt>Clock</dt><dd>{side.clockLabel}</dd></div>
-        <div><dt>Depth</dt><dd>{num(side.depthPct, 1, ' %WT')}</dd></div>
+        <div><dt>Depth</dt><dd>{num(side.depthPct, 1, ' %t')}</dd></div>
         <div><dt>Length</dt><dd>{num(side.lengthMm, 0, ' mm')}</dd></div>
         <div><dt>Width</dt><dd>{num(side.widthMm, 0, ' mm')}</dd></div>
         <div><dt>Wall</dt><dd>{num(side.wtMm, 1, ' mm')}</dd></div>
@@ -161,18 +161,18 @@ export default function SpoolInspector({
             value={STATUS_LABEL[feature.status]}
             tone={STATUS_COLOR[feature.status]}
           />
-          <Field label="Master axis" value={`${feature.maM.toFixed(3)} m`} delta={<DeltaChip value={feature.maShiftM} digits={3} suffix=" m" />} />
+          <Field label="Log distance, aligned" value={`${feature.maM.toFixed(3)} m`} delta={<DeltaChip value={feature.maShiftM} digits={3} suffix=" m" />} />
           <Field label="Clock position" value={feature.clockLabel} />
           <Field label="Length (axial)" value={num(current.lengthMm ?? previous.lengthMm, 0, ' mm')} delta={<DeltaChip value={feature.lengthDeltaMm} digits={0} suffix=" mm" />} />
           <Field label="Width (circ.)" value={num(current.widthMm ?? previous.widthMm, 0, ' mm')} delta={<DeltaChip value={feature.widthDeltaMm} digits={0} suffix=" mm" />} />
-          <Field label="Max depth" value={num(depth, 1, ' %WT')} delta={<DeltaChip value={feature.depthDeltaPct} digits={1} suffix=" %WT" />} />
+          <Field label="Max. depth" value={num(depth, 1, ' %t')} delta={<DeltaChip value={feature.depthDeltaPct} digits={1} suffix=" %t" />} />
           <Field label="Wall thickness" value={num(current.wtMm ?? previous.wtMm, 1, ' mm')} />
           <Field label="Remaining WT" value={num(current.remainingWtMm ?? previous.remainingWtMm, 2, ' mm')} delta={<DeltaChip value={feature.remainingWtDeltaMm} digits={2} suffix=" mm" />} />
           <Field label="ERF (vendor)" value={num(current.erf ?? previous.erf, 2)} delta={<DeltaChip value={feature.erfDelta} digits={2} />} />
           <Field label="Safe pressure (vendor)" value={num(current.psafeBar ?? previous.psafeBar, 1, ' bar')} />
           <Field
             label="Depth growth"
-            value={feature.depthGrowthPctPerYear === null ? '–' : `${feature.depthGrowthPctPerYear.toFixed(2)} %WT/yr`}
+            value={feature.depthGrowthPctPerYear === null ? '–' : `${feature.depthGrowthPctPerYear.toFixed(2)} %t/yr`}
           />
           <Field
             label="Length growth"

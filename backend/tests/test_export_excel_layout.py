@@ -188,9 +188,15 @@ class ExportExcelLayoutTests(unittest.TestCase):
             input_path.write_text(json.dumps(data), encoding="utf-8")
             subprocess.run([sys.executable, str(engine), str(input_path), str(output_path)], check=True)
             sheet = openpyxl.load_workbook(output_path, data_only=False).active
-            self.assertTrue(str(sheet["A1"].value).startswith("<  NEW DATA"))
-            self.assertTrue(str(sheet["P1"].value).startswith("COMPARISON"))
-            self.assertTrue(str(sheet["AB1"].value).startswith("OLD DATA"))
+            # Band titles follow POF 100 Appendix 8: "DATA RUN 1 / DATA RUN 2"
+            # either side of a "Difference" block.
+            self.assertTrue(str(sheet["A1"].value).startswith("<  DATA RUN NEW"))
+            self.assertTrue(str(sheet["P1"].value).startswith("DIFFERENCE"))
+            self.assertTrue(str(sheet["AB1"].value).startswith("DATA RUN OLD"))
+            self.assertEqual(sheet["A2"].value, "Log distance NEW [m]")
+            self.assertEqual(sheet["F2"].value, "Feature to upstream weld NEW [m]")
+            self.assertEqual(sheet["K2"].value, "Depth NEW [%t]")
+            self.assertEqual(sheet["Z2"].value, "Run\ncomparison")
             self.assertEqual(sheet["A3"].value, 10.5)
             self.assertEqual(sheet["C3"].value, "'=HYPERLINK(\"https://example.invalid\")")
             self.assertEqual(sheet["P3"].value, 0.75)

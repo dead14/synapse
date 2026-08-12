@@ -277,6 +277,30 @@
 .ds-segmented__option:focus-visible { outline: none; box-shadow: var(--ds-ring); }
 
 /* ===========================================================================
+ * Dialog — the surface a modal panel sits on.
+ *
+ * `Modal` takes the whole panel class as a prop, so a caller that passes only
+ * sizing (`max-w-3xl w-full`) silently drops the default background with it and
+ * the dialog renders transparent over whatever is behind it. This is the
+ * token-based surface to pass instead: it themes with the rest of the app and
+ * cannot be half-applied.
+ * ======================================================================== */
+
+.ds-dialog {
+  display: flex;
+  width: 100%;
+  max-height: min(86vh, 60rem);
+  min-width: 0;
+  flex-direction: column;
+  overflow: auto;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r-lg);
+  background: var(--ds-surface);
+  box-shadow: var(--ds-shadow-md);
+  color: var(--ds-ink);
+}
+
+/* ===========================================================================
  * Panel — every card in the wizard. Same border, radius, and header rhythm.
  * ======================================================================== */
 

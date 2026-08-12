@@ -19,6 +19,7 @@ import {
   sortAlignmentRowsByMasterAxis,
   summarizeConservationAudit,
 } from './utils/alignmentDisplay';
+import { pofColumnTitle } from './domain/pof100';
 import MatchEvidenceDrawer, { type MatchEvidence } from './components/comparison/MatchEvidenceDrawer';
 import ShareSnapshotButton from './components/sharing/ShareSnapshotButton';
 import { buildAlignmentShareState } from './lib/sharing/publicShareSnapshot';
@@ -221,8 +222,8 @@ const ProbabilityModal = ({ sourceRow, targetRow, movingSide = 'NEW', onConfirm,
             <span className="font-bold">{dDist.toFixed(3)} m</span>
           </div>
           <div className="flex justify-between border-b border-gray-100 pb-1">
-            <span className="text-gray-500">Depth Diff (Δ%WT)</span>
-            <span className="font-bold">{dDepth.toFixed(1)} %WT</span>
+            <span className="text-gray-500">Δ Depth [%t]</span>
+            <span className="font-bold">{dDepth.toFixed(1)} %t</span>
           </div>
           <div className="flex justify-between border-b border-gray-100 pb-1">
             <span className="text-gray-500">Dimensions Diff (ΔL/W)</span>
@@ -328,7 +329,7 @@ const ReassignDialog = ({ sourceRow, movingSide, candidates, onPick, onCancel }:
                   <span className="ml-2 text-xs text-gray-400">{String(row[`Feature Type ${anchorSide}`])}</span>
                 )}
                 {hasRowValue(row, `Depth ${anchorSide} (%WT)`) && (
-                  <span className="ml-2 text-xs text-gray-400">{String(row[`Depth ${anchorSide} (%WT)`])} %WT</span>
+                  <span className="ml-2 text-xs text-gray-400">{String(row[`Depth ${anchorSide} (%WT)`])} %t</span>
                 )}
               </button>
             </li>
@@ -1018,7 +1019,9 @@ export default function ResultsPanel({
                           checked={visibleColumns.includes(col)}
                           onChange={() => toggleColumn(col)}
                         />
-                        <span className="truncate flex-1" title={col}>{col}</span>
+                        <span className="truncate flex-1" title={`${pofColumnTitle(col)} · engine field: ${col}`}>
+                          {pofColumnTitle(col)}
+                        </span>
                       </label>
                     ))}
                   </div>
@@ -1258,10 +1261,13 @@ export default function ResultsPanel({
                           }}
                           style={{ width: colWidths[col] || 150 }}
                           title={col === MASTER_AXIS_COLUMN
-                            ? 'Canonical TIE-in coordinate used to align and order OLD and NEW rows.'
+                            ? 'Canonical TIE-in coordinate used to align and order OLD and NEW rows. POF 100 has no term for it; it is the newest run\'s log distance with the older runs projected onto it.'
                             : col === DEPTH_GROWTH_COLUMN
-                              ? 'Converted from %WT/year using NEW wall thickness (OLD when NEW is unavailable).'
-                              : undefined}
+                              ? 'Converted from %t/year using NEW wall thickness (OLD when NEW is unavailable).'
+                              // POF 100 terminology on screen, engine field on hover,
+                              // so a filter or a support question can still name the
+                              // key the payload actually carries.
+                              : `POF 100 term. Engine field: ${col}`}
                           aria-sort={sortConfig?.key === col ? (sortConfig.direction === 'asc' ? 'ascending' : 'descending') : undefined}
                           className={`px-2 py-2 font-bold whitespace-nowrap relative group select-none ${draggedColumn === col ? 'opacity-50' : ''}`}
                         >
@@ -1269,14 +1275,14 @@ export default function ResultsPanel({
                             <button
                               type="button"
                               className="flex w-full justify-between items-center cursor-pointer hover:text-brand-600 focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-500 rounded"
-                              aria-label={`Sort by ${col}${sortConfig?.key === col ? (sortConfig.direction === 'asc' ? ', currently ascending' : ', currently descending') : ''}`}
+                              aria-label={`Sort by ${pofColumnTitle(col)}${sortConfig?.key === col ? (sortConfig.direction === 'asc' ? ', currently ascending' : ', currently descending') : ''}`}
                               onClick={() => {
                                 let direction: 'asc' | 'desc' = 'asc';
                                 if (sortConfig && sortConfig.key === col && sortConfig.direction === 'asc') direction = 'desc';
                                 setSortConfig({ key: col, direction });
                               }}
                             >
-                              <span>{col}</span>
+                              <span>{pofColumnTitle(col)}</span>
                               <span aria-hidden="true" className="text-gray-400 text-[10px]">
                                 {sortConfig?.key === col ? (sortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
                               </span>
@@ -1284,7 +1290,7 @@ export default function ResultsPanel({
                             <input
                               type="text"
                               placeholder="Filter..."
-                              aria-label={`Filter ${col}`}
+                              aria-label={`Filter ${pofColumnTitle(col)}`}
                               className="w-full border border-gray-300 rounded px-1 py-0.5 text-[10px] font-normal focus:outline-none focus:border-brand-500"
                               value={filterInput[col] || ''}
                               onChange={(e) => setFilterInput(prev => ({ ...prev, [col]: e.target.value }))}

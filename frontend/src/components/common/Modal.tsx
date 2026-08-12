@@ -38,7 +38,14 @@ export interface ModalProps {
   ariaLabel?: string;
   /** Wrapper that covers the viewport; sites keep their existing backdrop styling. */
   overlayClassName?: string;
-  /** The dialog surface; sites keep their existing panel styling. */
+  /**
+   * The dialog surface; sites keep their existing panel styling.
+   *
+   * This *replaces* the default, background and all — passing only sizing
+   * (`max-w-3xl w-full`) leaves a transparent dialog with the page showing
+   * through it. Pass `ds-dialog` for the token-based surface, or include a
+   * background of your own.
+   */
   panelClassName?: string;
   /** Close when the backdrop (not the panel) is clicked. Default true. */
   closeOnBackdrop?: boolean;

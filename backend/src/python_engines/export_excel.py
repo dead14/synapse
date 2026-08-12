@@ -21,24 +21,47 @@ from excel_common import (
 )
 
 
-NEW_HEADERS = [
-    "Abs. Dist NEW (m)", "Feature Type NEW", "Identif. NEW", "Joint No. NEW",
-    "Joint Len NEW (m)", "Dist GW NEW (m)", "Wall WT NEW (mm)", "O'Clock NEW",
-    "Length NEW (mm)", "Width NEW (mm)", "Depth NEW (%WT)", "Surface NEW",
-    "ERF ASME NEW", "Psafe NEW (bar)", "Comment NEW",
-]
+# Column titles follow POF 100 (Nov 2021) Appendix 2 "Report structure,
+# terminology and abbreviations" and Appendix 8 "Run comparison example", so a
+# client can read this workbook next to the contractor's own report without
+# translating. Only the titles are POF; the row values are still pulled by the
+# engine's own keys in `side_values()` below, which are unchanged.
+#
+# Two headers have no POF equivalent and say so plainly rather than borrowing a
+# standard word: "Feature number" (the vendor's own record number, which POF
+# leaves to the contractor) and "Data completeness" (an audit of this alignment,
+# not a property of the pipe).
+def _sided(side):
+    return [
+        f"Log distance {side} [m]",
+        f"Feature type {side}",
+        f"Feature number {side}",
+        f"Girth weld number {side}",
+        f"Joint length {side} [m]",
+        f"Feature to upstream weld {side} [m]",
+        f"Wall thickness {side} [mm]",
+        f"Clock position {side}",
+        f"Length {side} [mm]",
+        f"Width {side} [mm]",
+        f"Depth {side} [%t]",
+        f"Surface location {side}",
+        f"ERF {side}",
+        f"Psafe {side} [bar]",
+        f"Comments {side}",
+    ]
+
+
+NEW_HEADERS = _sided("NEW")
+# POF Appendix 8 bands these as "Difference"; depth is %t and the clock is a
+# position, per POF §2.7.
 CENTER_HEADERS = [
-    "Odo Diff (m)\nNEW-OLD", "Dist GW Δ\nNEW-OLD", "O'Clock\nChanged?",
-    "Clock Δ\n(deg)", "Depth Δ (%)\nNEW-OLD", "Length Δ(mm)\nNEW-OLD",
-    "Width Δ(mm)\nNEW-OLD", "Depth Growth\n(%WT/yr)", "Length Growth\n(mm/yr)",
-    "Surface\nChanged?", "Match\nStatus", "Data\nCompleteness",
+    "Δ Log distance\n[m] NEW-OLD", "Δ Feature to\nupstream weld [m]",
+    "Clock position\nchanged?", "Δ Clock position\n[°]",
+    "Δ Depth [%t]\nNEW-OLD", "Δ Length [mm]\nNEW-OLD", "Δ Width [mm]\nNEW-OLD",
+    "Depth growth\n[%t/yr]", "Length growth\n[mm/yr]",
+    "Surface location\nchanged?", "Run\ncomparison", "Data\ncompleteness",
 ]
-OLD_HEADERS = [
-    "Abs. Dist OLD (m)", "Feature Type OLD", "Identif. OLD", "Joint No. OLD",
-    "Joint Len OLD (m)", "Dist GW OLD (m)", "Wall WT OLD (mm)", "O'Clock OLD",
-    "Length OLD (mm)", "Width OLD (mm)", "Depth OLD (%WT)", "Surface OLD",
-    "ERF ASME OLD", "Psafe OLD (bar)", "Comment OLD",
-]
+OLD_HEADERS = _sided("OLD")
 
 # Every style object is built exactly once at import time.  openpyxl keeps one
 # Cell object per populated cell, and the report is 40 columns wide, so a
@@ -74,7 +97,7 @@ THIN_BORDER = Border(bottom=Side(style="thin", color="D9E2F3"))
 # wrong cells with nothing to catch it.
 FIRST_CENTER_COLUMN = len(NEW_HEADERS) + 1
 FIRST_OLD_COLUMN = FIRST_CENTER_COLUMN + len(CENTER_HEADERS)
-STATUS_COLUMN = FIRST_CENTER_COLUMN + CENTER_HEADERS.index("Match\nStatus")
+STATUS_COLUMN = FIRST_CENTER_COLUMN + CENTER_HEADERS.index("Run\ncomparison")
 LAST_COLUMN = len(NEW_HEADERS) + len(CENTER_HEADERS) + len(OLD_HEADERS)
 
 
@@ -414,9 +437,9 @@ def initialize_comparison_sheet(workbook, title, row_count):
     headers = NEW_HEADERS + CENTER_HEADERS + OLD_HEADERS
     banner = [None] * len(headers)
     for column, value in (
-        (1, "<  NEW DATA — ALIGNMENT RESULT"),
-        (FIRST_CENTER_COLUMN, "COMPARISON (NEW − OLD)"),
-        (FIRST_OLD_COLUMN, "OLD DATA — ALIGNMENT RESULT  >"),
+        (1, "<  DATA RUN NEW — ALIGNMENT RESULT"),
+        (FIRST_CENTER_COLUMN, "DIFFERENCE (NEW − OLD)"),
+        (FIRST_OLD_COLUMN, "DATA RUN OLD — ALIGNMENT RESULT  >"),
     ):
         banner[column - 1] = styled_cell(
             worksheet,
@@ -623,15 +646,15 @@ def initialize_xlsxwriter_comparison_sheet(workbook, row_count, formats):
     # which left the OLD title merged across the wrong span — and unwritten.
     worksheet.merge_range(
         0, 0, 0, FIRST_CENTER_COLUMN - 2,
-        "<  NEW DATA — ALIGNMENT RESULT", formats["title_blue"],
+        "<  DATA RUN NEW — ALIGNMENT RESULT", formats["title_blue"],
     )
     worksheet.merge_range(
         0, FIRST_CENTER_COLUMN - 1, 0, FIRST_OLD_COLUMN - 2,
-        "COMPARISON (NEW − OLD)", formats["title_gold"],
+        "DIFFERENCE (NEW − OLD)", formats["title_gold"],
     )
     worksheet.merge_range(
         0, FIRST_OLD_COLUMN - 1, 0, LAST_COLUMN - 1,
-        "OLD DATA — ALIGNMENT RESULT  >", formats["title_blue"],
+        "DATA RUN OLD — ALIGNMENT RESULT  >", formats["title_blue"],
     )
     headers = NEW_HEADERS + CENTER_HEADERS + OLD_HEADERS
     for column, header in enumerate(headers):
@@ -792,9 +815,9 @@ def main():
     headers = NEW_HEADERS + CENTER_HEADERS + OLD_HEADERS
     banner = [None] * len(headers)
     for column, value in (
-        (1, "<  NEW DATA — ALIGNMENT RESULT"),
-        (FIRST_CENTER_COLUMN, "COMPARISON (NEW − OLD)"),
-        (FIRST_OLD_COLUMN, "OLD DATA — ALIGNMENT RESULT  >"),
+        (1, "<  DATA RUN NEW — ALIGNMENT RESULT"),
+        (FIRST_CENTER_COLUMN, "DIFFERENCE (NEW − OLD)"),
+        (FIRST_OLD_COLUMN, "DATA RUN OLD — ALIGNMENT RESULT  >"),
     ):
         banner[column - 1] = styled_cell(
             worksheet,

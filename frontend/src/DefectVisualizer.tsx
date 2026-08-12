@@ -8,6 +8,7 @@ import {
   type ComparisonLane,
   type LaneFeature,
 } from './domain/comparisonLanes.ts';
+import { POF_RUN_COMPARISON_BADGE } from './domain/pof100.ts';
 
 /**
  * Lane timeline for a comparison result, plus the entry point into the Spool
@@ -27,13 +28,8 @@ interface DefectVisualizerProps {
   onSelectRowIdx?: (idx: number | null) => void;
 }
 
-const STATUS_BADGE: Record<string, string> = {
-  persistent: 'Carried over',
-  new: 'New',
-  lost: 'Gone next run',
-  transient: 'One run only',
-  single: 'Single run',
-};
+/** POF 100 §7.5 / Appendix 8 wording for a run comparison outcome. */
+const STATUS_BADGE = POF_RUN_COMPARISON_BADGE;
 
 export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx }: DefectVisualizerProps) {
   const [isSpoolViewOpen, setIsSpoolViewOpen] = useState(false);
@@ -79,22 +75,24 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
   };
 
   const featureRows = (feature: LaneFeature, lane: ComparisonLane): Array<[string, string]> => {
+    // Row names follow POF 100 Appendix 2 / Appendix 8 so this card reads the
+    // same as the contractor's own pipe tally.
     const rows: Array<[string, string]> = [
       ['Run', lane.label],
-      ['Reported LD', feature.rawM === null ? '—' : `${feature.rawM.toFixed(3)} m`],
+      ['Log distance', feature.rawM === null ? '—' : `${feature.rawM.toFixed(3)} m`],
     ];
     if (!lane.isMaster) {
-      rows.push(['On master axis', feature.alignedM === null ? 'not aligned' : `${feature.alignedM.toFixed(3)} m`]);
+      rows.push(['Log distance, aligned', feature.alignedM === null ? 'not aligned' : `${feature.alignedM.toFixed(3)} m`]);
     }
     rows.push(
-      ['Dist U/S GW', feature.usGwM === null ? '—' : `${feature.usGwM.toFixed(3)} m`],
-      ['Joint no.', feature.jointNo ?? '—'],
-      ['Clock', feature.clockLabel],
-      ['Surface', feature.external === null ? '—' : (feature.external ? 'External' : 'Internal')],
-      ['Depth', feature.depthPct === null ? '—' : `${feature.depthPct} %WT`],
+      ['Feature to upstream weld', feature.usGwM === null ? '—' : `${feature.usGwM.toFixed(3)} m`],
+      ['Girth weld number', feature.jointNo ?? '—'],
+      ['Clock position', feature.clockLabel],
+      ['Surface location', feature.external === null ? '—' : (feature.external ? 'External' : 'Internal')],
+      ['Depth', feature.depthPct === null ? '—' : `${feature.depthPct} %t`],
       ['Length', feature.lengthMm === null ? '—' : `${feature.lengthMm} mm`],
       ['Width', feature.widthMm === null ? '—' : `${feature.widthMm} mm`],
-      ['Type', feature.featureType || '—'],
+      ['Feature identification', feature.featureType || '—'],
     );
     // Said outright, because the run-to-run columns above stay empty for these
     // rows by rule rather than because the runs disagreed.
