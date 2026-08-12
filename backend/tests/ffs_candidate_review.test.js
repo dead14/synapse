@@ -198,6 +198,23 @@ test('result source keys come from the latest completed alignment job', async ()
     assert.match(pool.calls[0].text, /Source Key NEW/);
 });
 
+test('result source keys read the persisted rows, not only the legacy blob', async () => {
+    // Rows moved out of result_json into alignment_job_rows; reading only the
+    // JSON array answered "no keys" for every run written since, which made the
+    // Corrosion Analysis handoff reject its own released population.
+    const pool = recordingPool([{ rows: [], rowCount: 0 }]);
+
+    await listResultSourceKeys(pool, 7, 22);
+
+    const sql = pool.calls[0].text;
+    assert.match(sql, /JOIN alignment_job_rows r ON r\.job_id = c\.job_id/i);
+    assert.match(sql, /r\.row_json->>'Source Key NEW'/);
+    assert.match(sql, /row_count IS NOT NULL/i);
+    // Runs completed before the migration still carry their rows inline.
+    assert.match(sql, /row_count IS NULL/i);
+    assert.match(sql, /UNION ALL/i);
+});
+
 test('saving a review replaces the previous one inside a transaction', async () => {
     const pool = recordingPool([{ rows: [], rowCount: 0 }]);
 

@@ -1,5 +1,9 @@
 const metrics = require('../../observability/metrics');
 const { comparisonRowDistance } = require('./alignmentContract');
+// Server-authored session fields a wizard snapshot never carries.  They are the
+// same fields the config fingerprint ignores, for the same reason: the client
+// does not own them.
+const { RUNTIME_CONFIG_FIELDS } = require('./alignmentExecution');
 
 // Kept in step with COMPARISON_DISTANCE_KEYS in alignmentContract: the export
 // cursor must order rows exactly the way the stored comparison array is ordered.
@@ -127,7 +131,21 @@ async function updateOwnedSessionConfig(pool, sessionId, orgId, config, { expect
               AND COALESCE(s.organization_id, p.organization_id) = $3
          )
          UPDATE alignment_sessions s
-         SET params_json = $1::jsonb,
+         -- The browser sends a wizard snapshot, which never contains the fields
+         -- the server writes for itself: the run summary the worker records on
+         -- completion, and the interventions, sections and route the reviewer
+         -- saves while reading the result.  A plain overwrite dropped them, so
+         -- stepping back and forward once after a finished run erased its
+         -- resultSummary — and with it the session's route into FFS, because
+         -- the handoff gate reads exactly that field.  The snapshot still wins
+         -- for every key it does define.
+         SET params_json = (
+                 COALESCE((
+                     SELECT jsonb_object_agg(entry.key, entry.value)
+                     FROM jsonb_each(COALESCE(s.params_json::jsonb, '{}'::jsonb)) entry
+                     WHERE entry.key = ANY($7::text[])
+                 ), '{}'::jsonb) || $1::jsonb
+             )::json,
              -- Only ever set, never cleared: a later wizard step may resave a
              -- config snapshot that omits summaryData.
              run_old_id = COALESCE($5::integer, s.run_old_id),
@@ -136,7 +154,15 @@ async function updateOwnedSessionConfig(pool, sessionId, orgId, config, { expect
          WHERE s.id = owned.id
            AND ($4::text IS NULL OR s.xmin::text = $4::text)
          RETURNING s.id, s.status, s.xmin::text AS revision`,
-        [toJson(config), sessionId, orgId, expectedRevision, oldRunId, newRunId],
+        [
+            toJson(config),
+            sessionId,
+            orgId,
+            expectedRevision,
+            oldRunId,
+            newRunId,
+            [...RUNTIME_CONFIG_FIELDS],
+        ],
     );
     return result.rows[0] || null;
 }

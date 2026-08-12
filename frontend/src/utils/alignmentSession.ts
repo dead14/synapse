@@ -28,6 +28,30 @@ export function isAlignmentSessionId(value: string | null | undefined): boolean 
   return Number.isSafeInteger(parsed) && parsed > 0;
 }
 
+/**
+ * What a published link points at.
+ *
+ * A share carries the server-authored reference it was created with — a run
+ * (`alignment-job:<id>`) or a session (`alignment-session:<id>`) — never a bare
+ * session id. Handing that string to the session resolver made every published
+ * alignment link open on "…is not an alignment session reference", because the
+ * prefix cannot be a positive integer. Rows for a share are read through the
+ * share's own endpoint, so a job reference needs no session at all.
+ */
+export function parseAlignmentShareReference(
+  sourceRef: string | null | undefined,
+): { kind: 'job' | 'session'; id: string } | null {
+  if (typeof sourceRef !== 'string') return null;
+  const reference = sourceRef.trim();
+  if (reference === '') return null;
+  const job = reference.match(/^alignment-job:(.+)$/);
+  if (job) return { kind: 'job', id: job[1] };
+  const session = reference.match(/^alignment-session:(.+)$/);
+  if (session) return { kind: 'session', id: session[1] };
+  // Links published before references were prefixed carry the bare session id.
+  return isAlignmentSessionId(reference) ? { kind: 'session', id: reference } : null;
+}
+
 export function resolveAlignmentSessionId({
   sharedSessionId = '',
   search = '',

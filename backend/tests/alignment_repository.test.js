@@ -58,7 +58,24 @@ test('updateOwnedSessionConfig cannot update a session outside the organization'
     assert.match(pool.calls[0].text, /COALESCE\(s\.organization_id, p\.organization_id\) = \$3/i);
     // Trailing values are the derived run references; a config with no
     // summaryData contributes none and must not clear the stored ones.
-    assert.deepEqual(pool.calls[0].values.slice(1), [7, 22, null, null, null]);
+    assert.deepEqual(pool.calls[0].values.slice(1, 6), [7, 22, null, null, null]);
+});
+
+test('updateOwnedSessionConfig keeps the fields the server writes for itself', async () => {
+    const pool = recordingPool({ rows: [{ id: 7, status: 'completed', revision: '43' }], rowCount: 1 });
+
+    await updateOwnedSessionConfig(pool, 7, 22, { hello: 'world' });
+
+    // A wizard snapshot never carries resultSummary, so overwriting the column
+    // with it erased the run summary the FFS handoff gate reads — and the
+    // reviewer's interventions and sections with it.
+    assert.deepEqual(pool.calls[0].values[6], [
+        'resultSummary', 'failureReason', 'interventions', 'sections', 'pipelineRoute',
+    ]);
+    assert.match(pool.calls[0].text, /jsonb_each\(COALESCE\(s\.params_json::jsonb/i);
+    assert.match(pool.calls[0].text, /entry\.key = ANY\(\$7::text\[\]\)/i);
+    // The snapshot still wins for every key it defines.
+    assert.match(pool.calls[0].text, /\|\| \$1::jsonb/);
 });
 
 test('updateOwnedSessionConfig records the run pair the session references', async () => {
@@ -68,7 +85,7 @@ test('updateOwnedSessionConfig records the run pair the session references', asy
         summaryData: { oldRun: { runId: 11 }, newRun: { runId: 12 } },
     });
 
-    assert.deepEqual(pool.calls[0].values.slice(4), [11, 12]);
+    assert.deepEqual(pool.calls[0].values.slice(4, 6), [11, 12]);
     assert.match(pool.calls[0].text, /run_old_id = COALESCE\(\$5::integer, s\.run_old_id\)/i);
 });
 
@@ -84,7 +101,7 @@ test('updateOwnedSessionConfig takes the chain ends when a session holds run pai
         },
     });
 
-    assert.deepEqual(pool.calls[0].values.slice(4), [5, 9]);
+    assert.deepEqual(pool.calls[0].values.slice(4, 6), [5, 9]);
 });
 
 test('updateOwnedSessionConfig does not echo the full saved JSON payload', async () => {

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   isAlignmentSessionId,
+  parseAlignmentShareReference,
   resolveAlignmentSessionId,
 } from '../src/utils/alignmentSession.ts';
 
@@ -41,6 +42,26 @@ test('a poisoned stored session is ignored rather than sent to the API', () => {
   assert.equal(resolveAlignmentSessionId({ storedSessionId: 'undefined' }), '');
   assert.equal(resolveAlignmentSessionId({ storedSessionId: '0' }), '');
   assert.equal(resolveAlignmentSessionId({ storedSessionId: '41' }), '41');
+});
+
+test('a published link is read through its own reference, not as a session id', () => {
+  // The share carries what it was created from. Feeding that string to the
+  // session resolver made every published alignment link open on
+  // "…is not an alignment session reference", because a prefixed reference can
+  // never be a positive integer.
+  assert.deepEqual(
+    parseAlignmentShareReference('alignment-job:9d1f4c2a-77b0-4e51-9a3e-2f6b8c0d1e42'),
+    { kind: 'job', id: '9d1f4c2a-77b0-4e51-9a3e-2f6b8c0d1e42' },
+  );
+  assert.deepEqual(
+    parseAlignmentShareReference('alignment-session:12'),
+    { kind: 'session', id: '12' },
+  );
+  // Links published before references were prefixed carry the bare id.
+  assert.deepEqual(parseAlignmentShareReference('12'), { kind: 'session', id: '12' });
+  for (const bad of ['', '   ', 'oops', 'alignment-job:', null, undefined]) {
+    assert.equal(parseAlignmentShareReference(bad), null, `expected ${String(bad)} to be refused`);
+  }
 });
 
 test('an explicitly requested session is returned even when malformed', () => {
