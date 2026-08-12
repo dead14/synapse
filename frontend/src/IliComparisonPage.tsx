@@ -119,6 +119,10 @@ export default function IliComparisonPage({
   const [jobProgress, setJobProgress] = useState(0);
   const [jobMessage, setJobMessage] = useState('Sending data to the queue...');
   const [isProcessing, setIsProcessing] = useState(false);
+  // The table is live from the first page onward, so the reader has to be told
+  // that more of the run is still arriving behind what they are already reading.
+  const [streaming, setStreaming] = useState(false);
+  const [loadedRows, setLoadedRows] = useState(0);
   const [selectedRowIdx, setSelectedRowIdx] = useState<number | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
@@ -133,9 +137,13 @@ export default function IliComparisonPage({
   const [sections, setSections] = useState<unknown[]>([]);
   const [pipelineExportData, setPipelineExportData] = useState<Record<string, unknown>>({});
   const [pairFilter, setPairFilter] = useState<string | null>(null);
+  // Rows stream in a page at a time, and whether the run-pair column is shown
+  // at all depends on how many pairs the *whole* result holds — so the decision
+  // is taken here, over everything loaded so far, rather than per page.
+  const labelledData = useMemo(() => withRunPairColumn(baseData), [baseData]);
   const data = useMemo(
-    () => applyInterventions(baseData, interventions),
-    [baseData, interventions],
+    () => applyInterventions(labelledData, interventions),
+    [labelledData, interventions],
   );
   const includedData = useMemo(() => includedInterventionRows(data), [data]);
   const requestedSessionId = resolveAlignmentSessionId({
@@ -210,11 +218,25 @@ export default function IliComparisonPage({
         setPipelineExportData({});
         setPairFilter(null);
         setSelectedRowIdx(null);
+        setStreaming(false);
+        setLoadedRows(0);
         setJobProgress(5);
         setJobMessage('Checking alignment status...');
         const progress = (value: number, message: string) => {
           setJobProgress(value);
           setJobMessage(message);
+        };
+        // Every page of rows goes on screen the moment it arrives. The reader
+        // used to watch a progress bar until the last row of the run had been
+        // downloaded, which on a published link is the whole comparison over
+        // someone else's connection.
+        const receivePage = (rows: ComparisonRow[], info: { loaded: number; complete: boolean }) => {
+          if (controller.signal.aborted) return;
+          setBaseData((current) => (current.length === 0 ? rows : [...current, ...rows]));
+          setIsProcessing(false);
+          setLoading(false);
+          setStreaming(!info.complete);
+          setLoadedRows(info.loaded);
         };
         const alignmentPromise = sharedId && sharedToken
           ? fetchSharedAlignmentResult(
@@ -222,8 +244,14 @@ export default function IliComparisonPage({
             sharedToken,
             progress,
             controller.signal,
+            { onPage: receivePage },
           )
-          : fetchAlignmentResult(requestedSessionId, progress, controller.signal);
+          : fetchAlignmentResult(
+            requestedSessionId,
+            progress,
+            controller.signal,
+            { onPage: receivePage },
+          );
         type SessionResponse = {
           config?: Record<string, unknown> & { interventions?: InterventionEvent[] };
         };
@@ -238,20 +266,26 @@ export default function IliComparisonPage({
             `/api/wizard/session/${encodeURIComponent(requestedSessionId)}`,
             { signal: controller.signal },
           );
-        const [alignment, session] = await Promise.all([
+        // Interventions decide which rows are excluded, so they are applied as
+        // soon as the session answers rather than after the last result page —
+        // otherwise the rows painted first would show as included until the
+        // whole run had loaded. The awaited pair below still reports failures.
+        void sessionPromise.then((session) => {
+          if (controller.signal.aborted) return;
+          setInterventions(session.config?.interventions || []);
+          const configuredSections = Array.isArray(session.config?.matchingSections)
+            && session.config.matchingSections.length > 0
+            ? session.config.matchingSections
+            : session.config?.sections;
+          setSections(Array.isArray(configuredSections) ? configuredSections : []);
+          setPipelineExportData(createPipelineExportData(session.config || {}));
+        }).catch(() => { /* reported by the await below */ });
+        const [alignment] = await Promise.all([
           alignmentPromise,
           sessionPromise,
         ]);
         setAudit(alignment.audit);
         setAlignmentJobId(alignment.jobId ?? '');
-        setBaseData(withRunPairColumn(alignment.comparison));
-        setInterventions(session.config?.interventions || []);
-        const configuredSections = Array.isArray(session.config?.matchingSections)
-          && session.config.matchingSections.length > 0
-          ? session.config.matchingSections
-          : session.config?.sections;
-        setSections(Array.isArray(configuredSections) ? configuredSections : []);
-        setPipelineExportData(createPipelineExportData(session.config || {}));
       } catch (caughtError) {
         if ((caughtError as Error).name !== 'AbortError') {
           setError(caughtError instanceof Error ? caughtError.message : 'Failed to load ILI results.');
@@ -260,6 +294,7 @@ export default function IliComparisonPage({
         if (!controller.signal.aborted) {
           setIsProcessing(false);
           setLoading(false);
+          setStreaming(false);
         }
       }
     };
@@ -495,6 +530,20 @@ export default function IliComparisonPage({
           </div>
         ) : (
           <div className="mt-1 flex flex-col gap-2">
+            {/* The result is readable from the first page on; the rest of the
+                run keeps arriving behind it, and saying so is what keeps a
+                partially loaded table from reading as the whole result. */}
+            {streaming && (
+              <div
+                role="status"
+                className="flex flex-wrap items-center gap-2 px-3 py-1.5 text-xs"
+                style={{ borderRadius: 'var(--syn-radius-control)', border: '1px solid var(--syn-line)', background: 'var(--syn-surface)', color: 'var(--syn-text-muted, #64748b)' }}
+              >
+                <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-200 border-t-blue-500" aria-hidden="true" />
+                Showing the first {loadedRows.toLocaleString()} rows — the rest of the run is still loading.
+              </div>
+            )}
+
             {/* Handoff to the corrosion review — the only route into FFS. */}
             {!readOnly && sessionId && (
               <div
