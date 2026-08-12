@@ -1,4 +1,5 @@
 const express = require('express');
+const compression = require('compression');
 const cors = require('cors');
 const path = require('path');
 const { getJwtSecret } = require('./config/auth');
@@ -58,6 +59,15 @@ app.use((req, res, next) => {
 
 app.use(securityHeaders);
 app.use(cors(corsOptions));
+
+// An alignment result page is the widest response this API serves: twenty
+// thousand objects that repeat the same forty column names, shipped in full to
+// whoever opens a published link.  Nothing in front of Express compresses it —
+// the server also serves the built frontend — so the recipient waited on the
+// raw bytes.  This shape gzips roughly tenfold for a few milliseconds of CPU.
+// The default filter already skips responses that are not compressible, so the
+// Excel export still streams as a binary.
+app.use(compression({ threshold: 1024 }));
 
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '10mb';
 // Publishing an FFS link uploads the whole frozen assessment in one request,

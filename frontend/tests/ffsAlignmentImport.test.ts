@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  describeEmptyImport,
   extractGirthWeldLadder,
   extractSpoolCensus,
   getAlignmentImportReadiness,
@@ -156,7 +157,53 @@ test('only features released by Corrosion Analysis are assessed', () => {
   const mapped = mapAlignmentRowsToFfs(rows, engineering, '5', released('new:2'));
 
   assert.deepEqual(mapped.accepted.map((item) => item.provenance.sourceFeatureKey), ['new:2']);
-  assert.deepEqual(mapped.rejected, [{ featureId: 'A-1', reason: 'Not selected in Corrosion Analysis.' }]);
+  assert.deepEqual(mapped.rejected, [
+    { featureId: 'A-1', reason: 'Not selected in Corrosion Analysis.', released: false },
+  ]);
+});
+
+test('an import that assessed nothing names the reasons that apply to released features', () => {
+  // The engineer released everything; the run reports no width. Reporting the
+  // first reject in row order announced "row does not contain a NEW-run
+  // feature" — a row nobody asked to assess — and hid the missing column.
+  const rows = [
+    { 'Source Key OLD': 'old:1', 'Identif. OLD': 'B-1' },
+    {
+      'Source Key NEW': 'new:1',
+      'Identif. NEW': 'A-1',
+      'Log Dist NEW (m)': 10,
+      'Depth NEW (%WT)': 20,
+      'Length NEW (mm)': 50,
+      'Wall WT NEW (mm)': 10,
+    },
+    {
+      'Source Key NEW': 'new:2',
+      'Identif. NEW': 'A-2',
+      'Log Dist NEW (m)': 20,
+      'Depth NEW (%WT)': 30,
+      'Length NEW (mm)': 60,
+      'Wall WT NEW (mm)': 10,
+    },
+  ];
+
+  const mapped = mapAlignmentRowsToFfs(rows, engineering, '5', released('new:1', 'new:2'));
+
+  assert.equal(mapped.accepted.length, 0);
+  const message = describeEmptyImport(mapped);
+  assert.match(message, /None of the 2 released feature\(s\) could be assessed/);
+  assert.match(message, /2 × Missing or invalid measured field\(s\): Width NEW \(mm\)\./);
+  assert.doesNotMatch(message, /does not contain a NEW-run feature/);
+});
+
+test('an empty import with nothing released points at the review, not at the data', () => {
+  const mapped = mapAlignmentRowsToFfs(
+    [{ 'Source Key NEW': 'new:1', 'Identif. NEW': 'A-1' }],
+    engineering,
+    '5',
+    released('new:other'),
+  );
+
+  assert.match(describeEmptyImport(mapped), /may have been saved against a different run/i);
 });
 
 test('an assessment without a saved selection is refused outright', () => {

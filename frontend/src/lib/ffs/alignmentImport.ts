@@ -86,6 +86,17 @@ export interface AcceptedAlignmentRow {
 export interface RejectedAlignmentRow {
   featureId: string;
   reason: string;
+  /**
+   * True when the Corrosion Analysis review released this feature and the
+   * import still could not assess it.
+   *
+   * Rows with no NEW-run feature, and features the review never released, are
+   * the ordinary remainder of a comparison table — not failures. Without this
+   * flag the two are indistinguishable, which is how "no feature could be
+   * assessed" came to be reported as "row does not contain a NEW-run feature":
+   * the first reject in row order, describing a row nobody asked to assess.
+   */
+  released: boolean;
 }
 
 /** One girth weld of the NEW run, on the master odometer the FFS rows use. */
@@ -553,6 +564,37 @@ function assertEngineeringInputs(inputs: AlignmentEngineeringInputs): void {
   }
 }
 
+/**
+ * Why an import produced nothing to assess.
+ *
+ * The caller used to report `rejected[0].reason`, which is the first row of the
+ * comparison table in row order — almost always an OLD-only row, so a run whose
+ * whole released population was missing one measured column announced itself as
+ * "Row does not contain a NEW-run feature." That names a row nobody asked to
+ * assess and hides the column the engineer has to go and fix. This counts the
+ * reasons that actually apply to released features and leads with the common
+ * ones.
+ */
+export function describeEmptyImport(result: AlignmentImportResult): string {
+  const blocked = result.rejected.filter((item) => item.released);
+  if (blocked.length === 0) {
+    return 'No released feature appears in this alignment result. The Corrosion '
+      + 'Analysis review may have been saved against a different run — reopen it and validate again.';
+  }
+  const counts = new Map<string, number>();
+  for (const item of blocked) counts.set(item.reason, (counts.get(item.reason) || 0) + 1);
+  const ranked = [...counts.entries()].sort((left, right) => right[1] - left[1]);
+  const named = ranked.slice(0, 3)
+    .map(([reason, count]) => `${count.toLocaleString()} × ${reason}`)
+    .join(' ');
+  const remainder = ranked.length > 3
+    ? ` (and ${(ranked.length - 3).toLocaleString()} further reason(s))`
+    : '';
+  return `None of the ${blocked.length.toLocaleString()} released feature(s) could be assessed. `
+    + `${named}${remainder} Repair the source data for those columns, or re-run the alignment `
+    + 'once the missing measurements are ingested.';
+}
+
 export function mapAlignmentRowsToFfs(
   comparison: ComparisonRow[],
   engineering: AlignmentEngineeringInputs,
@@ -571,11 +613,11 @@ export function mapAlignmentRowsToFfs(
     const sourceFeatureKey = text(source['Source Key NEW'], '');
     const featureId = text(source['Identif. NEW'], text(source['Feature ID NEW'], sourceFeatureKey || 'Unknown'));
     if (!sourceFeatureKey) {
-      rejected.push({ featureId, reason: 'Row does not contain a NEW-run feature.' });
+      rejected.push({ featureId, reason: 'Row does not contain a NEW-run feature.', released: false });
       continue;
     }
     if (!selection.selectedKeys.has(sourceFeatureKey)) {
-      rejected.push({ featureId, reason: 'Not selected in Corrosion Analysis.' });
+      rejected.push({ featureId, reason: 'Not selected in Corrosion Analysis.', released: false });
       continue;
     }
 
@@ -588,7 +630,11 @@ export function mapAlignmentRowsToFfs(
     ] as const;
     const missing = required.filter(([, value]) => value === null).map(([label]) => label);
     if (missing.length > 0) {
-      rejected.push({ featureId, reason: `Missing or invalid measured field(s): ${missing.join(', ')}.` });
+      rejected.push({
+        featureId,
+        reason: `Missing or invalid measured field(s): ${missing.join(', ')}.`,
+        released: true,
+      });
       continue;
     }
 
@@ -602,7 +648,11 @@ export function mapAlignmentRowsToFfs(
     // assessment before it ever ran; they are carried through and disclosed
     // instead. See the same note in `validation.ts`.
     if (distance < 0 || depth < 0 || depth > 100 || length <= 0 || width <= 0 || wall <= 0) {
-      rejected.push({ featureId, reason: 'Measured NEW-run values are outside the supported FFS domain.' });
+      rejected.push({
+        featureId,
+        reason: 'Measured NEW-run values are outside the supported FFS domain.',
+        released: true,
+      });
       continue;
     }
 

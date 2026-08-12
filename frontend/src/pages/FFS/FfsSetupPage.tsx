@@ -27,6 +27,7 @@ import {
 } from '../../utils/interventions';
 import {
   alignmentSectionOptions,
+  describeEmptyImport,
   getAlignmentImportReadiness,
   mapAlignmentRowsToFfs,
   normalizedSectionKey,
@@ -347,10 +348,7 @@ export default function FfsSetupPage() {
       }, selectedRunId, { selectedKeys, reasons });
 
       if (imported.accepted.length === 0) {
-        throw new Error(
-          imported.rejected[0]?.reason
-          || 'No released anomaly carries the geometry an FFS assessment needs.',
-        );
+        throw new Error(describeEmptyImport(imported));
       }
       const rows = imported.accepted.map((item) => item.row);
       const dataErrors = validateData(rows);
