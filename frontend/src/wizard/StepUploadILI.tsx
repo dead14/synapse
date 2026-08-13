@@ -7,6 +7,7 @@ import { formatIngestionImportError } from '../domain/ingestionError';
 import {
   buildPersistedIliRun,
   ingestPersistedInspectionRunPair,
+  runChronology,
   type IngestionResponse,
 } from '../domain/alignmentIntake';
 
@@ -72,6 +73,47 @@ function fileStem(fileName: string): string {
   return stem || 'ILI Alignment';
 }
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The survey year a date implies.
+ *
+ * The intake collects one value — the day the tool ran — and everything that
+ * used to be keyed on the year is derived from it, so the run can never be
+ * stored with a year that disagrees with its own date.
+ */
+function yearOfSurveyDate(surveyDate: string): string {
+  return ISO_DATE.test(surveyDate) ? surveyDate.slice(0, 4) : '';
+}
+
+/** A survey date that is a real calendar day inside the plausible run window. */
+function isUsableSurveyDate(surveyDate: string): boolean {
+  if (!ISO_DATE.test(surveyDate)) return false;
+  const parsed = new Date(`${surveyDate}T00:00:00Z`);
+  if (!Number.isFinite(parsed.getTime())) return false;
+  // Round-tripping rejects a rolled-over day such as 2026-02-31.
+  if (parsed.toISOString().slice(0, 10) !== surveyDate) return false;
+  const year = parsed.getUTCFullYear();
+  return year >= 1900 && year <= 2100;
+}
+
+function longSurveyDate(surveyDate: string): string {
+  if (!isUsableSurveyDate(surveyDate)) return '';
+  return new Date(`${surveyDate}T00:00:00Z`).toLocaleDateString('en-GB', {
+    day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
+  });
+}
+
+/** The `YYYY-MM-DD` a filename spells out, when it spells one out at all. */
+function surveyDateFromFileName(fileName: string): string {
+  const iso = fileName.match(/\b(19|20)(\d{2})[-_.]?(\d{2})[-_.]?(\d{2})\b/);
+  if (iso) {
+    const candidate = `${iso[1]}${iso[2]}-${iso[3]}-${iso[4]}`;
+    if (isUsableSurveyDate(candidate)) return candidate;
+  }
+  return '';
+}
+
 function abortError(): Error {
   return new DOMException('Aborted', 'AbortError');
 }
@@ -125,7 +167,10 @@ async function waitForIngestion(
 export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   const toast = useToast();
   const [expandedSection, setExpandedSection] = useState<string | null>('all');
-  const [datasets, setDatasets] = useState<any[]>([{ id: 1, year: '', vendor: '', file: null }, { id: 2, year: '', vendor: '', file: null }]);
+  const [datasets, setDatasets] = useState<any[]>([
+    { id: 1, surveyDate: '', vendor: '', file: null },
+    { id: 2, surveyDate: '', vendor: '', file: null },
+  ]);
   const [masterIndex, setMasterIndex] = useState(1);
   const [algorithm, setAlgorithm] = useState('dtw_hungarian_onedirection');
   const [enablePartialRun, setEnablePartialRun] = useState(false);
@@ -208,9 +253,9 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         }
         if (prev.length < 3 || prev[0].phyloLabel) return prev;
         return [
-          { id: 1, year: '', vendor: '', file: null, phyloLabel: 'Ancestor Data' },
-          { id: 2, year: '', vendor: '', file: null, phyloLabel: 'ILI Alignment 1' },
-          { id: 3, year: '', vendor: '', file: null, phyloLabel: 'ILI Alignment 2' },
+          { id: 1, surveyDate: '', vendor: '', file: null, phyloLabel: 'Ancestor Data' },
+          { id: 2, surveyDate: '', vendor: '', file: null, phyloLabel: 'ILI Alignment 1' },
+          { id: 3, surveyDate: '', vendor: '', file: null, phyloLabel: 'ILI Alignment 2' },
         ];
       });
       setMasterIndex(0);
@@ -226,8 +271,23 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   }, [algorithm]);
 
   const allFilesUploaded = datasets.every((ds) => (
-    ds.file !== null && /^\d{4}$/.test(String(ds.year || '').trim()) && String(ds.vendor || '').trim().length > 0
+    ds.file !== null
+    && isUsableSurveyDate(String(ds.surveyDate || '').trim())
+    && String(ds.vendor || '').trim().length > 0
   ));
+
+  /** Two runs flown on the same day cannot be ordered into OLD and NEW. */
+  const duplicateSurveyDates = (() => {
+    const seen = new Set<string>();
+    const clashes = new Set<string>();
+    for (const dataset of datasets) {
+      const value = String(dataset.surveyDate || '').trim();
+      if (!isUsableSurveyDate(value)) continue;
+      if (seen.has(value)) clashes.add(value);
+      seen.add(value);
+    }
+    return [...clashes];
+  })();
 
   const handleInitialize = async () => {
     const signal = unmountAbortRef.current?.signal;
@@ -251,7 +311,10 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         const formData = new FormData();
         formData.append('file', dataset.file);
         formData.append('pipelineName', pipelineName);
-        formData.append('surveyYear', dataset.year);
+        // The server derives the year from the date; `surveyYear` still travels
+        // so an older backend that has not learned about dates keeps working.
+        formData.append('surveyDate', dataset.surveyDate);
+        formData.append('surveyYear', yearOfSurveyDate(dataset.surveyDate));
         formData.append('vendor', dataset.vendor);
         const queued = await apiFetch<IngestionResponse>('/api/upload-csv', {
           method: 'POST',
@@ -264,7 +327,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         return buildPersistedIliRun(response, {
           name: dataset.file.name,
           vendor: dataset.vendor,
-          year: dataset.year,
+          year: yearOfSurveyDate(dataset.surveyDate),
+          surveyDate: dataset.surveyDate,
           tool: dataset.tool,
         });
       };
@@ -273,7 +337,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         datasets: datasets.map((dataset) => ({
           file: dataset.file as File,
           vendor: String(dataset.vendor || ''),
-          year: String(dataset.year || ''),
+          year: yearOfSurveyDate(String(dataset.surveyDate || '')),
+          surveyDate: String(dataset.surveyDate || ''),
           tool: String(dataset.tool || ''),
         })),
         masterIndex,
@@ -283,7 +348,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
 
       if (algorithm === 'phylogenetic') {
         const sorted = [...runPair.historicalRuns, runPair.masterRun]
-          .sort((a, b) => Number(a.year || 0) - Number(b.year || 0));
+          .sort((a, b) => runChronology(a) - runChronology(b));
         summaryData.ancestorRun = sorted[0];
         for (let i = 1; i < sorted.length; i++) {
           summaryData[`run${i}`] = sorted[i];
@@ -295,6 +360,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         {
           role: 'Master',
           year: runPair.masterRun.year,
+          surveyDate: runPair.masterRun.surveyDate,
           vendor: runPair.masterRun.vendor,
           fileName: runPair.masterRun.name,
           runId: runPair.masterRun.runId,
@@ -303,6 +369,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         ...runPair.historicalRuns.map((run) => ({
           role: 'Historical',
           year: run.year,
+          surveyDate: run.surveyDate,
           vendor: run.vendor,
           fileName: run.name,
           runId: run.runId,
@@ -349,12 +416,15 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
       <section className="alignment-intake__header">
         <div className="flex flex-col items-start justify-between gap-6 lg:flex-row lg:items-center">
           <div className="max-w-2xl">
-            <div className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-brand-50 text-brand-600"><FiDatabase size={14} /></span>
+            <div className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em]">
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg"><FiDatabase size={14} aria-hidden="true" /></span>
               01 — New alignment run
             </div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Inspection intake</h1>
-            <p className="mt-2 text-sm leading-6 text-slate-500 sm:text-base">Add the inspection runs that will be compared, then provide the pipeline context for a traceable alignment.</p>
+            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Inspection intake</h1>
+            <p className="mt-2 text-sm leading-6 sm:text-base">
+              Add the inspection runs that will be compared, with the date each was flown, then provide the
+              pipeline context for a traceable alignment.
+            </p>
           </div>
           <div className="ds-btn-group">
             <LinkButton
@@ -405,8 +475,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
               onClick={() => toggleSection('asset')}
               className="alignment-config-panel__trigger"
             >
-              <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-                <FiInfo className="text-gray-500" /> Asset & Operations
+              <h3 className="flex items-center gap-2 font-semibold">
+                <FiInfo aria-hidden="true" /> Asset &amp; operations
               </h3>
               {isExpanded('asset') ? <FiChevronUp /> : <FiChevronDown />}
             </button>
@@ -460,8 +530,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
               onClick={() => toggleSection('specs')}
               className="alignment-config-panel__trigger"
             >
-              <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-                <FiSettings className="text-gray-500" /> Physical Specs & Protection
+              <h3 className="flex items-center gap-2 font-semibold">
+                <FiSettings aria-hidden="true" /> Physical specs &amp; protection
               </h3>
               {isExpanded('specs') ? <FiChevronUp /> : <FiChevronDown />}
             </button>
@@ -551,59 +621,62 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         <div className="flex flex-col gap-4">
           <div className="alignment-run-panel">
             <div className="alignment-run-panel__toolbar">
-              <div className="flex items-center gap-4">
-                <div>
-                  <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">Run pair setup</p>
-                  <h3 className="font-semibold text-slate-900 flex items-center gap-2">
-                    <FiShield className="text-brand-600" /> ILI data configuration
-                  </h3>
-                </div>
+              <div className="alignment-run-panel__title">
+                <p className="alignment-run-panel__eyebrow">Run pair setup</p>
+                <h3>
+                  <FiShield aria-hidden="true" /> ILI data configuration
+                </h3>
+              </div>
+
+              <div className="alignment-run-panel__controls">
                 {datasets.length < 6 && (
                   <Button
                     size="sm"
                     variant="secondary"
                     startIcon={<FiPlus aria-hidden="true" />}
-                    onClick={() => setDatasets([...datasets, { id: Date.now(), year: '', vendor: '', file: null }])}
+                    onClick={() => setDatasets([...datasets, { id: Date.now(), surveyDate: '', vendor: '', file: null }])}
                   >
-                    Add another ILI data
+                    Add another run
                   </Button>
                 )}
-              </div>
-              <div className="flex items-center gap-3">
-                <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Strategy</label>
-                <select
-                  className="ds-select ds-select--sm"
-                  value={algorithm}
-                  onChange={(e) => setAlgorithm(e.target.value)}
-                >
-                  {strategies.map((capability) => (
-                    <option
-                      key={capability.id}
-                      value={capability.id}
-                      disabled={!capability.available}
-                    >
-                      {strategyLabel(capability)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {STRATEGY_HINTS[algorithm] && (
-                <p className="ds-muted" style={{ fontSize: 'var(--ds-t-xs)', margin: 0, maxWidth: '46rem' }}>
-                  {STRATEGY_HINTS[algorithm]}
-                </p>
-              )}
-              {algorithm !== 'phylogenetic' && (
-                <div className="flex items-center gap-2">
-                  <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-600">
-                    <input 
-                      type="checkbox" 
-                      className="w-4 h-4 rounded text-brand-600 focus:ring-brand-500" 
+                <label className="alignment-run-panel__strategy">
+                  <span>Strategy</span>
+                  <select
+                    className="ds-select ds-select--sm"
+                    value={algorithm}
+                    onChange={(e) => setAlgorithm(e.target.value)}
+                  >
+                    {strategies.map((capability) => (
+                      <option
+                        key={capability.id}
+                        value={capability.id}
+                        disabled={!capability.available}
+                      >
+                        {strategyLabel(capability)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {algorithm !== 'phylogenetic' && (
+                  <label className="alignment-run-panel__toggle">
+                    <input
+                      type="checkbox"
                       checked={enablePartialRun}
                       onChange={(e) => setEnablePartialRun(e.target.checked)}
                     />
-                    Enable Partial Run (Tie-In)
+                    Enable partial run (tie-in)
                   </label>
-                </div>
+                )}
+              </div>
+
+              {STRATEGY_HINTS[algorithm] && (
+                <p className="alignment-run-panel__hint">{STRATEGY_HINTS[algorithm]}</p>
+              )}
+              {duplicateSurveyDates.length > 0 && (
+                <p className="alignment-run-panel__conflict" role="alert">
+                  Two runs share the survey date {duplicateSurveyDates.join(', ')}. Give each run the day
+                  it was actually flown, or the chain cannot order them into OLD and NEW.
+                </p>
               )}
             </div>
             
@@ -613,73 +686,85 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                 const isMaster = index === masterIndex;
                 return (
                   <div key={ds.id} className={`alignment-dataset-card${isMaster ? ' is-master' : ''}`}>
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-2">
-                        <div className={`h-9 w-1 rounded-full ${isMaster ? 'bg-brand-500' : 'bg-slate-300'}`}></div>
-                        <div>
-                          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{isMaster ? 'Alignment anchor' : 'Comparison source'}</p>
-                          <h4 className={`font-bold ${isMaster ? 'text-brand-800' : 'text-slate-800'}`}>
-                            {algorithm === 'phylogenetic' ? ds.phyloLabel : isMaster ? 'Master dataset' : `Dataset ${index + 1}`}
-                          </h4>
-                        </div>
+                    <div className="alignment-dataset-card__head">
+                      <span className="alignment-dataset-card__rule" aria-hidden="true" />
+                      <div className="alignment-dataset-card__identity">
+                        <p className="alignment-dataset-card__role">
+                          {isMaster ? 'Alignment anchor' : 'Comparison source'}
+                        </p>
+                        <h4 className="alignment-dataset-card__name">
+                          {algorithm === 'phylogenetic' ? ds.phyloLabel : isMaster ? 'Master dataset' : `Dataset ${index + 1}`}
+                        </h4>
                       </div>
+                      {yearOfSurveyDate(ds.surveyDate || '') && (
+                        <span className="alignment-dataset-card__year">{yearOfSurveyDate(ds.surveyDate)}</span>
+                      )}
+                      {isMaster && <span className="alignment-dataset-card__flag">Master</span>}
                     </div>
 
                     <div className="alignment-dropzone group">
-                      <input 
-                        type="file" 
-                        accept=".csv,.xlsx" 
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
+                      <input
+                        type="file"
+                        accept=".csv,.xlsx"
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        aria-label={`Upload the inspection data file for ${isMaster ? 'the master dataset' : `dataset ${index + 1}`}`}
                         onChange={(e) => {
                           if (e.target.files && e.target.files[0]) {
-                            const newDs = [...datasets];
                             const file = e.target.files[0];
-                            newDs[index].file = file;
-                            
-                            // Auto-extract year from filename if it matches YYYY
-                            const yearMatch = file.name.match(/\b(19|20)\d{2}\b/);
-                            if (yearMatch) {
-                              newDs[index].year = yearMatch[0];
-                            }
-                            
-                            setDatasets(newDs);
+                            // A filename that spells out a full date pre-fills
+                            // it; a bare year cannot, because the day is the
+                            // part FFS needs and guessing 1 January would date
+                            // every assessment wrong by up to a year.
+                            const detected = surveyDateFromFileName(file.name);
+                            setDatasets((current) => current.map((item, itemIndex) => (
+                              itemIndex === index
+                                ? { ...item, file, surveyDate: item.surveyDate || detected }
+                                : item
+                            )));
                           }
                         }}
                       />
                       {ds.file ? (
                         <>
-                          <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center mb-2">
-                            <FiDatabase className="text-green-600 text-xl" />
-                          </div>
-                          <p className="text-sm font-bold text-gray-800 text-center px-4 truncate w-full">{ds.file.name}</p>
-                          <p className="text-xs text-gray-500 mt-1">Click to replace</p>
+                          <span className="alignment-dropzone__badge" aria-hidden="true">
+                            <FiDatabase />
+                          </span>
+                          <p className="alignment-dropzone__file">{ds.file.name}</p>
+                          <p className="alignment-dropzone__hint">Click to replace</p>
                         </>
                       ) : (
                         <>
-                          <FiUploadCloud className={`text-3xl mb-2 ${isMaster ? 'text-brand-400 group-hover:text-brand-500' : 'text-gray-400 group-hover:text-brand-500'}`} />
-                          <p className="text-sm font-medium text-gray-700">Upload Data File</p>
-                          <p className="text-xs text-gray-500 mt-1">Drag & drop or click to browse</p>
+                          <FiUploadCloud className="alignment-dropzone__icon" aria-hidden="true" />
+                          <p className="alignment-dropzone__title">Upload data file</p>
+                          <p className="alignment-dropzone__hint">Drag &amp; drop, or click to browse · .xlsx, .xls, .csv</p>
                         </>
                       )}
                     </div>
-                    <div className="mt-3 grid grid-cols-2 gap-3">
-                      <label className="text-xs font-semibold text-slate-600">
-                        Survey year
+                    <div className="alignment-dataset-card__fields">
+                      <label className="alignment-field">
+                        <span className="alignment-field__label">
+                          Survey date <em>required</em>
+                        </span>
                         <input
-                          type="number"
-                          min="1900"
-                          max="2100"
+                          type="date"
+                          min="1900-01-01"
+                          max="2100-12-31"
                           required
-                          value={ds.year || ''}
+                          value={ds.surveyDate || ''}
                           onChange={(event) => setDatasets((current) => current.map((item, itemIndex) => (
-                            itemIndex === index ? { ...item, year: event.target.value } : item
+                            itemIndex === index ? { ...item, surveyDate: event.target.value } : item
                           )))}
-                          className="ds-input" style={{ marginTop: '0.3rem' }}
-                          placeholder="2026"
+                          className="ds-input alignment-field__input"
                         />
+                        <span className="alignment-field__note">
+                          {longSurveyDate(ds.surveyDate || '')
+                            || 'The day the tool ran. Carried into the FFS assessment.'}
+                        </span>
                       </label>
-                      <label className="text-xs font-semibold text-slate-600">
-                        Vendor
+                      <label className="alignment-field">
+                        <span className="alignment-field__label">
+                          Vendor <em>required</em>
+                        </span>
                         <input
                           type="text"
                           required
@@ -687,9 +772,10 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
                           onChange={(event) => setDatasets((current) => current.map((item, itemIndex) => (
                             itemIndex === index ? { ...item, vendor: event.target.value } : item
                           )))}
-                          className="ds-input" style={{ marginTop: '0.3rem' }}
+                          className="ds-input alignment-field__input"
                           placeholder="e.g. ROSEN"
                         />
+                        <span className="alignment-field__note">The ILI contractor that ran this survey.</span>
                       </label>
                     </div>
                   </div>

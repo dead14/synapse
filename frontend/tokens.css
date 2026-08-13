@@ -53,3 +53,39 @@
   --radius-gw-control: 0.5rem;
   --radius-gw-panel: 0.75rem;
 }
+
+/*
+ * The alignment workspace in dark mode.
+ *
+ * Only the surfaces and inks flip. The status hues stay recognisably the same
+ * colours — green for matched, amber for review, red for not matched — because
+ * an engineer reading the canvas is reading colour, and a palette that changed
+ * meaning between themes would be worse than no dark mode at all. They are
+ * lifted in lightness so they still clear contrast against a dark ground, and
+ * the "soft" fills become dark tints of the same hue rather than pale washes.
+ */
+.dark {
+  --color-gw-canvas: oklch(18% 0.018 265);
+  --color-gw-canvas-raised: oklch(22% 0.02 265);
+  --color-gw-paper: oklch(24% 0.021 265);
+  --color-gw-paper-raised: oklch(28% 0.023 265);
+  --color-gw-paper-strong: oklch(33% 0.026 265);
+  --color-gw-rule: oklch(36% 0.028 265);
+  --color-gw-rule-strong: oklch(48% 0.032 265);
+  --color-gw-neutral: oklch(68% 0.026 265);
+  --color-gw-muted: oklch(74% 0.024 265);
+  --color-gw-ink: oklch(96% 0.008 265);
+  --color-gw-ink-soft: oklch(87% 0.016 265);
+  --color-gw-accent: oklch(72% 0.16 268);
+  --color-gw-accent-soft: oklch(30% 0.07 268);
+  --color-gw-accent-ink: oklch(16% 0.02 265);
+  --color-gw-focus: oklch(74% 0.13 250);
+  --color-gw-success: #34e08c;
+  --color-gw-success-soft: #0a2e1e;
+  --color-gw-warning: #f5c948;
+  --color-gw-warning-soft: #33270a;
+  --color-gw-danger: #ff6d80;
+  --color-gw-danger-soft: #3a1319;
+  --color-gw-violet: #bd86f5;
+  --color-gw-track: oklch(48% 0.03 265);
+}

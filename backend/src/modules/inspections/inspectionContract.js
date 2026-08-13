@@ -1,3 +1,5 @@
+const { isoCalendarDate } = require('../ingestion/surveyDate');
+
 function asNonNegativeInteger(value, fallback = null) {
     const parsed = Number(value);
     return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback;
@@ -132,6 +134,9 @@ function serializeInspectionRun(row = {}) {
         pipelineId: asNonNegativeInteger(row.pipeline_id, 0),
         pipelineName: typeof row.pipeline_name === 'string' ? row.pipeline_name : 'Unnamed pipeline',
         surveyYear: asNonNegativeInteger(row.survey_year),
+        // Null for runs imported before the intake collected a date. Consumers
+        // must fall back to the year rather than invent a day.
+        surveyDate: isoCalendarDate(row.survey_date),
         vendor: typeof row.vendor === 'string' ? row.vendor : null,
         sourceFile: typeof row.source_file === 'string' ? row.source_file : null,
         sourceObjectKey: typeof row.source_object_key === 'string' ? row.source_object_key : null,

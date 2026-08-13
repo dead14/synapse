@@ -3652,24 +3652,28 @@ body {
 /* GW matching console: dense, traceable, engineering-first hierarchy. */
 .gw-matching-workspace { --gw-ink:#10213d; --gw-muted:#64748b; --gw-line:#d9e2ee; --gw-blue:#2563eb; color:var(--gw-ink); gap:1rem!important; }
 .gw-matching-workspace > .grid { gap:1rem!important; }
-.gw-matching-workspace .gw-timeline-panel,.gw-matching-workspace .gw-settings-panel,.gw-matching-workspace .gw-trend-panel,.gw-matching-workspace .gw-review-panel { border:1px solid var(--gw-line)!important; border-radius:.75rem!important; box-shadow:0 8px 24px rgba(15,35,65,.06)!important; position:relative; overflow:hidden; }
-.gw-matching-workspace .gw-timeline-panel::before,.gw-matching-workspace .gw-settings-panel::before,.gw-matching-workspace .gw-trend-panel::before,.gw-matching-workspace .gw-review-panel::before { content:''; display:block; position:absolute; inset:0 0 auto; height:3px; background:linear-gradient(90deg,var(--gw-blue),#60a5fa 55%,#34d399); }
+.gw-matching-workspace .gw-timeline-panel,.gw-matching-workspace .gw-settings-panel,.gw-matching-workspace .gw-trend-panel { border:1px solid var(--gw-line)!important; border-radius:.75rem!important; box-shadow:0 8px 24px rgba(15,35,65,.06)!important; position:relative; overflow:hidden; }
+.gw-matching-workspace .gw-timeline-panel::before,.gw-matching-workspace .gw-settings-panel::before,.gw-matching-workspace .gw-trend-panel::before { content:''; display:block; position:absolute; inset:0 0 auto; height:3px; background:linear-gradient(90deg,var(--gw-blue),#60a5fa 55%,#34d399); }
 .gw-matching-workspace h3 { letter-spacing:-.015em; color:var(--gw-ink)!important; }
 .gw-matching-workspace h3::before { content:'SYS / '; color:var(--gw-blue); font:600 .6rem/1 ui-monospace,SFMono-Regular,Consolas,monospace; letter-spacing:.1em; margin-right:.35rem; }
 .gw-matching-workspace p,.gw-matching-workspace label,.gw-matching-workspace th { color:var(--gw-muted); }
 .gw-matching-workspace .gw-timeline-panel input[type=range] { accent-color:var(--gw-blue); }
 .gw-matching-workspace .gw-timeline-panel .relative.h-full { background-image:linear-gradient(rgba(37,99,235,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(37,99,235,.055) 1px,transparent 1px); background-size:32px 32px; }
-.gw-matching-workspace .gw-settings-panel,.gw-matching-workspace .gw-trend-panel,.gw-matching-workspace .gw-review-panel { padding:1rem!important; }
+.gw-matching-workspace .gw-settings-panel,.gw-matching-workspace .gw-trend-panel { padding:1rem!important; }
 .gw-matching-workspace .gw-settings-panel .bg-blue-50\/50 { background:#f6faff!important; border-color:#cfe0fb!important; border-radius:.55rem!important; padding:.7rem .8rem!important; }
 .gw-matching-workspace .gw-settings-panel button.w-12 { width:2.25rem; height:1.2rem; }
 .gw-matching-workspace .gw-settings-panel button.w-12>div { width:.85rem; height:.85rem; top:.175rem; }
 .gw-matching-workspace .gw-settings-panel button.w-12>div.left-7 { left:1.2rem; }
 .gw-matching-workspace .gw-trend-panel .h-\[300px\] { height:250px!important; }
-.gw-matching-workspace .gw-review-panel>div:first-child { border-color:var(--gw-line)!important; margin-bottom:.75rem!important; padding-bottom:.7rem!important; }
 .gw-matching-workspace table { font-variant-numeric:tabular-nums; }
-.gw-matching-workspace table thead th { background:#f5f8fc!important; color:#53657f!important; font:700 .61rem/1.2 ui-monospace,SFMono-Regular,Consolas,monospace!important; letter-spacing:.055em; text-transform:uppercase; white-space:nowrap; }
-.gw-matching-workspace table tbody tr { border-color:#e7edf5!important; }
-.gw-matching-workspace table tbody tr:hover { background:#eff6ff!important; }
+/* The result table owns its own header, hover and border colours in
+   alignment-review.css, where they come from the gw tokens and therefore
+   follow the theme. These literal light-mode overrides used to win on
+   `!important` and left the table lit up in dark mode, so they are scoped
+   away from it. */
+.gw-matching-workspace table:not(.gw-table) thead th { background:#f5f8fc!important; color:#53657f!important; font:700 .61rem/1.2 ui-monospace,SFMono-Regular,Consolas,monospace!important; letter-spacing:.055em; text-transform:uppercase; white-space:nowrap; }
+.gw-matching-workspace table:not(.gw-table) tbody tr { border-color:#e7edf5!important; }
+.gw-matching-workspace table:not(.gw-table) tbody tr:hover { background:#eff6ff!important; }
 @media (max-width:900px) { .gw-matching-workspace .gw-timeline-panel { padding:.85rem!important; } .gw-matching-workspace .gw-timeline-panel .h-\[360px\] { height:300px!important; min-height:260px!important; } }
 /* GW view / sectioning: shared engineering telemetry treatment. */
 .gw-alignment-panel { --gw-ink:#10213d; --gw-line:#d9e2ee; color:var(--gw-ink); gap:1rem!important; }

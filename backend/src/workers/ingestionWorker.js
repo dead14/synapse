@@ -15,12 +15,13 @@ const { resolveIngestionExit } = require('./ingestionOutcome');
 const { ingestionLimiter, isUnrecoverableIngestionError } = require('./ingestionPolicy');
 const { pythonExecutable, pythonSpawnOptions, killPythonProcess } = require('../config/python');
 
-function runIngestionProcess({ inputPath, pipelineName, surveyYear, vendor, organizationId, userId, sourceFile, objectKey }) {
+function runIngestionProcess({ inputPath, pipelineName, surveyYear, surveyDate, vendor, organizationId, userId, sourceFile, objectKey }) {
     return new Promise((resolve, reject) => {
         const child = spawn(pythonExecutable, buildIngestionArguments({
             inputPath,
             pipelineName,
             surveyYear,
+            surveyDate,
             vendor,
             organizationId,
             userId,

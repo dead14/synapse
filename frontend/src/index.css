@@ -513,13 +513,20 @@ layer(base);
     box-shadow: none !important;
   }
 
+  /* The intake is the first screen of the wizard and the one an operator
+     stares at longest, so it answers to the design-system tokens rather than
+     to literal greys: those tokens are what `.dark` re-points, and hard-coded
+     `white` was why this screen stayed lit up in dark mode. */
   .alignment-intake__header {
-    border: 1px solid var(--color-gray-200);
+    border: 1px solid var(--ds-line);
     border-radius: 0.75rem;
-    background: white;
+    background: var(--ds-surface);
     padding: 1.25rem 1.5rem;
-    box-shadow: 0 8px 20px -20px rgba(16, 24, 40, 0.35);
+    box-shadow: var(--ds-shadow-xs);
   }
+
+  .alignment-intake__header h1 { color: var(--ds-ink); }
+  .alignment-intake__header p { color: var(--ds-muted); }
 
   .alignment-intake__header > div {
     gap: 1.25rem;
@@ -536,16 +543,17 @@ layer(base);
 
   .alignment-intake__header .mb-3 {
     margin-bottom: 0.6rem;
-    color: var(--color-gray-500);
+    color: var(--ds-muted);
     font-family: var(--syn-font-data);
   }
 
   .alignment-intake__header .mb-3 > span {
     height: 1.75rem;
     width: 1.75rem;
-    border: 1px solid var(--color-gray-200);
+    border: 1px solid var(--ds-primary-border);
     border-radius: 0.4rem;
-    background: var(--color-gray-50);
+    background: var(--ds-primary-soft);
+    color: var(--ds-primary-ink);
   }
 
   .alignment-intake__action {
@@ -582,10 +590,10 @@ layer(base);
   .alignment-run-panel,
   .alignment-config-panel {
     overflow: hidden;
-    border: 1px solid var(--color-gray-200);
+    border: 1px solid var(--ds-line);
     border-radius: 0.75rem;
-    background: white;
-    box-shadow: 0 8px 20px -22px rgba(16, 24, 40, 0.4);
+    background: var(--ds-surface);
+    box-shadow: var(--ds-shadow-xs);
   }
 
   .alignment-run-panel {
@@ -593,18 +601,98 @@ layer(base);
     flex-direction: column;
   }
 
+  /* One column of stacked rows rather than a three-column grid: the strategy
+     select, the partial-run toggle and the hint had to share a row width that
+     none of them fitted, so the toggle wrapped under the select at every
+     laptop width and read as an unrelated control. */
   .alignment-run-panel__toolbar {
-    display: grid;
-    grid-template-columns: minmax(15rem, 1fr) minmax(20rem, auto) auto;
-    align-items: center;
-    gap: 1rem;
-    border-bottom: 1px solid var(--color-gray-200);
-    background: white;
-    padding: 0.9rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--ds-line);
+    background: var(--ds-surface);
+    padding: 1rem 1.15rem;
   }
 
-  .alignment-run-panel__toolbar > div:first-child {
-    gap: 0.75rem;
+  .alignment-run-panel__eyebrow {
+    margin: 0 0 0.25rem;
+    color: var(--ds-faint);
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .alignment-run-panel__title h3 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    color: var(--ds-ink);
+    font-size: 0.95rem;
+    font-weight: 700;
+  }
+
+  .alignment-run-panel__title h3 svg { color: var(--ds-primary); }
+
+  .alignment-run-panel__controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+  }
+
+  .alignment-run-panel__strategy {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--ds-muted);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .alignment-run-panel__strategy .ds-select { min-width: 17rem; }
+
+  .alignment-run-panel__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: 1px solid var(--ds-line);
+    border-radius: 0.5rem;
+    padding: 0.4rem 0.7rem;
+    color: var(--ds-ink-soft);
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+
+  .alignment-run-panel__toggle:hover { border-color: var(--ds-primary-border); }
+
+  .alignment-run-panel__toggle input {
+    width: 0.95rem;
+    height: 0.95rem;
+    accent-color: var(--ds-primary);
+  }
+
+  .alignment-run-panel__hint {
+    margin: 0;
+    max-width: 60rem;
+    color: var(--ds-muted);
+    font-size: var(--ds-t-xs);
+    line-height: 1.5;
+  }
+
+  .alignment-run-panel__conflict {
+    margin: 0;
+    border: 1px solid var(--ds-warning-border);
+    border-radius: 0.5rem;
+    background: var(--ds-warning-soft);
+    padding: 0.55rem 0.75rem;
+    color: var(--ds-ink);
+    font-size: var(--ds-t-xs);
+    line-height: 1.5;
   }
 
   .alignment-add-run {
@@ -641,30 +729,127 @@ layer(base);
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
     gap: 0.75rem;
-    background: var(--color-gray-50);
+    background: var(--ds-surface-sunken);
     padding: 0.75rem;
   }
 
   .alignment-dataset-card {
     min-width: 0;
-    border: 1px solid var(--color-gray-200);
+    border: 1px solid var(--ds-line);
     border-radius: 0.65rem;
-    background: white;
+    background: var(--ds-surface);
     padding: 0.9rem;
   }
 
   .alignment-dataset-card.is-master {
-    border-color: var(--color-brand-400);
-    background: var(--color-brand-25);
-    box-shadow: inset 3px 0 0 var(--color-brand-500);
+    border-color: var(--ds-primary-border);
+    background: var(--ds-primary-softer);
+    box-shadow: inset 3px 0 0 var(--ds-primary);
   }
 
-  .alignment-dataset-card > div:first-child {
-    margin-bottom: 0.75rem;
+  .alignment-dataset-card__head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.85rem;
   }
 
-  .alignment-dataset-card h4 {
+  .alignment-dataset-card__rule {
+    width: 3px;
+    align-self: stretch;
+    min-height: 2.25rem;
+    border-radius: 999px;
+    background: var(--ds-line-strong);
+  }
+
+  .alignment-dataset-card.is-master .alignment-dataset-card__rule { background: var(--ds-primary); }
+
+  .alignment-dataset-card__identity { min-width: 0; flex: 1; }
+
+  .alignment-dataset-card__role {
+    margin: 0;
+    color: var(--ds-faint);
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .alignment-dataset-card__name {
+    margin: 0.1rem 0 0;
+    overflow: hidden;
+    color: var(--ds-ink);
     font-size: 0.88rem;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The survey year, derived from the date rather than typed, so the card
+     still reads at a glance the way the year field used to make it read. */
+  .alignment-dataset-card__year {
+    border-radius: 0.35rem;
+    background: var(--ds-surface-inset);
+    padding: 0.2rem 0.45rem;
+    color: var(--ds-ink-soft);
+    font-family: var(--syn-font-data);
+    font-size: 0.72rem;
+    font-weight: 700;
+  }
+
+  .alignment-dataset-card__flag {
+    border-radius: 0.35rem;
+    background: var(--ds-primary);
+    padding: 0.2rem 0.45rem;
+    color: var(--ds-on-primary);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .alignment-dataset-card__fields {
+    display: grid;
+    gap: 0.7rem;
+    margin-top: 0.8rem;
+  }
+
+  .alignment-field { display: block; min-width: 0; }
+
+  .alignment-field__label {
+    display: flex;
+    align-items: baseline;
+    gap: 0.35rem;
+    color: var(--ds-ink-soft);
+    font-size: 0.7rem;
+    font-weight: 700;
+  }
+
+  .alignment-field__label em {
+    color: var(--ds-faint);
+    font-size: 0.62rem;
+    font-style: normal;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .alignment-field__input {
+    margin-top: 0.3rem;
+    /* Native date pickers paint their own calendar glyph from the OS colour
+       scheme; without this it stays black on the dark surface. */
+    color-scheme: light;
+  }
+
+  .dark .alignment-field__input { color-scheme: dark; }
+
+  .alignment-field__note {
+    display: block;
+    margin-top: 0.3rem;
+    color: var(--ds-faint);
+    font-size: 0.66rem;
+    font-weight: 500;
+    line-height: 1.4;
   }
 
   .alignment-dropzone {
@@ -675,20 +860,64 @@ layer(base);
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    border: 1px dashed var(--color-gray-300);
+    gap: 0.15rem;
+    border: 1px dashed var(--ds-line-strong);
     border-radius: 0.5rem;
-    background:
-      linear-gradient(rgba(16, 24, 40, 0.025) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(16, 24, 40, 0.025) 1px, transparent 1px),
-      white;
-    background-size: 16px 16px;
+    background: var(--ds-surface-sunken);
     padding: 1rem;
+    text-align: center;
     transition: border-color 140ms ease, background-color 140ms ease;
   }
 
-  .alignment-dropzone:hover {
-    border-color: var(--color-brand-500);
-    background-color: var(--color-brand-25);
+  .alignment-dropzone:hover,
+  .alignment-dropzone:focus-within {
+    border-color: var(--ds-primary);
+    background-color: var(--ds-primary-softer);
+  }
+
+  .alignment-dropzone__icon {
+    margin-bottom: 0.35rem;
+    color: var(--ds-faint);
+    font-size: 1.6rem;
+  }
+
+  .alignment-dropzone:hover .alignment-dropzone__icon { color: var(--ds-primary); }
+
+  .alignment-dropzone__badge {
+    display: inline-flex;
+    width: 2.25rem;
+    height: 2.25rem;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 0.45rem;
+    border-radius: 999px;
+    background: var(--ds-success-soft);
+    color: var(--ds-success);
+    font-size: 1.05rem;
+  }
+
+  .alignment-dropzone__title {
+    margin: 0;
+    color: var(--ds-ink);
+    font-size: 0.82rem;
+    font-weight: 650;
+  }
+
+  .alignment-dropzone__file {
+    margin: 0;
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--ds-ink);
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .alignment-dropzone__hint {
+    margin: 0.15rem 0 0;
+    color: var(--ds-faint);
+    font-size: 0.68rem;
   }
 
   .alignment-config-panel__trigger {
@@ -698,23 +927,27 @@ layer(base);
     align-items: center;
     justify-content: space-between;
     border: 0;
-    border-bottom: 1px solid var(--color-gray-200);
-    background: white;
-    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--ds-line);
+    background: var(--ds-surface);
+    padding: 0.75rem 1.15rem;
+    color: var(--ds-ink);
   }
 
+  .alignment-config-panel__trigger h3 { color: var(--ds-ink); }
+  .alignment-config-panel__trigger svg { color: var(--ds-muted); }
+
   .alignment-config-panel__trigger:hover {
-    background: var(--color-gray-50);
+    background: var(--ds-surface-sunken);
   }
 
   .alignment-config-panel__body {
     gap: 0.85rem;
-    padding: 1rem;
+    padding: 1.15rem;
   }
 
   .alignment-config-panel__body label {
     margin-bottom: 0.35rem;
-    color: var(--color-gray-600);
+    color: var(--ds-ink-soft);
     font-size: 0.72rem;
     font-weight: 650;
   }
@@ -842,7 +1075,8 @@ layer(base);
 
   @media (max-width: 1023px) {
     .alignment-progress { position: static; }
-    .alignment-run-panel__toolbar { grid-template-columns: 1fr; }
+    .alignment-run-panel__strategy { width: 100%; }
+    .alignment-run-panel__strategy .ds-select { min-width: 0; flex: 1; }
   }
 
   @media (max-width: 639px) {

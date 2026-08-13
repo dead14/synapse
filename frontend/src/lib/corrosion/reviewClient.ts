@@ -27,6 +27,12 @@ export interface FfsCandidateReview {
 export interface FfsEligibleSession {
   id: string;
   pipelineName: string;
+  /**
+   * The day the assessed run was flown, `YYYY-MM-DD`, taken from the master run
+   * recorded at upload. Null for sessions built before the intake collected it —
+   * the setup screen then asks for the date instead of assuming one.
+   */
+  inspectionDate: string | null;
   completedAt: string | null;
   reviewedAt: string | null;
   selectedCount: number;

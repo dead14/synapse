@@ -23,7 +23,7 @@ exports.getIngestionJob = async (req, res) => {
     }
 };
 
-exports.enqueueIngestion = async ({ file, pipelineName, surveyYear, vendor, user }) => {
+exports.enqueueIngestion = async ({ file, pipelineName, surveyYear, surveyDate, vendor, user }) => {
     const jobId = randomUUID();
     const storage = require('../storage/objectStorage');
     if (!(await isParserDictionaryReady(pool))) {
@@ -60,6 +60,7 @@ exports.enqueueIngestion = async ({ file, pipelineName, surveyYear, vendor, user
         userId: user.id,
         pipelineName,
         surveyYear,
+        surveyDate: surveyDate || null,
         vendor,
         sourceFile: file.originalname,
         objectKey: stored.key,
@@ -72,6 +73,7 @@ exports.enqueueIngestion = async ({ file, pipelineName, surveyYear, vendor, user
             userId: user.id,
             pipelineName,
             surveyYear,
+            surveyDate: surveyDate || null,
             vendor,
             sourceFile: file.originalname,
             objectKey: stored.key,

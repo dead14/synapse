@@ -43,6 +43,7 @@ const {
 const { buildTieInEvidence, signTieInEvidence, verifyTieInEvidence } = require('./tieInEvidence');
 const ingestionController = require('../ingestion/ingestionController');
 const { toIngestionUploadErrorResponse } = require('../ingestion/ingestionErrors');
+const { parseSurveyDateInput } = require('../ingestion/surveyDate');
 const { alignmentQueue } = require('./alignmentWorker');
 const {
     canonicalSignature,
@@ -321,7 +322,7 @@ async function hydrateRunReferences(payload, orgId) {
 }
 
 exports.uploadCsv = async (req, res) => {
-    const { pipelineName, surveyYear, vendor } = req.body;
+    const { pipelineName, surveyYear, surveyDate, vendor } = req.body;
     const file = req.file;
     if (!file) {
         return res.status(400).json({ error: 'No file uploaded' });
@@ -354,7 +355,16 @@ exports.uploadCsv = async (req, res) => {
 
     const normalizedPipelineName = String(pipelineName || '').trim();
     const normalizedVendor = String(vendor || '').trim();
-    const normalizedYear = Number(surveyYear);
+    // When the intake supplies a full date it also decides the year, so the two
+    // can never be stored disagreeing about which run this is.
+    let survey;
+    try {
+        survey = parseSurveyDateInput(surveyDate);
+    } catch (error) {
+        fs.unlink(file.path, () => {});
+        return res.status(400).json({ error: error.message });
+    }
+    const normalizedYear = survey.year ?? Number(surveyYear);
     if (!normalizedPipelineName || normalizedPipelineName.length > 120) {
         fs.unlink(file.path, () => {});
         return res.status(400).json({ error: 'Pipeline name is required and must be at most 120 characters' });
@@ -373,6 +383,7 @@ exports.uploadCsv = async (req, res) => {
             file,
             pipelineName: normalizedPipelineName,
             surveyYear: normalizedYear,
+            surveyDate: survey.date,
             vendor: normalizedVendor,
             user: req.user,
         });

@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey, JSON, UniqueConstraint, create_engine
+from sqlalchemy import Column, Integer, String, Float, Date, DateTime, Boolean, ForeignKey, JSON, UniqueConstraint, create_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from datetime import datetime
 
@@ -102,6 +102,10 @@ class SurveyRun(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     pipeline_id = Column(Integer, ForeignKey('pipelines.id'))
     survey_year = Column(Integer, index=True)
+    # The day the tool ran.  Null for runs uploaded before the intake asked for
+    # it — unknown has to stay unknown, because FFS measures remnant life from
+    # this date and a guessed 1 January would silently shift every interval.
+    survey_date = Column(Date, index=True)
     vendor = Column(String)
     source_file = Column(String)
     source_object_key = Column(String)

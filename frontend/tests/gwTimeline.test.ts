@@ -7,9 +7,97 @@ import {
   buildTimelineSummary,
   calculateViewportWindow,
   classifyTimelineMatch,
+  offsetTrend,
   rawLdForTimelineMarker,
   readMatchConfidence,
+  timelineLaneLabels,
+  TIMELINE_STATUS_LABEL,
 } from '../src/domain/gwTimeline.ts';
+
+test('offsetTrend reports the mean, the worst pair and the drift along the line', () => {
+  const trend = offsetTrend([
+    { x: 0, y: 1 },
+    { x: 1_000, y: 2 },
+    { x: 2_000, y: 3 },
+  ]);
+
+  assert.ok(trend);
+  assert.equal(trend.mean, 2);
+  assert.equal(trend.maxAbs, 3);
+  assert.equal(trend.maxAt, 2_000);
+  assert.equal(trend.drift, 2);
+  assert.equal(trend.spanFrom, 0);
+  assert.equal(trend.spanTo, 2_000);
+  // 1 m gained over 1000 m is 1 mm per metre.
+  assert.equal(trend.slopeMmPerM, 1);
+});
+
+test('offsetTrend reads the series in distance order, not upload order', () => {
+  const trend = offsetTrend([
+    { x: 2_000, y: 3 },
+    { x: 0, y: 1 },
+  ]);
+
+  assert.ok(trend);
+  assert.equal(trend.drift, 2);
+  assert.equal(trend.spanFrom, 0);
+});
+
+test('offsetTrend picks the largest magnitude, including a negative one', () => {
+  const trend = offsetTrend([
+    { x: 0, y: 2 },
+    { x: 500, y: -9 },
+  ]);
+
+  assert.ok(trend);
+  assert.equal(trend.maxAbs, 9);
+  assert.equal(trend.maxAt, 500);
+});
+
+test('offsetTrend refuses to claim a slope it could not measure', () => {
+  // Every pair at one chainage: there is no run to fit a line along, and
+  // reporting 0 mm/m would read as a measured flat trend.
+  assert.equal(offsetTrend([{ x: 100, y: 1 }, { x: 100, y: 3 }])?.slopeMmPerM, null);
+  assert.equal(offsetTrend([]), null);
+});
+
+test('a girth weld with no counterpart reads as not matched, never as missing', () => {
+  // "Missing" is the metal-loss finding — present in the old run, gone from the
+  // new one. A weld the comparison could not pair is a different result, and
+  // sharing the word makes two findings look like one.
+  assert.equal(TIMELINE_STATUS_LABEL.missing, 'Not match');
+  assert.equal(TIMELINE_STATUS_LABEL.matched, 'Matched');
+  assert.equal(TIMELINE_STATUS_LABEL.review, 'Review');
+});
+
+test('viewer lanes are named by survey year, not by OLD and NEW', () => {
+  assert.deepEqual(
+    timelineLaneLabels({ year: '2024' }, { year: '2026' }),
+    { old: '2024', new: '2026' },
+  );
+});
+
+test('a lane with no year falls back to the vendor rather than to a side name', () => {
+  assert.deepEqual(
+    timelineLaneLabels({ vendor: 'ROSEN' }, { year: '2026' }),
+    { old: 'ROSEN', new: '2026' },
+  );
+  assert.deepEqual(
+    timelineLaneLabels({ surveyDate: '2021-11-02' }, { year: '2026' }),
+    { old: '2021', new: '2026' },
+  );
+});
+
+test('two lanes that would read identically are separated by position', () => {
+  assert.deepEqual(
+    timelineLaneLabels({ year: '2026' }, { year: '2026' }),
+    { old: '2026 (earlier)', new: '2026 (later)' },
+  );
+  assert.deepEqual(
+    timelineLaneLabels(null, undefined),
+    { old: 'Undated run (earlier)', new: 'Undated run (later)' },
+  );
+});
 
 test('buildTimelineModel keeps a full NEW master domain and a partial mapped OLD coverage', () => {
   const model = buildTimelineModel(

@@ -25,6 +25,7 @@ test('builds a small persisted run reference from server ingestion evidence', ()
     name: 'north-line-2026.xlsx',
     vendor: 'Vendor A',
     year: '2026',
+    surveyDate: '2026-03-14',
     tool: 'MFL',
   });
 
@@ -33,6 +34,7 @@ test('builds a small persisted run reference from server ingestion evidence', ()
     name: 'north-line-2026.xlsx',
     vendor: 'Vendor A',
     year: '2026',
+    surveyDate: '2026-03-14',
     tool: 'MFL',
     total: 120_000,
     anomalies: 24_000,
@@ -58,6 +60,38 @@ test('falls back to measured audit counts when a legacy ingest response has no r
   assert.equal(run.welds, 1);
   assert.equal(run.gwAnchors, 1);
   assert.equal(run.anomalies, 0);
+  // A run imported without a survey date must read as "date unknown", never as
+  // a guessed one — FFS measures remnant life from this value.
+  assert.equal(run.surveyDate, '');
+});
+
+test('orders same-year runs by the day the tool ran, not by upload order', async () => {
+  const datasets = [
+    { file: { name: 'december.xlsx' }, vendor: 'V', year: '2026', surveyDate: '2026-12-02', tool: 'MFL' },
+    { file: { name: 'february.xlsx' }, vendor: 'V', year: '2026', surveyDate: '2026-02-09', tool: 'MFL' },
+  ];
+
+  const pair = await ingestPersistedInspectionRunPair({
+    datasets,
+    masterIndex: 0,
+    ingest: async (dataset, index) => buildPersistedIliRun({
+      pipeline_run_id: index + 1,
+      run_summary: { total: 10, welds: 2, gw_anchors: 2 },
+    }, {
+      name: dataset.file.name,
+      vendor: dataset.vendor,
+      year: dataset.year,
+      surveyDate: dataset.surveyDate,
+      tool: dataset.tool,
+    }),
+  });
+
+  assert.equal(pair.oldRun.name, 'february.xlsx');
+  assert.equal(pair.newRun.name, 'december.xlsx');
+  assert.deepEqual(
+    pair.runPairs.map(({ oldRun, newRun }) => [oldRun.name, newRun.name]),
+    [['february.xlsx', 'december.xlsx']],
+  );
 });
 
 test('persists every selected inspection run before forming the master and historical pair', async () => {

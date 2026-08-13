@@ -1253,9 +1253,86 @@
   padding: 0.625rem 0.75rem;
 }
 
-.gw-toggle-row__copy { display: grid; gap: 0.125rem; min-width: 0; }
+.gw-toggle-row__copy { display: grid; gap: 0.125rem; min-width: 0; flex: 1; }
 .gw-toggle-row__copy strong { color: var(--ds-ink); font-size: var(--ds-t-sm); font-weight: 650; }
 .gw-toggle-row__copy small { color: var(--ds-muted); font-size: var(--ds-t-xs); line-height: 1.35; }
+
+/* An icon per rule, so the three toggles are told apart at a glance rather
+   than by reading three similar-length sentences. */
+.gw-toggle-row__icon {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--ds-r-sm);
+  background: var(--ds-primary-soft);
+  color: var(--ds-primary-ink);
+}
+
+/* Tick labels under the tolerance track. */
+.gw-slider-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-block-start: 0.35rem;
+  color: var(--ds-faint);
+  font-family: var(--ds-font-data, inherit);
+  font-size: 0.6rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.gw-control-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (max-width: 1180px) {
+  .gw-control-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.gw-trend-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.625rem;
+}
+
+.gw-trend-stat {
+  min-width: 0;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r-sm);
+  background: var(--ds-surface-sunken);
+  padding: 0.55rem 0.7rem;
+}
+
+.gw-trend-stat dt {
+  color: var(--ds-muted);
+  font-size: var(--ds-t-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.gw-trend-stat dd {
+  margin: 0.15rem 0 0;
+  color: var(--ds-primary-ink);
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.gw-trend-stat small {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--ds-faint);
+  font-size: var(--ds-t-xs);
+  line-height: 1.35;
+}
+
+.gw-trend-chart { position: relative; width: 100%; height: 20rem; }
 
 .gw-section-ota {
   display: grid;
