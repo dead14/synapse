@@ -299,9 +299,15 @@ interface MeasuredGeometry {
   wallSource: FfsWallThicknessSource;
 }
 
-type MeasuredReading =
-  | { ok: true; geometry: MeasuredGeometry }
-  | { ok: false; reason: string };
+/**
+ * The measurements, or the sentence naming what stopped the row.
+ *
+ * A `{ ok, geometry | reason }` result object would read better, but this
+ * project compiles with `strictNullChecks` off, and a boolean discriminant does
+ * not narrow a union under that setting — every `reading.reason` became a type
+ * error. `typeof` narrows in every mode.
+ */
+type MeasuredReading = MeasuredGeometry | string;
 
 /**
  * Reads the five measured values from one row, or says exactly what stopped it.
@@ -334,7 +340,7 @@ function readMeasuredGeometry(
   if (width === null) missing.push('Width NEW (mm)');
   if (wall === null) missing.push('Wall WT NEW (mm)');
   if (missing.length > 0) {
-    return { ok: false, reason: `Missing or invalid measured field(s): ${missing.join(', ')}.` };
+    return `Missing or invalid measured field(s): ${missing.join(', ')}.`;
   }
 
   // Depth is bounded by the wall, not by the 80 %WT project rejection line.
@@ -346,19 +352,16 @@ function readMeasuredGeometry(
     || (depth as number) < 0 || (depth as number) > 100
     || (length as number) <= 0 || (width as number) <= 0 || (wall as number) <= 0
   ) {
-    return { ok: false, reason: 'Measured NEW-run values are outside the supported FFS domain.' };
+    return 'Measured NEW-run values are outside the supported FFS domain.';
   }
 
   return {
-    ok: true,
-    geometry: {
-      distance: distance as number,
-      depth: depth as number,
-      length: length as number,
-      width: width as number,
-      wall: wall as number,
-      wallSource: reportedWall === null ? 'line-nominal' : 'run-reported',
-    },
+    distance: distance as number,
+    depth: depth as number,
+    length: length as number,
+    width: width as number,
+    wall: wall as number,
+    wallSource: reportedWall === null ? 'line-nominal' : 'run-reported',
   };
 }
 
@@ -421,15 +424,15 @@ export function summariseReleasedIntake(
     }
     seen.add(sourceFeatureKey);
     const reading = readMeasuredGeometry(source, nominalWallThicknessMm);
-    if (reading.ok) {
+    if (typeof reading !== 'string') {
       assessable += 1;
-      if (reading.geometry.wallSource === 'line-nominal') usingNominalWall += 1;
+      if (reading.wallSource === 'line-nominal') usingNominalWall += 1;
       continue;
     }
-    let blocker = blockers.get(reading.reason);
+    let blocker = blockers.get(reading);
     if (!blocker) {
-      blocker = { reason: reading.reason, count: 0, examples: [] };
-      blockers.set(reading.reason, blocker);
+      blocker = { reason: reading, count: 0, examples: [] };
+      blockers.set(reading, blocker);
     }
     blocker.count += 1;
     if (blocker.examples.length < 3) {
@@ -823,11 +826,11 @@ export function mapAlignmentRowsToFfs(
     }
 
     const reading = readMeasuredGeometry(source, nominalWall);
-    if (!reading.ok) {
-      rejected.push({ featureId, reason: reading.reason });
+    if (typeof reading === 'string') {
+      rejected.push({ featureId, reason: reading });
       continue;
     }
-    const { distance, depth, length, width, wall, wallSource } = reading.geometry;
+    const { distance, depth, length, width, wall, wallSource } = reading;
 
     const warnings: string[] = [];
     if (wallSource === 'line-nominal') {
