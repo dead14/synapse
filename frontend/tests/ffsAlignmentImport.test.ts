@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  describeEmptyIntake,
   extractGirthWeldLadder,
   extractSpoolCensus,
   getAlignmentImportReadiness,
   mapAlignmentRowsToFfs,
+  summariseReleasedIntake,
 } from '../src/lib/ffs/alignmentImport.ts';
 import { REQUIRED_COLUMNS } from '../src/lib/ffs/types.ts';
 import { validateData } from '../src/lib/ffs/validation.ts';
@@ -84,6 +86,7 @@ test('maps the NEW-run alignment anomaly and converts depth growth from %WT/year
     designFactor: 0.72,
     designFactorSource: 'line-default',
     isClusteredMetalLoss: false,
+    wallThicknessSource: 'run-reported',
     growthEvidence: {
       oldSurveyYear: null,
       newSurveyYear: null,
@@ -156,7 +159,9 @@ test('only features released by Corrosion Analysis are assessed', () => {
   const mapped = mapAlignmentRowsToFfs(rows, engineering, '5', released('new:2'));
 
   assert.deepEqual(mapped.accepted.map((item) => item.provenance.sourceFeatureKey), ['new:2']);
-  assert.deepEqual(mapped.rejected, [{ featureId: 'A-1', reason: 'Not selected in Corrosion Analysis.' }]);
+  // A feature the review held back is a decision already made, not a failure.
+  assert.deepEqual(mapped.rejected, []);
+  assert.deepEqual(mapped.skipped, { noNewFeature: 0, notReleased: 1 });
 });
 
 test('an assessment without a saved selection is refused outright', () => {
@@ -188,7 +193,7 @@ test('uses explicit fallback corrosion rates when alignment growth is unavailabl
   ]);
 });
 
-test('rejects rows without a NEW feature or required measured anomaly dimensions', () => {
+test('the OLD side of the comparison is skipped, not reported as a rejected feature', () => {
   const mapped = mapAlignmentRowsToFfs([
     {
       'Source Key NEW': '-',
@@ -197,6 +202,7 @@ test('rejects rows without a NEW feature or required measured anomaly dimensions
     },
     {
       'Source Key NEW': 'new:2',
+      'Identif. NEW': 'A-2',
       'Log Dist NEW (m)': 20,
       'Depth NEW (%WT)': 25,
       'Length NEW (mm)': '-',
@@ -206,9 +212,123 @@ test('rejects rows without a NEW feature or required measured anomaly dimensions
   ], engineering, '10', released('new:2'));
 
   assert.equal(mapped.accepted.length, 0);
-  assert.equal(mapped.rejected.length, 2);
-  assert.match(mapped.rejected[0].reason, /NEW-run feature/i);
-  assert.match(mapped.rejected[1].reason, /Length NEW/);
+  // Only the released feature is a rejection. The OLD-only row used to be one
+  // too, and being first in the array it became the message the operator saw.
+  assert.deepEqual(mapped.rejected, [{
+    featureId: 'A-2',
+    reason: 'Missing or invalid measured field(s): Length NEW (mm).',
+  }]);
+  assert.deepEqual(mapped.skipped, { noNewFeature: 1, notReleased: 0 });
+});
+
+test('the intake summary counts what a release can assess, and why the rest cannot', () => {
+  const rows = [
+    // The OLD side of the comparison: never a candidate.
+    { 'Source Key NEW': '-', 'Source Key OLD': 'old:1', 'Depth OLD (%WT)': 30 },
+    {
+      'Source Key NEW': 'new:1', 'Identif. NEW': 'A-1', 'Log Dist NEW (m)': 10,
+      'Depth NEW (%WT)': 25, 'Length NEW (mm)': 50, 'Width NEW (mm)': 20, 'Wall WT NEW (mm)': 10,
+    },
+    // The vendor shipped %WT depths with no wall column, which is the case that
+    // refused an entire released population and reported it as an OLD-run row.
+    {
+      'Source Key NEW': 'new:2', 'Identif. NEW': 'A-2', 'Log Dist NEW (m)': 20,
+      'Depth NEW (%WT)': 30, 'Length NEW (mm)': 60, 'Width NEW (mm)': 25, 'Wall WT NEW (mm)': '-',
+    },
+    {
+      'Source Key NEW': 'new:3', 'Identif. NEW': 'A-3', 'Log Dist NEW (m)': 30,
+      'Depth NEW (%WT)': 30, 'Length NEW (mm)': 60, 'Width NEW (mm)': 25, 'Wall WT NEW (mm)': '-',
+    },
+  ];
+  const selection = released('new:1', 'new:2', 'new:3', 'new:missing');
+
+  const summary = summariseReleasedIntake(rows, selection);
+  assert.equal(summary.released, 3);
+  assert.equal(summary.assessable, 1);
+  assert.equal(summary.excludedByIntervention, 0);
+  // A released key with no row in the result means the review was saved against
+  // a different run — a different problem with a different fix.
+  assert.equal(summary.missingFromResult, 1);
+  assert.deepEqual(summary.blockers, [{
+    reason: 'Missing or invalid measured field(s): Wall WT NEW (mm).',
+    count: 2,
+    examples: ['A-2', 'A-3'],
+  }]);
+
+  const withNominalWall = summariseReleasedIntake(rows, selection, 9.5);
+  assert.equal(withNominalWall.assessable, 3);
+  assert.equal(withNominalWall.usingNominalWall, 2);
+  assert.deepEqual(withNominalWall.blockers, []);
+});
+
+test('an empty intake is explained by what blocked it, not by the first row in the file', () => {
+  const wallMissing = summariseReleasedIntake([{
+    'Source Key NEW': 'new:1', 'Identif. NEW': 'A-1', 'Log Dist NEW (m)': 10,
+    'Depth NEW (%WT)': 25, 'Length NEW (mm)': 50, 'Width NEW (mm)': 20,
+  }], released('new:1'));
+  assert.match(describeEmptyIntake(wallMissing), /1 released feature\(s\), none assessable/);
+  assert.match(describeEmptyIntake(wallMissing), /Wall WT NEW \(mm\)/);
+
+  const wrongRun = summariseReleasedIntake([], released('new:1', 'new:2'));
+  assert.match(describeEmptyIntake(wrongRun), /saved against a different run/i);
+
+  // An exclusion is a decision a reviewer made, and reads as one.
+  const allExcluded = summariseReleasedIntake([{
+    'Source Key NEW': 'new:1', 'Log Dist NEW (m)': 10, 'Depth NEW (%WT)': 25,
+    'Length NEW (mm)': 50, 'Width NEW (mm)': 20, 'Wall WT NEW (mm)': 10, __excluded: true,
+  }], released('new:1'));
+  assert.equal(allExcluded.excludedByIntervention, 1);
+  assert.equal(allExcluded.missingFromResult, 0);
+  assert.match(describeEmptyIntake(allExcluded), /excluded from the released outputs/i);
+});
+
+test('the line nominal wall stands in only where the run reported none, and says so', () => {
+  const mapped = mapAlignmentRowsToFfs([{
+    'Source Key NEW': 'new:1',
+    'Identif. NEW': 'A-1',
+    'Log Dist NEW (m)': 10,
+    'Depth NEW (%WT)': 50,
+    'Length NEW (mm)': 50,
+    'Width NEW (mm)': 20,
+  }], { ...engineering, nominalWallThicknessMm: 9.5 }, '11', released('new:1'));
+
+  assert.equal(mapped.accepted.length, 1);
+  assert.equal(mapped.accepted[0].row['Nominal Wall Thickness [mm]'], '9.5');
+  assert.equal(mapped.accepted[0].provenance.wallThicknessSource, 'line-nominal');
+  assert.match(mapped.accepted[0].warnings.join(' '), /line nominal wall of 9.5 mm was used/);
+
+  // A wall the run did report is never overridden by the line default.
+  const reported = mapAlignmentRowsToFfs([{
+    'Source Key NEW': 'new:1',
+    'Log Dist NEW (m)': 10,
+    'Depth NEW (%WT)': 50,
+    'Length NEW (mm)': 50,
+    'Width NEW (mm)': 20,
+    'Wall WT NEW (mm)': 12.7,
+  }], { ...engineering, nominalWallThicknessMm: 9.5 }, '11', released('new:1'));
+  assert.equal(reported.accepted[0].row['Nominal Wall Thickness [mm]'], '12.7');
+  assert.equal(reported.accepted[0].provenance.wallThicknessSource, 'run-reported');
+});
+
+test('a released population with nothing assessable blocks the run before the form is filled', () => {
+  const reasons = getAlignmentImportReadiness({
+    lineName: 'HU CPA',
+    iliDate: '2026-07-03',
+    selectedRunId: '12',
+    alignmentRowCount: 11_147,
+    selectedFeatureCount: 7_463,
+    assessableFeatureCount: 0,
+    intakeBlockReason: '7,463 released feature(s), none assessable. 7,463 of them: Missing or invalid measured field(s): Wall WT NEW (mm).',
+    outerDiameterMm: '508',
+    smysMpa: '359',
+    designFactor: '0.72',
+    operatingPressureMpa: '7.2',
+    fallbackDepthGrowthMmPerYear: '0',
+    fallbackLengthGrowthMmPerYear: '0',
+  });
+  assert.deepEqual(reasons, [
+    '7,463 released feature(s), none assessable. 7,463 of them: Missing or invalid measured field(s): Wall WT NEW (mm).',
+  ]);
 });
 
 test('explains every condition that keeps the assessment disabled', () => {

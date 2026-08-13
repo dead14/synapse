@@ -46,10 +46,24 @@ The session has a saved FFS candidate selection with at least one selected
 feature, and its `result_signature` still matches the current alignment result.
 
 **Gate C — the feature itself is selected.**
-`mapAlignmentRowsToFfs` receives the selected `Source Key NEW` set. Anything not
-in it is returned as `rejected` with the reason
-`"Not selected in Corrosion Analysis"`, so the count is visible rather than
-silently dropped.
+`mapAlignmentRowsToFfs` receives the selected `Source Key NEW` set. Rows outside
+it are counted in `skipped` — `noNewFeature` for the OLD side of the comparison,
+`notReleased` for features the review held back. Neither is a rejection, and
+listing them as one buried the released features that genuinely could not be
+assessed: the operator was shown the first entry of that list, which is
+invariably an OLD-only row, and told their release "does not contain a NEW-run
+feature". `rejected` now holds released features alone, each with the field that
+stopped it.
+
+**Gate D — the feature carries the measurements B31G needs.**
+`readMeasuredGeometry` is the single reader of this rule: `summariseReleasedIntake`
+shows what the release would produce before the assessment runs, and
+`mapAlignmentRowsToFfs` applies the same rule when it does. Position, depth,
+length and width must come from the run — nothing else can supply them. Wall
+thickness may fall back to a line nominal entered on the setup screen, because it
+is a property of the pipe rather than of the defect; where it is used, the
+feature carries a warning and `wallThicknessSource: 'line-nominal'` in its
+provenance.
 
 ## Corrosion Analysis page
 

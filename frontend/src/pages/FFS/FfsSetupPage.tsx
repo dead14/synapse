@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   FiAlertCircle,
@@ -27,9 +27,11 @@ import {
 } from '../../utils/interventions';
 import {
   alignmentSectionOptions,
+  describeEmptyIntake,
   getAlignmentImportReadiness,
   mapAlignmentRowsToFfs,
   normalizedSectionKey,
+  summariseReleasedIntake,
   type AlignmentSectionOption,
 } from '../../lib/ffs/alignmentImport';
 import { convertLength, convertPressure, toMegapascals, toMillimetres, type LengthUnit, type PressureUnit } from '../../lib/ffs/units';
@@ -75,6 +77,10 @@ export default function FfsSetupPage() {
   const [blocked, setBlocked] = useState<FfsBlockedSession[]>([]);
   const [selectedRunId, setSelectedRunId] = useState('');
   const [alignmentRows, setAlignmentRows] = useState<ComparisonRow[]>([]);
+  // The same rows before excluded ones are dropped. Only the intake summary
+  // reads these, so that "a reviewer excluded it" is never reported as "this
+  // feature does not exist in the run".
+  const [alignmentRowsWithExclusions, setAlignmentRowsWithExclusions] = useState<ComparisonRow[]>([]);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [alignmentLoading, setAlignmentLoading] = useState(false);
@@ -84,6 +90,9 @@ export default function FfsSetupPage() {
 
   // Pipeline parameters. Alignment carries anomaly geometry, not line design.
   const [outerDiameterMm, setOuterDiameterMm] = useState('');
+  // Only used where the run reported no wall for a feature, which is the one
+  // measured field an engineer can legitimately supply from the line record.
+  const [nominalWallThickness, setNominalWallThickness] = useState('');
   const [smysMpa, setSmysMpa] = useState('');
   const [designFactor, setDesignFactor] = useState('0.72');
   const [operatingPressureMpa, setOperatingPressureMpa] = useState('');
@@ -107,6 +116,9 @@ export default function FfsSetupPage() {
     value: string,
     convert: (numeric: number) => number,
   ) => {
+    // An empty field stays empty. `Number('')` is 0, so converting it turned a
+    // blank optional input into a typed zero the moment the unit was switched.
+    if (value.trim() === '') return value;
     const numeric = Number(value);
     return Number.isFinite(numeric) ? Number(convert(numeric).toFixed(6)).toString() : value;
   };
@@ -114,6 +126,18 @@ export default function FfsSetupPage() {
     outerDiameterMm,
     (value) => toMillimetres(value, diameterUnit),
   );
+  const nominalWallThicknessMmForCalculation = normalizeDisplayValue(
+    nominalWallThickness,
+    (value) => toMillimetres(value, diameterUnit),
+  );
+  const parsedNominalWall = nominalWallThickness.trim() === ''
+    ? null
+    : Number(nominalWallThicknessMmForCalculation);
+  const nominalWallThicknessMm = parsedNominalWall !== null
+    && Number.isFinite(parsedNominalWall)
+    && parsedNominalWall > 0
+    ? parsedNominalWall
+    : null;
   const smysMpaForCalculation = normalizeDisplayValue(smysMpa, (value) => toMegapascals(value, pressureUnit));
   const operatingPressureMpaForCalculation = normalizeDisplayValue(
     operatingPressureMpa,
@@ -154,18 +178,31 @@ export default function FfsSetupPage() {
       : []),
   ];
 
+  /**
+   * What the assessment would accept from this release, recomputed as the wall
+   * fallback is typed. The engineer sees the answer before filling in the form,
+   * instead of a thrown error after pressing Run.
+   */
+  const intake = useMemo(
+    () => summariseReleasedIntake(alignmentRowsWithExclusions, { selectedKeys }, nominalWallThicknessMm),
+    [alignmentRowsWithExclusions, selectedKeys, nominalWallThicknessMm],
+  );
+
   const alignmentReadinessReasons = getAlignmentImportReadiness({
     lineName,
     iliDate,
     selectedRunId,
     alignmentRowCount: alignmentRows.length,
     selectedFeatureCount: selectedKeys.size,
+    assessableFeatureCount: intake.assessable,
+    intakeBlockReason: describeEmptyIntake(intake),
     outerDiameterMm: outerDiameterMmForCalculation,
     smysMpa: smysMpaForCalculation,
     designFactor,
     operatingPressureMpa: operatingPressureMpaForCalculation,
     fallbackDepthGrowthMmPerYear: fallbackDepthGrowth,
     fallbackLengthGrowthMmPerYear: fallbackLengthGrowth,
+    nominalWallThicknessMm: nominalWallThickness,
   });
   const manualReadinessReasons = [
     ...(!lineName.trim() ? ['Enter the pipeline / line name.'] : []),
@@ -221,6 +258,7 @@ export default function FfsSetupPage() {
     setAlignmentLoading(true);
     setAlignmentError('');
     setAlignmentRows([]);
+    setAlignmentRowsWithExclusions([]);
     setSelectedKeys(new Set());
     setReasons({});
     setSectionOptions([]);
@@ -243,9 +281,9 @@ export default function FfsSetupPage() {
       if (keys.size === 0) {
         throw new Error('The Corrosion Analysis review for this session released no feature to FFS.');
       }
-      const includedRows = includedInterventionRows(
-        applyInterventions(result.comparison, sessionConfig.config?.interventions || []),
-      );
+      const revisedRows = applyInterventions(result.comparison, sessionConfig.config?.interventions || []);
+      const includedRows = includedInterventionRows(revisedRows);
+      setAlignmentRowsWithExclusions(revisedRows);
       setAlignmentRows(includedRows);
       setSelectedKeys(keys);
       const options = alignmentSectionOptions(includedRows, { selectedKeys: keys });
@@ -344,13 +382,15 @@ export default function FfsSetupPage() {
         operatingPressureMpa: Number(operatingPressureMpaForCalculation),
         fallbackDepthGrowthMmPerYear: Number(fallbackDepthGrowth),
         fallbackLengthGrowthMmPerYear: Number(fallbackLengthGrowth),
+        nominalWallThicknessMm,
       }, selectedRunId, { selectedKeys, reasons });
 
+      // The reason of whichever row happened to sit first used to be raised
+      // here. That row is almost always the OLD side of the comparison, so the
+      // engineer was told their release "does not contain a NEW-run feature"
+      // about a row they never released. Say what actually stopped the run.
       if (imported.accepted.length === 0) {
-        throw new Error(
-          imported.rejected[0]?.reason
-          || 'No released anomaly carries the geometry an FFS assessment needs.',
-        );
+        throw new Error(describeEmptyIntake(intake));
       }
       const rows = imported.accepted.map((item) => item.row);
       const dataErrors = validateData(rows);
@@ -371,9 +411,11 @@ export default function FfsSetupPage() {
           alignmentImport: {
             sessionId: selectedRunId,
             accepted: imported.accepted.map((item) => item.provenance),
-            // Features the review did not release are the bulk of the rejects;
-            // they are carried through so the results page can state the count.
+            // Released features that could not be assessed, and why — not the
+            // OLD side of the comparison and not the features the review held
+            // back, which are counted separately.
             rejected: imported.rejected,
+            skipped: imported.skipped,
             // The weld ladder the spool review groups against. Sent with the
             // results because it is a property of the run, not of any feature.
             girthWelds: imported.girthWelds,
@@ -700,6 +742,73 @@ export default function FfsSetupPage() {
               {alignmentError && <p role="alert" className="mt-2 text-xs font-medium text-red-600">{alignmentError}</p>}
             </div>
 
+            {/* What the assessment would do with this release, before it runs. */}
+            {selectedKeys.size > 0 && !alignmentLoading && (
+              <div
+                className={`rounded-xl border p-4 ${
+                  intake.assessable === 0
+                    ? 'border-red-200 bg-red-50/70 dark:border-red-900 dark:bg-red-950/20'
+                    : intake.blockers.length > 0 || intake.missingFromResult > 0
+                    ? 'border-amber-200 bg-amber-50/70 dark:border-amber-900 dark:bg-amber-950/20'
+                    : 'border-emerald-200 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/20'
+                }`}
+              >
+                <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                  {intake.assessable.toLocaleString()} of {selectedKeys.size.toLocaleString()} released
+                  feature{selectedKeys.size === 1 ? '' : 's'} can be assessed
+                </p>
+                {intake.assessable > 0 && (
+                  <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                    Metal loss the NEW run reported for the first time is assessed too, on a disclosed
+                    zero-depth baseline at the OLD survey rather than a measured run-pair rate.
+                  </p>
+                )}
+                {intake.usingNominalWall > 0 && (
+                  <p className="mt-1 text-[11px] font-medium leading-relaxed text-amber-700 dark:text-amber-400">
+                    {intake.usingNominalWall.toLocaleString()} of them will use the line nominal wall you
+                    entered, because the run reported none. Each says so in its warnings.
+                  </p>
+                )}
+                {intake.excludedByIntervention > 0 && (
+                  <p className="mt-2 text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+                    {intake.excludedByIntervention.toLocaleString()} released feature
+                    {intake.excludedByIntervention === 1 ? ' was' : 's were'} excluded from the released outputs
+                    by a reviewer, so {intake.excludedByIntervention === 1 ? 'it is' : 'they are'} not assessed.
+                  </p>
+                )}
+                {intake.missingFromResult > 0 && (
+                  <p className="mt-2 text-[11px] font-medium leading-relaxed text-red-700 dark:text-red-400">
+                    {intake.missingFromResult.toLocaleString()} released feature
+                    {intake.missingFromResult === 1 ? ' does' : 's do'} not exist in the loaded result. The
+                    review was saved against a different run —{' '}
+                    <Link
+                      to={`/alignment/${encodeURIComponent(selectedRunId)}/corrosion`}
+                      className="font-semibold text-indigo-600 hover:underline"
+                    >
+                      review it again
+                    </Link>.
+                  </p>
+                )}
+                {intake.blockers.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {intake.blockers.map((blocker) => (
+                      <li key={blocker.reason} className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+                        <span className="font-semibold tabular-nums">{blocker.count.toLocaleString()}</span>
+                        {' — '}{blocker.reason}
+                        <span className="text-slate-400"> e.g. {blocker.examples.join(', ')}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {intake.assessable === 0 && intake.blockers.some((blocker) => blocker.reason.includes('Wall WT NEW')) && (
+                  <p className="mt-2 text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+                    Wall thickness is a property of the pipe, not a measurement of the defect: enter the line
+                    nominal wall below and these features become assessable.
+                  </p>
+                )}
+              </div>
+            )}
+
             {blocked.length > 0 && (
               <details className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
                 <summary className="cursor-pointer text-xs font-semibold text-slate-600 dark:text-slate-300">
@@ -732,6 +841,7 @@ export default function FfsSetupPage() {
                   onChange={(event) => {
                     const next = event.target.value as LengthUnit;
                     setOuterDiameterMm((value) => normalizeDisplayValue(value, (numeric) => convertLength(numeric, diameterUnit, next)));
+                    setNominalWallThickness((value) => normalizeDisplayValue(value, (numeric) => convertLength(numeric, diameterUnit, next)));
                     setDiameterUnit(next);
                   }}
                   className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
@@ -758,6 +868,21 @@ export default function FfsSetupPage() {
                   <option value="bar">bar</option>
                   <option value="psi">psi</option>
                 </select>
+              </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                Nominal wall thickness [{diameterUnit}]
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={nominalWallThickness}
+                  onChange={(event) => setNominalWallThickness(event.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                />
+                <span className="mt-1 block text-[10px] font-normal leading-snug">
+                  Optional. Used only where the run reported no wall for a feature, and disclosed on every
+                  feature that used it.
+                </span>
               </label>
               <label className="block text-xs font-semibold text-slate-500">
                 SMYS [{pressureUnit}]

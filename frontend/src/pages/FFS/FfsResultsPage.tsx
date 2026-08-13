@@ -71,6 +71,7 @@ interface LocationState {
   alignmentImport?: {
     sessionId: string;
     accepted: AlignmentImportProvenance[];
+    /** Released features the import could not assess — never the OLD side. */
     rejected: unknown[];
     /** The run's weld ladder, which is what a spool is measured between. */
     girthWelds?: FfsGirthWeld[];
@@ -562,7 +563,7 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
             <strong className="font-mono">{state.alignmentImport.sessionId}</strong> ·{' '}
             {state.alignmentImport.accepted.length.toLocaleString()} features accepted
             {state.alignmentImport.rejected.length > 0 &&
-              ` · ${state.alignmentImport.rejected.length.toLocaleString()} rejected`}
+              ` · ${state.alignmentImport.rejected.length.toLocaleString()} released but not assessable`}
             {state.alignmentImport.warningCount > 0 &&
               ` · ${state.alignmentImport.warningCount.toLocaleString()} with warnings`}
             . NEW-run geometry and each growth observation carry session, feature, formula, and analysis-basis provenance.

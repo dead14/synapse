@@ -25,6 +25,16 @@ export interface AlignmentEngineeringInputs {
   operatingPressureMpa: number;
   fallbackDepthGrowthMmPerYear: number;
   fallbackLengthGrowthMmPerYear: number;
+  /**
+   * The line's nominal wall thickness, used only where the run reported none.
+   *
+   * Depth, length, width and position are measurements — absent, they cannot be
+   * supplied from anywhere else. Wall thickness is a property of the pipe, and a
+   * vendor that ships %WT depths without a wall column is common enough that
+   * refusing the whole assessment over it withheld every released feature on the
+   * line. Where it is used the feature says so, in its warnings and provenance.
+   */
+  nominalWallThicknessMm?: number | null;
 }
 
 /**
@@ -65,7 +75,11 @@ export interface AlignmentImportProvenance {
   designFactor: number;
   designFactorSource: FfsDesignFactorSource;
   isClusteredMetalLoss: boolean;
+  /** Where the wall thickness the assessment used came from. */
+  wallThicknessSource: FfsWallThicknessSource;
 }
+
+export type FfsWallThicknessSource = 'run-reported' | 'line-nominal';
 
 /**
  * The Corrosion Analysis outcome. FFS is not allowed to widen this: a feature
@@ -114,9 +128,27 @@ export interface FfsSpoolCensusRow {
   assessed: boolean;
 }
 
+/**
+ * Rows the import never treated as candidates, counted rather than listed.
+ *
+ * A comparison result is not a list of assessment candidates: most of it is the
+ * OLD run, the skeleton, and features the review deliberately held back. Those
+ * are not rejections, and reporting them as such buried the handful of released
+ * features that genuinely could not be assessed under thousands of rows nobody
+ * ever asked to assess.
+ */
+export interface AlignmentImportSkipped {
+  /** Rows carrying no NEW-run feature — the OLD side of the comparison. */
+  noNewFeature: number;
+  /** NEW-run features the Corrosion Analysis review did not release. */
+  notReleased: number;
+}
+
 export interface AlignmentImportResult {
   accepted: AcceptedAlignmentRow[];
+  /** Released features that could not be assessed, and why. */
   rejected: RejectedAlignmentRow[];
+  skipped: AlignmentImportSkipped;
   /**
    * Every girth weld of the NEW run. A spool is the pipe between two of these,
    * which is the unit a repair is actually made to — and it is the only
@@ -219,6 +251,16 @@ export interface AlignmentImportReadinessInput {
   operatingPressureMpa: string;
   fallbackDepthGrowthMmPerYear: string;
   fallbackLengthGrowthMmPerYear: string;
+  /** Optional; blank means "the run must report a wall for every feature". */
+  nominalWallThicknessMm?: string;
+  /**
+   * Released features the loaded result can actually assess. Zero blocks the
+   * run, because the alternative is a thrown error after the engineer has
+   * filled in the whole form.
+   */
+  assessableFeatureCount?: number;
+  /** Stated verbatim when nothing is assessable, so the block says why. */
+  intakeBlockReason?: string;
 }
 
 function present(value: unknown): boolean {
@@ -245,6 +287,186 @@ function numericText(value: number): string {
 function optionalNumericText(value: unknown): string {
   const parsed = finiteNumber(value);
   return parsed === null ? '' : numericText(parsed);
+}
+
+/** The NEW-run measurements an assessment is built from. */
+interface MeasuredGeometry {
+  distance: number;
+  depth: number;
+  length: number;
+  width: number;
+  wall: number;
+  wallSource: FfsWallThicknessSource;
+}
+
+type MeasuredReading =
+  | { ok: true; geometry: MeasuredGeometry }
+  | { ok: false; reason: string };
+
+/**
+ * Reads the five measured values from one row, or says exactly what stopped it.
+ *
+ * The only reader of this rule. The setup screen shows what an assessment would
+ * accept before it is run, and the import decides what it does accept; when the
+ * two answered from separate copies of the rule the screen said a session was
+ * ready and the run then refused every feature in it.
+ */
+function readMeasuredGeometry(
+  source: ComparisonRow,
+  nominalWallThicknessMm: number | null,
+): MeasuredReading {
+  const distance = finiteNumber(source['Log Dist NEW (m)']);
+  const depth = finiteNumber(source['Depth NEW (%WT)']);
+  const length = finiteNumber(source['Length NEW (mm)']);
+  const width = finiteNumber(source['Width NEW (mm)']);
+  const reportedWall = finiteNumber(source['Wall WT NEW (mm)']);
+  const fallbackWall = nominalWallThicknessMm !== null
+    && Number.isFinite(nominalWallThicknessMm)
+    && nominalWallThicknessMm > 0
+    ? nominalWallThicknessMm
+    : null;
+  const wall = reportedWall ?? fallbackWall;
+
+  const missing: string[] = [];
+  if (distance === null) missing.push('Log Dist NEW (m)');
+  if (depth === null) missing.push('Depth NEW (%WT)');
+  if (length === null) missing.push('Length NEW (mm)');
+  if (width === null) missing.push('Width NEW (mm)');
+  if (wall === null) missing.push('Wall WT NEW (mm)');
+  if (missing.length > 0) {
+    return { ok: false, reason: `Missing or invalid measured field(s): ${missing.join(', ')}.` };
+  }
+
+  // Depth is bounded by the wall, not by the 80 %WT project rejection line.
+  // Rejecting deep features here removed the ones most likely to govern the
+  // assessment before it ever ran; they are carried through and disclosed
+  // instead. See the same note in `validation.ts`.
+  if (
+    (distance as number) < 0
+    || (depth as number) < 0 || (depth as number) > 100
+    || (length as number) <= 0 || (width as number) <= 0 || (wall as number) <= 0
+  ) {
+    return { ok: false, reason: 'Measured NEW-run values are outside the supported FFS domain.' };
+  }
+
+  return {
+    ok: true,
+    geometry: {
+      distance: distance as number,
+      depth: depth as number,
+      length: length as number,
+      width: width as number,
+      wall: wall as number,
+      wallSource: reportedWall === null ? 'line-nominal' : 'run-reported',
+    },
+  };
+}
+
+/** One reason a group of released features cannot be assessed, with its size. */
+export interface ReleasedIntakeBlocker {
+  reason: string;
+  count: number;
+  /** A few feature IDs, so the engineer can open one and see it for themselves. */
+  examples: string[];
+}
+
+/**
+ * What an assessment would do with this release, without running it.
+ *
+ * Answers the only question the setup screen was never able to: of the features
+ * an engineer released, how many can actually be assessed — and if none can,
+ * which field is missing from how many of them.
+ */
+export interface ReleasedIntakeSummary {
+  /** Released keys that were found in the loaded comparison result. */
+  released: number;
+  /**
+   * Released keys with no row in this result at all. Non-zero means the review
+   * and the result disagree about the run — a re-import, not a data problem.
+   */
+  missingFromResult: number;
+  /**
+   * Released features a reviewer later excluded. Held apart from the two above:
+   * an exclusion is a decision someone made, not a mismatch and not bad data.
+   */
+  excludedByIntervention: number;
+  assessable: number;
+  blockers: ReleasedIntakeBlocker[];
+  /** Assessable features that will use the line nominal wall, not a measured one. */
+  usingNominalWall: number;
+}
+
+/**
+ * @param comparison Rows after interventions and *before* excluded rows are
+ * filtered out, so an exclusion can be told apart from a missing feature.
+ */
+export function summariseReleasedIntake(
+  comparison: readonly ComparisonRow[],
+  selection: AlignmentSelection,
+  nominalWallThicknessMm: number | null = null,
+): ReleasedIntakeSummary {
+  const selectedKeys = selection?.selectedKeys instanceof Set ? selection.selectedKeys : new Set<string>();
+  const seen = new Set<string>();
+  const excluded = new Set<string>();
+  const blockers = new Map<string, ReleasedIntakeBlocker>();
+  let assessable = 0;
+  let usingNominalWall = 0;
+
+  for (const source of comparison) {
+    const sourceFeatureKey = text(source['Source Key NEW'], '');
+    if (!sourceFeatureKey || !selectedKeys.has(sourceFeatureKey)) continue;
+    if (source.__excluded === true) {
+      excluded.add(sourceFeatureKey);
+      continue;
+    }
+    seen.add(sourceFeatureKey);
+    const reading = readMeasuredGeometry(source, nominalWallThicknessMm);
+    if (reading.ok) {
+      assessable += 1;
+      if (reading.geometry.wallSource === 'line-nominal') usingNominalWall += 1;
+      continue;
+    }
+    let blocker = blockers.get(reading.reason);
+    if (!blocker) {
+      blocker = { reason: reading.reason, count: 0, examples: [] };
+      blockers.set(reading.reason, blocker);
+    }
+    blocker.count += 1;
+    if (blocker.examples.length < 3) {
+      blocker.examples.push(text(source['Identif. NEW'], text(source['Feature ID NEW'], sourceFeatureKey)));
+    }
+  }
+
+  return {
+    released: seen.size,
+    missingFromResult: selectedKeys.size - seen.size - excluded.size,
+    excludedByIntervention: excluded.size,
+    assessable,
+    blockers: [...blockers.values()].sort((left, right) => right.count - left.count),
+    usingNominalWall,
+  };
+}
+
+/** One sentence stating why an assessment produced nothing, for the operator. */
+export function describeEmptyIntake(summary: ReleasedIntakeSummary): string {
+  if (summary.released === 0 && summary.excludedByIntervention > 0 && summary.missingFromResult === 0) {
+    return `All ${summary.excludedByIntervention.toLocaleString()} released feature(s) were excluded from the `
+      + 'released outputs by a reviewer. Restore the exclusion, or release features that are still included.';
+  }
+  if (summary.released === 0 && summary.missingFromResult > 0) {
+    return `None of the ${summary.missingFromResult.toLocaleString()} released feature(s) exist in the loaded `
+      + 'alignment result. The review was saved against a different run — reload the session, then review it '
+      + 'again in Corrosion Analysis.';
+  }
+  if (summary.released === 0) {
+    return 'No released feature reached the assessment. Release the features in Corrosion Analysis first.';
+  }
+  const [worst] = summary.blockers;
+  if (!worst) return 'No released anomaly carries the geometry an FFS assessment needs.';
+  const others = summary.blockers.length - 1;
+  return `${summary.released.toLocaleString()} released feature(s), none assessable. `
+    + `${worst.count.toLocaleString()} of them: ${worst.reason}`
+    + (others > 0 ? ` (${others} other reason${others === 1 ? '' : 's'} affect the rest.)` : '');
 }
 
 function roundedRate(value: number): number {
@@ -496,6 +718,16 @@ export function getAlignmentImportReadiness(input: AlignmentImportReadinessInput
   else if (input.alignmentRowCount === 0) reasons.push('Load the selected alignment result first.');
   else if (input.selectedFeatureCount === 0) {
     reasons.push('Release at least one feature in Corrosion Analysis for this session.');
+  } else if (input.assessableFeatureCount === 0) {
+    reasons.push(input.intakeBlockReason
+      || 'No released feature carries the geometry an FFS assessment needs.');
+  }
+
+  if (input.nominalWallThicknessMm !== undefined && input.nominalWallThicknessMm.trim() !== '') {
+    const wall = strictNumber(input.nominalWallThicknessMm);
+    if (wall === null || wall <= 0) {
+      reasons.push('Nominal wall thickness must be greater than 0 mm, or left empty.');
+    }
   }
 
   const od = strictNumber(input.outerDiameterMm);
@@ -531,6 +763,11 @@ function assertEngineeringInputs(inputs: AlignmentEngineeringInputs): void {
     }
   }
   if (inputs.designFactor > 1) throw new Error('Design factor must not exceed 1.');
+  if (inputs.nominalWallThicknessMm !== null && inputs.nominalWallThicknessMm !== undefined) {
+    if (!Number.isFinite(inputs.nominalWallThicknessMm) || inputs.nominalWallThicknessMm <= 0) {
+      throw new Error('Nominal wall thickness must be greater than zero, or left empty.');
+    }
+  }
   if (inputs.safetyFactor !== null && inputs.safetyFactor !== undefined) {
     if (!Number.isFinite(inputs.safetyFactor) || inputs.safetyFactor <= 0) {
       throw new Error('Safety factor must be greater than zero.');
@@ -566,47 +803,39 @@ export function mapAlignmentRowsToFfs(
 
   const accepted: AcceptedAlignmentRow[] = [];
   const rejected: RejectedAlignmentRow[] = [];
+  const skipped: AlignmentImportSkipped = { noNewFeature: 0, notReleased: 0 };
+  const nominalWall = engineering.nominalWallThicknessMm ?? null;
 
   for (const source of comparison) {
     const sourceFeatureKey = text(source['Source Key NEW'], '');
     const featureId = text(source['Identif. NEW'], text(source['Feature ID NEW'], sourceFeatureKey || 'Unknown'));
+    // Neither of these is a rejection: the OLD side of the comparison was never
+    // a candidate, and a feature the review held back is a decision already
+    // made. Counted so the results page can state them, never listed as
+    // failures the engineer has to read past.
     if (!sourceFeatureKey) {
-      rejected.push({ featureId, reason: 'Row does not contain a NEW-run feature.' });
+      skipped.noNewFeature += 1;
       continue;
     }
     if (!selection.selectedKeys.has(sourceFeatureKey)) {
-      rejected.push({ featureId, reason: 'Not selected in Corrosion Analysis.' });
+      skipped.notReleased += 1;
       continue;
     }
 
-    const required = [
-      ['Log Dist NEW (m)', finiteNumber(source['Log Dist NEW (m)'])],
-      ['Depth NEW (%WT)', finiteNumber(source['Depth NEW (%WT)'])],
-      ['Length NEW (mm)', finiteNumber(source['Length NEW (mm)'])],
-      ['Width NEW (mm)', finiteNumber(source['Width NEW (mm)'])],
-      ['Wall WT NEW (mm)', finiteNumber(source['Wall WT NEW (mm)'])],
-    ] as const;
-    const missing = required.filter(([, value]) => value === null).map(([label]) => label);
-    if (missing.length > 0) {
-      rejected.push({ featureId, reason: `Missing or invalid measured field(s): ${missing.join(', ')}.` });
+    const reading = readMeasuredGeometry(source, nominalWall);
+    if (!reading.ok) {
+      rejected.push({ featureId, reason: reading.reason });
       continue;
     }
-
-    const distance = required[0][1] as number;
-    const depth = required[1][1] as number;
-    const length = required[2][1] as number;
-    const width = required[3][1] as number;
-    const wall = required[4][1] as number;
-    // Depth is bounded by the wall, not by the 80 %WT project rejection line.
-    // Rejecting deep features here removed the ones most likely to govern the
-    // assessment before it ever ran; they are carried through and disclosed
-    // instead. See the same note in `validation.ts`.
-    if (distance < 0 || depth < 0 || depth > 100 || length <= 0 || width <= 0 || wall <= 0) {
-      rejected.push({ featureId, reason: 'Measured NEW-run values are outside the supported FFS domain.' });
-      continue;
-    }
+    const { distance, depth, length, width, wall, wallSource } = reading.geometry;
 
     const warnings: string[] = [];
+    if (wallSource === 'line-nominal') {
+      warnings.push(
+        `The run reported no wall thickness for this feature; the line nominal wall of ${numericText(wall)} mm `
+        + 'was used, and both the depth in millimetres and the failure pressure follow from it.',
+      );
+    }
     // Carried rather than dropped, but never carried quietly: past 80 %WT the
     // section 3 tables no longer apply and para. 1.2(f) asks for the sizing
     // accuracy and the effective corrosion rate to be justified.
@@ -679,6 +908,7 @@ export function mapAlignmentRowsToFfs(
         designFactor,
         designFactorSource,
         isClusteredMetalLoss,
+        wallThicknessSource: wallSource,
       },
       warnings,
     });
@@ -687,6 +917,7 @@ export function mapAlignmentRowsToFfs(
   return {
     accepted,
     rejected,
+    skipped,
     girthWelds: extractGirthWeldLadder(comparison),
     census: extractSpoolCensus(comparison, selection),
   };
