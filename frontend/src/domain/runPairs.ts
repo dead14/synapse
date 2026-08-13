@@ -35,7 +35,17 @@ function runYear(run: any): number | null {
 }
 
 function pairLabel(oldRun: any, newRun: any): string {
-  return `${oldRun?.year || '?'} → ${newRun?.year || '?'}`;
+  const year = (run: any) => String(run?.year || '').trim();
+  const oldYear = year(oldRun);
+  const newYear = year(newRun);
+  // Two runs flown in the same year would otherwise label the tab "2026 → 2026",
+  // which names neither side. The survey date is what separates them, so it is
+  // what the label falls back to.
+  if (oldYear && oldYear === newYear) {
+    const date = (run: any) => String(run?.surveyDate || '').trim() || oldYear;
+    return `${date(oldRun)} → ${date(newRun)}`;
+  }
+  return `${oldYear || '?'} → ${newYear || '?'}`;
 }
 
 /**

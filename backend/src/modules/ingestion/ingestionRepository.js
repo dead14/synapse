@@ -1,3 +1,5 @@
+const { isoCalendarDate } = require('./surveyDate');
+
 function asJson(value) {
     return JSON.stringify(value ?? {});
 }
@@ -55,8 +57,8 @@ async function createIngestionJob(pool, input) {
     const result = await pool.query(
         `INSERT INTO ingestion_jobs
             (job_id, organization_id, user_id, pipeline_name, survey_year,
-             vendor, source_file, object_key, source_sha256, state, progress)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'queued', 0)
+             survey_date, vendor, source_file, object_key, source_sha256, state, progress)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'queued', 0)
          RETURNING *`,
         [
             input.jobId,
@@ -64,6 +66,7 @@ async function createIngestionJob(pool, input) {
             input.userId || null,
             input.pipelineName,
             input.surveyYear,
+            input.surveyDate || null,
             input.vendor,
             input.sourceFile,
             input.objectKey,
@@ -120,6 +123,7 @@ function serializeIngestionJob(row) {
         progress: Number(row.progress || 0),
         pipelineName: row.pipeline_name,
         surveyYear: row.survey_year,
+        surveyDate: isoCalendarDate(row.survey_date),
         vendor: row.vendor,
         sourceFile: row.source_file,
         runId: row.run_id === null || row.run_id === undefined ? null : Number(row.run_id),

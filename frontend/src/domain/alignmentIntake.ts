@@ -34,6 +34,13 @@ export interface PersistedIliRun {
   name: string;
   vendor: string;
   year: string;
+  /**
+   * The day the tool ran, `YYYY-MM-DD`, when the intake collected one. Empty
+   * for a run imported before the intake asked, where only the year is known.
+   * FFS reads this to date its assessment instead of asking the engineer to
+   * retype what the upload already recorded.
+   */
+  surveyDate: string;
   tool: string;
   total: number;
   anomalies: number;
@@ -51,6 +58,8 @@ export interface PersistedInspectionDataset<TFile = unknown> {
   file: TFile;
   vendor: string;
   year: string;
+  /** `YYYY-MM-DD` when the operator supplied one; omitted for year-only runs. */
+  surveyDate?: string;
   tool: string;
 }
 
@@ -80,9 +89,29 @@ function asRunId(value: unknown): number {
   return parsed;
 }
 
+/**
+ * A run's position in time, as a sortable number.
+ *
+ * The day wins where the intake recorded one: two runs flown in the same year
+ * are a real chain that ordering by year alone resolves arbitrarily, which puts
+ * the wrong run on the OLD side of a pair. Runs with only a year sort to
+ * mid-year so they interleave sensibly with dated ones rather than always
+ * landing first.
+ */
+export function runChronology(run: { year?: unknown; surveyDate?: unknown }): number {
+  const date = String(run.surveyDate ?? '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const parsed = Date.parse(`${date}T00:00:00Z`);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  const year = Number(run.year);
+  if (!Number.isFinite(year)) return 0;
+  return Date.UTC(year, 6, 1);
+}
+
 export function buildPersistedIliRun(
   response: IngestionResponse,
-  input: { name: string; vendor: string; year: string; tool: string },
+  input: { name: string; vendor: string; year: string; surveyDate?: string; tool: string },
 ): PersistedIliRun {
   const counts = response.run_summary
     ?? response.result?.summary
@@ -100,6 +129,7 @@ export function buildPersistedIliRun(
     name: input.name,
     vendor: input.vendor,
     year: input.year,
+    surveyDate: input.surveyDate ?? '',
     tool: input.tool,
     total,
     anomalies: nonNegativeCount(counts.anomalies),
@@ -138,16 +168,14 @@ export async function ingestPersistedInspectionRunPair<TFile>({
   const masterRun = runs[masterIndex];
   const historicalRuns = runs
     .filter((_run, index) => index !== masterIndex)
-    .sort((left, right) => Number(right.year || 0) - Number(left.year || 0));
+    .sort((left, right) => runChronology(right) - runChronology(left));
   const oldRun = historicalRuns[0];
   if (!masterRun || !oldRun) {
     throw new Error('One persisted master run and one persisted historical run are required.');
   }
 
-  // Build pairwise chain sorted by year ascending
-  const sorted = [...runs].sort(
-    (a, b) => Number(a.year || 0) - Number(b.year || 0),
-  );
+  // Build pairwise chain in survey order, oldest first
+  const sorted = [...runs].sort((a, b) => runChronology(a) - runChronology(b));
   const runPairs: RunPair[] = [];
   for (let i = 0; i < sorted.length - 1; i++) {
     runPairs.push({ oldRun: sorted[i], newRun: sorted[i + 1] });

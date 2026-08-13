@@ -61,6 +61,9 @@ export default function FfsSetupPage() {
   const [method, setMethod] = useState<'original' | 'modified'>('modified');
   const [modifiedSa, setModifiedSa] = useState<'smys69' | 'smys11'>('smys69');
   const [iliDate, setIliDate] = useState('');
+  // The date the selected release carried, kept so the field can say where its
+  // value came from — and stop saying it once the engineer overrides it.
+  const [iliDateSource, setIliDateSource] = useState('');
   const [highlightYears, setHighlightYears] = useState(5);
   const [analysisHorizonYears, setAnalysisHorizonYears] = useState(DEFAULT_FFS_ANALYSIS_HORIZON_YEARS);
   const [screening, setScreening] = useState<FfsScreeningConfig>(DEFAULT_SCREENING_CONFIG);
@@ -302,6 +305,13 @@ export default function FfsSetupPage() {
       );
       const session = sessions.find((item) => item.id === sessionId);
       if (!lineName && session) setLineName(session.pipelineName);
+      // The upload recorded when the run was flown, so the engineer should not
+      // have to retype it. Only an untouched field is filled: a date typed by
+      // hand is a deliberate correction and must survive changing sessions.
+      if (session?.inspectionDate && !iliDate) {
+        setIliDate(session.inspectionDate);
+        setIliDateSource(session.inspectionDate);
+      }
     } catch (caught) {
       setAlignmentError(caught instanceof Error ? caught.message : 'The alignment results could not be loaded.');
     } finally {
@@ -521,6 +531,14 @@ export default function FfsSetupPage() {
                 onChange={e => setIliDate(e.target.value)}
                 className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 focus:border-indigo-500 focus:outline-none [color-scheme:light] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:[color-scheme:dark]"
               />
+              {iliDateSource && (
+                <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                  <FiCheckCircle className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-hidden="true" />
+                  {iliDate === iliDateSource
+                    ? 'Taken from the survey date recorded when this run was uploaded.'
+                    : `Overrides the uploaded survey date (${iliDateSource}).`}
+                </p>
+              )}
             </div>
 
             <div>

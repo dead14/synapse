@@ -9,7 +9,7 @@ async function listOwnedInspectionRuns(pool, orgId, { limit, beforeId }) {
 
     const result = await pool.query(
         `SELECT sr.id, sr.pipeline_id, p.name AS pipeline_name,
-                sr.survey_year, sr.vendor, sr.source_file, sr.source_object_key, sr.source_sha256,
+                sr.survey_year, sr.survey_date, sr.vendor, sr.source_file, sr.source_object_key, sr.source_sha256,
                 sr.uploaded_at, sr.row_count, sr.parser_version,
                 sr.schema_version, sr.ingestion_audit,
                 workflow.workflow_stage, workflow.workflow_session_id,

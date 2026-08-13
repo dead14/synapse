@@ -13,6 +13,7 @@ const {
     finalPhaseRejection,
     parseParams,
 } = require('./ffsEligibility');
+const { isoCalendarDate } = require('../ingestion/surveyDate');
 
 function parsePositiveId(value) {
     const id = Number(value);
@@ -26,6 +27,35 @@ function sessionLabel(row) {
         || summaryData.pipelineName
         || row.stored_pipeline_name
         || `Run ${row.id}`;
+}
+
+/**
+ * The date the assessed run was flown, from the session's own master run.
+ *
+ * FFS dates its assessment from the newest run in the comparison — that is the
+ * inspection whose depths are being assessed — so this reads the master (NEW)
+ * side and falls back to the newest date on any run in the session. Null for a
+ * session built before the intake collected dates; the setup screen then asks
+ * for one instead of guessing.
+ */
+function sessionInspectionDate(row) {
+    const summaryData = parseParams(row).summaryData || {};
+    const candidates = [
+        summaryData.masterRun,
+        summaryData.newRun,
+        ...(Array.isArray(summaryData.historicalRuns) ? summaryData.historicalRuns : []),
+        summaryData.oldRun,
+    ];
+    const dates = candidates
+        .map((run) => isoCalendarDate(run && run.surveyDate))
+        .filter((value) => value !== null);
+    if (dates.length === 0) return null;
+    const master = isoCalendarDate(
+        (summaryData.masterRun && summaryData.masterRun.surveyDate)
+        || (summaryData.newRun && summaryData.newRun.surveyDate),
+    );
+    // ISO dates sort lexicographically, so the plain max is the newest run.
+    return master || dates.reduce((newest, value) => (value > newest ? value : newest));
 }
 
 exports.getCandidates = async (req, res) => {
@@ -137,6 +167,7 @@ exports.listEligibleSessions = async (req, res) => {
             const entry = {
                 id: String(row.id),
                 pipelineName: sessionLabel(row),
+                inspectionDate: sessionInspectionDate(row),
                 completedAt: row.completed_at,
                 reviewedAt: row.reviewed_at,
                 selectedCount: Number(row.selected_count) || 0,

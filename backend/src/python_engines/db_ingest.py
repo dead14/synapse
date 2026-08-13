@@ -5,6 +5,7 @@ import io
 import json
 import re
 import sys
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -579,6 +580,26 @@ def _copy_insert_features(session, run_id, frame, batch_size=INSERT_BATCH_SIZE):
         cursor.close()
 
 
+def parse_survey_date(value):
+    """An ISO calendar date, or None when the caller did not supply one.
+
+    An unparseable value is rejected rather than dropped: the run would be
+    stored with a blank date that reads as "this run predates the date field",
+    which is a different fact from "the operator typed something we ignored".
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError as error:
+        failure = ValueError(f"Survey date is not a valid ISO calendar date: {text}")
+        failure.code = "INVALID_SURVEY_DATE"
+        raise failure from error
+
+
 def ingest_csv(
     file_path,
     pipeline_name,
@@ -588,6 +609,7 @@ def ingest_csv(
     user_id=None,
     source_name=None,
     source_object_key=None,
+    survey_date=None,
 ):
     synonym_lookup = load_field_synonym_lookup()
     if not synonym_lookup:
@@ -613,6 +635,7 @@ def ingest_csv(
     )
 
     checksum = source_sha256(file_path)
+    surveyed_on = parse_survey_date(survey_date)
     session = SessionLocal()
     try:
         pipeline = session.query(Pipeline).filter(
@@ -626,7 +649,11 @@ def ingest_csv(
 
         run = SurveyRun(
             pipeline_id=pipeline.id,
-            survey_year=survey_year,
+            # The date wins where both are present: the caller derives the year
+            # from it, so they cannot disagree, and a run flown in December is
+            # not the same evidence as one flown the following January.
+            survey_year=surveyed_on.year if surveyed_on else survey_year,
+            survey_date=surveyed_on,
             vendor=vendor,
             source_file=source_name or Path(file_path).name,
             source_object_key=source_object_key,
@@ -658,6 +685,7 @@ def ingest_csv(
         "parser_version": PARSER_VERSION,
         "schema_version": SCHEMA_VERSION,
         "source_sha256": checksum,
+        "survey_date": surveyed_on.isoformat() if surveyed_on else None,
     }
 
 
@@ -671,6 +699,7 @@ def main():
     parser.add_argument("--user-id", type=int, required=True)
     parser.add_argument("--source-name")
     parser.add_argument("--source-object-key")
+    parser.add_argument("--survey-date")
     args = parser.parse_args()
 
     try:
@@ -684,6 +713,7 @@ def main():
             user_id=args.user_id,
             source_name=args.source_name,
             source_object_key=args.source_object_key,
+            survey_date=args.survey_date,
         )
         print("JSON_OUTPUT:" + json.dumps(result))
         return 0
