@@ -95,6 +95,28 @@ test('the rule proposes only assessable metal loss', () => {
   assert.deepEqual([...suggested].sort(), ['new:deep', 'new:growing', 'new:high-erf']);
 });
 
+test('metal loss the NEW run reported for the first time is reviewable and releasable', () => {
+  // No OLD side and therefore no run-pair growth rate. That is a fact about the
+  // history of the defect, not a reason to keep it out of the assessment — a
+  // defect first seen on this run is exactly the one an engineer wants assessed.
+  const features = analyseComparison([metalLoss({
+    'Source Key NEW': 'new:first-seen',
+    'Source Key OLD': '-',
+    'Identif. OLD': '-',
+    'Match/Unmatch': 'Only NEW',
+    'Depth Growth (%WT/yr)': '-',
+    'Length Growth (mm/yr)': '-',
+  })]);
+
+  assert.equal(features.length, 1);
+  assert.equal(features[0].growthClass, 'unknown');
+  assert.equal(features[0].ffsReady, true);
+  assert.deepEqual([...selectableKeys(features, new Set(['new:first-seen']))], ['new:first-seen']);
+  assert.deepEqual(buildReviewPayload(features, new Set(['new:first-seen'])), [
+    { sourceKey: 'new:first-seen', featureId: 'A-1', selected: true, reason: null },
+  ]);
+});
+
 test('the saved payload records rejections but omits untouched features', () => {
   const features = analyseComparison([
     metalLoss({ 'Source Key NEW': 'new:1' }),
