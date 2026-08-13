@@ -6,7 +6,7 @@ import {
   FiXCircle,
 } from 'react-icons/fi';
 
-import type { TimelineStatus, TimelineSummary } from '../domain/gwTimeline';
+import { TIMELINE_STATUS_LABEL, type TimelineStatus, type TimelineSummary } from '../domain/gwTimeline';
 
 type HistogramBin = {
   from: number;
@@ -31,8 +31,8 @@ export default function GwMatchHealthRail({
     Icon: typeof FiCheckCircle;
   }> = [
     { status: 'review', label: 'Review queue', count: summary.review, Icon: FiAlertTriangle },
-    { status: 'missing', label: 'Missing', count: summary.missing, Icon: FiXCircle },
-    { status: 'matched', label: 'Matched', count: summary.matched, Icon: FiCheckCircle },
+    { status: 'missing', label: TIMELINE_STATUS_LABEL.missing, count: summary.missing, Icon: FiXCircle },
+    { status: 'matched', label: TIMELINE_STATUS_LABEL.matched, count: summary.matched, Icon: FiCheckCircle },
   ];
 
   return (

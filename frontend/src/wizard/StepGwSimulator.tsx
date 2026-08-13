@@ -1,7 +1,18 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Line } from 'react-chartjs-2';
-import { FiX, FiBox, FiChevronRight, FiChevronLeft, FiDownload, FiSearch } from 'react-icons/fi';
-import OdometerDashboard from './OdometerDashboard';
+import {
+  FiActivity,
+  FiAnchor,
+  FiBox,
+  FiChevronLeft,
+  FiChevronRight,
+  FiCrosshair,
+  FiDownload,
+  FiLayers,
+  FiRotateCcw,
+  FiSearch,
+  FiX,
+} from 'react-icons/fi';
 import GwTimelineViewer from './GwTimelineViewer';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Tooltip } from 'chart.js';
 import { apiFetch, ApiError } from '../utils/api';
@@ -9,7 +20,18 @@ import Modal from '../components/common/Modal';
 import { extentOf, maxOf, minOf } from '../utils/numericRange.ts';
 import { clampTooltipPosition } from '../utils/tooltipPosition';
 import { gwReviewKey, normalizeGwReview, selectReviewedGwLocks, type GwReviewDisposition, type GwReviewState } from '../domain/alignmentReview';
-import { buildTimelineModel, sourceOdometerOffset, type TimelineEvidence, type TimelineGeometry } from '../domain/gwTimeline';
+import {
+  buildTimelineModel,
+  classifyTimelineMatch,
+  offsetTrend,
+  readMatchConfidence,
+  sourceOdometerOffset,
+  timelineLaneLabels,
+  TIMELINE_STATUS_LABEL,
+  type TimelineEvidence,
+  type TimelineGeometry,
+  type TimelineStatus,
+} from '../domain/gwTimeline';
 import { buildGwReviewTransitionPayload } from './gwReviewTransition';
 import { canonicalGwReviewSignature, pairResultForPersistence } from './gwPairReviewPersistence';
 import { pairGwResult, pairTieIn, primaryRunPair, resolveRunPairs } from '../domain/runPairs';
@@ -19,7 +41,9 @@ import {
   Button,
   Panel,
   PanelBody,
+  PanelFooter,
   PanelHeader,
+  Segmented,
   SliderField,
   Switch,
 } from '../components/ds';
@@ -42,6 +66,60 @@ function buildReviewSignature(config: any, settings: {
   dtwOn: boolean;
 }) {
   return canonicalGwReviewSignature(config, settings);
+}
+
+type GwTableTab = 'all' | 'matched' | 'unmatched';
+type GwTableSortKey = 'old' | 'new' | 'offset' | 'deviation';
+
+const GW_TABLE_TABS: Array<{ id: GwTableTab; label: string }> = [
+  { id: 'all', label: 'All GWs' },
+  { id: 'matched', label: 'Matched' },
+  { id: 'unmatched', label: 'Unmatched' },
+];
+
+/** A percentage rendered as four discrete bars, as the review screens do. */
+function confidenceBand(confidence: number): { label: string; filled: number } {
+  if (confidence >= 90) return { label: 'Very high', filled: 4 };
+  if (confidence >= 70) return { label: 'High', filled: 3 };
+  if (confidence >= 45) return { label: 'Medium', filled: 2 };
+  return { label: 'Low', filled: 1 };
+}
+
+function metres(value: unknown, digits = 3): string {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(digits) : '—';
+}
+
+/** A share of the run, blank when there is no run to take a share of. */
+function percentOfRun(count: number, total: number): string {
+  return total === 0 ? '' : `${((count / total) * 100).toFixed(1)}%`;
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  activeKey,
+  direction,
+  onSort,
+}: {
+  label: string;
+  sortKey: GwTableSortKey;
+  activeKey: GwTableSortKey;
+  direction: 'asc' | 'desc';
+  onSort: (key: GwTableSortKey) => void;
+}) {
+  const isActive = activeKey === sortKey;
+  return (
+    <button
+      type="button"
+      className={`gw-table__sort${isActive ? ' is-active' : ''}`}
+      aria-sort={isActive ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+      onClick={() => onSort(sortKey)}
+    >
+      {label}
+      <span aria-hidden="true">{isActive ? (direction === 'asc' ? '↑' : '↓') : '↕'}</span>
+    </button>
+  );
 }
 
 /** One run pair's matching result and the operator's review of it. */
@@ -124,45 +202,19 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
     if (tooltipFrameRef.current !== null) window.cancelAnimationFrame(tooltipFrameRef.current);
   }, []);
 
-  const [activeTab, setActiveTab] = useState<'offset' | 'unmatched' | 'matched' | 'table' | 'odometer' | 'all'>('all');
-
-  const handleDownloadExcel = async () => {
-    const XLSX = await import('xlsx');
-    const dataToExport = matches.map((m: any, index: number) => ({
-      'No.': index + 1,
-      'Status': m.status,
-      'Baseline Odometer (m)': m.oldVal !== null ? m.oldVal.toFixed(3) : '-',
-      'Raw Odometer (m)': m.newVal !== null ? m.newVal.toFixed(3) : '-',
-      'Deviation (%)': m.varPct.toFixed(2) + '%',
-      'Offset (m)': m.offset !== null ? m.offset.toFixed(3) : '-',
-      'Flagged (>5%)': m.flagged ? 'Yes' : 'No'
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Girth Weld Matches");
-
-    // Adjust column widths
-    worksheet['!cols'] = [
-      {wch: 5},
-      {wch: 12},
-      {wch: 22},
-      {wch: 22},
-      {wch: 15},
-      {wch: 15},
-      {wch: 15}
-    ];
-
-    XLSX.writeFile(workbook, 'GW_Match_Report.xlsx');
-  };
+  const [activeTab, setActiveTab] = useState<GwTableTab>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | TimelineStatus>('all');
+  const [sortKey, setSortKey] = useState<GwTableSortKey>('old');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [rowsPerPage, setRowsPerPage] = useState(25);
+  const [chartScope, setChartScope] = useState<'matched' | 'all'>('matched');
 
   const [dtwOn, setDtwOn] = useState(initialSettings.dtwOn);
   const [useValveAnchor, setUseValveAnchor] = useState(initialSettings.useValveAnchor);
   const [strictPenalty, setStrictPenalty] = useState(initialSettings.strictPenalty);
   const [currentPage, setCurrentPage] = useState(1);
   const tableRowRefs = useRef<{[key: string]: HTMLTableRowElement | null}>({});
-  const itemsPerPage = 10;
-  
+
   const [searchQuery, setSearchQuery] = useState('');
 
   const [matches, setMatches] = useState<any[]>([]);
@@ -459,67 +511,56 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
     };
   }, [ota, strictPenalty, useValveAnchor, dtwOn, config, retryNonce]);
 
-  const unmatchedRanges = useMemo(() => {
-    const ranges: any[] = [];
-    let currentRange: any = null;
-
-    matches.forEach(m => {
-      if (m.status === 'Skipped') {
-        if (!currentRange) {
-           currentRange = {
-             id: m.id,
-             oldFrom: m.oldVal, oldTo: m.oldVal,
-             newFrom: m.newVal, newTo: m.newVal
-           };
-        } else {
-           if (m.oldVal !== null) {
-              if (currentRange.oldFrom === null) currentRange.oldFrom = m.oldVal;
-              currentRange.oldTo = m.oldVal;
-           }
-           if (m.newVal !== null) {
-              if (currentRange.newFrom === null) currentRange.newFrom = m.newVal;
-              currentRange.newTo = m.newVal;
-           }
-        }
-      } else {
-        if (currentRange) {
-           ranges.push(currentRange);
-           currentRange = null;
-        }
-      }
-    });
-    if (currentRange) ranges.push(currentRange);
-    return ranges;
-  }, [matches]);
-
   const matchedOnly = useMemo(
     () => matches.filter(m => m.status === 'Match').sort((a, b) => a.oldVal - b.oldVal),
     [matches],
   );
-  const filteredMatched = matchedOnly.filter(m => 
-    searchQuery === '' || 
-    (m.oldVal !== null && m.oldVal.toString().includes(searchQuery)) ||
-    (m.newVal !== null && m.newVal.toString().includes(searchQuery))
-  );
-  
-  const paginatedMatched = filteredMatched.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-  const totalPages = Math.ceil(filteredMatched.length / itemsPerPage);
 
 
-  // Build the chart from the exact rows shown in the matched table.  The
-  // table and chart therefore use the same x-position and offset value,
-  // including when a long-running backend worker returns a legacy payload.
+  // Build the chart from the exact rows shown in the table. The table and chart
+  // therefore use the same x-position and offset value, including when a
+  // long-running backend worker returns a legacy payload.
   const chartPoints = useMemo(() => {
-    return matchedOnly
+    const source = chartScope === 'matched'
+      ? matchedOnly
+      // "All pairs" still means pairs: a weld with no counterpart has no offset
+      // to plot, so widening the scope adds the flagged pairs, not blanks.
+      : [...matches].sort((left, right) => Number(left.oldVal) - Number(right.oldVal));
+    return source
       .map((match) => ({
         x: match.oldVal as number,
         y: match.odometerOffset as number,
         match,
       }))
       .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
-  }, [matchedOnly]);
+  }, [chartScope, matchedOnly, matches]);
 
   const graphPoints = chartPoints.map(({ x, y }) => ({ x, y }));
+  const trend = useMemo(() => offsetTrend(graphPoints), [graphPoints]);
+
+  const MATCHER_DEFAULTS = { strictPenalty: false, useValveAnchor: true, dtwOn: true };
+  const isAtMatcherDefaults = ota === initialOta
+    && strictPenalty === MATCHER_DEFAULTS.strictPenalty
+    && useValveAnchor === MATCHER_DEFAULTS.useValveAnchor
+    && dtwOn === MATCHER_DEFAULTS.dtwOn;
+  const resetMatcherDefaults = () => {
+    setOta(initialOta);
+    setStrictPenalty(MATCHER_DEFAULTS.strictPenalty);
+    setUseValveAnchor(MATCHER_DEFAULTS.useValveAnchor);
+    setDtwOn(MATCHER_DEFAULTS.dtwOn);
+  };
+
+  const downloadOffsetCsv = () => {
+    const header = [`${laneLabels.old} log distance (m)`, 'Offset (m)'];
+    const rows = chartPoints.map(({ x, y }) => `${x},${y}`);
+    const csv = [header.join(','), ...rows].join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `GW_offset_${laneLabels.old}_to_${laneLabels.new}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   const defaultDisposition = (match: any): GwReviewDisposition => {
     if (match?.status === 'Skipped') return 'excluded';
@@ -630,6 +671,137 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
     }
   };
 
+  // The viewer names each lane by its survey year. In a chain the NEW side of
+  // an intermediate pair is not the master run, so "Master NEW" was wrong there
+  // anyway; the year is both shorter and always true.
+  const laneLabels = useMemo(
+    () => timelineLaneLabels(activePair?.oldRun, activePair?.newRun),
+    [activePair],
+  );
+
+  /**
+   * One row per matcher outcome, carrying the result the table has to sort,
+   * filter and colour by. Classified with the same function the viewer uses, so
+   * a weld cannot be amber on the canvas and green in the table.
+   */
+  const tableRows = useMemo(() => timelineMatches.map((match) => {
+    const deviationPct = Number.isFinite(Number(match.deviationRatio))
+      ? Math.abs(Number(match.deviationRatio)) * 100
+      : Number(match.rawVarPct);
+    return {
+      match,
+      status: classifyTimelineMatch(match, timelineDispositions[String(match.id)]),
+      confidence: readMatchConfidence(match),
+      deviationPct: Number.isFinite(deviationPct) ? deviationPct : null,
+    };
+  }), [timelineMatches, timelineDispositions]);
+
+  const statusCounts = useMemo(() => tableRows.reduce((counts, item) => {
+    counts[item.status] += 1;
+    return counts;
+  }, { matched: 0, review: 0, missing: 0 } as Record<TimelineStatus, number>), [tableRows]);
+
+  // A weld under review is not a clean match, so it belongs in the unmatched
+  // set — matched plus unmatched then adds up to the run, which is the only way
+  // the three tab counts can be read against each other.
+  const tabCounts: Record<GwTableTab, number> = {
+    all: tableRows.length,
+    matched: statusCounts.matched,
+    unmatched: statusCounts.review + statusCounts.missing,
+  };
+
+  const meanOffsetAll = useMemo(() => {
+    const offsets = tableRows
+      .filter((item) => item.status !== 'missing')
+      .map((item) => Number(item.match.offset))
+      .filter(Number.isFinite);
+    return offsets.length === 0 ? null : offsets.reduce((sum, value) => sum + value, 0) / offsets.length;
+  }, [tableRows]);
+
+  // The engine only reports a match confidence on some strategies. A column
+  // that is "—" on every row teaches the reader nothing, so it appears only
+  // when there is something in it.
+  const hasConfidence = tableRows.some((item) => item.confidence !== null);
+
+  const visibleRows = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const filtered = tableRows.filter((item) => {
+      if (activeTab === 'matched' && item.status !== 'matched') return false;
+      if (activeTab === 'unmatched' && item.status === 'matched') return false;
+      if (statusFilter !== 'all' && item.status !== statusFilter) return false;
+      if (!query) return true;
+      return [
+        item.match.oldVal,
+        item.match.originalNewVal ?? item.match.newVal,
+        item.match.oldDesc,
+        item.match.newDesc,
+      ].some((value) => String(value ?? '').toLowerCase().includes(query));
+    });
+
+    const readSortValue = (item: typeof tableRows[number]) => {
+      switch (sortKey) {
+        case 'new': return Number(item.match.originalNewVal ?? item.match.newVal);
+        case 'offset': return Number(item.match.offset);
+        case 'deviation': return item.deviationPct === null ? Number.NaN : item.deviationPct;
+        default: return Number(item.match.oldVal);
+      }
+    };
+    const direction = sortDirection === 'asc' ? 1 : -1;
+    return [...filtered].sort((left, right) => {
+      const leftValue = readSortValue(left);
+      const rightValue = readSortValue(right);
+      // Rows with nothing on the sorted side sink to the bottom whichever way
+      // the sort runs. Floating them to the top would bury the run behind the
+      // welds that have no counterpart to sort by.
+      if (!Number.isFinite(leftValue) && !Number.isFinite(rightValue)) return 0;
+      if (!Number.isFinite(leftValue)) return 1;
+      if (!Number.isFinite(rightValue)) return -1;
+      return (leftValue - rightValue) * direction;
+    });
+  }, [tableRows, activeTab, statusFilter, searchQuery, sortKey, sortDirection]);
+
+  const totalPages = Math.max(1, Math.ceil(visibleRows.length / rowsPerPage));
+  const pageNumber = Math.min(currentPage, totalPages);
+  const firstRowIndex = (pageNumber - 1) * rowsPerPage;
+  const pageRows = visibleRows.slice(firstRowIndex, firstRowIndex + rowsPerPage);
+
+  const toggleSort = (key: GwTableSortKey) => {
+    if (sortKey === key) {
+      setSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortKey(key);
+    setSortDirection('asc');
+    setCurrentPage(1);
+  };
+
+  const handleDownloadExcel = async () => {
+    const XLSX = await import('xlsx');
+    // The rows on screen, in the order they are on screen. Exporting the whole
+    // unfiltered set from a filtered table hands the reader a workbook that
+    // does not match what they were looking at when they pressed the button.
+    const dataToExport = visibleRows.map((item, index) => ({
+      'No.': index + 1,
+      'Result': TIMELINE_STATUS_LABEL[item.status],
+      [`${laneLabels.old} log distance (m)`]: item.match.oldVal ?? '',
+      [`${laneLabels.old} feature`]: item.match.oldDesc ?? '',
+      [`${laneLabels.new} log distance (m)`]: item.match.originalNewVal ?? item.match.newVal ?? '',
+      [`${laneLabels.new} feature`]: item.match.newDesc ?? '',
+      'Offset (m)': item.match.offset ?? '',
+      'Deviation (%)': item.deviationPct === null ? '' : Number(item.deviationPct.toFixed(3)),
+      'Match confidence (%)': item.confidence === null ? '' : Number(item.confidence.toFixed(1)),
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Girth weld matches');
+    worksheet['!cols'] = [
+      { wch: 6 }, { wch: 11 }, { wch: 24 }, { wch: 24 },
+      { wch: 24 }, { wch: 24 }, { wch: 12 }, { wch: 14 }, { wch: 20 },
+    ];
+    XLSX.writeFile(workbook, `GW_matches_${laneLabels.old}_to_${laneLabels.new}.xlsx`);
+  };
+
   const chartPalette = useMemo(() => {
     const styles = getComputedStyle(document.documentElement);
     return {
@@ -723,13 +895,8 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
             dispositionsById={timelineDispositions}
             timeline={timelineGeometry}
             zoom={zoom}
-            /* In a chain, the NEW side of an intermediate pair is not the master
-               run — labelling it "Master NEW" made a 2012→2024 comparison read as
-               though 2024 were the master when 2026 was. */
-            oldRunLabel={activePair?.oldRun?.year ? `${activePair.oldRun.year} (OLD)` : 'Historical OLD'}
-            newRunLabel={activePair?.newRun?.year
-              ? `${activePair.newRun.year}${activePair.key === primaryPair?.key ? ' (Master NEW)' : ' (NEW)'}`
-              : 'Master NEW'}
+            oldRunLabel={laneLabels.old}
+            newRunLabel={laneLabels.new}
             selectedMatch={selectedMatch}
             selectedDecision={selectedMatch ? decisionFor(selectedMatch) : null}
             isLoading={isCalculating}
@@ -744,360 +911,436 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
         </div>
 
         {/* Full-width match table */}
-        <div className="flex flex-col gap-5">
-          
-          {/* Data Tables Container */}
-          <div className="gw-match-table ds-panel" style={{ height: 'min(70vh, 720px)', minHeight: '520px' }}>
-            
-            {/* Tabs Header */}
-            <div className="flex border-b border-gray-200 bg-gray-50">
-              {[
-                { id: 'all', label: 'All GWs' },
-                { id: 'matched', label: 'Matched' },
-                { id: 'unmatched', label: 'Unmatched' }
-              ].map(tab => (
-                <button
-                  key={tab.id}
-                  onClick={() => { setActiveTab(tab.id as any); setCurrentPage(1); }}
-                  className={`flex-1 py-3 text-xs font-bold transition-colors border-b-2 tracking-wide uppercase ${
-                    activeTab === tab.id || (activeTab === 'offset' && tab.id === 'all') || (activeTab === 'odometer' && tab.id === 'all')
-                      ? 'border-blue-600 text-blue-600 bg-white shadow-[0_2px_0_0_white]' 
-                      : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-100'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex-1 flex flex-col overflow-hidden relative">
-              {/* Unmatched Table */}
-              {(activeTab === 'unmatched') && (
-                <div className="absolute inset-0 flex flex-col bg-white">
-                  <div className="p-2 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                    <span className="text-xs font-bold text-gray-600 pl-2">Anomalies Detected</span>
-                    <button className="ds-btn ds-btn--ghost ds-btn--xs ds-btn--icon"><FiDownload size={14} /></button>
-                  </div>
-                  <div className="flex-1 overflow-auto custom-scrollbar">
-                    <table className="w-full min-w-[760px] text-left text-xs leading-tight">
-                      <thead className="text-gray-500 bg-gray-50 sticky top-0 border-b border-gray-200 z-10 shadow-sm">
-                        <tr>
-                          <th className="px-3 py-2 font-bold">Old From</th>
-                          <th className="px-3 py-2 font-bold">New From</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {unmatchedRanges.map((r, idx) => (
-                          <tr key={idx} className="hover:bg-rose-50/50 transition-colors group">
-                            <td className="px-3 py-2 font-mono text-gray-700">{r.oldFrom !== null ? r.oldFrom : ''}</td>
-                            <td className="px-3 py-2 font-mono text-gray-700">{r.newFrom !== null ? r.newFrom : ''}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {/* Matched Table */}
-              {(activeTab === 'matched') && (
-                <div className="absolute inset-0 flex flex-col bg-white">
-                  <div className="p-2 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                    <div className="relative flex-1 max-w-[180px]">
-                      <FiSearch className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" size={12} />
-                      <input 
-                        type="text" placeholder="Search GW..." 
-                        value={searchQuery} onChange={(e) => {setSearchQuery(e.target.value); setCurrentPage(1);}}
-                        className="ds-input ds-input--sm"
-                      />
-                    </div>
-                    <button className="ds-btn ds-btn--ghost ds-btn--xs ds-btn--icon"><FiDownload size={14} /></button>
-                  </div>
-                  <div className="flex-1 overflow-auto custom-scrollbar">
-                    <table className="w-full min-w-[920px] text-left text-xs leading-tight">
-                      <thead className="text-gray-500 bg-gray-50 sticky top-0 border-b border-gray-200 z-10 shadow-sm">
-                        <tr>
-                          <th className="px-2 py-2 w-14 text-center font-bold">Review</th>
-                          <th className="px-3 py-2 font-bold">Old Run (m)</th>
-                          <th className="px-3 py-2 font-bold">Old Desc</th>
-                          <th className="px-3 py-2 font-bold">New Run (m)</th>
-                          <th className="px-3 py-2 font-bold">New Desc</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {paginatedMatched.map((row) => (
-                            <tr
-                              key={row.id}
-                              onClick={() => setSelectedMatch(row)}
-                              className={`cursor-pointer transition-colors ${
-                                selectedMatch?.id === row.id
-                                  ? 'bg-blue-100 border-l-2 border-blue-500'
-                                  : 'border-l-2 border-transparent hover:bg-blue-50/50'
-                              }`}
-                            >
-                              <td className="px-2 py-2 text-center">
-                                <button type="button" onClick={(event) => { event.stopPropagation(); setSelectedMatch(row); }} className="ds-btn ds-btn--soft ds-btn--xs">Open</button>
-                              </td>
-                              <td className="px-3 py-2 font-mono text-gray-700">{row.oldVal !== null ? row.oldVal : '-'}</td>
-                              <td className="px-3 py-2 text-gray-500 truncate max-w-[260px]" title={row.oldDesc}>{row.oldDesc}</td>
-                              <td className="px-3 py-2 font-mono text-gray-700">{row.originalNewVal !== undefined && row.originalNewVal !== null ? row.originalNewVal : '-'}</td>
-                              <td className="px-3 py-2 text-gray-500 truncate max-w-[260px]" title={row.newDesc}>{row.newDesc}</td>
-                            </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  {/* Pagination Mini */}
-                  <div className="px-3 py-2 bg-gray-50 border-t border-gray-200 flex justify-between items-center text-[10px]">
-                    <div className="flex gap-1">
-                      <button onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))} className="ds-btn ds-btn--ghost ds-btn--xs ds-btn--icon"><FiChevronLeft/></button>
-                      <span className="p-1 font-bold text-gray-700">{currentPage} / {totalPages}</span>
-                      <button onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))} className="ds-btn ds-btn--ghost ds-btn--xs ds-btn--icon"><FiChevronRight/></button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* All Table (Default) */}
-              {(activeTab === 'all' || activeTab === 'offset' || activeTab === 'odometer') && (
-                <div className="absolute inset-0 flex flex-col bg-white">
-                   <div className="p-2 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                    <span className="text-xs font-bold text-gray-600 pl-2">All Pipeline Features</span>
-                    <button onClick={handleDownloadExcel} className="ds-btn ds-btn--soft ds-btn--xs"><FiDownload /> Export</button>
-                  </div>
-                  <div className="flex-1 overflow-auto custom-scrollbar">
-                    <table className="w-full min-w-[980px] text-left text-xs leading-tight">
-                      <thead className="text-gray-500 bg-gray-50 sticky top-0 border-b border-gray-200 z-10 shadow-sm">
-                        <tr>
-                          <th className="px-3 py-2 font-bold w-6"></th>
-                          <th className="px-3 py-2 font-bold">Old Run (m)</th>
-                          <th className="px-3 py-2 font-bold">Old Desc</th>
-                          <th className="px-3 py-2 font-bold">New Run (m)</th>
-                          <th className="px-3 py-2 font-bold">New Desc</th>
-                          <th className="px-3 py-2 font-bold text-right">Offset</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {!isCalculating && matches.length === 0 && (
-                          <tr>
-                            <td colSpan={6} className="px-3 py-10 text-center text-gray-500">
-                              {loadError || 'No matching results to display yet.'}
-                            </td>
-                          </tr>
-                        )}
-                        {matches.map((row) => (
-                          <tr key={row.id} 
-                            ref={(el: HTMLTableRowElement | null) => {
-                              if (el) tableRowRefs.current[row.id] = el;
-                              else delete tableRowRefs.current[row.id];
-                            }}
-                            className={`transition-colors cursor-pointer group ${
-                              selectedMatch?.id === row.id
-                                ? 'bg-blue-100 hover:bg-blue-100'
-                                :
-                              (row.oldVal !== null && selectedGWs.includes(row.oldVal)) || (row.newVal !== null && selectedGWs.includes(row.newVal))
-                                ? 'bg-yellow-100 hover:bg-yellow-200' 
-                                : row.status === 'Skipped'
-                                  ? 'bg-rose-50 hover:bg-rose-100'
-                                  : row.status === 'Flagged'
-                                    ? 'bg-amber-50 hover:bg-amber-100'
-                                    : 'hover:bg-blue-50/50'
-                            }`}
-                            onMouseMove={(e) => queueTooltipUpdate({ x: e.clientX, y: e.clientY, row: row })}
-                            onMouseLeave={() => queueTooltipUpdate(null)}
-                            onClick={() => {
-                              setSelectedMatch(row);
-                              if (row.oldVal === null) return;
-                              setSelectedGWs(prev => {
-                                const dist = row.oldVal;
-                                if (prev.includes(dist)) return prev.filter(d => d !== dist);
-                                const next = [...prev, dist].slice(-2);
-                                if (next.length === 2) setShow3DViewer(true);
-                                return next;
-                              });
-                            }}>
-                            <td className="px-3 py-2.5">
-                              <div className={`w-1.5 h-1.5 rounded-full ${row.status === 'Match' ? 'bg-blue-500' : 'bg-rose-500'}`}></div>
-                            </td>
-                            <td className="px-3 py-2.5 font-mono text-gray-700">{row.oldVal !== null ? row.oldVal : '-'}</td>
-                            <td className="px-3 py-2.5 text-gray-500 truncate max-w-[320px]" title={row.oldDesc}>{row.oldDesc}</td>
-                            <td className="px-3 py-2.5 font-mono text-gray-700">{row.originalNewVal !== undefined && row.originalNewVal !== null ? row.originalNewVal : '-'}</td>
-                            <td className="px-3 py-2.5 text-gray-500 truncate max-w-[320px]" title={row.newDesc}>{row.newDesc}</td>
-                            <td className="px-3 py-2.5 font-mono font-bold text-right text-gray-800">{row.offset !== null ? row.offset : '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-            
-            {/* Table Footer Stats */}
-            <div className="bg-gray-50 border-t border-gray-200 px-4 py-3 flex justify-between items-center text-xs">
-               <div className="flex flex-col">
-                 <span className="font-bold text-gray-800">{matches.filter(m => m.status === 'Match').length}</span>
-                 <span className="text-gray-500 text-[10px] uppercase tracking-wider">Total Matches</span>
-               </div>
-               <div className="h-6 w-px bg-gray-300"></div>
-               <div className="flex flex-col text-right">
-                 <span className="font-bold text-blue-600">{(graphPoints.reduce((sum, p) => sum + p.y, 0) / (graphPoints.length || 1)).toFixed(2)}m</span>
-                 <span className="text-gray-500 text-[10px] uppercase tracking-wider">Mean Offset</span>
-               </div>
-            </div>
+        <div className="gw-table-panel ds-panel">
+          <div className="gw-table__tabs" role="tablist" aria-label="Girth weld result set">
+            {GW_TABLE_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                className={activeTab === tab.id ? 'is-active' : ''}
+                onClick={() => { setActiveTab(tab.id); setCurrentPage(1); }}
+              >
+                {tab.label}
+                <span>{tabCounts[tab.id].toLocaleString()}</span>
+              </button>
+            ))}
           </div>
-          
+
+          <dl className="gw-table__stats">
+            <div className="gw-table__stat">
+              <dt>Total features</dt>
+              <dd>{tableRows.length.toLocaleString()}</dd>
+            </div>
+            <div className="gw-table__stat is-matched">
+              <dt>{TIMELINE_STATUS_LABEL.matched}</dt>
+              <dd>
+                {statusCounts.matched.toLocaleString()}
+                <small>{percentOfRun(statusCounts.matched, tableRows.length)}</small>
+              </dd>
+            </div>
+            <div className="gw-table__stat is-review">
+              <dt>{TIMELINE_STATUS_LABEL.review}</dt>
+              <dd>
+                {statusCounts.review.toLocaleString()}
+                <small>{percentOfRun(statusCounts.review, tableRows.length)}</small>
+              </dd>
+            </div>
+            <div className="gw-table__stat is-missing">
+              <dt>{TIMELINE_STATUS_LABEL.missing}</dt>
+              <dd>
+                {statusCounts.missing.toLocaleString()}
+                <small>{percentOfRun(statusCounts.missing, tableRows.length)}</small>
+              </dd>
+            </div>
+            <div className="gw-table__stat is-offset">
+              <dt>Mean offset</dt>
+              <dd>{meanOffsetAll === null ? '—' : `${meanOffsetAll.toFixed(2)} m`}</dd>
+            </div>
+          </dl>
+
+          <div className="gw-table__toolbar">
+            <label className="gw-table__search">
+              <FiSearch aria-hidden="true" />
+              <input
+                type="search"
+                value={searchQuery}
+                placeholder="Search a distance or description"
+                aria-label="Search girth weld rows"
+                onChange={(event) => { setSearchQuery(event.target.value); setCurrentPage(1); }}
+              />
+            </label>
+
+            <label className="gw-table__filter">
+              <span>Result</span>
+              <select
+                className="ds-select ds-select--sm"
+                value={statusFilter}
+                onChange={(event) => {
+                  setStatusFilter(event.target.value as 'all' | TimelineStatus);
+                  setCurrentPage(1);
+                }}
+              >
+                <option value="all">All results</option>
+                <option value="matched">{TIMELINE_STATUS_LABEL.matched}</option>
+                <option value="review">{TIMELINE_STATUS_LABEL.review}</option>
+                <option value="missing">{TIMELINE_STATUS_LABEL.missing}</option>
+              </select>
+            </label>
+
+            {(statusFilter !== 'all' || searchQuery.trim() !== '') && (
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => { setStatusFilter('all'); setSearchQuery(''); setCurrentPage(1); }}
+              >
+                Clear filters
+              </Button>
+            )}
+
+            <span className="ds-toolbar__spacer" />
+
+            <Button size="sm" variant="secondary" startIcon={<FiDownload aria-hidden="true" />} onClick={handleDownloadExcel}>
+              Export
+            </Button>
+          </div>
+
+          <div className="gw-table__scroll">
+            <table className="gw-table">
+              <thead>
+                <tr>
+                  <th scope="col" className="gw-table__status-col">Result</th>
+                  <th scope="col" className="is-numeric">
+                    <SortHeader label={`${laneLabels.old} (m)`} sortKey="old" activeKey={sortKey} direction={sortDirection} onSort={toggleSort} />
+                  </th>
+                  <th scope="col">{laneLabels.old} feature</th>
+                  <th scope="col" className="is-numeric">
+                    <SortHeader label={`${laneLabels.new} (m)`} sortKey="new" activeKey={sortKey} direction={sortDirection} onSort={toggleSort} />
+                  </th>
+                  <th scope="col">{laneLabels.new} feature</th>
+                  <th scope="col" className="is-numeric">
+                    <SortHeader label="Offset (m)" sortKey="offset" activeKey={sortKey} direction={sortDirection} onSort={toggleSort} />
+                  </th>
+                  <th scope="col" className="is-numeric">
+                    <SortHeader label="Deviation" sortKey="deviation" activeKey={sortKey} direction={sortDirection} onSort={toggleSort} />
+                  </th>
+                  {hasConfidence && <th scope="col">Confidence</th>}
+                  <th scope="col" className="gw-table__action-col">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {!isCalculating && visibleRows.length === 0 && (
+                  <tr>
+                    <td colSpan={hasConfidence ? 9 : 8} className="gw-table__empty">
+                      {loadError
+                        || (tableRows.length === 0
+                          ? 'No matching results to display yet.'
+                          : 'No girth weld matches this filter.')}
+                    </td>
+                  </tr>
+                )}
+                {pageRows.map(({ match: row, status, confidence, deviationPct }) => {
+                  const band = confidence === null ? null : confidenceBand(confidence);
+                  const isSelected = selectedMatch?.id === row.id;
+                  const isPinned = (row.oldVal !== null && selectedGWs.includes(row.oldVal as number))
+                    || (row.newVal !== null && selectedGWs.includes(row.newVal as number));
+                  return (
+                    <tr
+                      key={String(row.id)}
+                      ref={(element: HTMLTableRowElement | null) => {
+                        if (element) tableRowRefs.current[String(row.id)] = element;
+                        else delete tableRowRefs.current[String(row.id)];
+                      }}
+                      className={`is-${status}${isSelected ? ' is-selected' : ''}${isPinned ? ' is-pinned' : ''}`}
+                      onMouseMove={(event) => queueTooltipUpdate({ x: event.clientX, y: event.clientY, row })}
+                      onMouseLeave={() => queueTooltipUpdate(null)}
+                      onClick={() => {
+                        setSelectedMatch(row);
+                        if (row.oldVal === null || row.oldVal === undefined) return;
+                        setSelectedGWs((previous) => {
+                          const distance = row.oldVal as number;
+                          if (previous.includes(distance)) return previous.filter((value) => value !== distance);
+                          const next = [...previous, distance].slice(-2);
+                          if (next.length === 2) setShow3DViewer(true);
+                          return next;
+                        });
+                      }}
+                    >
+                      <td className="gw-table__status-col">
+                        <span className={`gw-status-chip is-${status}`}>{TIMELINE_STATUS_LABEL[status]}</span>
+                      </td>
+                      <td className="is-numeric">{metres(row.oldVal)}</td>
+                      <td className="is-text" title={row.oldDesc}>{row.oldDesc || '—'}</td>
+                      <td className="is-numeric">{metres(row.originalNewVal ?? row.newVal)}</td>
+                      <td className="is-text" title={row.newDesc}>{row.newDesc || '—'}</td>
+                      <td className="is-numeric is-strong">{metres(row.offset)}</td>
+                      <td className="is-numeric">{deviationPct === null ? '—' : `${deviationPct.toFixed(2)}%`}</td>
+                      {hasConfidence && (
+                        <td>
+                          {band === null ? '—' : (
+                            <span className="gw-confidence" title={`${confidence?.toFixed(1)}%`}>
+                              <span className="gw-confidence__bars" aria-hidden="true">
+                                {[0, 1, 2, 3].map((index) => (
+                                  <i key={index} className={index < band.filled ? 'is-filled' : ''} />
+                                ))}
+                              </span>
+                              {band.label}
+                            </span>
+                          )}
+                        </td>
+                      )}
+                      <td className="gw-table__action-col">
+                        <button
+                          type="button"
+                          className="ds-btn ds-btn--soft ds-btn--xs"
+                          onClick={(event) => { event.stopPropagation(); setSelectedMatch(row); }}
+                        >
+                          Inspect
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="gw-table__footer">
+            <label className="gw-table__page-size">
+              Rows per page
+              <select
+                className="ds-select ds-select--sm"
+                value={rowsPerPage}
+                onChange={(event) => { setRowsPerPage(Number(event.target.value)); setCurrentPage(1); }}
+              >
+                {[25, 50, 100, 250].map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
+            <span className="gw-table__range">
+              {visibleRows.length === 0
+                ? 'No rows'
+                : `Showing ${(firstRowIndex + 1).toLocaleString()}–${Math.min(firstRowIndex + rowsPerPage, visibleRows.length).toLocaleString()} of ${visibleRows.length.toLocaleString()}`}
+            </span>
+            <div className="gw-table__pager">
+              <button type="button" aria-label="First page" disabled={pageNumber <= 1} onClick={() => setCurrentPage(1)}>«</button>
+              <button type="button" aria-label="Previous page" disabled={pageNumber <= 1} onClick={() => setCurrentPage(pageNumber - 1)}><FiChevronLeft aria-hidden="true" /></button>
+              <span>{pageNumber} / {totalPages}</span>
+              <button type="button" aria-label="Next page" disabled={pageNumber >= totalPages} onClick={() => setCurrentPage(pageNumber + 1)}><FiChevronRight aria-hidden="true" /></button>
+              <button type="button" aria-label="Last page" disabled={pageNumber >= totalPages} onClick={() => setCurrentPage(totalPages)}>»</button>
+            </div>
+            <span className="gw-table__mean">
+              Mean offset (all) <strong>{meanOffsetAll === null ? '—' : `${meanOffsetAll.toFixed(2)} m`}</strong>
+            </span>
+          </div>
         </div>
 
       </div>
 
-      {/* Middle Row: OTA Settings & GW Offset Trends */}
-      <div className="gw-control-grid grid grid-cols-1 xl:grid-cols-5 gap-5 items-stretch">
-        
-        {/* LEFT: OTA Settings */}
-        <div className="xl:col-span-2 flex">
-          <Panel className="gw-settings-panel w-full">
-            <PanelHeader
-              eyebrow="Matcher"
-              title="OTA settings"
-              subtitle="Adjust slippage tolerance and toggle DTW correction to force alignment."
-            />
-            <PanelBody className="ds-stack">
-              <SliderField
-                label={`Slippage tolerance${perSectionOtaEnabled ? ' (global default)' : ''}`}
-                value={ota}
-                display={`${ota}%`}
-                min={0.1}
-                max={10}
-                step={0.1}
-                onChange={setOta}
+      {/* Matcher controls and the offset trend they produce */}
+      <div className="gw-control-grid">
+        <Panel className="gw-settings-panel">
+          <PanelHeader
+            eyebrow="Matcher"
+            title="Matcher controls"
+            subtitle="Alignment behaviour and matching rules for this run pair."
+          />
+          <PanelBody className="ds-stack">
+            <SliderField
+              label={`Slippage tolerance${perSectionOtaEnabled ? ' (global default)' : ''}`}
+              value={ota}
+              display={`${ota.toFixed(1)}%`}
+              min={0.1}
+              max={10}
+              step={0.1}
+              hint="Maximum spool-length slippage before a pair is held back for review."
+              onChange={setOta}
+            >
+              {/* The track alone gives no sense of where 1.5 % sits between the
+                  ends, which is the one thing an operator is judging when they
+                  drag it. */}
+              <div className="gw-slider-scale" aria-hidden="true">
+                {[0.1, 2, 4, 6, 8, 10].map((mark) => <span key={mark}>{mark === 0.1 ? '0.1' : mark}%</span>)}
+              </div>
+            </SliderField>
+
+            {sections.length > 0 && (
+              <div className="gw-toggle-row">
+                <span className="gw-toggle-row__icon" aria-hidden="true"><FiLayers /></span>
+                <div className="gw-toggle-row__copy">
+                  <strong>Per-section OTA</strong>
+                  <small>Override the tolerance for individual pipeline sections.</small>
+                </div>
+                <Switch
+                  checked={perSectionOtaEnabled}
+                  onChange={setPerSectionOtaEnabled}
+                  label="Enable per-section OTA overrides"
+                />
+              </div>
+            )}
+
+            {perSectionOtaEnabled && sections.length > 0 && (
+              <div className="gw-section-ota">
+                {sections.map((s) => {
+                  const sOta = sectionOtaOverrides[s.id] ?? ota;
+                  return (
+                    <div key={s.id} className="gw-section-ota__item">
+                      <SliderField
+                        label={s.name}
+                        value={sOta}
+                        display={`${sOta.toFixed(1)}%`}
+                        min={0.1}
+                        max={10}
+                        step={0.1}
+                        onChange={(value) => setSectionOtaOverrides((prev) => ({ ...prev, [s.id]: value }))}
+                      >
+                        {sectionOtaOverrides[s.id] != null && (
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            title="Reset to global"
+                            onClick={() => setSectionOtaOverrides((prev) => { const next = { ...prev }; delete next[s.id]; return next; })}
+                          >
+                            Reset to global
+                          </Button>
+                        )}
+                      </SliderField>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="gw-toggle-row">
+              <span className="gw-toggle-row__icon" aria-hidden="true"><FiCrosshair /></span>
+              <div className="gw-toggle-row__copy">
+                <strong>Strict distance &amp; spool matching</strong>
+                <small>Penalises distance drift to prevent forced matches across tie-ins.</small>
+              </div>
+              <Switch checked={strictPenalty} onChange={setStrictPenalty} label="Strict distance and spool matching" />
+            </div>
+
+            <div className="gw-toggle-row">
+              <span className="gw-toggle-row__icon" aria-hidden="true"><FiAnchor /></span>
+              <div className="gw-toggle-row__copy">
+                <strong>Valve-to-valve anchoring</strong>
+                <small>Locks the alignment explicitly between matched valves.</small>
+              </div>
+              <Switch checked={useValveAnchor} onChange={setUseValveAnchor} label="Valve-to-valve anchoring" />
+            </div>
+
+            <div className="gw-toggle-row">
+              <span className="gw-toggle-row__icon" aria-hidden="true"><FiActivity /></span>
+              <div className="gw-toggle-row__copy">
+                <strong>Apply DTW correction</strong>
+                <small>Corrects the raw odometer against the reference run.</small>
+              </div>
+              <Switch checked={dtwOn} onChange={setDtwOn} label="Apply DTW correction" />
+            </div>
+          </PanelBody>
+          <PanelFooter>
+            <span className="ds-toolbar__hint">
+              {isCalculating ? 'Re-matching with the current settings…' : 'Every change re-runs the matcher.'}
+            </span>
+            <span className="ds-toolbar__spacer" />
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={isAtMatcherDefaults}
+              startIcon={<FiRotateCcw aria-hidden="true" />}
+              onClick={resetMatcherDefaults}
+            >
+              Reset to defaults
+            </Button>
+          </PanelFooter>
+        </Panel>
+
+        <Panel className="gw-trend-panel">
+          <PanelHeader
+            eyebrow="Evidence"
+            title="GW offset trends"
+            subtitle={`Difference in log distance between ${laneLabels.old} and ${laneLabels.new} along the line.`}
+            actions={(
+              <Segmented<'matched' | 'all'>
+                ariaLabel="Offset chart scope"
+                value={chartScope}
+                onChange={setChartScope}
+                options={[
+                  { value: 'matched', label: 'Matched only' },
+                  { value: 'all', label: 'All pairs' },
+                ]}
               />
-
-              {sections.length > 0 && (
-                <div className="gw-toggle-row">
-                  <div className="gw-toggle-row__copy">
-                    <strong>Per-section OTA</strong>
-                    <small>Override the OTA threshold for individual pipeline sections.</small>
-                  </div>
-                  <Switch
-                    checked={perSectionOtaEnabled}
-                    onChange={setPerSectionOtaEnabled}
-                    label="Enable per-section OTA overrides"
-                  />
-                </div>
-              )}
-
-              {perSectionOtaEnabled && sections.length > 0 && (
-                <div className="gw-section-ota">
-                  {sections.map((s) => {
-                    const sOta = sectionOtaOverrides[s.id] ?? ota;
-                    return (
-                      <div key={s.id} className="gw-section-ota__item">
-                        <SliderField
-                          label={s.name}
-                          value={sOta}
-                          display={`${sOta}%`}
-                          min={0.1}
-                          max={10}
-                          step={0.1}
-                          onChange={(value) => setSectionOtaOverrides((prev) => ({ ...prev, [s.id]: value }))}
-                        >
-                          {sectionOtaOverrides[s.id] != null && (
-                            <Button
-                              size="xs"
-                              variant="ghost"
-                              title="Reset to global"
-                              onClick={() => setSectionOtaOverrides((prev) => { const next = { ...prev }; delete next[s.id]; return next; })}
-                            >
-                              Reset to global
-                            </Button>
-                          )}
-                        </SliderField>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              <div className="gw-toggle-row">
-                <div className="gw-toggle-row__copy">
-                  <strong>Strict distance &amp; spool matching</strong>
-                  <small>Penalizes distance drift to prevent forced matches across tie-ins.</small>
-                </div>
-                <Switch checked={strictPenalty} onChange={setStrictPenalty} label="Strict distance and spool matching" />
+            )}
+          />
+          <PanelBody className="ds-stack">
+            <div className="gw-trend-stats">
+              <div className="gw-trend-stat">
+                <dt>Mean offset</dt>
+                <dd>{trend === null ? '—' : `${trend.mean.toFixed(2)} m`}</dd>
+                <small>
+                  {trend === null
+                    ? 'No paired welds in this scope'
+                    : `${trend.drift >= 0 ? '↑' : '↓'} ${Math.abs(trend.drift).toFixed(2)} m end to end`}
+                </small>
               </div>
-
-              <div className="gw-toggle-row">
-                <div className="gw-toggle-row__copy">
-                  <strong>Valve-to-valve anchoring</strong>
-                  <small>Locks alignment explicitly between matched valves.</small>
-                </div>
-                <Switch checked={useValveAnchor} onChange={setUseValveAnchor} label="Valve-to-valve anchoring" />
+              <div className="gw-trend-stat">
+                <dt>Max offset</dt>
+                <dd>{trend === null ? '—' : `${trend.maxAbs.toFixed(2)} m`}</dd>
+                <small>{trend === null ? '—' : `at ${trend.maxAt.toFixed(0)} m`}</small>
               </div>
-
-              <div className="gw-toggle-row">
-                <div className="gw-toggle-row__copy">
-                  <strong>Apply DTW correction</strong>
-                  <small>Corrects raw odometer using the reference run.</small>
-                </div>
-                <Switch checked={dtwOn} onChange={setDtwOn} label="Apply DTW correction" />
+              <div className="gw-trend-stat">
+                <dt>Slope</dt>
+                <dd>{trend?.slopeMmPerM === null || trend === null ? '—' : `${trend.slopeMmPerM.toFixed(2)} mm/m`}</dd>
+                <small>
+                  {trend?.slopeMmPerM === null || trend === null
+                    ? 'Needs two distinct distances'
+                    : trend.slopeMmPerM >= 0 ? 'Drifting apart downstream' : 'Closing downstream'}
+                </small>
               </div>
-            </PanelBody>
-          </Panel>
-        </div>
+            </div>
 
-        {/* RIGHT: GW Offset Chart */}
-        <div className="xl:col-span-3 flex">
-      <div className="gw-trend-panel ds-panel w-full" style={{ padding: '1.125rem' }}>
-        <div className="flex justify-between items-start mb-4">
-          <div>
-            <h3 className="font-bold text-gray-800 text-lg">GW Offset Trends</h3>
-            <p className="text-xs text-gray-500">Difference in distance (m) over pipeline</p>
-          </div>
-          <div className="bg-blue-50 px-2 py-1 rounded text-blue-700 text-xs font-bold font-mono">Matched Only</div>
-        </div>
-        <div className="w-full relative h-[300px]">
-          <Line data={chartData} options={{
-            ...chartOptions,
-            maintainAspectRatio: false,
-            onClick: (e: any, elements: any[]) => {
-              if (elements.length > 0) {
-                const idx = elements[0].index;
-                const match = chartPoints[idx]?.match;
-                if (match && match.oldVal !== null) {
-                  setSelectedGWs(prev => {
+            <div className="gw-trend-chart">
+              <Line data={chartData} options={{
+                ...chartOptions,
+                maintainAspectRatio: false,
+                onClick: (_event: any, elements: any[]) => {
+                  if (elements.length === 0) return;
+                  const match = chartPoints[elements[0].index]?.match;
+                  if (!match || match.oldVal === null) return;
+                  setSelectedGWs((prev) => {
                     const dist = match.oldVal;
-                    if (prev.includes(dist)) return prev.filter(d => d !== dist);
+                    if (prev.includes(dist)) return prev.filter((d: number) => d !== dist);
                     const next = [...prev, dist].slice(-2);
                     if (next.length === 2) setShow3DViewer(true);
                     return next;
                   });
-                  const rowEl = tableRowRefs.current[match.id];
-                  if (rowEl) {
-                    rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    rowEl.classList.add('animate-pulse', 'bg-yellow-200');
-                    setTimeout(() => rowEl.classList.remove('animate-pulse', 'bg-yellow-200'), 2000);
+                  const rowElement = tableRowRefs.current[String(match.id)];
+                  if (rowElement) {
+                    rowElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    rowElement.classList.add('is-pinned');
                   }
-                }
-              }
-            }
-          } as any} />
-        </div>
+                },
+              } as any} />
+            </div>
+          </PanelBody>
+          <PanelFooter>
+            <span className="ds-toolbar__hint">
+              {chartPoints.length.toLocaleString()} pairs
+              {trend === null ? '' : ` · ${trend.spanFrom.toFixed(0)}–${trend.spanTo.toFixed(0)} m`} · metres
+            </span>
+            <span className="ds-toolbar__spacer" />
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={chartPoints.length === 0}
+              startIcon={<FiDownload aria-hidden="true" />}
+              onClick={downloadOffsetCsv}
+            >
+              Export CSV
+            </Button>
+          </PanelFooter>
+        </Panel>
       </div>
-      </div>
-      </div>
-
-      {/* Full-Width Odometer Slippage Section */}
-      <Panel className="gw-review-panel">
-        <PanelHeader
-          eyebrow="Evidence"
-          title="Joint review queue"
-          subtitle="Review high-deviation matched joints before accepting alignment."
-        />
-        <PanelBody>
-          <OdometerDashboard matches={matchedOnly} ota={ota} setOta={setOta} dtwOn={dtwOn} setDtwOn={setDtwOn} />
-        </PanelBody>
-      </Panel>
 
       <ActionBar
         back={

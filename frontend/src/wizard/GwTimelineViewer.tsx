@@ -1,11 +1,12 @@
 import { useCallback, useMemo } from 'react';
-import { FiMinus, FiPlus } from 'react-icons/fi';
+import { FiMaximize, FiMinus, FiPlus } from 'react-icons/fi';
 
 import type { GwReviewDecision, GwReviewDisposition } from '../domain/alignmentReview';
 import {
   buildOffsetHistogram,
   buildTimelineSummary,
   classifyTimelineMatch,
+  TIMELINE_STATUS_LABEL,
   type GwTimelineMatch,
   type TimelineGeometry,
   type TimelineStatus,
@@ -77,23 +78,55 @@ export default function GwTimelineViewer({
     <section className="gw-timeline-viewer" aria-labelledby="gw-timeline-title">
       <header className="gw-timeline-viewer__header">
         <div className="gw-timeline-viewer__title">
-          <h2 id="gw-timeline-title"><span>SYS /</span> Timeline Viewer</h2>
-          <p>{(masterLength / 1_000).toFixed(2)} km NEW-master domain · OLD coverage remains partial</p>
+          <h2 id="gw-timeline-title">Alignment viewer</h2>
+          <p>
+            {(masterLength / 1_000).toFixed(2)} km on the aligned axis · {oldRunLabel} projected onto {newRunLabel}
+          </p>
         </div>
-        <div className="gw-timeline-viewer__stats" aria-label="Match summary">
-          <span className="is-matched">{summary.matched} matched</span>
-          <span className="is-review">{summary.review} review</span>
-          <span className="is-missing">{summary.missing} missing</span>
-          <span className="is-offset">mean {summary.meanOffset.toFixed(2)}m</span>
-          <span>max {summary.maxOffset.toFixed(2)}m</span>
+        <div className="gw-timeline-viewer__legend" aria-label="Marker legend">
+          <span className="is-matched">{TIMELINE_STATUS_LABEL.matched}</span>
+          <span className="is-review">{TIMELINE_STATUS_LABEL.review}</span>
+          <span className="is-missing">{TIMELINE_STATUS_LABEL.missing}</span>
+          <span className="is-feature">Valve / tee</span>
+          <span className="is-link">Pair link</span>
         </div>
-        <label className="gw-zoom-control">
-          <span>Zoom</span>
-          <button type="button" onClick={() => onZoomChange(clampZoom(zoom - 50))} disabled={zoom <= 100} aria-label="Zoom out"><FiMinus aria-hidden="true" /></button>
-          <input type="range" min="100" max="10000" step="25" value={zoom} onChange={(event) => onZoomChange(clampZoom(Number(event.target.value)))} aria-label="Timeline zoom" />
-          <button type="button" onClick={() => onZoomChange(clampZoom(zoom + 50))} disabled={zoom >= 10000} aria-label="Zoom in"><FiPlus aria-hidden="true" /></button>
-        </label>
+        <div className="gw-timeline-viewer__tools">
+          <button
+            type="button"
+            className="gw-zoom-fit"
+            onClick={() => onZoomChange(100)}
+            disabled={zoom === 100}
+            title="Fit the whole run in the viewport"
+          >
+            <FiMaximize aria-hidden="true" /> Fit
+          </button>
+          <div className="gw-zoom-control" role="group" aria-label="Timeline zoom">
+            <button type="button" onClick={() => onZoomChange(clampZoom(zoom - 50))} disabled={zoom <= 100} aria-label="Zoom out"><FiMinus aria-hidden="true" /></button>
+            {/* The multiplier, not the raw percentage: the range runs to 10 000 %
+                and "10000" read as a distance rather than as a zoom level. */}
+            <output className="gw-zoom-control__value">{(zoom / 100).toFixed(zoom < 1_000 ? 1 : 0)}×</output>
+            <button type="button" onClick={() => onZoomChange(clampZoom(zoom + 50))} disabled={zoom >= 10000} aria-label="Zoom in"><FiPlus aria-hidden="true" /></button>
+          </div>
+          <input
+            className="gw-zoom-slider"
+            type="range"
+            min="100"
+            max="10000"
+            step="25"
+            value={zoom}
+            onChange={(event) => onZoomChange(clampZoom(Number(event.target.value)))}
+            aria-label="Timeline zoom level"
+          />
+        </div>
       </header>
+
+      <div className="gw-timeline-viewer__stats" aria-label="Match summary">
+        <span className="is-matched"><strong>{summary.matched}</strong> {TIMELINE_STATUS_LABEL.matched.toLowerCase()}</span>
+        <span className="is-review"><strong>{summary.review}</strong> {TIMELINE_STATUS_LABEL.review.toLowerCase()}</span>
+        <span className="is-missing"><strong>{summary.missing}</strong> not matched</span>
+        <span className="is-offset"><strong>{summary.meanOffset.toFixed(2)} m</strong> mean offset</span>
+        <span><strong>{summary.maxOffset.toFixed(2)} m</strong> max offset</span>
+      </div>
 
       <div className="gw-timeline-viewer__grid">
         <div className="gw-timeline-viewer__main">
@@ -108,13 +141,6 @@ export default function GwTimelineViewer({
             statusFor={statusFor}
             onSelectMatch={onSelectMatch}
           />
-          <div className="gw-timeline-legend" aria-label="Timeline legend">
-            <span className="is-matched">Matched</span>
-            <span className="is-missing">Missing</span>
-            <span className="is-review">Review</span>
-            <span className="is-feature">Valve / Tee</span>
-            <span className="is-link">Pair link</span>
-          </div>
         </div>
         <GwMatchHealthRail summary={summary} histogram={histogram} onOpenStatus={openStatus} />
       </div>
@@ -123,6 +149,8 @@ export default function GwTimelineViewer({
         <GwReviewPanel
           match={selectedMatch}
           decision={selectedDecision}
+          oldRunLabel={oldRunLabel}
+          newRunLabel={newRunLabel}
           onClose={onClearSelection}
           onDisposition={onDisposition}
           onNote={onNote}

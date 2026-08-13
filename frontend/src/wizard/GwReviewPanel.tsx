@@ -1,7 +1,7 @@
 import { FiAlertTriangle, FiCheckCircle, FiFileText, FiX, FiXCircle } from 'react-icons/fi';
 
 import type { GwReviewDecision, GwReviewDisposition } from '../domain/alignmentReview';
-import { readMatchConfidence, type GwTimelineMatch } from '../domain/gwTimeline';
+import { readMatchConfidence, TIMELINE_STATUS_LABEL, type GwTimelineMatch } from '../domain/gwTimeline';
 
 const options: Array<{ value: GwReviewDisposition; label: string; Icon: typeof FiCheckCircle }> = [
   { value: 'accepted', label: 'Accept', Icon: FiCheckCircle },
@@ -28,6 +28,8 @@ function offset(value: number | null | undefined) {
 export default function GwReviewPanel({
   match,
   decision,
+  oldRunLabel,
+  newRunLabel,
   onClose,
   onDisposition,
   onNote,
@@ -35,6 +37,8 @@ export default function GwReviewPanel({
 }: {
   match: GwTimelineMatch;
   decision: GwReviewDecision;
+  oldRunLabel: string;
+  newRunLabel: string;
   onClose: () => void;
   onDisposition: (value: GwReviewDisposition) => void;
   onNote: (value: string) => void;
@@ -48,8 +52,8 @@ export default function GwReviewPanel({
     ? Number(match.originalNewVal) - Number(match.oldVal)
     : null;
   const statusLabel = decision.disposition === 'accepted'
-    ? 'Matched'
-    : decision.disposition === 'review' ? 'Review' : 'Missing';
+    ? TIMELINE_STATUS_LABEL.matched
+    : decision.disposition === 'review' ? TIMELINE_STATUS_LABEL.review : TIMELINE_STATUS_LABEL.missing;
 
   return (
     <section className="gw-pair-details" aria-labelledby="gw-pair-details-title">
@@ -64,17 +68,17 @@ export default function GwReviewPanel({
       </header>
       <div className="gw-pair-details__grid">
         <dl>
-          <div className="gw-pair-details__group-title"><dt>Historical OLD</dt><dd>{match.oldDesc || 'Feature description unavailable'}</dd></div>
+          <div className="gw-pair-details__group-title"><dt>{oldRunLabel}</dt><dd>{match.oldDesc || 'Feature description unavailable'}</dd></div>
           <div><dt>Feature ID</dt><dd>{match.oldId ?? '—'}</dd></div>
           <div><dt>Distance</dt><dd>{chainage(match.oldVal)}</dd></div>
         </dl>
         <dl>
-          <div className="gw-pair-details__group-title"><dt>Master NEW</dt><dd>{match.newDesc || 'Feature description unavailable'}</dd></div>
+          <div className="gw-pair-details__group-title"><dt>{newRunLabel}</dt><dd>{match.newDesc || 'Feature description unavailable'}</dd></div>
           <div><dt>Feature ID</dt><dd>{match.newId ?? '—'}</dd></div>
           <div><dt>Distance</dt><dd>{chainage(match.originalNewVal)}</dd></div>
         </dl>
         <dl>
-          <div className="gw-pair-details__group-title"><dt>Comparison</dt><dd>{match.flagged ? 'High deviation' : match.status === 'Skipped' ? 'Missing side' : 'Canonical pair'}</dd></div>
+          <div className="gw-pair-details__group-title"><dt>Comparison</dt><dd>{match.flagged ? 'High deviation' : match.status === 'Skipped' ? 'No counterpart weld' : 'Canonical pair'}</dd></div>
           <div><dt>Delta</dt><dd>{offset(delta)}</dd></div>
           <div><dt>Offset</dt><dd>{offset(match.offset)}</dd></div>
           <div><dt>Confidence</dt><dd>{confidence === null ? '—' : `${confidence.toFixed(1)}%`}</dd></div>

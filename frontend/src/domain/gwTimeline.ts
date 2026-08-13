@@ -3,6 +3,52 @@ import { extentOf, maxOf } from '../utils/numericRange.ts';
 
 export type TimelineStatus = 'matched' | 'review' | 'missing';
 
+/**
+ * The display term for a timeline status.
+ *
+ * `missing` is the engine's bucket key and stays that way on the wire. On a
+ * girth-weld lane it must not be *read* as "missing", though: a weld with no
+ * counterpart in the other run is a weld the comparison could not match, not a
+ * weld that has gone. "Missing" is the metal-loss word — a feature that was in
+ * the OLD run and is absent from the NEW one — and using it for both makes two
+ * different findings look like one.
+ */
+export const TIMELINE_STATUS_LABEL: Record<TimelineStatus, string> = {
+  matched: 'Matched',
+  review: 'Review',
+  missing: 'Not match',
+};
+
+type RunLaneLike = { year?: unknown; vendor?: unknown; surveyDate?: unknown } | null | undefined;
+
+/**
+ * What to write on each lane of the viewer.
+ *
+ * Engineers read the two lanes as survey years, so that is all the lane says.
+ * "OLD" and "NEW" are the engine's names for the sides of a pair and mean
+ * nothing on a screen that already shows which year sits where — worse, in a
+ * chain the NEW side of an intermediate pair is not the master run, so the word
+ * actively misled. A run with no year falls back to its vendor, and identical
+ * fallbacks are disambiguated by position rather than left ambiguous.
+ */
+export function timelineLaneLabels(oldRun: RunLaneLike, newRun: RunLaneLike): {
+  old: string;
+  new: string;
+} {
+  const name = (run: RunLaneLike) => {
+    const year = String(run?.year ?? '').trim();
+    if (/^\d{4}$/.test(year)) return year;
+    const date = String(run?.surveyDate ?? '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return date.slice(0, 4);
+    const vendor = String(run?.vendor ?? '').trim();
+    return vendor || 'Undated run';
+  };
+  const oldLabel = name(oldRun);
+  const newLabel = name(newRun);
+  if (oldLabel !== newLabel) return { old: oldLabel, new: newLabel };
+  return { old: `${oldLabel} (earlier)`, new: `${newLabel} (later)` };
+}
+
 export type TimelineMatchLike = {
   id?: string | number;
   status?: string;
@@ -351,4 +397,45 @@ export function readMatchConfidence(match: TimelineMatchLike): number | null {
     if (value <= 100) return Number(value.toFixed(1));
   }
   return null;
+}
+
+/**
+ * What the offset series says, as three numbers an engineer acts on.
+ *
+ * The mean says how far the two runs sit apart, the maximum says where the
+ * worst disagreement is (so it can be opened), and the slope says whether the
+ * gap grows along the line — a steady slope is odometer scale error, a step is
+ * a missed weld or an inserted spool. Reported in mm/m because that is the
+ * magnitude these actually land at; m/m would be a column of zeroes.
+ */
+export function offsetTrend(points: Array<{ x: number; y: number }>) {
+  if (points.length === 0) return null;
+  const ordered = [...points].sort((left, right) => left.x - right.x);
+  const mean = ordered.reduce((sum, point) => sum + point.y, 0) / ordered.length;
+
+  let worst = ordered[0];
+  for (const point of ordered) {
+    if (Math.abs(point.y) > Math.abs(worst.y)) worst = point;
+  }
+
+  const meanX = ordered.reduce((sum, point) => sum + point.x, 0) / ordered.length;
+  let covariance = 0;
+  let variance = 0;
+  for (const point of ordered) {
+    covariance += (point.x - meanX) * (point.y - mean);
+    variance += (point.x - meanX) ** 2;
+  }
+  // Every pair at the same chainage means there is no run to fit a line along.
+  // Reporting 0 mm/m there would claim a flat trend that was never measured.
+  const slopeMmPerM = variance === 0 ? null : (covariance / variance) * 1_000;
+
+  return {
+    mean,
+    maxAbs: Math.abs(worst.y),
+    maxAt: worst.x,
+    drift: ordered[ordered.length - 1].y - ordered[0].y,
+    spanFrom: ordered[0].x,
+    spanTo: ordered[ordered.length - 1].x,
+    slopeMmPerM,
+  };
 }

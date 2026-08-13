@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   calculateViewportWindow,
   rawLdForTimelineMarker,
+  TIMELINE_STATUS_LABEL,
   type GwTimelineMatch,
   type TimelineFeatureEvidence,
   type TimelineGeometry,
@@ -89,7 +90,7 @@ function TrackMarker({
   const label = distanceLabel(position);
   const rawLd = rawLdForTimelineMarker(sourcePosition, match, side);
   const rawSourceLabel = rawLd === null ? ' · source LD unavailable' : ` · source LD ${distanceLabel(rawLd)}`;
-  const markerLabel = `${label} · ${status}${match ? ' pair' : ' feature'}${rawSourceLabel}`;
+  const markerLabel = `${label} · ${TIMELINE_STATUS_LABEL[status]}${match ? ' pair' : ' feature'}${rawSourceLabel}`;
 
   return (
     <button
@@ -226,24 +227,44 @@ export default function GwPipelineCanvas({
   return (
     <div className="gw-pipeline" style={{ position: 'relative' }}>
       {isMeasuring && (
-        <div style={{
-          margin: '0 0 0.75rem',
-          background: '#eff6ff',
-          padding: '0.75rem 1rem',
-          borderRadius: '0.5rem',
-          border: '1px solid #93c5fd',
-          display: 'flex',
-          gap: '1rem',
-          alignItems: 'center'
-        }}>
-          <strong style={{color: '#1d4ed8', fontSize: '0.875rem'}}>Selected GW spacing</strong>
-          <div style={{fontSize: '0.875rem', display: 'flex', gap: '1.25rem', fontWeight: 600, flexWrap: 'wrap'}}>
-            <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>OLD raw:</span> {rawOldSpool !== null && Number.isFinite(rawOldSpool) ? distanceLabel(rawOldSpool) : '-'}</div>
-            <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>NEW raw:</span> {rawNewSpool !== null && Number.isFinite(rawNewSpool) ? distanceLabel(rawNewSpool) : '-'}</div>
-            <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>LD:</span> <strong style={{ color: lengthDifference !== null && lengthDifference <= 0.5 ? '#15803d' : '#b45309' }}>{lengthDifference !== null ? distanceLabel(lengthDifference) : '-'}</strong></div>
-            <div><span style={{color: 'var(--color-gw-muted, #666)', fontWeight: 400}}>Master:</span> {masterOldSpool !== null && masterNewSpool !== null && Number.isFinite(masterOldSpool) && Number.isFinite(masterNewSpool) ? `${distanceLabel(masterOldSpool)} / ${distanceLabel(masterNewSpool)}` : '-'}</div>
-          </div>
-          <button onClick={() => setPreviousSelectedId('')} style={{background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5, padding: 0, fontSize: '1.2rem'}} aria-label="Close measurement">✕</button>
+        <div className="gw-pipeline-measure" role="status">
+          <strong className="gw-pipeline-measure__title">Selected GW spacing</strong>
+          <dl className="gw-pipeline-measure__values">
+            {/* Named by survey year, like the lanes: "OLD raw" and "NEW raw"
+                asked the reader to map engine sides back onto the two rows they
+                were already looking at. */}
+            <div>
+              <dt>{oldRunLabel} reported</dt>
+              <dd>{rawOldSpool !== null && Number.isFinite(rawOldSpool) ? distanceLabel(rawOldSpool) : '—'}</dd>
+            </div>
+            <div>
+              <dt>{newRunLabel} reported</dt>
+              <dd>{rawNewSpool !== null && Number.isFinite(rawNewSpool) ? distanceLabel(rawNewSpool) : '—'}</dd>
+            </div>
+            <div>
+              <dt>Length difference</dt>
+              <dd className={lengthDifference !== null && lengthDifference <= 0.5 ? 'is-good' : 'is-warn'}>
+                {lengthDifference !== null ? distanceLabel(lengthDifference) : '—'}
+              </dd>
+            </div>
+            <div>
+              <dt>Aligned axis</dt>
+              <dd>
+                {masterOldSpool !== null && masterNewSpool !== null
+                  && Number.isFinite(masterOldSpool) && Number.isFinite(masterNewSpool)
+                  ? `${distanceLabel(masterOldSpool)} / ${distanceLabel(masterNewSpool)}`
+                  : '—'}
+              </dd>
+            </div>
+          </dl>
+          <button
+            type="button"
+            className="gw-pipeline-measure__close"
+            onClick={() => setPreviousSelectedId('')}
+            aria-label="Close measurement"
+          >
+            ✕
+          </button>
         </div>
       )}
       <div className="gw-pipeline-overview">
@@ -273,7 +294,7 @@ export default function GwPipelineCanvas({
             {axisTicks.map((tick) => <span key={tick} style={{ insetInlineStart: `${distancePercent(tick, domain)}%` }}>{distanceLabel(tick)}</span>)}
           </div>
 
-          <div className="gw-pipeline-row is-new" aria-label={newRunLabel}>
+          <div className="gw-pipeline-row is-new" aria-label={`Survey ${newRunLabel}`}>
             <strong>{newRunLabel}</strong>
             <div className="gw-pipeline-track" style={coverageStyle(timeline.newCoverage)} aria-hidden="true" />
             <FeatureMarkers values={timeline.newValves} type="valve" domain={domain} />
@@ -299,7 +320,7 @@ export default function GwPipelineCanvas({
             })}
           </svg>
 
-          <div className="gw-pipeline-row is-old" aria-label={oldRunLabel}>
+          <div className="gw-pipeline-row is-old" aria-label={`Survey ${oldRunLabel}`}>
             <strong>{oldRunLabel}</strong>
             <div className="gw-pipeline-track" style={coverageStyle(timeline.oldCoverage)} aria-hidden="true" />
             <FeatureMarkers values={timeline.oldValves} type="valve" domain={domain} />

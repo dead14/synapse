@@ -1,7 +1,18 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { FiArrowRight, FiArrowLeft, FiCheckCircle, FiTarget, FiActivity, FiPlus, FiTrash2 } from 'react-icons/fi';
+import {
+  FiActivity,
+  FiArrowLeft,
+  FiArrowRight,
+  FiCheckCircle,
+  FiPlus,
+  FiShield,
+  FiSliders,
+  FiTarget,
+  FiTrash2,
+} from 'react-icons/fi';
 import { apiFetch } from '../utils/api';
 import { pairTieIn, primaryRunPair, resolveRunPairs } from '../domain/runPairs';
+import { timelineLaneLabels } from '../domain/gwTimeline';
 import { Button } from '../components/ds';
 
 interface StepTieInConfigProps {
@@ -116,6 +127,41 @@ const reviewReasonLabels: Record<string, string> = {
 
 type TieInSelection = 'auto' | 'acknowledged' | 'manual';
 type ExcludedRange = { run: 'OLD' | 'NEW'; startM: number; endM: number };
+type TieInSection = 'evidence' | 'exclusions' | 'manual';
+
+/**
+ * The three decisions this step actually contains, as a rail.
+ *
+ * They used to be stacked as three cards of similar weight, so the exclusion
+ * panel — a tuning aid most runs never need — sat between the recommendation
+ * and the sign-off that depends on it, and the manual override read as a third
+ * equally valid choice rather than the legacy escape hatch it is.
+ */
+const TIE_IN_SECTIONS: Array<{
+  id: TieInSection;
+  title: string;
+  detail: string;
+  Icon: typeof FiTarget;
+}> = [
+  {
+    id: 'evidence',
+    title: 'Partial run calibration',
+    detail: 'Map and align the latest run with historical data',
+    Icon: FiTarget,
+  },
+  {
+    id: 'exclusions',
+    title: 'Exclusion options',
+    detail: 'Define ranges to leave out of the estimate',
+    Icon: FiShield,
+  },
+  {
+    id: 'manual',
+    title: 'Manual override',
+    detail: 'Advanced option to set the offset by hand',
+    Icon: FiSliders,
+  },
+];
 
 /**
  * Everything the operator decided about one run pair. A chain session aligns
@@ -178,6 +224,14 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
   });
 
   const [rangeDraft, setRangeDraft] = useState<{ run: 'OLD' | 'NEW'; startM: number | ''; endM: number | '' }>({ run: 'NEW', startM: '', endM: '' });
+  const [section, setSection] = useState<TieInSection>('evidence');
+  // The runs are named by survey year here for the same reason they are in the
+  // viewer: "OLD → NEW master" asks the reader to translate engine sides back
+  // onto the two runs they picked at upload.
+  const laneLabels = useMemo(
+    () => timelineLaneLabels(activePair?.oldRun, activePair?.newRun),
+    [activePair],
+  );
   const requestRevision = useRef(0);
   const activeExcludedKey = JSON.stringify(excludedRanges);
 
@@ -301,28 +355,28 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
   const manualSelected = selection === 'manual' && manualAllowed;
 
   return (
-    <div className="alignment-surface bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex flex-col h-full animate-fade-in">
-      <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gradient-to-r from-blue-50 to-white">
+    <div className="tiein-step animate-fade-in">
+      <header className="tiein-step__header">
         <div>
-          <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-            <FiTarget className="text-brand-500" /> Partial Run Calibration
-          </h2>
-          <p className="text-sm text-gray-500 mt-1">
-            Find the physical overlap, then map the historical run onto the latest master axis.
+          <p className="tiein-step__eyebrow">Partial run</p>
+          <h2>Tie-in calibration</h2>
+          <p className="tiein-step__lede">
+            Find the physical overlap between {laneLabels.old} and {laneLabels.new}, then map the
+            historical run onto the latest axis.
           </p>
         </div>
         {pairs.length > 1 && (
-          <div className="text-right text-xs font-semibold text-gray-500">
+          <span className="tiein-step__progress">
             {pairs.length - unresolvedPairs.length} / {pairs.length} pairs ready
-          </div>
+          </span>
         )}
-      </div>
+      </header>
 
       {/* One tie-in per chain transition. Each pair has its own overlap, so each
           needs its own transform and its own sign-off. */}
       {pairs.length > 1 && (
-        <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 bg-brand-50/60 px-6 py-3">
-          <span className="text-xs font-bold uppercase tracking-wide text-brand-700">Run pair</span>
+        <div className="tiein-step__pairs">
+          <span className="tiein-step__pairs-label">Run pair</span>
           {pairs.map((pair) => {
             const state = pairStates[pair.key];
             const resolved = pairIsResolved(state);
@@ -333,11 +387,7 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                 type="button"
                 aria-pressed={isActive}
                 onClick={() => setActivePairKey(pair.key)}
-                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                  isActive
-                    ? 'bg-brand-600 text-white shadow-sm'
-                    : 'border border-brand-200 bg-white text-brand-700 hover:bg-brand-100'
-                }`}
+                className={`tiein-pair-chip${isActive ? ' is-active' : ''}${resolved ? ' is-resolved' : ''}`}
               >
                 {resolved ? <FiCheckCircle aria-hidden="true" /> : <span aria-hidden="true">•</span>}
                 {pair.label}
@@ -347,225 +397,335 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
         </div>
       )}
 
-      <div className="p-8 flex-1">
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center" role="status" aria-live="polite">
-            <div className="w-12 h-12 border-4 border-brand-200 border-t-brand-500 rounded-full animate-spin mb-4"></div>
-            <h3 className="text-lg font-semibold text-gray-700">Matching ordered physical anchors...</h3>
-            <p className="text-gray-500 max-w-md mt-2">
-              The engine is searching for the common permanent pipeline using weld order, fittings, and spool lengths.
-            </p>
-          </div>
-        ) : (
-          <div className="max-w-3xl mx-auto space-y-8">
-            
-            {/* Auto Guess Card */}
-            <div 
-              className={`p-6 rounded-xl border-2 transition-all cursor-pointer ${useAuto ? 'border-brand-500 bg-brand-50 shadow-md' : 'border-gray-200 hover:border-brand-300'}`}
+      <div className="tiein-step__body">
+        <nav className="tiein-rail" aria-label="Tie-in sections">
+          {TIE_IN_SECTIONS.map(({ id, title, detail, Icon }) => {
+            const isCurrent = section === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-current={isCurrent ? 'step' : undefined}
+                className={`tiein-rail__item${isCurrent ? ' is-active' : ''}`}
+                onClick={() => setSection(id)}
+              >
+                <span className="tiein-rail__icon" aria-hidden="true"><Icon /></span>
+                <span className="tiein-rail__copy">
+                  <strong>{title}</strong>
+                  <small>{detail}</small>
+                </span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="tiein-main">
+          {loading ? (
+            <div className="tiein-loading" role="status" aria-live="polite">
+              <span className="tiein-loading__spinner" aria-hidden="true" />
+              <strong>Matching ordered physical anchors…</strong>
+              <p>
+                The engine is searching for the common permanent pipeline using weld order, fittings
+                and spool lengths.
+              </p>
+            </div>
+          ) : section === 'evidence' ? (
+            <article
+              className={`tiein-card${useAuto ? ' is-selected' : ''}`}
               onClick={() => { if (autoAccepted) setSelection('auto'); }}
             >
-              <div className="flex items-start gap-4">
-                <button
-                  type="button"
-                  aria-label="Use the automatic engineering recommendation"
-                  aria-pressed={useAuto}
-                  disabled={!autoAccepted}
-                  onClick={(event) => { event.stopPropagation(); setSelection('auto'); }}
-                  className={`mt-1 rounded-full p-2 ${useAuto ? 'bg-brand-500 text-white' : 'bg-gray-100 text-gray-400'}`}
-                >
-                  <FiActivity size={20} />
-                </button>
-                <div className="flex-1">
-                  <div className="flex justify-between items-center mb-2">
-                    <h3 className="text-lg font-bold text-gray-800">Engineering Evidence Recommendation</h3>
-                    {useAuto && <span className="text-xs font-bold bg-brand-500 text-white px-2 py-1 rounded-full uppercase tracking-wider">Selected</span>}
-                  </div>
-                  <p className="text-gray-600 mb-4">
-                    GW and landmark sequences are matched without using the absolute odometer as identity.
-                  </p>
-                  {errorMessage ? (
-                    <div className="bg-red-50 p-4 rounded-lg border border-red-200 text-red-700 text-sm mb-4" role="alert">
-                      <strong>Engine Error:</strong> {errorMessage}
-                      <br/>
-                      <span className="text-red-500 text-xs">
-                        {partialRunEnabled
-                          ? 'Check the anchors or excluded ranges. Partial Run must not fall back to a scalar offset.'
-                          : 'Use Manual Override if legacy mode is genuinely required.'}
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="bg-white p-4 rounded-lg border border-gray-200 flex items-center justify-between">
-                      <div>
-                        <p className="text-sm text-gray-500 font-medium">First stable physical point</p>
-                        <p className="text-xl font-black text-gray-800 mt-1">
-                          OLD {tieInMetrics?.tieIn?.oldDistanceM?.toFixed(3)} m
-                          <span className="mx-2 text-brand-500">→</span>
-                          NEW master {tieInMetrics?.tieIn?.newDistanceM?.toFixed(3)} m
-                        </p>
-                        <p className="mt-1 text-xs text-gray-500">Transform: OLD → NEW, piecewise-linear; legacy offset {autoOffset?.toLocaleString()} m</p>
-                        {tieInMetrics?.comparisonCoordinates && (
-                          <p className="mt-1 text-xs text-blue-700">
-                            TIE-IN helper view: OLD + {tieInMetrics.comparisonCoordinates.provisionalOffsetM.toFixed(3)} m ≈ NEW. Raw odometers are unchanged.
-                          </p>
-                        )}
-                      </div>
-                      <div className="text-right">
-                        <p className={`text-sm font-bold flex items-center gap-1 justify-end ${(tieInMetrics?.confidence ?? 0) >= 80 ? 'text-green-600' : 'text-amber-600'}`}>
-                          <FiCheckCircle /> {tieInMetrics?.confidence ? `${tieInMetrics.confidence.toFixed(1)}/100 evidence` : 'Estimated'}
-                        </p>
-                        <p className="mt-1 text-[11px] font-medium text-gray-500">Evidence score, not a probability</p>
-                        <p className="text-xs text-gray-400 mt-1">{tieInMetrics?.message || 'Sequence Alignment (Anchors)'}</p>
-                      </div>
-                    </div>
-                  )}
-                  {tieInMetrics?.decision?.status === 'REVIEW_REQUIRED' && !errorMessage && (
-                    <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
-                      <strong>Auto-apply blocked:</strong>{' '}
-                      {tieInMetrics.decision.reasons.map((reason) => reviewReasonLabels[reason] ?? reason).join('; ')}.
-                      {' '}Fix the overlap candidates, source anchors, or excluded ranges until the engineering gate passes — or knowingly accept this transform below.
-                    </div>
-                  )}
-                  {transformDomain && !errorMessage && (
-                    <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs text-blue-900">
-                      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-                        <span>Domain transform OLD<br/><strong>{transformDomain.oldStartM?.toFixed(3) ?? '?'}–{transformDomain.oldEndM?.toFixed(3) ?? '?'} m</strong></span>
-                        <span>Domain transform NEW<br/><strong>{transformDomain.newStartM?.toFixed(3) ?? '?'}–{transformDomain.newEndM?.toFixed(3) ?? '?'} m</strong></span>
-                        <span>Locked weld knots<br/><strong>{tieInMetrics.transform?.knotCount ?? tieInMetrics.transform?.knots?.length ?? '?'}</strong></span>
-                        <span>Anchor aligned<br/><strong>{tieInMetrics.alignedPairCount ?? tieInMetrics.inlierPairCount}</strong></span>
-                        <span>Anchor unaligned<br/><strong>{tieInMetrics.unalignedPairCount ?? Math.max(0, tieInMetrics.matchedPairCount - tieInMetrics.inlierPairCount)}</strong></span>
-                        <span>Span residual P95<br/><strong>{tieInMetrics.spanResidual ? `${tieInMetrics.spanResidual.p95AbsM.toFixed(3)} m` : 'Not available'}</strong></span>
-                      </div>
-                      {tieInMetrics.evidenceOverlap && (
-                        <p className="mt-3 border-t border-blue-200 pt-2 text-blue-700">
-                          Evidence envelope (including non-knot fittings): OLD {tieInMetrics.evidenceOverlap.oldStartM.toFixed(3)}–{tieInMetrics.evidenceOverlap.oldEndM.toFixed(3)} m; NEW {tieInMetrics.evidenceOverlap.newStartM.toFixed(3)}–{tieInMetrics.evidenceOverlap.newEndM.toFixed(3)} m.
-                        </p>
-                      )}
-                      <p className="mt-1 text-blue-700">
-                        Affine RMSE {tieInMetrics.residualRmseM.toFixed(3)} m is diagnostic only; the final mapping follows the piecewise knots.
-                        {tieInMetrics.robustFit?.method ? ` Fit: ${tieInMetrics.robustFit.method}.` : ''}
-                      </p>
-                    </div>
-                  )}
+              <header className="tiein-card__header">
+                <span className="tiein-card__badge" aria-hidden="true"><FiActivity /></span>
+                <div className="tiein-card__heading">
+                  <h3>Engineering evidence recommendation</h3>
+                  <p>GW and landmark sequences are matched without using the absolute odometer as identity.</p>
                 </div>
-              </div>
-            </div>
+                {useAuto
+                  ? <span className="tiein-chip is-selected">Selected</span>
+                  : (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={!autoAccepted}
+                      onClick={(event) => { event.stopPropagation(); setSelection('auto'); }}
+                    >
+                      Use this
+                    </Button>
+                  )}
+              </header>
 
-            <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-6">
-              <h3 className="font-bold text-gray-800">Exclude noisy GW area from Tie-In</h3>
-              <p className="mt-1 text-sm text-gray-600">This area is not removed from the file. Anchors in the range are only excluded from the tie-in estimate and stay recorded in the results/audit.</p>
-              <div className="mt-4 grid items-end gap-3 md:grid-cols-[130px_1fr_1fr_auto]">
-                <label className="text-xs font-semibold text-gray-600">Run
-                  <select value={rangeDraft.run} onChange={(event) => setRangeDraft((current) => ({ ...current, run: event.target.value as 'OLD' | 'NEW' }))} className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm"><option value="OLD">OLD</option><option value="NEW">NEW master</option></select>
-                </label>
-                <label className="text-xs font-semibold text-gray-600">Start (m)
-                  <input type="number" value={rangeDraft.startM} onChange={(event) => setRangeDraft((current) => ({ ...current, startM: event.target.value === '' ? '' : Number(event.target.value) }))} className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm" />
-                </label>
-                <label className="text-xs font-semibold text-gray-600">End (m)
-                  <input type="number" value={rangeDraft.endM} onChange={(event) => setRangeDraft((current) => ({ ...current, endM: event.target.value === '' ? '' : Number(event.target.value) }))} className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm" />
-                </label>
-                <button type="button" disabled={rangeDraft.startM === '' || rangeDraft.endM === '' || rangeDraft.startM === rangeDraft.endM} onClick={() => {
-                  if (rangeDraft.startM === '' || rangeDraft.endM === '') return;
-                  setExcludedRanges((current) => [...current, { run: rangeDraft.run, startM: Number(rangeDraft.startM), endM: Number(rangeDraft.endM) }]);
-                  setRangeDraft((current) => ({ ...current, startM: '', endM: '' }));
-                }} className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40"><FiPlus className="mr-1 inline" />Exclude</button>
-              </div>
-              {excludedRanges.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{excludedRanges.map((range, index) => <span key={`${range.run}-${range.startM}-${range.endM}-${index}`} className="rounded-full border border-amber-200 bg-white px-3 py-1 text-xs font-semibold text-amber-800">{range.run} {Math.min(range.startM, range.endM)}–{Math.max(range.startM, range.endM)} m <button type="button" aria-label={`Remove excluded range ${range.run} ${range.startM} to ${range.endM} meters`} onClick={() => setExcludedRanges((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="ml-2 text-red-600"><FiTrash2 className="inline" /></button></span>)}</div>}
-            </div>
-
-            {/* Engineer sign-off on evidence that failed a gate. Partial Run has
-                no scalar fallback, so without this the wizard dead-ends. */}
-            {acknowledgement && !errorMessage && (
-              <div
-                className={`p-6 rounded-xl border-2 transition-all cursor-pointer ${selection === 'acknowledged' ? 'border-amber-500 bg-amber-50 shadow-md' : 'border-amber-200 hover:border-amber-400'}`}
-                onClick={() => setSelection('acknowledged')}
-              >
-                <div className="flex items-start gap-4">
-                  <button
-                    type="button"
-                    aria-label="Accept the tie-in transform with a review note"
-                    aria-pressed={selection === 'acknowledged'}
-                    onClick={(event) => { event.stopPropagation(); setSelection('acknowledged'); }}
-                    className={`mt-1 flex h-5 w-5 items-center justify-center rounded-full border-2 ${selection === 'acknowledged' ? 'border-amber-600' : 'border-amber-300'}`}
-                  >
-                    {selection === 'acknowledged' && <div className="h-2.5 w-2.5 rounded-full bg-amber-600" />}
-                  </button>
-                  <div className="flex-1">
-                    <div className="mb-2 flex items-center justify-between">
-                      <h3 className="text-lg font-bold text-gray-800">Accept with Review Sign-off</h3>
-                      {selection === 'acknowledged' && <span className="rounded-full bg-amber-600 px-2 py-1 text-xs font-bold uppercase tracking-wider text-white">Selected</span>}
-                    </div>
-                    <p className="mb-4 text-sm text-gray-600">
-                      The piecewise OLD → NEW transform is still used as-is — not a scalar offset. Only its
-                      status changes: the alignment proceeds under engineering responsibility, and the gate reasons
-                      above are recorded in the result audit trail.
+              {errorMessage ? (
+                <div className="tiein-alert is-danger" role="alert">
+                  <strong>Engine error:</strong> {errorMessage}
+                  <span>
+                    {partialRunEnabled
+                      ? 'Check the anchors or excluded ranges. Partial Run must not fall back to a scalar offset.'
+                      : 'Use Manual Override if legacy mode is genuinely required.'}
+                  </span>
+                </div>
+              ) : (
+                <div className="tiein-headline">
+                  <div>
+                    <p className="tiein-headline__label">First stable physical point</p>
+                    <p className="tiein-headline__value">
+                      {laneLabels.old} {tieInMetrics?.tieIn?.oldDistanceM?.toFixed(3)} m
+                      <span aria-hidden="true">→</span>
+                      {laneLabels.new} {tieInMetrics?.tieIn?.newDistanceM?.toFixed(3)} m
                     </p>
-                    {selection === 'acknowledged' && (
-                      <label className="block animate-fade-in text-xs font-semibold text-gray-600">
-                        Review note (optional, recorded in the audit)
-                        <textarea
-                          value={acknowledgementNote}
-                          onChange={(event) => setAcknowledgementNote(event.target.value.slice(0, 500))}
-                          rows={2}
-                          placeholder="Example: short overlap because the 2012 partial run only covers the downstream segment; anchors verified manually."
-                          className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm font-normal"
-                        />
-                      </label>
+                    <p className="tiein-headline__note">
+                      Transform {laneLabels.old} → {laneLabels.new}, piecewise-linear · legacy offset{' '}
+                      {autoOffset?.toLocaleString()} m
+                    </p>
+                    {tieInMetrics?.comparisonCoordinates && (
+                      <p className="tiein-headline__note is-accent">
+                        Helper view: {laneLabels.old} + {tieInMetrics.comparisonCoordinates.provisionalOffsetM.toFixed(3)} m
+                        ≈ {laneLabels.new}. Raw odometers are unchanged.
+                      </p>
                     )}
                   </div>
-                </div>
-              </div>
-            )}
-
-            {/* Manual Override Card */}
-            <div 
-              className={`p-6 rounded-xl border-2 transition-all ${manualAllowed ? 'cursor-pointer hover:border-gray-300' : 'cursor-not-allowed opacity-60'} ${manualSelected ? 'border-gray-800 bg-gray-50 shadow-md' : 'border-gray-200'}`}
-              onClick={() => { if (manualAllowed) setSelection('manual'); }}
-            >
-              <div className="flex items-start gap-4">
-                <button
-                  type="button"
-                  aria-label="Use manual override"
-                  aria-pressed={manualSelected}
-                  disabled={!manualAllowed}
-                  onClick={(event) => { event.stopPropagation(); setSelection('manual'); }}
-                  className={`mt-1 flex h-5 w-5 items-center justify-center rounded-full border-2 ${manualSelected ? 'border-gray-800' : 'border-gray-300'}`}
-                >
-                  {manualSelected && <div className="w-2.5 h-2.5 bg-gray-800 rounded-full"></div>}
-                </button>
-                <div className="flex-1">
-                  <div className="flex justify-between items-center mb-2">
-                    <h3 className="text-lg font-bold text-gray-800">Manual Override</h3>
-                    {manualSelected && <span className="text-xs font-bold bg-gray-800 text-white px-2 py-1 rounded-full uppercase tracking-wider">Selected</span>}
+                  <div className="tiein-score">
+                    <p className={(tieInMetrics?.confidence ?? 0) >= 80 ? 'is-good' : 'is-warn'}>
+                      <FiCheckCircle aria-hidden="true" />
+                      {tieInMetrics?.confidence ? `${tieInMetrics.confidence.toFixed(1)}/100 evidence` : 'Estimated'}
+                    </p>
+                    <small>Evidence score, not a probability</small>
+                    <small>{tieInMetrics?.message || 'Sequence alignment (anchors)'}</small>
                   </div>
-                  <p className="text-gray-600 mb-4 text-sm">
-                    {manualAllowed
-                      ? 'Compatibility mode for legacy full-run comparisons.'
-                      : 'Disabled for Partial Run: a scalar offset cannot control drift and missing welds.'}
-                  </p>
-                  
-                  {manualSelected && (
-                    <div className="flex items-center gap-3 mt-4 animate-fade-in">
-                      <div className="flex-1 max-w-xs relative">
-                        <input 
-                          type="number" 
-                          value={manualOffset}
-                          onChange={(e) => setManualOffset(Number(e.target.value))}
-                          placeholder="e.g. 40000"
-                          className="w-full pl-4 pr-12 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-800 focus:border-gray-800 transition-all font-mono text-lg"
-                        />
-                        <span className="absolute right-4 top-3 text-gray-400 font-medium">m</span>
-                      </div>
-                      <p className="text-sm text-gray-500">
-                        Compatibility mode: this value is added to the NEW odometer. For automatic results the system uses the more accurate OLD → NEW transform.
-                      </p>
+                </div>
+              )}
+
+              {tieInMetrics?.decision?.status === 'REVIEW_REQUIRED' && !errorMessage && (
+                <div className="tiein-alert is-warning">
+                  <strong>Auto-apply blocked:</strong>{' '}
+                  {tieInMetrics.decision.reasons.map((reason) => reviewReasonLabels[reason] ?? reason).join('; ')}.
+                  <span>
+                    Fix the overlap candidates, source anchors or excluded ranges until the engineering
+                    gate passes — or knowingly accept this transform below.
+                  </span>
+                </div>
+              )}
+
+              {transformDomain && !errorMessage && (
+                <>
+                  <dl className="tiein-metrics">
+                    <div>
+                      <dt>Domain {laneLabels.old}</dt>
+                      <dd>{transformDomain.oldStartM?.toFixed(3) ?? '?'}–{transformDomain.oldEndM?.toFixed(3) ?? '?'} m</dd>
                     </div>
+                    <div>
+                      <dt>Domain {laneLabels.new}</dt>
+                      <dd>{transformDomain.newStartM?.toFixed(3) ?? '?'}–{transformDomain.newEndM?.toFixed(3) ?? '?'} m</dd>
+                    </div>
+                    <div>
+                      <dt>Locked weld knots</dt>
+                      <dd>{tieInMetrics.transform?.knotCount ?? tieInMetrics.transform?.knots?.length ?? '?'}</dd>
+                    </div>
+                    <div>
+                      <dt>Anchors aligned</dt>
+                      <dd>{tieInMetrics.alignedPairCount ?? tieInMetrics.inlierPairCount}</dd>
+                    </div>
+                    <div>
+                      <dt>Anchors unaligned</dt>
+                      <dd>{tieInMetrics.unalignedPairCount ?? Math.max(0, tieInMetrics.matchedPairCount - tieInMetrics.inlierPairCount)}</dd>
+                    </div>
+                    <div>
+                      <dt>Span residual P95</dt>
+                      <dd>{tieInMetrics.spanResidual ? `${tieInMetrics.spanResidual.p95AbsM.toFixed(3)} m` : 'Not available'}</dd>
+                    </div>
+                  </dl>
+                  <div className="tiein-footnotes">
+                    {tieInMetrics.evidenceOverlap && (
+                      <p>
+                        Evidence envelope (including non-knot fittings): {laneLabels.old}{' '}
+                        {tieInMetrics.evidenceOverlap.oldStartM.toFixed(3)}–{tieInMetrics.evidenceOverlap.oldEndM.toFixed(3)} m;{' '}
+                        {laneLabels.new} {tieInMetrics.evidenceOverlap.newStartM.toFixed(3)}–{tieInMetrics.evidenceOverlap.newEndM.toFixed(3)} m.
+                      </p>
+                    )}
+                    <p>
+                      Affine RMSE {tieInMetrics.residualRmseM.toFixed(3)} m is diagnostic only; the final
+                      mapping follows the piecewise knots.
+                      {tieInMetrics.robustFit?.method ? ` Fit: ${tieInMetrics.robustFit.method}.` : ''}
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {/* Engineer sign-off on evidence that failed a gate. Partial Run has
+                  no scalar fallback, so without this the wizard dead-ends. */}
+              {acknowledgement && !errorMessage && (
+                <div
+                  className={`tiein-signoff${selection === 'acknowledged' ? ' is-selected' : ''}`}
+                  onClick={(event) => { event.stopPropagation(); setSelection('acknowledged'); }}
+                >
+                  <div className="tiein-signoff__head">
+                    <h4>Accept with review sign-off</h4>
+                    {selection === 'acknowledged'
+                      ? <span className="tiein-chip is-warning">Selected</span>
+                      : (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={(event) => { event.stopPropagation(); setSelection('acknowledged'); }}
+                        >
+                          Accept with sign-off
+                        </Button>
+                      )}
+                  </div>
+                  <p>
+                    The piecewise {laneLabels.old} → {laneLabels.new} transform is still used as-is — not a
+                    scalar offset. Only its status changes: the alignment proceeds under engineering
+                    responsibility, and the gate reasons above are recorded in the result audit trail.
+                  </p>
+                  {selection === 'acknowledged' && (
+                    <label className="tiein-note">
+                      Review note (optional, recorded in the audit)
+                      <textarea
+                        value={acknowledgementNote}
+                        onChange={(event) => setAcknowledgementNote(event.target.value.slice(0, 500))}
+                        rows={2}
+                        placeholder="Example: short overlap because the 2012 partial run only covers the downstream segment; anchors verified manually."
+                      />
+                    </label>
                   )}
                 </div>
-              </div>
-            </div>
+              )}
+            </article>
+          ) : section === 'exclusions' ? (
+            <article className="tiein-card">
+              <header className="tiein-card__header">
+                <span className="tiein-card__badge is-warning" aria-hidden="true"><FiShield /></span>
+                <div className="tiein-card__heading">
+                  <h3>Exclude noisy GW area from the tie-in</h3>
+                  <p>
+                    Nothing is removed from the file. Anchors inside the range are left out of the tie-in
+                    estimate only, and stay recorded in the results and the audit.
+                  </p>
+                </div>
+              </header>
 
-          </div>
-        )}
+              <div className="tiein-range-form">
+                <label>
+                  Run
+                  <select
+                    className="ds-select"
+                    value={rangeDraft.run}
+                    onChange={(event) => setRangeDraft((current) => ({ ...current, run: event.target.value as 'OLD' | 'NEW' }))}
+                  >
+                    <option value="OLD">{laneLabels.old}</option>
+                    <option value="NEW">{laneLabels.new}</option>
+                  </select>
+                </label>
+                <label>
+                  Start (m)
+                  <input
+                    type="number"
+                    className="ds-input"
+                    value={rangeDraft.startM}
+                    placeholder="Enter start position"
+                    onChange={(event) => setRangeDraft((current) => ({ ...current, startM: event.target.value === '' ? '' : Number(event.target.value) }))}
+                  />
+                </label>
+                <label>
+                  End (m)
+                  <input
+                    type="number"
+                    className="ds-input"
+                    value={rangeDraft.endM}
+                    placeholder="Enter end position"
+                    onChange={(event) => setRangeDraft((current) => ({ ...current, endM: event.target.value === '' ? '' : Number(event.target.value) }))}
+                  />
+                </label>
+                <Button
+                  variant="secondary"
+                  startIcon={<FiPlus aria-hidden="true" />}
+                  disabled={rangeDraft.startM === '' || rangeDraft.endM === '' || rangeDraft.startM === rangeDraft.endM}
+                  onClick={() => {
+                    if (rangeDraft.startM === '' || rangeDraft.endM === '') return;
+                    setExcludedRanges((current) => [...current, { run: rangeDraft.run, startM: Number(rangeDraft.startM), endM: Number(rangeDraft.endM) }]);
+                    setRangeDraft((current) => ({ ...current, startM: '', endM: '' }));
+                  }}
+                >
+                  Exclude range
+                </Button>
+              </div>
+
+              <div className="tiein-ranges">
+                <h4>Excluded ranges ({excludedRanges.length})</h4>
+                {excludedRanges.length === 0 ? (
+                  <p className="tiein-ranges__empty">
+                    No exclusions. Every anchor in the overlap is feeding the estimate.
+                  </p>
+                ) : (
+                  <ul>
+                    {excludedRanges.map((range, index) => (
+                      <li key={`${range.run}-${range.startM}-${range.endM}-${index}`}>
+                        <span>
+                          {range.run === 'OLD' ? laneLabels.old : laneLabels.new}{' '}
+                          {Math.min(range.startM, range.endM)}–{Math.max(range.startM, range.endM)} m
+                        </span>
+                        <button
+                          type="button"
+                          aria-label={`Remove excluded range ${range.run} ${range.startM} to ${range.endM} metres`}
+                          onClick={() => setExcludedRanges((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                        >
+                          <FiTrash2 aria-hidden="true" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </article>
+          ) : (
+            <article className={`tiein-card${manualSelected ? ' is-selected' : ''}${manualAllowed ? '' : ' is-disabled'}`}>
+              <header className="tiein-card__header">
+                <span className="tiein-card__badge is-neutral" aria-hidden="true"><FiSliders /></span>
+                <div className="tiein-card__heading">
+                  <h3>Manual override</h3>
+                  <p>
+                    {manualAllowed
+                      ? 'Compatibility mode for legacy full-run comparisons. Use only when the automatic tie-in is not reliable; a manual offset can introduce drift.'
+                      : 'Disabled for Partial Run: a scalar offset cannot control drift and missing welds.'}
+                  </p>
+                </div>
+                {manualSelected
+                  ? <span className="tiein-chip is-neutral">Enabled</span>
+                  : (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={!manualAllowed}
+                      onClick={() => setSelection('manual')}
+                    >
+                      {manualAllowed ? 'Enable manual override' : 'Disabled'}
+                    </Button>
+                  )}
+              </header>
+
+              {manualSelected && (
+                <div className="tiein-manual">
+                  <label>
+                    Offset
+                    <span className="tiein-manual__input">
+                      <input
+                        type="number"
+                        className="ds-input"
+                        value={manualOffset}
+                        placeholder="e.g. 40000"
+                        onChange={(event) => setManualOffset(Number(event.target.value))}
+                      />
+                      <em>m</em>
+                    </span>
+                  </label>
+                  <p>
+                    This value is added to the {laneLabels.new} odometer. For automatic results the system
+                    uses the more accurate {laneLabels.old} → {laneLabels.new} transform.
+                  </p>
+                </div>
+              )}
+            </article>
+          )}
+        </div>
       </div>
 
       <div className="ds-panel__footer" style={{ flexWrap: 'wrap' }}>
