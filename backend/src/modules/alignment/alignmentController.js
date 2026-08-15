@@ -17,6 +17,7 @@ const {
     iterateOwnedAlignmentExportRows,
     listOwnedAlignmentResultPage,
     serializeAlignmentJob,
+    serializeAlignmentResultPage,
     updateAlignmentJob,
 } = require('./alignmentRepository');
 const {
@@ -458,10 +459,9 @@ exports.getAlignmentResultsPage = async (req, res) => {
             req.user.orgId,
             pageQuery,
         );
-        return res.json({
-            items: page.rows,
-            nextCursor: page.nextCursor === null ? null : String(page.nextCursor),
-        });
+        // The rows arrive as JSON text and are spliced into the body rather than
+        // parsed and re-encoded; see serializeAlignmentResultPage.
+        return res.type('application/json').send(serializeAlignmentResultPage(page));
     } catch (error) {
         console.error('Paged alignment results error:', error);
         return res.status(500).json({ error: 'Failed to fetch paged alignment results' });

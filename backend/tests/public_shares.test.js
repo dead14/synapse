@@ -40,13 +40,23 @@ function validSnapshot(overrides = {}) {
 function fakeResponse() {
     return {
         body: undefined,
+        contentType: undefined,
         headers: {},
         statusCode: 200,
         status(code) { this.statusCode = code; return this; },
         json(value) { this.body = value; return this; },
+        // The alignment page endpoint answers with a pre-built JSON string
+        // rather than an object, so the double it is tested against has to
+        // support the chained form Express offers for that.
+        type(value) { this.contentType = value; return this; },
         send(value) { this.body = value; return this; },
         setHeader(name, value) { this.headers[name] = value; },
     };
+}
+
+/** The decoded body, whichever of the two response forms produced it. */
+function decodedBody(res) {
+    return typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
 }
 
 test('create contract normalizes supported snapshots and applies safe defaults', () => {
@@ -332,9 +342,10 @@ test('ILI share reads the canonical paged result with the scoped organization', 
                 revoked_at: null,
             }),
         },
+        // Rows leave the repository as JSON text, never as parsed objects.
         readAlignmentPage: async (...args) => {
             readCalls.push(args);
-            return { rows: [{ 'Source Key NEW': 'new:1' }], nextCursor: 20_000 };
+            return { rows: ['{"Source Key NEW":"new:1"}'], nextCursor: 20_000 };
         },
         now: () => new Date('2026-07-28T00:00:00.000Z'),
         pool: { name: 'pool' },
@@ -348,7 +359,8 @@ test('ILI share reads the canonical paged result with the scoped organization', 
     }, res);
 
     assert.equal(res.statusCode, 200);
-    assert.deepEqual(res.body, {
+    assert.equal(res.contentType, 'application/json');
+    assert.deepEqual(decodedBody(res), {
         items: [{ 'Source Key NEW': 'new:1' }],
         nextCursor: '20000',
     });
@@ -358,6 +370,46 @@ test('ILI share reads the canonical paged result with the scoped organization', 
         9,
         { limit: 20_000, after: 0 },
     ]]);
+});
+
+test('paging a shared alignment never re-reads the stored snapshot', async () => {
+    const token = 'G'.repeat(43);
+    const share = {
+        public_id: 'f349577d-4bbf-4a99-8a46-6ee88cd84ea8',
+        token_hash: hashShareToken(token),
+        organization_id: 9,
+        kind: 'ILI_ALIGNMENT',
+        source_ref: 'alignment-session:42',
+        created_at: new Date('2026-07-28T00:00:00.000Z'),
+        expires_at: new Date('2026-08-27T00:00:00.000Z'),
+        revoked_at: null,
+    };
+    let snapshotReads = 0;
+    let accessReads = 0;
+    const controller = createPublicShareController({
+        repository: {
+            findPublic: async () => { snapshotReads += 1; return { ...share, snapshot_json: {} }; },
+            findPublicAccess: async () => { accessReads += 1; return share; },
+        },
+        readAlignmentPage: async () => ({ rows: ['{"Source Key NEW":"new:1"}'], nextCursor: null }),
+        now: () => new Date('2026-07-28T00:00:00.000Z'),
+        pool: { name: 'pool' },
+    });
+
+    const res = fakeResponse();
+    await controller.getPublicAlignmentResultsPage({
+        params: { id: 'f349577d-4bbf-4a99-8a46-6ee88cd84ea8' },
+        headers: { 'x-share-token': token },
+        query: { limit: '20000', cursor: '0' },
+    }, res);
+
+    assert.equal(res.statusCode, 200);
+    // A shared run is read one page at a time and every page re-verifies the
+    // token.  Reading the snapshot column to do that made a published link pay
+    // for its whole frozen state once per page — up to fifty megabytes of it,
+    // de-TOASTed and parsed, only to be discarded.
+    assert.equal(accessReads, 1);
+    assert.equal(snapshotReads, 0);
 });
 
 test('a link published from a run reads that run, not whichever run is newest', async () => {
@@ -379,11 +431,11 @@ test('a link published from a run reads that run, not whichever run is newest', 
         },
         readAlignmentPage: async (...args) => {
             sessionCalls.push(args);
-            return { rows: [{ 'Source Key NEW': 'later-run' }], nextCursor: null };
+            return { rows: ['{"Source Key NEW":"later-run"}'], nextCursor: null };
         },
         readAlignmentJobPage: async (...args) => {
             jobCalls.push(args);
-            return { rows: [{ 'Source Key NEW': 'published-run' }], nextCursor: null };
+            return { rows: ['{"Source Key NEW":"published-run"}'], nextCursor: null };
         },
         now: () => new Date('2026-07-28T00:00:00.000Z'),
         pool: { name: 'pool' },
@@ -397,7 +449,7 @@ test('a link published from a run reads that run, not whichever run is newest', 
     }, res);
 
     assert.equal(res.statusCode, 200);
-    assert.deepEqual(res.body.items, [{ 'Source Key NEW': 'published-run' }]);
+    assert.deepEqual(decodedBody(res).items, [{ 'Source Key NEW': 'published-run' }]);
     assert.deepEqual(sessionCalls, []);
     assert.deepEqual(jobCalls, [[
         { name: 'pool' },

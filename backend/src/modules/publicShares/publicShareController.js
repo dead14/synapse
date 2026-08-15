@@ -5,6 +5,7 @@ const defaultRepository = require('./publicShareRepository');
 const {
     listOwnedAlignmentJobResultPage,
     listOwnedAlignmentResultPage,
+    serializeAlignmentResultPage,
 } = require('../alignment/alignmentRepository');
 const { parseAlignmentResultPageQuery } = require('../alignment/alignmentResultPaging');
 const {
@@ -64,6 +65,7 @@ function createPublicShareController({
     repository = {
         create: defaultRepository.createPublicShare,
         findPublic: defaultRepository.findPublicShare,
+        findPublicAccess: defaultRepository.findPublicShareAccess,
         listOwned: defaultRepository.listOwnedShares,
         revokeOwned: defaultRepository.revokeOwnedShare,
     },
@@ -73,11 +75,22 @@ function createPublicShareController({
     now = () => new Date(),
     writeAuditLog = defaultWriteAuditLog,
 } = {}) {
-    async function resolvePublicShare(req) {
+    /**
+     * The share this request may read, or null.
+     *
+     * `withSnapshot` decides whether the frozen page state is fetched with it.
+     * Only the endpoint that returns the snapshot needs it; the paging endpoint
+     * is called once per page and would otherwise re-read a stored assessment —
+     * up to fifty megabytes of it — on every one of those requests.
+     */
+    async function resolvePublicShare(req, { withSnapshot = true } = {}) {
         const publicId = req.params.id || '';
         const accessToken = req.headers['x-share-token'];
         if (!PUBLIC_ID_PATTERN.test(publicId) || typeof accessToken !== 'string') return null;
-        const row = await repository.findPublic(pool, publicId);
+        const read = withSnapshot
+            ? repository.findPublic
+            : (repository.findPublicAccess || repository.findPublic);
+        const row = await read(pool, publicId);
         const unavailable = !row
             || row.revoked_at
             || new Date(row.expires_at).getTime() <= now().getTime()
@@ -243,7 +256,7 @@ function createPublicShareController({
 
         async getPublicAlignmentResultsPage(req, res) {
             try {
-                const row = await resolvePublicShare(req);
+                const row = await resolvePublicShare(req, { withSnapshot: false });
                 const source = row?.kind === 'ILI_ALIGNMENT'
                     ? alignmentSource(row.source_ref)
                     : null;
@@ -268,10 +281,8 @@ function createPublicShareController({
                 );
                 res.setHeader('Cache-Control', 'private, no-store');
                 res.setHeader('Referrer-Policy', 'no-referrer');
-                return res.json({
-                    items: page.rows,
-                    nextCursor: page.nextCursor === null ? null : String(page.nextCursor),
-                });
+                // Rows arrive as JSON text; see serializeAlignmentResultPage.
+                return res.type('application/json').send(serializeAlignmentResultPage(page));
             } catch (error) {
                 console.error('Get public alignment result page error:', error.message);
                 return publicUnavailable(res);
