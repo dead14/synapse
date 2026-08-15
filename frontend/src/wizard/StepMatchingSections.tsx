@@ -2,9 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { FiAlertTriangle, FiChevronLeft, FiChevronRight, FiMap, FiTarget } from 'react-icons/fi';
 import { type SectionDraft } from '../sectioning/SectionComposer';
 import GwPositionCard from '../sectioning/GwPositionCard';
-import { getOriginalLd } from '../sectioning/gwPosition';
 import SectioningSchematic from '../sectioning/SectioningSchematic';
-import { bendAngleDeg, isBendFeature, isBendType } from '../sectioning/bendGeometry';
+import { isBendType } from '../sectioning/bendGeometry';
 import SectionMap from '../sectioning/SectionMap';
 import SectionTable from '../sectioning/SectionTable';
 import SectionWorkbench from '../sectioning/SectionWorkbench';
@@ -236,13 +235,6 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
     [displaySections, features.stats.totalLength],
   );
 
-  const bendFeatures = useMemo(
-    () => features.allFeatures.filter((feature) => {
-      return isBendFeature(feature);
-    }).sort((left, right) => left.dist - right.dist),
-    [features.allFeatures],
-  );
-
   /** Clicking a marker on the schematic fills the next empty boundary. */
   const handleGwClick = (gw: SpatialFeature) => {
     const boundary = sectionBoundaryForFeature(gw, lockedGws);
@@ -436,9 +428,14 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
           <span className="ds-toolbar__label">Detailed viewer</span>
           <span className="ds-toolbar__divider" />
           <span className="ds-toolbar__hint">
-            {canInspectGwPrecisely(zoom)
-              ? 'Click a GW marker to fill the next empty boundary.'
-              : 'Zoom past 600% to click individual GWs — or use the rail above.'}
+            {isLoadingMasterEvidence
+              // Said here rather than nowhere: until the master rows arrive the
+              // schematic is drawing an incomplete run, and a reader who cannot
+              // find a bend needs to know it is still loading.
+              ? 'Loading master feature evidence…'
+              : canInspectGwPrecisely(zoom)
+                ? 'Click a GW marker to fill the next empty boundary.'
+                : 'Zoom past 600% to click individual GWs — or use the rail above.'}
           </span>
           <label className="ds-toolbar__hint" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
             <input
@@ -514,32 +511,6 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
         </div>
 
         {inspectedGw && <GwPositionCard feature={inspectedGw} onDismiss={() => setInspectedGw(null)} />}
-
-        <PanelBody className="ds-stack ds-stack--sm">
-          <div className="ds-row" style={{ justifyContent: 'space-between' }}>
-            <span className="ds-panel__eyebrow">Bends ({bendFeatures.length})</span>
-            <span className="ds-toolbar__hint">Inferred physical features</span>
-          </div>
-          <div className="sec-bend-grid">
-            {isLoadingMasterEvidence && <span className="ds-toolbar__hint">Loading bend locations from master data…</span>}
-            {bendFeatures.map((bend, index) => (
-              <button
-                key={`${bend.id}-${bend.dist}`}
-                type="button"
-                className="sec-bend"
-                onClick={() => setInspectedGw(bend)}
-                aria-label={`Inspect bend ${index + 1}, source LD ${getOriginalLd(bend.rawData, bend.runRole) ?? 'unavailable'}`}
-              >
-                <i aria-hidden="true">◆</i>
-                <strong>BEND {String(index + 1).padStart(2, '0')}</strong>
-                <small>Source LD {getOriginalLd(bend.rawData, bend.runRole) ?? 'unavailable'} · plot {(bend.dist / 1000).toFixed(2)} km · {bendAngleDeg(bend).toFixed(0)}°</small>
-              </button>
-            ))}
-            {!isLoadingMasterEvidence && bendFeatures.length === 0 && (
-              <span className="ds-toolbar__hint">No bends detected from master data yet.</span>
-            )}
-          </div>
-        </PanelBody>
       </Panel>
 
       <SectionTable sections={sections} boundaries={allBoundaries} sectionTypes={SECTION_TYPES} onEdit={editSection} onDelete={deleteSection} />
