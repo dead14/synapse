@@ -53,21 +53,61 @@ export function isInternal(item: FfsScreenedResult): boolean {
 }
 
 /**
+ * The most bins any distribution table or chart will build.
+ *
+ * The bin count is the pipeline's length divided by the bin size, and the bin
+ * size is typed in by the engineer. The `min` attribute on those inputs is a
+ * spinner hint the browser does not enforce on typed text, so a stray "0.01" on
+ * a 120 km line asked for twelve million bins — one array allocated per bin in
+ * `buildWorstTable` — and took the tab down with it. Past a few thousand rows a
+ * distribution table has stopped being readable anyway, so the bin size is
+ * widened to fit rather than the table being truncated: every feature stays
+ * counted, in fewer and coarser bands.
+ */
+export const MAX_LD_BINS = 5_000;
+/** The finest bin the inputs accept, in metres. */
+export const MIN_LD_BIN_SIZE_M = 1;
+
+/**
+ * The bin size that will actually be used for this population.
+ *
+ * Exported so the panels can show the engineer the number their table was drawn
+ * with instead of the one they typed — a silently widened bin is a mislabelled
+ * axis.
+ */
+export function resolveLdBinSize(items: FfsScreenedResult[], binSizeM: number): number {
+  if (!items.length) return MIN_LD_BIN_SIZE_M;
+  const requested = Number.isFinite(binSizeM) && binSizeM > 0
+    ? Math.max(binSizeM, MIN_LD_BIN_SIZE_M)
+    : MIN_LD_BIN_SIZE_M;
+  const distances = items.map(numericLd);
+  const span = maxOf(distances) - minOf(distances);
+  if (!(span > 0)) return requested;
+  const needed = span / MAX_LD_BINS;
+  return requested >= needed ? requested : needed;
+}
+
+/**
  * Builds evenly spaced log-distance bins spanning the dataset. Bins are keyed by
  * index so a feature can be assigned in constant time.
+ *
+ * `assignBinIndex` reads the width back off the bins rather than being told it
+ * again, so a size this function widened can never disagree with the arithmetic
+ * that places a feature into it.
  */
 export function buildLdBins(items: FfsScreenedResult[], binSizeM: number): LdBin[] {
-  if (!items.length || binSizeM <= 0) return [];
+  if (!items.length) return [];
+  const size = resolveLdBinSize(items, binSizeM);
   const distances = items.map(numericLd);
   const min = minOf(distances);
   const max = maxOf(distances);
-  const first = Math.floor(min / binSizeM);
-  const last = Math.floor(max / binSizeM);
+  const first = Math.floor(min / size);
+  const last = Math.floor(max / size);
 
   const bins: LdBin[] = [];
   for (let i = first; i <= last; i++) {
-    const start = i * binSizeM;
-    const end = start + binSizeM;
+    const start = i * size;
+    const end = start + size;
     bins.push({
       index: bins.length,
       start,
@@ -82,10 +122,16 @@ export function buildLdBins(items: FfsScreenedResult[], binSizeM: number): LdBin
  * Bins are evenly spaced from `bins[0].start`, so the index is arithmetic. The
  * previous linear search made every distribution table and stacked chart cost
  * features × bins, which is what made a large run pair stall on a small bin size.
+ *
+ * The width comes off the bins themselves. Passing it separately meant a size
+ * `buildLdBins` had widened to stay inside `MAX_LD_BINS` no longer matched the
+ * one used to place features, which would drop every feature past the first bin.
  */
-export function assignBinIndex(item: FfsScreenedResult, bins: LdBin[], binSizeM: number): number {
-  if (!bins.length || !(binSizeM > 0)) return -1;
-  const index = Math.floor((numericLd(item) - bins[0].start) / binSizeM);
+export function assignBinIndex(item: FfsScreenedResult, bins: LdBin[]): number {
+  if (!bins.length) return -1;
+  const width = bins[0].end - bins[0].start;
+  if (!(width > 0)) return -1;
+  const index = Math.floor((numericLd(item) - bins[0].start) / width);
   return index >= 0 && index < bins.length ? index : -1;
 }
 
@@ -133,7 +179,7 @@ export function buildDistributionTable(
   };
 
   for (const item of items) {
-    const binIndex = assignBinIndex(item, bins, binSizeM);
+    const binIndex = assignBinIndex(item, bins);
     const bucketIndex = bucketIndexFor(item.nominal.maxDepthPct, buckets);
     if (binIndex < 0 || bucketIndex < 0) continue;
 
@@ -179,7 +225,7 @@ export function buildWorstTable(
   const grouped: FfsScreenedResult[][] = bins.map(() => []);
 
   for (const item of items) {
-    const binIndex = assignBinIndex(item, bins, binSizeM);
+    const binIndex = assignBinIndex(item, bins);
     if (binIndex >= 0) grouped[binIndex].push(item);
   }
 
