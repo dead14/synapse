@@ -15,6 +15,7 @@ const {
     iterateOwnedAlignmentExportRows,
     listOwnedAlignmentResultPage,
     saveAlignmentJobRows,
+    serializeAlignmentResultPage,
 } = require('../src/modules/alignment/alignmentRepository');
 
 function recordingPool(result = { rows: [], rowCount: 0 }) {
@@ -192,43 +193,64 @@ test('alignment job persists engine and configuration metadata before execution'
 test('alignment result page is tenant scoped and read as an indexed row range', async () => {
     const pool = recordingPool({
         rows: [
-            { row: { id: 1 }, ordinal: 2 },
-            { row: { id: 2 }, ordinal: 3 },
-            { row: { id: 3 }, ordinal: 4 },
+            { row: '{"id":1}', ordinal: 2 },
+            { row: '{"id":2}', ordinal: 3 },
+            { row: '{"id":3}', ordinal: 4 },
         ],
     });
     const page = await listOwnedAlignmentResultPage(pool, 8, 22, { limit: 2, after: 1 });
-    assert.deepEqual(page.rows, [{ id: 1 }, { id: 2 }]);
+    assert.deepEqual(page.rows, ['{"id":1}', '{"id":2}']);
     assert.equal(page.nextCursor, 3);
-    assert.equal(pool.calls.length, 1, 'a page served from rows must not also run the legacy query');
+    assert.equal(pool.calls.length, 1, 'a page must be one statement, whichever generation stored it');
     assert.match(pool.calls[0].text, /organization_id = \$2/i);
     // Paging must be a range scan over the stored rows, never a re-expansion of
     // the whole comparison array: that is what made every page cost O(all rows).
     assert.match(pool.calls[0].text, /alignment_job_rows/i);
-    assert.doesNotMatch(pool.calls[0].text, /jsonb_array_elements/i);
+    // Nothing on this path reads inside a row, so the rows must leave the
+    // database as text.  Selected as jsonb the driver parses every one of them
+    // into objects the response then serialises straight back.
+    assert.match(pool.calls[0].text, /row_json::text/i);
     assert.deepEqual(pool.calls[0].values, [8, 22, 1, 3]);
 });
 
-test('alignment result page falls back to the stored JSON for pre-migration jobs', async () => {
-    const responses = [
-        { rows: [] },
-        { rows: [{ row: { id: 9 }, ordinal: 1 }] },
-    ];
-    const calls = [];
-    const pool = {
-        async query(text, values) {
-            calls.push({ text, values });
-            return responses.shift() ?? { rows: [] };
-        },
-    };
+test('alignment result page reads pre-migration jobs in the same statement', async () => {
+    const pool = recordingPool({ rows: [{ row: '{"id":9}', ordinal: 1 }] });
 
     const page = await listOwnedAlignmentResultPage(pool, 8, 22, { limit: 2, after: 0 });
 
-    assert.deepEqual(page.rows, [{ id: 9 }]);
+    assert.deepEqual(page.rows, ['{"id":9}']);
     assert.equal(page.nextCursor, null);
-    assert.equal(calls.length, 2);
-    assert.match(calls[1].text, /jsonb_array_elements/i);
-    assert.match(calls[1].text, /row_count IS NULL/i);
+    // One statement covers both storage generations, keyed off the chosen job's
+    // own row_count.  The previous shape ran the modern query and fell back on
+    // an empty result — which is what the last page of every read returns, so
+    // every pagination ended with a guaranteed-empty array expansion.
+    assert.equal(pool.calls.length, 1);
+    assert.match(pool.calls[0].text, /jsonb_array_elements/i);
+    assert.match(pool.calls[0].text, /row_count IS NULL/i);
+    assert.match(pool.calls[0].text, /row_count IS NOT NULL/i);
+});
+
+test('alignment result page body splices stored JSON without re-encoding it', () => {
+    const body = serializeAlignmentResultPage({
+        rows: ['{"Log Dist NEW (m)":12.5}', '{"Log Dist NEW (m)":13.5}'],
+        nextCursor: 40,
+    });
+
+    assert.deepEqual(JSON.parse(body), {
+        items: [{ 'Log Dist NEW (m)': 12.5 }, { 'Log Dist NEW (m)': 13.5 }],
+        nextCursor: '40',
+    });
+    // A row spliced as text must stay an object in the response.  Handing these
+    // to res.json would quote each one into a string and every client would
+    // read the whole run as a list of strings.
+    assert.equal(typeof JSON.parse(body).items[0], 'object');
+});
+
+test('alignment result page body reports the end of the run as a null cursor', () => {
+    const body = serializeAlignmentResultPage({ rows: [], nextCursor: null });
+
+    assert.equal(body, '{"items":[],"nextCursor":null}');
+    assert.deepEqual(JSON.parse(body), { items: [], nextCursor: null });
 });
 
 test('alignment export descriptor returns the tenant-owned completed row count', async () => {

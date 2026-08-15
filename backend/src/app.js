@@ -1,4 +1,5 @@
 const express = require('express');
+const compression = require('compression');
 const cors = require('cors');
 const path = require('path');
 const { getJwtSecret } = require('./config/auth');
@@ -56,6 +57,25 @@ app.use((req, res, next) => {
     next();
 });
 
+// Nothing sits in front of this process — no reverse proxy, no CDN — so if the
+// responses are not compressed here they are not compressed at all.  That is
+// what made the alignment result and the published FFS link slow: a result page
+// is 20k rows of repetitive tabular JSON and a shared assessment can reach tens
+// of megabytes, both of which are exactly the shape gzip does best on.
+//
+// Registered before the routes and before express.static so it covers the API
+// responses and the frontend bundle alike.  Socket.IO is attached to the HTTP
+// server rather than to this middleware chain and is unaffected.
+app.use(compression({
+    // Below roughly one MTU the compression costs more than it saves.
+    threshold: 1024,
+    // A caller that cannot buffer a whole compressed response — a download the
+    // browser streams to disk, an EventSource — opts out per request rather
+    // than forcing the ceiling down for everyone.
+    filter: (req, res) => (
+        req.headers['x-no-compression'] ? false : compression.filter(req, res)
+    ),
+}));
 app.use(securityHeaders);
 app.use(cors(corsOptions));
 

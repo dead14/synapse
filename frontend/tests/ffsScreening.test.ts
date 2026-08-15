@@ -531,3 +531,34 @@ test('the narrative degrades gracefully with no features', () => {
   assert.equal(blocks.length, 2);
   assert.equal(blocks[0].kind, 'heading');
 });
+
+test('a repair disposition changes no screened figure', () => {
+  // The results workspace applies the reviewer's repair evidence to the screened
+  // output rather than folding it into the results before screening them. That
+  // is only sound while none of FfsRepairDispositionPatch's fields reach the
+  // kernel, the growth resolvers or the priority rule — so the invariant is
+  // pinned here. If a future field on that patch does affect the maths, this
+  // test fails and FfsResultsPage has to re-screen instead of re-labelling.
+  const nominal = processRow(row(), config);
+  const patched = {
+    ...nominal,
+    repairStatus: 'permanent-repair-verified' as const,
+    repairMethod: 'Type B sleeve',
+    repairDate: '2025-03-01',
+    repairReference: 'WO-1187',
+    recommendation: 'Monitor at the next ILI.',
+    actionOwner: 'Integrity engineer',
+  };
+
+  const before = screenResults([nominal], config, DEFAULT_SCREENING_CONFIG)[0];
+  const after = screenResults([patched], config, DEFAULT_SCREENING_CONFIG)[0];
+
+  assert.deepEqual(after.conservative, before.conservative);
+  assert.deepEqual(after.forecast, before.forecast);
+  assert.deepEqual(after.remnantLifeConservative, before.remnantLifeConservative);
+  assert.equal(after.priority, before.priority);
+  assert.equal(after.clockHour, before.clockHour);
+  assert.equal(after.bottomQuadrant, before.bottomQuadrant);
+  assert.equal(after.index, before.index);
+  assert.equal(after.key, before.key);
+});

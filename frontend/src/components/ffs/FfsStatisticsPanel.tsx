@@ -4,9 +4,11 @@ import { exportStatisticsWorkbook } from '../../lib/ffs/exports';
 import { formatRemnantLife } from '../../lib/ffs/lifeProjection';
 import {
   DEFAULT_DEPTH_BUCKETS,
+  MIN_LD_BIN_SIZE_M,
   buildDistributionTable,
   buildWorstTable,
   isInternal,
+  resolveLdBinSize,
   type DepthBucket,
   type WorstBy,
 } from '../../lib/ffs/statistics';
@@ -157,6 +159,11 @@ export default function FfsStatisticsPanel({
     [items, binSize, buckets],
   );
   const worstRows = useMemo(() => buildWorstTable(items, binSize, worstBy), [items, binSize, worstBy]);
+  // The size the tables were actually drawn with. A request finer than the line
+  // can carry is widened rather than honoured, and an axis labelled with the
+  // number the engineer typed instead of the one used would be a lie.
+  const effectiveBinSize = useMemo(() => resolveLdBinSize(items, binSize), [items, binSize]);
+  const binWasWidened = effectiveBinSize > binSize;
 
   if (!items.length) {
     return <Callout tone="warn">No assessed features are available to summarise.</Callout>;
@@ -179,17 +186,26 @@ export default function FfsStatisticsPanel({
             <input
               type="number"
               value={draftBin}
-              min={10}
+              min={MIN_LD_BIN_SIZE_M}
               step={50}
               onChange={(event) => setDraftBin(parseFloat(event.target.value) || 0)}
               className="w-[84px] rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs tabular-nums text-slate-800 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
             />
             <span className="text-[11px] text-slate-400">m</span>
+            {binWasWidened && (
+              <span className="text-[11px] text-amber-600 dark:text-amber-500">
+                widened to {effectiveBinSize.toFixed(1)} m to keep the table readable
+              </span>
+            )}
           </div>
 
           <button
             type="button"
-            onClick={() => draftBin > 0 && setBinSize(draftBin)}
+            // `min` on a number input is a spinner hint, not a constraint on
+            // typed text: a bin of 0.01 m over a long line asked for millions of
+            // bins and froze the tab. Clamped here, and widened further inside
+            // buildLdBins when the population still needs it.
+            onClick={() => setBinSize(Math.max(MIN_LD_BIN_SIZE_M, draftBin || MIN_LD_BIN_SIZE_M))}
             className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 px-3 py-1.5 text-xs font-medium text-indigo-600 transition-colors hover:bg-indigo-50 dark:border-indigo-800/60 dark:text-indigo-400 dark:hover:bg-indigo-950/40"
           >
             <FiRefreshCw className="h-3 w-3" /> Rebuild tables
@@ -200,7 +216,7 @@ export default function FfsStatisticsPanel({
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => exportStatisticsWorkbook(distribution, worstRows, binSize, config)}
+              onClick={() => exportStatisticsWorkbook(distribution, worstRows, effectiveBinSize, config)}
             >
               <span className="inline-flex items-center gap-2">
                 <FiDownload /> Export Excel
@@ -214,7 +230,7 @@ export default function FfsStatisticsPanel({
       <Panel>
         <PanelHeader
           title="Defect distribution"
-          subtitle={`Feature count per ${binSize} m bin, by depth band and corrosion surface`}
+          subtitle={`Feature count per ${effectiveBinSize} m bin, by depth band and corrosion surface`}
           actions={
             <button
               type="button"
@@ -356,7 +372,7 @@ export default function FfsStatisticsPanel({
       <Panel>
         <PanelHeader
           title="Governing feature per bin"
-          subtitle={`The single worst feature in each ${binSize} m bin under the selected criterion`}
+          subtitle={`The single worst feature in each ${effectiveBinSize} m bin under the selected criterion`}
           actions={
             <div
               role="group"

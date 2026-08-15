@@ -59,7 +59,7 @@ export function buildDepthByLd(
   }));
 
   for (const item of scoped) {
-    const binIndex = assignBinIndex(item, bins, binSizeM);
+    const binIndex = assignBinIndex(item, bins);
     const bucketIndex = bucketIndexFor(item.nominal.maxDepthPct, buckets);
     if (binIndex >= 0 && bucketIndex >= 0) series[bucketIndex].data[binIndex] += 1;
   }

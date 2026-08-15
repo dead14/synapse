@@ -155,6 +155,13 @@ export function buildResultsWorkbook(
   scenarioSheet['!freeze'] = { xSplit: 0, ySplit: 3 };
   XLSX.utils.book_append_sheet(workbook, scenarioSheet, 'Scenarios');
 
+  // The depth rejection line is configurable, so the column that reports the
+  // years to it cannot be headed with a hard-coded 80. Read from the projection
+  // that was actually computed rather than from the screening config, so the
+  // heading always names the number the figures beneath it were measured to.
+  const depthLimitPct = items[0]?.nominal.remnantLife.depthLimitPct
+    ?? screening.depthRejectionPct;
+
   const header = [
     'Feature ID', 'LD [m]', 'Section', 'Surface', 'Orientation', 'Max depth [%]', 'Length [mm]', 'Width [mm]',
     'Wall [mm]', 'OD [mm]', 'SMYS [MPa]', 'Design factor', 'Design factor source',
@@ -166,7 +173,7 @@ export function buildResultsWorkbook(
     'd [mm]', 'd/t', 'z', 'M', 'S_flow [MPa]', 'Sf [MPa]', 'Pf [MPa]', 'S0 [MPa]',
     'P_safe [MPa]', 'ERF nominal', 'Acceptance',
     'Remnant life [y]', 'Due date', 'Governing limit',
-    'Years to 80% depth', 'Years to ERF 1', 'Length held constant', 'Capped at design life',
+    `Years to ${depthLimitPct}% depth`, 'Years to ERF 1', 'Length held constant', 'Capped at design life',
     'Conservative depth [%]', 'Conservative length [mm]', 'ERF conservative', 'P_safe conservative [MPa]',
     'Forecast depth [%]', 'ERF forecast',
     'Remnant life tolerance-adjusted [y]', 'Priority', 'Severity', 'Engineering disposition',

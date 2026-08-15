@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 
 const {
     ALIGNMENT_ENGINE_VERSION,
+    FINGERPRINT_IGNORED_FIELDS,
+    RUNTIME_CONFIG_FIELDS,
     alignmentConfigFingerprint,
     alignmentJobReuseMaxAgeMs,
     alignmentProcessTimeoutMs,
@@ -135,6 +137,31 @@ test('review evidence written after a run does not invalidate that run', () => {
 
     assert.equal(alignmentConfigFingerprint(config), alignmentConfigFingerprint(reviewed));
     assert.equal(isReusableAlignmentJob(jobFor(config), reviewed), true);
+});
+
+test('switching a feature class off does not re-run the alignment', () => {
+    const config = { ToleranceConfig: { clock_tolerance: 10 } };
+    // The Feature rules step's saved decision.  No engine reads it — the run
+    // still matched and conserved every row and the viewer filters the report —
+    // so hiding a class must not throw the finished run away.
+    const hidden = { ...config, hiddenFeatures: ['valve', 'tee'] };
+
+    assert.equal(alignmentConfigFingerprint(config), alignmentConfigFingerprint(hidden));
+    assert.equal(isReusableAlignmentJob(jobFor(config), hidden), true);
+    // And back again, from a run queued while the class was hidden.
+    assert.equal(isReusableAlignmentJob(jobFor(hidden), config), true);
+});
+
+test('hiddenFeatures stays owned by the browser, not preserved server-side', () => {
+    // The two sets answer different questions.  RUNTIME_CONFIG_FIELDS is what
+    // updateOwnedSessionConfig carries across a wizard snapshot, so a key in it
+    // can never be cleared by the client — which for this one would make a
+    // switched-off class impossible to switch back on.
+    assert.equal(RUNTIME_CONFIG_FIELDS.has('hiddenFeatures'), false);
+    assert.equal(FINGERPRINT_IGNORED_FIELDS.has('hiddenFeatures'), true);
+    for (const field of RUNTIME_CONFIG_FIELDS) {
+        assert.equal(FINGERPRINT_IGNORED_FIELDS.has(field), true, `${field} must not invalidate a run`);
+    }
 });
 
 test('matchingSections still invalidates: the engine reads it', () => {

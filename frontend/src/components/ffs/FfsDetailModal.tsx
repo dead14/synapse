@@ -233,6 +233,13 @@ export default function FfsDetailModal({
 
   const n = item.nominal;
   const life = n.remnantLife;
+  // The depth rejection line this projection was actually measured to. Read
+  // from the projection rather than assumed to be 80: it is configurable, and
+  // remnantLife carries the value that was used.
+  const depthLimitPct = Number(
+    (Number.isFinite(life.depthLimitPct) ? life.depthLimitPct : 80).toFixed(2),
+  );
+  const depthLimitRatio = (depthLimitPct / 100).toFixed(2);
   const caveats = remnantLifeCaveats(life);
   const isOriginal = config.method === 'original';
   const areaLabel = isOriginal ? '⅔dL' : '0.85dL';
@@ -699,12 +706,16 @@ export default function FfsDetailModal({
               {/* Both criteria, always. The governing figure alone hides how
                   close the other limit is, which is what decides whether a
                   repair buys years or months. */}
+              {/* The depth line is configurable, so neither the heading nor the
+                  arithmetic beneath it may hard-code 80: at a project screening
+                  at 70 %WT the working printed a sum that does not produce the
+                  number above it. `depthLimitPct` is what the projection used. */}
               <LifeCard
-                label="Years to 80% Depth"
+                label={`Years to ${depthLimitPct}% Depth`}
                 value={life.depthLimitYears === null ? '—' : life.depthLimitYears.toFixed(2)}
                 unit={life.depthLimitYears === null ? undefined : 'y'}
-                description={`(0.80 − d/t) × t / CR depth`}
-                basis={`Closed-form: (0.80 − ${fmt(n.dt, 4)}) × ${n.wall.toFixed(2)} / ${life.depthRateMmPerYear.toFixed(4)}. The 80 %WT line is a project rejection threshold, not a B31G applicability limit.`}
+                description={`(${depthLimitRatio} − d/t) × t / CR depth`}
+                basis={`Closed-form: (${depthLimitRatio} − ${fmt(n.dt, 4)}) × ${n.wall.toFixed(2)} / ${life.depthRateMmPerYear.toFixed(4)}. The ${depthLimitPct} %WT line is a project rejection threshold, not a B31G applicability limit.`}
                 showWorking={showWorking}
               />
               <LifeCard
@@ -801,7 +812,7 @@ export default function FfsDetailModal({
             <Callout tone="neutral">
               {life.status === 'insufficient-growth-basis'
                 ? 'No due date is calculated because neither depth nor length has a positive growth basis.'
-                : `Neither the 80% depth limit nor ERF 1.0 is reached inside the configured ${life.analysisHorizonYears}-year analysis horizon.`}{' '}
+                : `Neither the ${depthLimitPct}% depth limit nor ERF 1.0 is reached inside the configured ${life.analysisHorizonYears}-year analysis horizon.`}{' '}
               This is not a prediction of unlimited service life. Final disposition requires an approved
               procedure and independent checking.
             </Callout>

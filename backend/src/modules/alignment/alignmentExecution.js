@@ -12,21 +12,41 @@ const PENDING_JOB_STATES = new Set(['queued', 'active', 'retrying']);
 // been spawned, so discarding it costs nothing.  An 'active' job owns a running
 // Python child that this process cannot stop, so it is left to finish.
 const DISCARDABLE_JOB_STATES = new Set(['queued', 'retrying']);
-// Session config fields that never reach the engine, so changing one must not
-// invalidate a finished run.  resultSummary and failureReason are written by
-// the worker; interventions, sections and pipelineRoute are written by the
-// reviewer *reading* the result, which meant every exclusion, intervention or
-// saved section threw away the very run being reviewed and made the next page
-// load re-run the engine from scratch.
+// Session config fields the *server* owns, which a wizard snapshot from the
+// browser never carries and must therefore not erase on save.  resultSummary
+// and failureReason are written by the worker; interventions, sections and
+// pipelineRoute are written by the reviewer *reading* the result.
 //
-// matchingSections is deliberately absent: hungarian_engine.py reads it, so it
-// genuinely changes the result and must stay in the fingerprint.
+// This set is consumed by updateOwnedSessionConfig, which preserves exactly
+// these keys across a snapshot save.  Membership here is a statement about
+// *ownership*, not about whether the engine reads the field — see
+// FINGERPRINT_IGNORED_FIELDS below, which is the set that answers that.
 const RUNTIME_CONFIG_FIELDS = new Set([
     'resultSummary',
     'failureReason',
     'interventions',
     'sections',
     'pipelineRoute',
+]);
+
+// Fields that never reach the alignment engine, so changing one must not
+// invalidate a finished run.  Everything the server owns qualifies — an
+// exclusion, an intervention or a saved section used to throw away the very run
+// being reviewed and make the next page load re-run the engine from scratch.
+//
+// hiddenFeatures is here and deliberately *not* in RUNTIME_CONFIG_FIELDS. The
+// Feature rules step owns that key, so the browser snapshot has to be able to
+// clear it — preserving it server-side would make a switched-off class
+// impossible to switch back on. But no engine reads it: the run still matches
+// and conserves every row and the viewer filters the report, which is why
+// toggling a class must not cost a re-run. Keeping it in the fingerprint is
+// what made changing one checkbox re-align the whole pipeline.
+//
+// matchingSections is deliberately absent from both: hungarian_engine.py reads
+// it, so it genuinely changes the result and must stay in the fingerprint.
+const FINGERPRINT_IGNORED_FIELDS = new Set([
+    ...RUNTIME_CONFIG_FIELDS,
+    'hiddenFeatures',
 ]);
 
 function alignmentProcessTimeoutMs(env = process.env) {
@@ -58,7 +78,7 @@ function canonicalize(value) {
 
 function alignmentConfigFingerprint(config) {
     const matchingConfig = Object.fromEntries(
-        Object.entries(config || {}).filter(([key]) => !RUNTIME_CONFIG_FIELDS.has(key)),
+        Object.entries(config || {}).filter(([key]) => !FINGERPRINT_IGNORED_FIELDS.has(key)),
     );
     return createHash('sha256')
         .update(JSON.stringify(canonicalize(matchingConfig)))
@@ -124,6 +144,7 @@ function buildReusableAlignmentJobResponse(job) {
 
 module.exports = {
     ALIGNMENT_ENGINE_VERSION,
+    FINGERPRINT_IGNORED_FIELDS,
     RUNTIME_CONFIG_FIELDS,
     alignmentConfigFingerprint,
     alignmentJobReuseMaxAgeMs,

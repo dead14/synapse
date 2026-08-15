@@ -361,24 +361,56 @@ async function saveAlignmentJobRows(pool, jobId, rows) {
     return rows.length;
 }
 
-/** Legacy jobs keep their rows inside result_json; those still expand the array. */
-function legacyPageQuery(selector) {
+/**
+ * One page of result rows, as raw JSON text.
+ *
+ * `row_json` is cast to text rather than selected as jsonb because nothing on
+ * this path looks inside a row. Selected as jsonb, the driver ran JSON.parse
+ * over every row to build objects that `res.json` immediately serialised back —
+ * two full passes over a 20,000-row page, per page, that changed nothing. The
+ * text comes out of PostgreSQL already canonical JSON and is spliced straight
+ * into the response body.
+ *
+ * The two storage generations are resolved in one statement, keyed off the
+ * chosen job's own `row_count`. The previous shape ran the modern query and
+ * fell back to the legacy one whenever it came back empty — which is exactly
+ * what the last page of every paginated read does, so every pagination paid for
+ * a guaranteed-empty `jsonb_array_elements` expansion at the end. Selecting the
+ * newest completed job once also removes the case where the two queries could
+ * pick different jobs for the same session.
+ *
+ * The legacy branch costs nothing for a modern job: those jobs no longer carry
+ * a `comparison` key at all, so the COALESCE expands an empty array.
+ */
+function resultPageQuery(selector) {
     return `WITH completed AS (
-            SELECT result_json
+            SELECT job_id, result_json, row_count
             FROM alignment_jobs
             WHERE ${selector}
               AND organization_id = $2
               AND state = 'completed'
-              AND row_count IS NULL
             ORDER BY completed_at DESC NULLS LAST, created_at DESC
             LIMIT 1
+         ),
+         persisted AS (
+            SELECT r.row_json::text AS row, r.ordinal
+            FROM completed c
+            JOIN alignment_job_rows r ON r.job_id = c.job_id
+            WHERE c.row_count IS NOT NULL
+              AND r.ordinal > $3
+         ),
+         legacy AS (
+            SELECT item.value::text AS row, item.ordinality::int AS ordinal
+            FROM completed c
+            CROSS JOIN LATERAL jsonb_array_elements(
+                COALESCE(c.result_json->'comparison', '[]'::jsonb)
+            ) WITH ORDINALITY AS item(value, ordinality)
+            WHERE c.row_count IS NULL
+              AND item.ordinality > $3
          )
-         SELECT item.value AS row, item.ordinality::int AS ordinal
-         FROM completed c
-         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.result_json->'comparison', '[]'::jsonb))
-             WITH ORDINALITY AS item(value, ordinality)
-         WHERE item.ordinality > $3
-         ORDER BY item.ordinality ASC
+         SELECT row, ordinal
+         FROM (SELECT * FROM persisted UNION ALL SELECT * FROM legacy) page
+         ORDER BY ordinal ASC
          LIMIT $4`;
 }
 
@@ -392,33 +424,26 @@ function pageResponse(rows, limit) {
     };
 }
 
+/**
+ * The paged response as a JSON string.
+ *
+ * `rows` are already-serialised JSON documents, so handing them to `res.json`
+ * would re-encode each one as a quoted string. They are spliced into the array
+ * literal instead. Every element came out of PostgreSQL as `jsonb::text`, which
+ * is always a complete, well-formed JSON value — jsonb cannot hold an unescaped
+ * control character or a NUL, so there is nothing here that needs escaping.
+ */
+function serializeAlignmentResultPage(page) {
+    const cursor = page.nextCursor === null
+        ? 'null'
+        : JSON.stringify(String(page.nextCursor));
+    return `{"items":[${page.rows.join(',')}],"nextCursor":${cursor}}`;
+}
+
 async function listOwnedAlignmentResultPage(pool, sessionId, orgId, { limit, after }) {
     const startedAt = performance.now();
     const values = [sessionId, orgId, after === null ? 0 : after, limit + 1];
-    // An index range scan over (job_id, ordinal) instead of re-expanding the
-    // whole comparison array once per page.
-    let result = await pool.query(
-        `WITH completed AS (
-            SELECT job_id
-            FROM alignment_jobs
-            WHERE session_id = $1
-              AND organization_id = $2
-              AND state = 'completed'
-              AND row_count IS NOT NULL
-            ORDER BY completed_at DESC NULLS LAST, created_at DESC
-            LIMIT 1
-         )
-         SELECT r.row_json AS row, r.ordinal
-         FROM completed c
-         JOIN alignment_job_rows r ON r.job_id = c.job_id
-         WHERE r.ordinal > $3
-         ORDER BY r.ordinal ASC
-         LIMIT $4`,
-        values,
-    );
-    if (result.rows.length === 0) {
-        result = await pool.query(legacyPageQuery('session_id = $1'), values);
-    }
+    const result = await pool.query(resultPageQuery('session_id = $1'), values);
     metrics.observe('alignment_result_query', performance.now() - startedAt, { query: 'page' });
     return pageResponse(result.rows, limit);
 }
@@ -431,22 +456,7 @@ async function listOwnedAlignmentResultPage(pool, sessionId, orgId, { limit, aft
 async function listOwnedAlignmentJobResultPage(pool, jobId, orgId, { limit, after }) {
     const startedAt = performance.now();
     const values = [String(jobId), orgId, after === null ? 0 : after, limit + 1];
-    let result = await pool.query(
-        `SELECT r.row_json AS row, r.ordinal
-         FROM alignment_jobs j
-         JOIN alignment_job_rows r ON r.job_id = j.job_id
-         WHERE j.job_id = $1
-           AND j.organization_id = $2
-           AND j.state = 'completed'
-           AND j.row_count IS NOT NULL
-           AND r.ordinal > $3
-         ORDER BY r.ordinal ASC
-         LIMIT $4`,
-        values,
-    );
-    if (result.rows.length === 0) {
-        result = await pool.query(legacyPageQuery('job_id = $1'), values);
-    }
+    const result = await pool.query(resultPageQuery('job_id = $1'), values);
     metrics.observe('alignment_result_query', performance.now() - startedAt, { query: 'job_page' });
     return pageResponse(result.rows, limit);
 }
@@ -635,6 +645,7 @@ module.exports = {
     listOwnedAlignmentJobResultPage,
     listOwnedAlignmentResultPage,
     listOwnedSessions,
+    serializeAlignmentResultPage,
     saveAlignmentJobRows,
     createOwnedSession,
     updateOwnedSessionConfig,

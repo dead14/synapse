@@ -510,6 +510,10 @@ export function buildNarrative(
   const lifeGoverning = reportCase.remnantLife.governing;
   if (lifeGoverning) {
     const remnant = lifeGoverning.nominal.remnantLife;
+    // The line this projection was measured to, not the 80 %WT default.
+    const depthLimitPct = Number(
+      (Number.isFinite(remnant.depthLimitPct) ? remnant.depthLimitPct : 80).toFixed(2),
+    );
     blocks.push({
       kind: 'formula',
       lines: [
@@ -519,7 +523,9 @@ export function buildNarrative(
         `Depth CGR           ${remnant.depthRateMmPerYear.toFixed(3)} mm/y`,
         `Length CGR          ${remnant.lengthHeldConstant ? 'not established — length held constant' : `${remnant.lengthRateMmPerYear.toFixed(3)} mm/y`}`,
         '',
-        `80 %WT limit        (0.80 - ${(governing.nominal.maxDepthPct / 100).toFixed(2)}) x ${lifeGoverning.nominal.wall.toFixed(2)} mm / ${remnant.depthRateMmPerYear.toFixed(3)} mm/y = ${remnant.depthLimitYears === null ? `not reached in ${horizonYears} y` : `${remnant.depthLimitYears.toFixed(2)} y`}`,
+        // The depth line is configurable; printing 0.80 here published a sum
+        // that does not evaluate to the years quoted at the end of the row.
+        `${`${depthLimitPct} %WT limit`.padEnd(20)}(${(depthLimitPct / 100).toFixed(2)} - ${(governing.nominal.maxDepthPct / 100).toFixed(2)}) x ${lifeGoverning.nominal.wall.toFixed(2)} mm / ${remnant.depthRateMmPerYear.toFixed(3)} mm/y = ${remnant.depthLimitYears === null ? `not reached in ${horizonYears} y` : `${remnant.depthLimitYears.toFixed(2)} y`}`,
         `ERF 1.0 limit       ${remnant.erfLimitYears === null ? `not reached in ${horizonYears} y` : `${remnant.erfLimitYears.toFixed(2)} y`}`,
         service.designLifeYears !== null ? `Design life limit   ${service.designLifeYears.toFixed(2)} y` : '',
         '',

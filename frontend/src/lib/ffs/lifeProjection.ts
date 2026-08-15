@@ -47,8 +47,22 @@ export function lifeProjectionStatusLabel(
   return `Limit not reached in ${horizonYears} y`;
 }
 
-/** Which limit governed, phrased for a report column. */
+/**
+ * Which limit governed, phrased for a report column.
+ *
+ * `'Depth = 80%'` is the stable identifier the filters and the stored case match
+ * on, not a label — the depth line it names is configurable and the projection
+ * carries the value that was actually used. Printing the token verbatim put
+ * "Depth = 80%" in the governing-limit column and in the exported workbook for
+ * an assessment screened at, say, 70 %WT, contradicting the years quoted beside
+ * it. The number is substituted here, at the display boundary, so the token
+ * itself stays untouched for everything that compares against it.
+ */
 export function remnantLimitLabel(remnant: FfsRemnantLife): string {
+  if (remnant.governingLimit === 'Depth = 80%') {
+    const limitPct = Number.isFinite(remnant.depthLimitPct) ? remnant.depthLimitPct : 80;
+    return `Depth = ${Number(limitPct.toFixed(2))}%`;
+  }
   return lifeProjectionStatusLabel(
     remnant.status,
     remnant.governingLimit,

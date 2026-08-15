@@ -4,6 +4,8 @@ import test from 'node:test';
 import { processRow } from '../src/lib/ffs/calcEngine.ts';
 import { screenResults, lengthApplicationFor } from '../src/lib/ffs/screening.ts';
 import { computeRemnantLife, designLifeUsage } from '../src/lib/ffs/remnantLife.ts';
+import { remnantLimitLabel } from '../src/lib/ffs/lifeProjection.ts';
+import { evaluateB31g } from '../src/lib/ffs/b31g.ts';
 import {
   buildFfsReportCase,
   repairProgrammeTargets,
@@ -446,4 +448,88 @@ test('section growth reports the maximum per surface and counts unavailable axia
   assert.equal(aerial.lengthRateUnavailableCount, 1);
   assert.equal(crossing.externalLengthRateMmPerYear, null);
   assert.equal(crossing.lengthRateUnavailableCount, 1);
+});
+
+test('the governing-limit label names the depth line that was actually used', () => {
+  // 'Depth = 80%' is a stable identifier, not a label. Printing it verbatim put
+  // "Depth = 80%" in the governing-limit column and in the exported workbook
+  // for an assessment screened at 70 %WT, contradicting the years beside it.
+  const at70 = computeRemnantLife({
+    geometry: { wallThickness: 10, outerDiameter: 508, smysMpa: 359, safetyFactor: 1.39, operatingPressureMpa: 5 },
+    method: 'modified',
+    flowStressMode: 'smys69',
+    basis: 'as-reported',
+    startDepthPct: 40,
+    startLengthMm: 20,
+    depthRateMmPerYear: 0.2,
+    lengthRateMmPerYear: 0,
+    lengthRateAvailable: false,
+    horizonYears: 30,
+    iliDate: new Date('2024-08-23'),
+    service: { designLifeYears: null, commissioningYear: null },
+    depthLimitRatio: 0.7,
+  });
+
+  assert.equal(at70.governingLimit, 'Depth = 80%', 'the stored token must not change');
+  assert.equal(at70.depthLimitPct, 70);
+  assert.equal(remnantLimitLabel(at70), 'Depth = 70%');
+  // (0.70 - 0.40) x 10 mm / 0.2 mm/y = 15 y — the label and the figure agree.
+  assert.equal(at70.years, 15);
+});
+
+test('the default depth line still reads as 80% and the other limits are untouched', () => {
+  const request = {
+    geometry: { wallThickness: 10, outerDiameter: 508, smysMpa: 359, safetyFactor: 1.39, operatingPressureMpa: 5 },
+    method: 'modified' as const,
+    flowStressMode: 'smys69' as const,
+    basis: 'as-reported' as const,
+    startDepthPct: 40,
+    startLengthMm: 20,
+    depthRateMmPerYear: 0.2,
+    lengthRateMmPerYear: 0,
+    lengthRateAvailable: false,
+    horizonYears: 30,
+    iliDate: new Date('2024-08-23'),
+    service: { designLifeYears: null, commissioningYear: null },
+  };
+  assert.equal(remnantLimitLabel(computeRemnantLife(request)), 'Depth = 80%');
+
+  const noGrowth = computeRemnantLife({ ...request, depthRateMmPerYear: 0 });
+  assert.equal(noGrowth.governingLimit, null);
+  assert.equal(remnantLimitLabel(noGrowth), 'No positive growth basis');
+});
+
+test('the ERF bisection resolves far past the precision remnant life is quoted at', () => {
+  // The search was cut from 60 halvings to 30. Thirty takes a 100-year bracket
+  // to about 1e-7 years, which round2 discards anyway — so the shorter search
+  // has to land on exactly the same reported figure.
+  const request = {
+    geometry: { wallThickness: 8, outerDiameter: 323.9, smysMpa: 359, safetyFactor: 1.39, operatingPressureMpa: 6.5 },
+    method: 'modified' as const,
+    flowStressMode: 'smys69' as const,
+    basis: 'as-reported' as const,
+    startDepthPct: 55,
+    startLengthMm: 120,
+    depthRateMmPerYear: 0.25,
+    lengthRateMmPerYear: 2,
+    lengthRateAvailable: true,
+    horizonYears: 100,
+    iliDate: new Date('2024-08-23'),
+    service: { designLifeYears: null, commissioningYear: null },
+  };
+  const life = computeRemnantLife(request);
+
+  assert.equal(life.status, 'calculated');
+  assert.notEqual(life.erfLimitYears, null);
+  // The bracket is monotonic, so the answer is the crossing itself: ERF is
+  // below 1 just before the reported year and at or above it just after.
+  const erfAt = (years: number) => evaluateB31g(
+    (request.startDepthPct / 100) * request.geometry.wallThickness + request.depthRateMmPerYear * years,
+    request.startLengthMm + request.lengthRateMmPerYear * years,
+    request.geometry,
+    request.method,
+    request.flowStressMode,
+  ).erf;
+  assert.ok(erfAt(life.erfLimitYears! - 0.01) < 1);
+  assert.ok(erfAt(life.erfLimitYears! + 0.01) >= 1);
 });

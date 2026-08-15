@@ -54,10 +54,36 @@ async function revokeOwnedShare(pool, publicId, organizationId) {
     return result.rows[0] || null;
 }
 
+// The columns needed to decide whether a link may be read at all.  Kept apart
+// from the snapshot because the two are wanted at very different rates: the
+// snapshot is read once, when the page opens, while these are re-checked on
+// every request the page then makes.
+const SHARE_ACCESS_COLUMNS = `public_id, token_hash, organization_id, kind, title, source_ref,
+                created_at, expires_at, revoked_at`;
+
 async function findPublicShare(pool, publicId) {
     const result = await pool.query(
-        `SELECT public_id, token_hash, organization_id, kind, title, source_ref, snapshot_json,
-                created_at, expires_at, revoked_at
+        `SELECT ${SHARE_ACCESS_COLUMNS}, snapshot_json
+         FROM public_result_shares
+         WHERE public_id = $1::uuid`,
+        [publicId],
+    );
+    return result.rows[0] || null;
+}
+
+/**
+ * The same row without its frozen snapshot.
+ *
+ * An alignment link pages its rows in, and every one of those requests has to
+ * re-verify the token — which meant re-reading, de-TOASTing and JSON-parsing
+ * the whole stored snapshot once per page just to throw it away. Reading a
+ * shared alignment therefore paid for its snapshot as many times as it had
+ * pages. The paging path uses this projection; only the endpoint that actually
+ * returns the snapshot reads the column.
+ */
+async function findPublicShareAccess(pool, publicId) {
+    const result = await pool.query(
+        `SELECT ${SHARE_ACCESS_COLUMNS}
          FROM public_result_shares
          WHERE public_id = $1::uuid`,
         [publicId],
@@ -68,6 +94,7 @@ async function findPublicShare(pool, publicId) {
 module.exports = {
     createPublicShare,
     findPublicShare,
+    findPublicShareAccess,
     listOwnedShares,
     revokeOwnedShare,
 };

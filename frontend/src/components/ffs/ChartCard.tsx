@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { FiDownload, FiRefreshCw, FiSettings } from 'react-icons/fi';
 import { downloadCanvasPng } from '../../lib/ffs/exports';
+import { MIN_LD_BIN_SIZE_M } from '../../lib/ffs/statistics';
 import { Panel } from './FfsPrimitives';
 
 /** Point shapes offered by the scatter customisers, mapped to Chart.js names. */
@@ -74,15 +75,18 @@ export default function ChartCard({
               <input
                 type="number"
                 value={draftBin}
-                min={10}
+                min={MIN_LD_BIN_SIZE_M}
                 step={50}
                 onChange={(event) => setDraftBin(parseFloat(event.target.value) || 0)}
                 className="w-[68px] rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs tabular-nums text-slate-800 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
               />
               <button
                 type="button"
+                // `min` on a number input only binds the spinner, not typed
+                // text.  An unclamped bin of a few centimetres over a long line
+                // asks for millions of bins and freezes the tab.
                 onClick={() => {
-                  if (draftBin > 0) onBinSizeChange(draftBin);
+                  onBinSizeChange(Math.max(MIN_LD_BIN_SIZE_M, draftBin || MIN_LD_BIN_SIZE_M));
                   onRedraw?.();
                 }}
                 className="inline-flex items-center gap-1 rounded-md border border-indigo-200 px-2 py-1 text-[11px] font-medium text-indigo-600 transition-colors hover:bg-indigo-50 dark:border-indigo-800/60 dark:text-indigo-400 dark:hover:bg-indigo-950/40"
