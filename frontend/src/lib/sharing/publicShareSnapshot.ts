@@ -39,6 +39,12 @@ export interface AlignmentShareState {
   kind: 'ILI_ALIGNMENT';
   interventions: PublicShareValue[];
   sections: PublicShareValue[];
+  /**
+   * Feature classes the Feature rules step switched off. Frozen with the rest
+   * because a recipient shown more rows than the author is a recipient reading
+   * different evidence — the same rule the interventions follow.
+   */
+  hiddenFeatures?: PublicShareValue[];
 }
 
 /** Frozen FFS assessment state — everything FfsResultsPage needs to reopen. */
@@ -122,11 +128,13 @@ function shareRecord(value: unknown): Record<string, PublicShareValue> | null {
 export function buildAlignmentShareState(input: {
   interventions?: unknown;
   sections?: unknown;
+  hiddenFeatures?: unknown;
 }): AlignmentShareState {
   return {
     kind: 'ILI_ALIGNMENT',
     interventions: shareArray(input.interventions),
     sections: shareArray(input.sections),
+    hiddenFeatures: shareArray(input.hiddenFeatures),
   };
 }
 

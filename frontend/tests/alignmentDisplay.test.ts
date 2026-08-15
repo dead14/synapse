@@ -7,8 +7,11 @@ import {
   depthGrowthMmPerYear,
   isAlignmentDisplayMetadata,
   isClusteredAlignmentRow,
+  isHiddenAlignmentRow,
+  normalizeHiddenFeatures,
   sortAlignmentRowsByMasterAxis,
   summarizeConservationAudit,
+  toggleableFeatureKind,
 } from '../src/utils/alignmentDisplay.ts';
 import { createExcelExportRows } from '../src/utils/alignmentExport.ts';
 
@@ -261,4 +264,74 @@ test('a cluster is excluded from the manual reassignment candidates but stays a 
   assert.deepEqual(candidates.map((row) => row['Source Key OLD']), ['OLD:1']);
   // The cluster is still one of the rows the table renders and FFS reads.
   assert.equal(rows.length, 2);
+});
+
+test('a switchable class is recognised from the labels a vendor actually writes', () => {
+  const cases: Array<[Record<string, unknown>, string]> = [
+    [{ 'Feature Identification NEW': 'Valve' }, 'valve'],
+    [{ 'Feature Type OLD': 'Tee' }, 'tee'],
+    [{ 'Feature Identification OLD': 'Branch connection' }, 'tee'],
+    // Tested before the tee pattern, so "offtake" never lands under Tees.
+    [{ 'Feature Identification NEW': 'Off-take' }, 'offtake'],
+    [{ 'Feature Identification NEW': 'Offtake' }, 'offtake'],
+    [{ 'Feature Identification OLD': 'Bend begin' }, 'bend'],
+    [{ 'Feature Identification OLD': 'Elbow' }, 'bend'],
+    // Nothing recognised, and not metal loss or a joint weld.
+    [{ 'Feature Identification NEW': 'Anode' }, 'other'],
+    [{ 'Feature Identification NEW': 'Casing end' }, 'other'],
+    [{}, 'other'],
+  ];
+
+  for (const [row, kind] of cases) {
+    assert.equal(toggleableFeatureKind(row), kind, JSON.stringify(row));
+  }
+});
+
+test('metal loss and joint welds are never switchable, whatever the label says', () => {
+  const alwaysShown = [
+    { 'Feature Identification NEW': 'Corrosion' },
+    { 'Feature Type OLD': 'Metal loss' },
+    { 'Feature Identification OLD': 'External corrosion pitting' },
+    { 'Feature Identification NEW': 'Girth weld' },
+    { 'Feature Type NEW': 'Weld' },
+    // A vendor who wrote "Bend" into a corrosion row's identification must not
+    // be able to make that defect vanish from an engineer's screen.
+    { 'Result Group': 'ANOMALY', 'Feature Identification NEW': 'Bend begin' },
+    // An unpaired GW orphan whose feature record could not be read carries no
+    // label at all. It is still the weld evidence the report is anchored on.
+    { 'Result Group': 'GW', 'Feature Type OLD': '-', 'Feature Type NEW': '-' },
+  ];
+
+  for (const row of alwaysShown) {
+    assert.equal(toggleableFeatureKind(row), null, JSON.stringify(row));
+  }
+});
+
+test('a longitudinal seam is not a joint weld, so it stays switchable as Other', () => {
+  assert.equal(toggleableFeatureKind({ 'Feature Identification NEW': 'Long seam weld' }), 'other');
+});
+
+test('hiding a class removes exactly that class from the report', () => {
+  const rows = [
+    { 'Result Group': 'ANOMALY', 'Feature Identification NEW': 'Corrosion' },
+    { 'Result Group': 'GW', 'Feature Identification NEW': 'Girth weld' },
+    { 'Result Group': 'BYPASSED', 'Feature Identification NEW': 'Bend begin' },
+    { 'Result Group': 'GW', 'Feature Identification NEW': 'Valve' },
+  ];
+
+  const shown = rows.filter((row) => !isHiddenAlignmentRow(row, ['bend']));
+
+  assert.deepEqual(
+    shown.map((row) => row['Feature Identification NEW']),
+    ['Corrosion', 'Girth weld', 'Valve'],
+  );
+  // An empty rule set is the common case and must not walk the rows at all.
+  assert.equal(rows.every((row) => !isHiddenAlignmentRow(row, [])), true);
+});
+
+test('only classes the viewer knows how to act on survive a saved rule set', () => {
+  assert.deepEqual(normalizeHiddenFeatures(['bend', 'valve']), ['valve', 'bend']);
+  assert.deepEqual(normalizeHiddenFeatures(['weld', 'metal loss']), []);
+  assert.deepEqual(normalizeHiddenFeatures(undefined), []);
+  assert.deepEqual(normalizeHiddenFeatures('bend'), []);
 });

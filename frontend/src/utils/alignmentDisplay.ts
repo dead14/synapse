@@ -181,6 +181,103 @@ export function isClusteredAlignmentRow<T extends Record<string, unknown>>(row: 
   });
 }
 
+/* ---------------------------------------------------------------------------
+ * Feature visibility
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The classes the Feature rules step can switch off. Keep in step with
+ * `TOGGLEABLE_FEATURE_TYPES` in `frontend/src/wizard/matchingRules.ts`, which is
+ * what writes the saved `hiddenFeatures` list this reads.
+ */
+export type ToggleableFeatureKind = 'valve' | 'tee' | 'bend' | 'offtake' | 'other';
+
+/**
+ * The vendor labels a class is recognised by, in resolution order.
+ *
+ * Mirrors `FITTING_CLASS_PATTERNS` in `hungarian_engine.py`, with one deliberate
+ * split: the engine files tees, offtakes and branch connections under a single
+ * "Tee / offtake" identity class because it has to pair them ordinally, while
+ * the report offers them as two switches. Offtake is therefore tested first, so
+ * "offtake" never falls through to the tee pattern.
+ */
+const FEATURE_KIND_PATTERNS: ReadonlyArray<[ToggleableFeatureKind, RegExp]> = [
+  ['valve', /\bvalves?\b/i],
+  ['offtake', /\boff[\s_-]?takes?\b/i],
+  ['tee', /\btees?\b|\bbranch(?:\s+connection)?\b/i],
+  ['bend', /\b(?:bends?|elbows?)\b/i],
+];
+
+/** Metal loss, whatever the vendor called it. Never hideable — it is the report. */
+const METAL_LOSS_PATTERN = /\b(?:anomal(?:y|ies)|metal[\s_-]?loss|corrosion|corr|pitting|pit)\b/i;
+
+/**
+ * Circumferential joint welds. Never hideable either: they are what anchors
+ * every matched anomaly, and the Feature rules step locks them on for that
+ * reason. Longitudinal seams are excluded for the same reason
+ * `gw_distance_derivation` excludes them — they are not joint boundaries.
+ */
+const WELD_PATTERN = /\b(?:girth|gw|welds?)\b/i;
+const NON_GIRTH_WELD_PATTERN = /\b(?:seam|longitudinal|spiral|helical|erw|dsaw|lsaw)\b/i;
+
+const CLASSIFICATION_COLUMNS = [
+  'Feature Type OLD',
+  'Feature Type NEW',
+  'Feature Identification OLD',
+  'Feature Identification NEW',
+] as const;
+
+function classificationText<T extends Record<string, unknown>>(row: T): string {
+  return CLASSIFICATION_COLUMNS
+    .map((column) => row[column])
+    .filter((value) => typeof value === 'string' && value.trim() !== '' && value.trim() !== '-')
+    .join(' ');
+}
+
+/**
+ * Which switchable class a result row belongs to, or `null` when it is one the
+ * report always shows.
+ *
+ * A row the engine bucketed as an anomaly is `null` regardless of how its label
+ * reads: the matched metal loss is the report, and a vendor who wrote "Bend"
+ * into a corrosion row's identification column must not be able to make that
+ * defect vanish from an engineer's screen.
+ */
+export function toggleableFeatureKind<T extends Record<string, unknown>>(
+  row: T,
+): ToggleableFeatureKind | null {
+  if (String(row['Result Group'] ?? '').trim().toUpperCase() === 'ANOMALY') return null;
+  const text = classificationText(row);
+  if (METAL_LOSS_PATTERN.test(text)) return null;
+  for (const [kind, pattern] of FEATURE_KIND_PATTERNS) {
+    if (pattern.test(text)) return kind;
+  }
+  if (WELD_PATTERN.test(text) && !NON_GIRTH_WELD_PATTERN.test(text)) return null;
+  // An unlabelled row the engine bucketed as a Phase-1 anchor is a girth weld —
+  // that is what the bucket holds once the fittings above have been taken out
+  // of it. Letting it fall through to `other` would put the welds that anchor
+  // every matched anomaly behind the "Other features" switch.
+  if (String(row['Result Group'] ?? '').trim().toUpperCase() === 'GW') return null;
+  return 'other';
+}
+
+/** Whether the saved Feature rules keep this row out of the report. */
+export function isHiddenAlignmentRow<T extends Record<string, unknown>>(
+  row: T,
+  hiddenFeatures: readonly string[],
+): boolean {
+  if (hiddenFeatures.length === 0) return false;
+  const kind = toggleableFeatureKind(row);
+  return kind !== null && hiddenFeatures.includes(kind);
+}
+
+/** The saved list, narrowed to entries this module knows how to act on. */
+export function normalizeHiddenFeatures(value: unknown): ToggleableFeatureKind[] {
+  if (!Array.isArray(value)) return [];
+  const known: readonly ToggleableFeatureKind[] = ['valve', 'tee', 'bend', 'offtake', 'other'];
+  return known.filter((kind) => value.includes(kind));
+}
+
 function mappedDistance(value: unknown): number | null {
   return hasDistance(value) ? Number(value) : null;
 }

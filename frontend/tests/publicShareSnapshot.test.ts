@@ -20,7 +20,11 @@ test('an alignment link carries the reviewer edits, so the reader sees the revie
     { id: 'unassign-1', type: 'UNASSIGN_PAIR', sourceOldKey: 'old:3', sourceNewKey: 'new:3' },
   ];
   const snapshot = buildPublicShareSnapshot(
-    buildAlignmentShareState({ interventions, sections: [{ name: 'KP 0-5' }] }),
+    buildAlignmentShareState({
+      interventions,
+      sections: [{ name: 'KP 0-5' }],
+      hiddenFeatures: ['bend'],
+    }),
     { notes: ['Frozen to this alignment run.'] },
   );
 
@@ -30,6 +34,9 @@ test('an alignment link carries the reviewer edits, so the reader sees the revie
     kind: 'ILI_ALIGNMENT',
     interventions,
     sections: [{ name: 'KP 0-5' }],
+    // Frozen with the edits: a recipient shown rows the author had switched
+    // off is reading a different report from the one that was published.
+    hiddenFeatures: ['bend'],
   });
   assert.deepEqual(snapshot.notes, ['Frozen to this alignment run.']);
 });
