@@ -9,6 +9,7 @@ import {
   FiClock,
   FiGitCommit,
   FiFileText,
+  FiLayers,
   FiMaximize2,
   FiRotateCcw,
   FiSettings,
@@ -35,9 +36,11 @@ import {
   buildMatchingRulesConfig,
   defaultMatchingRules,
   US_GW_DISTANCE_SOURCES,
+  WALL_THICKNESS_SOURCES,
   type AnomalyMatcher,
   type ToleranceValues,
   type UsGwDistanceSource,
+  type WallThicknessSource,
 } from './matchingRules';
 import {
   buildProjectionColumns,
@@ -211,7 +214,9 @@ export default function StepScenarioFilter({ onNext, onBack, config }: StepScena
     }));
   };
 
-  const applyValues = (values: ToleranceValues) => patch(values);
+  // Partial: a named profile sets the gates and deliberately leaves the
+  // evidence-source choices it does not own alone.
+  const applyValues = (values: Partial<ToleranceValues>) => patch(values);
 
   const enablePerPair = (enabled: boolean) => {
     if (enabled) {
@@ -403,6 +408,48 @@ export default function StepScenarioFilter({ onNext, onBack, config }: StepScena
               runs together or to neither: a vendor measures to the weld centreline and this
               measures to the reported weld position, so mixing the two would feed a fixed bias into
               the comparison. Every result row records which source it used.
+            </Callout>
+          )}
+        </PanelBody>
+      </Panel>
+
+      {/* Wall thickness source --------------------------------------------- */}
+      <Panel>
+        <PanelHeader
+          plain
+          eyebrow="Evidence"
+          title="Wall thickness"
+          subtitle="Not a matching gate. It is what depth is a percentage of, and what fitness-for-service refuses to run without."
+        />
+        <PanelBody className="ds-stack">
+          <div className="ds-row">
+            {WALL_THICKNESS_SOURCES.map((source) => (
+              <Button
+                key={source.id}
+                size="sm"
+                variant={current.wall_thickness_source === source.id ? 'primary' : 'secondary'}
+                aria-pressed={current.wall_thickness_source === source.id}
+                onClick={() => patch({
+                  wall_thickness_source: source.id as WallThicknessSource,
+                })}
+              >
+                {source.label}
+              </Button>
+            ))}
+          </div>
+          <p className="tol-row__desc">
+            {WALL_THICKNESS_SOURCES.find(
+              (source) => source.id === current.wall_thickness_source,
+            )?.hint}
+          </p>
+          {current.wall_thickness_source === 'gw' && (
+            <Callout tone="info" icon={<FiLayers aria-hidden="true" />}>
+              A pipe joint is one piece of pipe rolled to one thickness, so metal loss between two
+              girth welds sits in metal of exactly the thickness those welds report. Only blanks are
+              filled — a reported reading is never replaced — and the value is taken from the
+              upstream weld of that joint, or the downstream one when the upstream weld reports
+              none. Nothing is read from further away. Every result row records whether its
+              thickness was reported at the defect or taken from the joint.
             </Callout>
           )}
         </PanelBody>

@@ -1237,5 +1237,83 @@ class DistanceCoercionTests(unittest.TestCase):
                 self.assertIsNone(hungarian_engine._coerce_distance(value))
 
 
+class WallThicknessPolicyTests(unittest.TestCase):
+    """Where the reported wall thickness comes from, and who asked for it."""
+
+    @staticmethod
+    def engine():
+        return HungarianAnomalyAlignmentEngine.__new__(HungarianAnomalyAlignmentEngine)
+
+    @staticmethod
+    def run_features():
+        """A joint whose weld carries the thickness and whose defect does not."""
+        return [
+            {
+                "id": "gw-1", "abs_distance_m": 0.0, "source_abs_distance_m": 0.0,
+                "originalType": "girth weld", "wall_thickness_mm": 9.5, "raw": {},
+            },
+            {
+                "id": "ml-1", "abs_distance_m": 4.0, "source_abs_distance_m": 4.0,
+                "originalType": "metal loss", "wall_thickness_mm": None, "raw": {},
+            },
+        ]
+
+    def test_uploaded_is_the_default_and_leaves_every_blank_alone(self):
+        old_features = self.run_features()
+        new_features = self.run_features()
+
+        audit = self.engine()._resolve_wall_thickness_policy(old_features, new_features, {})
+
+        self.assertEqual(audit["resolvedMode"], "uploaded")
+        self.assertIsNone(audit["old"]["inheritance"])
+        self.assertIsNone(old_features[1]["wall_thickness_mm"])
+        self.assertIsNone(new_features[1]["wall_thickness_mm"])
+
+    def test_gw_mode_fills_both_runs_so_a_growth_rate_is_built_the_same_way(self):
+        old_features = self.run_features()
+        new_features = self.run_features()
+
+        audit = self.engine()._resolve_wall_thickness_policy(
+            old_features, new_features, {"wall_thickness_source": "gw"},
+        )
+
+        self.assertEqual(audit["resolvedMode"], "gw")
+        self.assertEqual(old_features[1]["wall_thickness_mm"], 9.5)
+        self.assertEqual(new_features[1]["wall_thickness_mm"], 9.5)
+        for side in ("old", "new"):
+            self.assertEqual(audit[side]["inheritance"]["inheritedUpstream"], 1)
+
+    def test_an_unrecognised_mode_falls_back_to_the_uploaded_column(self):
+        # Never silently inherit: an unreadable setting must not start writing
+        # thicknesses into rows the tool reported none for.
+        old_features = self.run_features()
+        new_features = self.run_features()
+
+        audit = self.engine()._resolve_wall_thickness_policy(
+            old_features, new_features, {"wall_thickness_source": "magic"},
+        )
+
+        self.assertEqual(audit["resolvedMode"], "uploaded")
+        self.assertIsNone(old_features[1]["wall_thickness_mm"])
+
+    def test_the_result_cell_reads_the_inherited_value_not_the_source_row(self):
+        features = self.run_features()
+        self.engine()._resolve_wall_thickness_policy(
+            features, self.run_features(), {"wall_thickness_source": "gw"},
+        )
+
+        self.assertEqual(hungarian_engine._wall_thickness_cell(features[1]), 9.5)
+        self.assertEqual(hungarian_engine._wall_thickness_cell(None), "-")
+
+    def test_the_result_cell_falls_back_to_an_unmapped_source_row(self):
+        self.assertEqual(
+            hungarian_engine._wall_thickness_cell({"raw": {"wall_thickness_mm": "12.7"}}),
+            12.7,
+        )
+        self.assertEqual(
+            hungarian_engine._wall_thickness_cell({"wall_thickness_mm": 0, "raw": {}}), "-",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

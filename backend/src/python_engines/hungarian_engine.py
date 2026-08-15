@@ -11,6 +11,7 @@ from datetime import date
 from models import SessionLocal, ILIFeature, AlignmentResult, AlignmentSession
 from tiein_transform import prepare_transform, validated_tiein_knots
 import gw_distance_derivation as gw_derivation
+import wall_thickness_inheritance as wt_inheritance
 
 
 class EmptyDatasetError(RuntimeError):
@@ -76,6 +77,31 @@ DEFAULT_US_GW_DISTANCE_SOURCE = "uploaded"
 # reading before the vendor column is trusted for that comparison.  Below it,
 # *both* runs are re-derived: see the provenance rule in the same method.
 DEFAULT_US_GW_VENDOR_COVERAGE = 0.9
+
+# Where a feature's wall thickness comes from.  ``uploaded`` is the historical
+# behaviour — the column as the tool reported it, blanks included.  ``gw`` fills
+# only the blanks from the girth welds bounding the same joint, which is the
+# same piece of pipe and therefore the same thickness; see
+# ``_resolve_wall_thickness_policy``.
+WALL_THICKNESS_SOURCES = ("uploaded", "gw")
+DEFAULT_WALL_THICKNESS_SOURCE = "uploaded"
+
+
+def _wall_thickness_cell(feature):
+    """The wall thickness to report for one side of a result row.
+
+    Prefers the mapped record, which is where the joint-inheritance pass writes,
+    and falls back to the untouched source row for a feature that never went
+    through ``fetch_data``'s mapping.
+    """
+    if not feature:
+        return "-"
+    thickness = wt_inheritance.readable_thickness(feature.get("wall_thickness_mm"))
+    if thickness is None:
+        thickness = wt_inheritance.readable_thickness(
+            (feature.get("raw") or {}).get("wall_thickness_mm")
+        )
+    return thickness if thickness is not None else "-"
 
 
 def _coerce_distance(value):
@@ -928,6 +954,17 @@ class HungarianAnomalyAlignmentEngine:
                     "pregenerated_us_gw_m": _coerce_distance(
                         f.get("dist_to_us_gw_derived_m")
                     ),
+                    # Lifted out of `raw` so the joint-inheritance pass has one
+                    # place to write to and the result row has one place to
+                    # read from.  A blank stays blank until that pass runs.
+                    "wall_thickness_mm": wt_inheritance.readable_thickness(
+                        f.get("wall_thickness_mm")
+                    ),
+                    "wall_thickness_source": (
+                        wt_inheritance.REPORTED_SOURCE
+                        if wt_inheritance.readable_thickness(f.get("wall_thickness_mm")) is not None
+                        else None
+                    ),
                     "clock_position": clock,
                     "originalType": str(f.get("feature_type") or f.get("originalType") or "").lower(),
                     "raw": f
@@ -1422,6 +1459,71 @@ class HungarianAnomalyAlignmentEngine:
                     "distance could be derived for that run."
                 )
                 print(f"[WARN] {audit['warning']}", file=sys.stderr)
+        return audit
+
+    def _resolve_wall_thickness_policy(
+        self,
+        old_features: list[dict],
+        new_features: list[dict],
+        tol_config: dict,
+    ) -> dict:
+        """Decide where each feature's wall thickness comes from.
+
+        Unlike the weld-relative distance, thickness is not a matching gate:
+        nothing in the cost matrix reads it.  It is a reported dimension that
+        the growth rates and the FFS intake depend on, so the rule here is not
+        provenance consistency between the two runs but simply "do not leave a
+        blank where the joint itself carries the answer".
+
+        Both runs are still put on the same setting, because a growth rate in
+        mm/yr is computed from the pair: filling NEW while leaving OLD blank
+        would produce a comparison whose two halves were built differently.
+
+        Modes:
+          ``uploaded``  the column exactly as the tool reported it.
+          ``gw``        blanks filled from the girth welds bounding the joint.
+        """
+        requested = str(
+            tol_config.get("wall_thickness_source") or DEFAULT_WALL_THICKNESS_SOURCE
+        ).strip().lower()
+        if requested not in WALL_THICKNESS_SOURCES:
+            requested = DEFAULT_WALL_THICKNESS_SOURCE
+
+        predicate = self._is_girth_weld_feature
+        audit = {
+            "requestedMode": requested,
+            "resolvedMode": requested,
+            "old": {**wt_inheritance.coverage(old_features, predicate), "inheritance": None},
+            "new": {**wt_inheritance.coverage(new_features, predicate), "inheritance": None},
+        }
+        if requested != "gw":
+            return audit
+
+        audit["old"]["inheritance"] = wt_inheritance.inherit_wall_thickness(
+            old_features, predicate,
+        )
+        audit["new"]["inheritance"] = wt_inheritance.inherit_wall_thickness(
+            new_features, predicate,
+        )
+        inherited = sum(
+            audit[side]["inheritance"]["inheritedUpstream"]
+            + audit[side]["inheritance"]["inheritedDownstream"]
+            for side in ("old", "new")
+        )
+        unresolved = sum(
+            audit[side]["inheritance"]["noJointThickness"] for side in ("old", "new")
+        )
+        print(
+            f"[Wall Thickness] Took {inherited} reading(s) from the bounding girth "
+            f"welds; {unresolved} feature(s) sit in a joint whose welds report none.",
+            file=sys.stderr,
+        )
+        if not audit["old"]["inheritance"]["jointReferences"] or not audit["new"]["inheritance"]["jointReferences"]:
+            audit["warning"] = (
+                "One or both runs report no girth weld carrying a wall thickness, "
+                "so no value could be inherited for that run."
+            )
+            print(f"[WARN] {audit['warning']}", file=sys.stderr)
         return audit
 
     @classmethod
@@ -1944,6 +2046,12 @@ class HungarianAnomalyAlignmentEngine:
         self.us_gw_distance_audit = self._resolve_us_gw_distance_policy(
             anomalies_1_all, anomalies_2_all, tol_config,
         )
+        # Independent of the gates above: nothing in the cost matrix reads wall
+        # thickness.  It runs here because this is where both complete feature
+        # lists exist, and it must happen before the result rows are formatted.
+        self.wall_thickness_audit = self._resolve_wall_thickness_policy(
+            anomalies_1_all, anomalies_2_all, tol_config,
+        )
         self.require_us_gw_distance = (
             params_json.get("algorithm") == "dtw_hungarian_onedirection"
             and self.use_us_gw_distance
@@ -2313,8 +2421,16 @@ class HungarianAnomalyAlignmentEngine:
                 "Feature Identification NEW": f2.get("raw", {}).get("feature_identification") if f2 else "-",
                 "Dim Classification OLD": f1.get("raw", {}).get("dim_classification") if f1 else "-",
                 "Dim Classification NEW": f2.get("raw", {}).get("dim_classification") if f2 else "-",
-                "Wall WT OLD (mm)": f1.get("raw", {}).get("wall_thickness_mm") if f1 else "-",
-                "Wall WT NEW (mm)": f2.get("raw", {}).get("wall_thickness_mm") if f2 else "-",
+                # Read off the mapped record, not out of `raw`: a value taken
+                # from the bounding girth welds is written there, and reading
+                # the untouched source row would report the blank it replaced.
+                "Wall WT OLD (mm)": _wall_thickness_cell(f1),
+                "Wall WT NEW (mm)": _wall_thickness_cell(f2),
+                # "reported" or "gw_joint".  An inherited value is the joint's
+                # own measurement rather than one taken at the defect, and a
+                # reviewer has to see that before it reaches an FFS assessment.
+                "Wall WT Source OLD": (f1.get("wall_thickness_source") or "-") if f1 else "-",
+                "Wall WT Source NEW": (f2.get("wall_thickness_source") or "-") if f2 else "-",
                 "Depth OLD (%WT)": f1.get("depth_pct") if f1 else "-",
                 "Depth NEW (%WT)": f2.get("depth_pct") if f2 else "-",
                 "Length OLD (mm)": f1.get("length_mm") if f1 else "-",
@@ -2518,6 +2634,7 @@ class HungarianAnomalyAlignmentEngine:
             **self._matcher_audit(),
         }
         json_output["audit"]["usGwDistance"] = getattr(self, "us_gw_distance_audit", None)
+        json_output["audit"]["wallThickness"] = getattr(self, "wall_thickness_audit", None)
         run_warnings = self._missing_survey_year_warnings()
         json_output["audit"]["warnings"] = run_warnings
         for warning in run_warnings:

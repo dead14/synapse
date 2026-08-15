@@ -133,11 +133,21 @@ export function formatTolerance(spec: ToleranceSpec, value: number): string {
  * Named profiles
  * ------------------------------------------------------------------------ */
 
+/**
+ * What a named profile actually sets.
+ *
+ * `wall_thickness_source` is deliberately not part of it. A profile describes
+ * how strictly pairs are gated; where a thickness reading comes from is an
+ * evidence decision about the uploaded data that survives switching profiles.
+ * Including it would let picking "Conservative" silently undo it.
+ */
+export type ProfileValues = Omit<ToleranceValues, 'wall_thickness_source'>;
+
 export interface ToleranceProfile {
   id: string;
   label: string;
   hint: string;
-  values: ToleranceValues;
+  values: ProfileValues;
 }
 
 export const TOLERANCE_PROFILES: readonly ToleranceProfile[] = [
@@ -186,7 +196,7 @@ export const TOLERANCE_PROFILES: readonly ToleranceProfile[] = [
 /** The non-numeric settings that are part of a tolerance set's identity. */
 const CHOICE_KEYS = ['use_us_gw_distance', 'us_gw_distance_source', 'anomaly_matcher'] as const;
 
-function sameChoices(left: ToleranceValues, right: ToleranceValues): boolean {
+function sameChoices(left: ProfileValues, right: ProfileValues): boolean {
   return CHOICE_KEYS.every((key) => left[key] === right[key]);
 }
 
