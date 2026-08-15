@@ -2445,14 +2445,6 @@ label.feature-row:hover { background: var(--ds-surface-inset); }
 
 .gw-table tbody td.is-strong { color: var(--color-gw-ink); font-weight: 700; }
 
-.gw-table tbody td.is-text {
-  max-width: 16rem;
-  overflow: hidden;
-  color: var(--color-gw-muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .gw-table tbody tr { cursor: pointer; }
 .gw-table tbody tr:hover td { background: var(--color-gw-paper-raised); }
 .gw-table tbody tr.is-selected td { background: var(--color-gw-accent-soft); }
