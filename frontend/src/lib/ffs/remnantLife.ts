@@ -114,7 +114,17 @@ export interface FfsRemnantLifeRequest {
   depthLimitRatio?: number;
 }
 
-const BISECTION_STEPS = 60;
+/**
+ * Bisection steps for the ERF search.
+ *
+ * Each step halves the bracket, which starts at the analysis horizon. Thirty
+ * steps take a 100-year horizon to about 10⁻⁷ years — four decimal places past
+ * the second the answer is quoted to, and well past anything the growth rates
+ * feeding it could justify. This used to be 60, which bought no accuracy the
+ * `round2` below does not immediately discard and doubled the cost of the one
+ * calculation the screening layer runs per feature per pass.
+ */
+const BISECTION_STEPS = 30;
 
 /** Rounds to two decimals, the precision remnant life is quoted at. */
 function round2(value: number): number {

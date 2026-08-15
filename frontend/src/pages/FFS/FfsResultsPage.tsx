@@ -151,7 +151,9 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
   const [assumptionsOpen, setAssumptionsOpen] = useState(false);
   // Navigation state outlives the build that wrote it, so the screening config
   // is repaired on the way in rather than trusted. See normaliseScreeningConfig.
-  const [screening, setScreening] = useState<FfsScreeningConfig>(
+  // Read through `screening` below, never directly: the depth rejection line is
+  // owned by the assessment configuration, not by this drawer.
+  const [screeningDraft, setScreening] = useState<FfsScreeningConfig>(
     () => normaliseScreeningConfig(state?.screening),
   );
   // Figures snapshotted by the Charts tab, kept so the narrative can embed them
@@ -171,10 +173,32 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
   const results = state?.results ?? NO_RESULTS;
   const config = state?.config;
 
-  const resultsWithRepairReview = useMemo(
-    () => results.map((result, index) => ({ ...result, ...(repairOverrides[index] ?? {}) })),
-    [results, repairOverrides],
-  );
+  /**
+   * The screening assumptions this page actually applies.
+   *
+   * Everything in the drawer is a post-hoc screening decision that leaves the
+   * nominal code result alone — except the depth rejection line, which is not.
+   * `processRow` bakes `config.depthRejectionPct` into the Acceptance column and
+   * into the as-reported remnant life at the moment the assessment is run, and
+   * the results here are never re-processed. Letting the drawer move that line
+   * afterwards therefore split the report in two: the conservative tier, the
+   * priorities and the exported "Depth rejection limit" row followed the new
+   * value while the Acceptance column and the governing-limit column beside it
+   * still answered to the old one. An engineer screening at 70 %WT could export
+   * a workbook whose assumptions page said 70 and whose acceptance column had
+   * passed a 75 %WT feature.
+   *
+   * The line is set once, on the setup page, and pinned here — which also heals
+   * a link or a filed session published while the two could still disagree.
+   */
+  const screening = useMemo<FfsScreeningConfig>(() => {
+    const configured = config?.depthRejectionPct;
+    if (!Number.isFinite(configured) || !(configured > 0) || !(configured <= 100)) {
+      return screeningDraft;
+    }
+    if (screeningDraft.depthRejectionPct === configured) return screeningDraft;
+    return { ...screeningDraft, depthRejectionPct: configured as number };
+  }, [screeningDraft, config?.depthRejectionPct]);
 
   const updateRepairDisposition = useCallback((index: number, patch: FfsRepairDispositionPatch) => {
     setRepairOverrides((previous) => ({ ...previous, [index]: patch }));
@@ -202,10 +226,32 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
     });
   }, []);
 
-  const screened = useMemo(
-    () => (config ? screenResults(resultsWithRepairReview, config, screening) : []),
-    [resultsWithRepairReview, config, screening],
+  /**
+   * The screening pass, held apart from the reviewer's repair evidence.
+   *
+   * `screenResults` is the expensive part of this page: two B31G tiers plus a
+   * bisection search for the tolerance-adjusted remnant life, per feature. A
+   * repair disposition changes none of its inputs — `FfsRepairDispositionPatch`
+   * carries repair status, method, date, reference, recommendation and owner,
+   * and not one of those reaches the kernel, the growth resolvers or the
+   * priority rule. Folding the patch into the results before screening them
+   * therefore re-ran the whole assessment on every checkbox, which on a large
+   * run is millions of B31G evaluations to arrive at the same numbers.
+   *
+   * The patch is applied to the screened output instead, where it costs one
+   * shallow copy per edited feature.
+   */
+  const screenedBase = useMemo(
+    () => (config ? screenResults(results, config, screening) : []),
+    [results, config, screening],
   );
+  const screened = useMemo(() => {
+    if (Object.keys(repairOverrides).length === 0) return screenedBase;
+    return screenedBase.map((item) => {
+      const patch = repairOverrides[item.index];
+      return patch ? { ...item, nominal: { ...item.nominal, ...patch } } : item;
+    });
+  }, [screenedBase, repairOverrides]);
   // Bulk edit from the spool review. The patch is a function of the feature so
   // the caller can carry existing fields through untouched instead of having to
   // reconstruct them, which is how a plan would otherwise wipe real evidence.
@@ -527,22 +573,29 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
                   max={20}
                   step={1}
                 />
-                <NumberField
-                  label="Depth limit"
-                  value={screening.depthRejectionPct}
-                  onChange={(depthRejectionPct) => setScreening((s) => ({ ...s, depthRejectionPct }))}
-                  unit="% WT"
-                  min={40}
-                  max={100}
-                  step={1}
-                />
+                {/* Read-only, unlike everything above it. The nominal Acceptance
+                    column and the as-reported remnant life were both measured
+                    against this line when the assessment ran, and neither is
+                    re-derived here — so moving it from this drawer would leave
+                    the report disagreeing with itself. It is set on the setup
+                    page, where changing it re-runs the assessment. */}
+                <div className="flex flex-col justify-end">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                    Depth limit
+                  </span>
+                  <span className="mt-1 text-sm font-semibold tabular-nums text-slate-800 dark:text-slate-100">
+                    {screening.depthRejectionPct} % WT
+                  </span>
+                </div>
               </div>
 
               <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                 <p className="max-w-2xl text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
                   These are project screening decisions, not ASME B31G requirements. Changing them recalculates
                   the conservative and forecast tiers, remaining life, priorities, and the action register — the
-                  nominal code result is unaffected.
+                  nominal code result is unaffected. The depth limit is shown but not editable here: the nominal
+                  acceptance and the as-reported remnant life were measured against it when the assessment ran,
+                  so it belongs to the assessment setup rather than to this drawer.
                 </p>
                 <button
                   type="button"
