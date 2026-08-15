@@ -37,6 +37,30 @@ export const US_GW_DISTANCE_SOURCES = [
 
 export type UsGwDistanceSource = (typeof US_GW_DISTANCE_SOURCES)[number]['id'];
 
+/**
+ * Where a feature's wall thickness comes from.
+ *
+ * Many pipetallies report thickness on the girth weld rows and leave it blank
+ * on the metal loss inside the joint. A joint is one piece of pipe rolled to one
+ * thickness, so `gw` reads the blank off the welds that bound it — the same
+ * measurement, not an estimate. Keep in step with `WALL_THICKNESS_SOURCES` in
+ * `backend/src/python_engines/hungarian_engine.py`.
+ */
+export const WALL_THICKNESS_SOURCES = [
+  {
+    id: 'uploaded',
+    label: 'Uploaded column',
+    hint: 'Use the thickness exactly as the tool reported it. A blank stays blank.',
+  },
+  {
+    id: 'gw',
+    label: 'Fill blanks from the girth weld',
+    hint: 'Where an anomaly reports no thickness, take it from the girth welds bounding its joint.',
+  },
+] as const;
+
+export type WallThicknessSource = (typeof WALL_THICKNESS_SOURCES)[number]['id'];
+
 export type ToleranceValues = {
   clock_tolerance: number;
   us_gw_distance_tolerance: number;
@@ -48,6 +72,12 @@ export type ToleranceValues = {
    */
   use_us_gw_distance: boolean;
   us_gw_distance_source: UsGwDistanceSource;
+  /**
+   * Not a matching gate — nothing in the cost matrix reads thickness. It is
+   * here because it travels to the engine on the same `ToleranceConfig`, and
+   * because the growth rates and the FFS intake are built from it.
+   */
+  wall_thickness_source: WallThicknessSource;
   anomaly_matcher: AnomalyMatcher;
   /**
    * Permitted difference between the two runs' reported distance to their own
@@ -68,6 +98,7 @@ export const RECOMMENDED_TOLERANCES: ToleranceValues = {
   ds_gw_distance_tolerance: 0.2,
   use_us_gw_distance: true,
   us_gw_distance_source: 'auto',
+  wall_thickness_source: 'uploaded',
   anomaly_matcher: 'hungarian',
   gw_offset_tolerance: 0.2,
   length_tolerance: 50,
@@ -101,6 +132,13 @@ export function toleranceValues(source: any, legacyDistance: unknown): Tolerance
       source?.us_gw_distance_source,
       US_GW_DISTANCE_SOURCES.map((item) => item.id),
       legacySource,
+    ),
+    // A session saved before this setting existed reported exactly what the
+    // tool uploaded, so that is what it keeps meaning when it is reopened.
+    wall_thickness_source: oneOf(
+      source?.wall_thickness_source,
+      WALL_THICKNESS_SOURCES.map((item) => item.id),
+      'uploaded',
     ),
     anomaly_matcher: oneOf(
       source?.anomaly_matcher,

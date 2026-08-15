@@ -139,6 +139,7 @@ function PublicAlignmentPreview({
             readOnly
             sharedInterventions={alignmentState?.interventions}
             sharedSections={alignmentState?.sections}
+            sharedHiddenFeatures={alignmentState?.hiddenFeatures}
             shareAccess={{
               id: share.id,
               accessToken,

@@ -128,6 +128,10 @@ const SIDED_COLUMN_TITLES: Array<[string, string]> = [
 
   // Dimensions and position on the joint.
   ['Wall WT {S} (mm)', 'Wall thickness {S} [mm]'],
+  // Not a POF column. POF assumes the thickness was reported against the
+  // feature; when it was taken off the joint's girth welds instead, the reader
+  // has to be able to see that before the number reaches an assessment.
+  ['Wall WT Source {S}', 'Wall thickness {S} — source'],
   ["O'Clock {S}", 'Clock position {S}'],
   ['Length {S} (mm)', 'Length {S} [mm]'],
   ['Width {S} (mm)', 'Width {S} [mm]'],

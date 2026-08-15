@@ -33,6 +33,10 @@ test('combined scenario and tolerance settings persist the exact engine contract
     // source selector has to resolve to `off` rather than to the `auto` default.
     // Reading it any other way would switch a saved session's gates back on.
     us_gw_distance_source: 'off',
+    // Same rule, for the same reason: a session saved before the girth-weld
+    // fill existed reported exactly what its pipetally carried, so reopening it
+    // must not start inheriting thicknesses it never had.
+    wall_thickness_source: 'uploaded',
     // Absent from a saved session means the matcher that existed at the time.
     anomaly_matcher: 'hungarian',
     // A session saved before the weld-offset gate was separated from the

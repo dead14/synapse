@@ -427,8 +427,12 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
 
               const oldFeature = m.oldId ? oldFeatureById.get(m.oldId) ?? null : null;
               const newFeature = m.newId ? newFeatureById.get(m.newId) ?? null : null;
-              const oldDesc = oldFeature ? (oldFeature.feature_identification || oldFeature.originalType || 'Weld') : '(Missing)';
-              const newDesc = newFeature ? (newFeature.feature_identification || newFeature.originalType || 'Weld') : '(Missing)';
+              // Blank, not a "(Missing)" placeholder. A persisted run holds its
+              // features in the database rather than on the wizard config, so
+              // this lookup misses for almost every row — the placeholder was
+              // reporting an absent description as absent evidence.
+              const oldDesc = oldFeature ? (oldFeature.feature_identification || oldFeature.originalType || 'Weld') : '';
+              const newDesc = newFeature ? (newFeature.feature_identification || newFeature.originalType || 'Weld') : '';
 
               const finalVarPct = isMatch && m.deviation_ratio !== undefined && m.deviation_ratio !== null 
                   ? m.deviation_ratio * 100 
@@ -730,11 +734,12 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
       if (activeTab === 'unmatched' && item.status === 'matched') return false;
       if (statusFilter !== 'all' && item.status !== statusFilter) return false;
       if (!query) return true;
+      // The description columns are gone from the table; searching them would
+      // hit rows for text the reader cannot see. The review drawer still shows
+      // a description when the run carries one.
       return [
         item.match.oldVal,
         item.match.originalNewVal ?? item.match.newVal,
-        item.match.oldDesc,
-        item.match.newDesc,
       ].some((value) => String(value ?? '').toLowerCase().includes(query));
     });
 
@@ -784,9 +789,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
       'No.': index + 1,
       'Result': TIMELINE_STATUS_LABEL[item.status],
       [`${laneLabels.old} log distance (m)`]: item.match.oldVal ?? '',
-      [`${laneLabels.old} feature`]: item.match.oldDesc ?? '',
       [`${laneLabels.new} log distance (m)`]: item.match.originalNewVal ?? item.match.newVal ?? '',
-      [`${laneLabels.new} feature`]: item.match.newDesc ?? '',
       'Offset (m)': item.match.offset ?? '',
       'Deviation (%)': item.deviationPct === null ? '' : Number(item.deviationPct.toFixed(3)),
       'Match confidence (%)': item.confidence === null ? '' : Number(item.confidence.toFixed(1)),
@@ -797,7 +800,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Girth weld matches');
     worksheet['!cols'] = [
       { wch: 6 }, { wch: 11 }, { wch: 24 }, { wch: 24 },
-      { wch: 24 }, { wch: 24 }, { wch: 12 }, { wch: 14 }, { wch: 20 },
+      { wch: 12 }, { wch: 14 }, { wch: 20 },
     ];
     XLSX.writeFile(workbook, `GW_matches_${laneLabels.old}_to_${laneLabels.new}.xlsx`);
   };
@@ -966,7 +969,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
               <input
                 type="search"
                 value={searchQuery}
-                placeholder="Search a distance or description"
+                placeholder="Search a log distance"
                 aria-label="Search girth weld rows"
                 onChange={(event) => { setSearchQuery(event.target.value); setCurrentPage(1); }}
               />
@@ -1014,11 +1017,9 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                   <th scope="col" className="is-numeric">
                     <SortHeader label={`${laneLabels.old} (m)`} sortKey="old" activeKey={sortKey} direction={sortDirection} onSort={toggleSort} />
                   </th>
-                  <th scope="col">{laneLabels.old} feature</th>
                   <th scope="col" className="is-numeric">
                     <SortHeader label={`${laneLabels.new} (m)`} sortKey="new" activeKey={sortKey} direction={sortDirection} onSort={toggleSort} />
                   </th>
-                  <th scope="col">{laneLabels.new} feature</th>
                   <th scope="col" className="is-numeric">
                     <SortHeader label="Offset (m)" sortKey="offset" activeKey={sortKey} direction={sortDirection} onSort={toggleSort} />
                   </th>
@@ -1032,7 +1033,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
               <tbody>
                 {!isCalculating && visibleRows.length === 0 && (
                   <tr>
-                    <td colSpan={hasConfidence ? 9 : 8} className="gw-table__empty">
+                    <td colSpan={hasConfidence ? 7 : 6} className="gw-table__empty">
                       {loadError
                         || (tableRows.length === 0
                           ? 'No matching results to display yet.'
@@ -1071,9 +1072,7 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                         <span className={`gw-status-chip is-${status}`}>{TIMELINE_STATUS_LABEL[status]}</span>
                       </td>
                       <td className="is-numeric">{metres(row.oldVal)}</td>
-                      <td className="is-text" title={row.oldDesc}>{row.oldDesc || '—'}</td>
                       <td className="is-numeric">{metres(row.originalNewVal ?? row.newVal)}</td>
-                      <td className="is-text" title={row.newDesc}>{row.newDesc || '—'}</td>
                       <td className="is-numeric is-strong">{metres(row.offset)}</td>
                       <td className="is-numeric">{deviationPct === null ? '—' : `${deviationPct.toFixed(2)}%`}</td>
                       {hasConfidence && (

@@ -7,7 +7,13 @@ import {
   type ComparisonRow,
   type ConservationAudit,
 } from './utils/alignment';
-import { RUN_PAIR_COLUMN, runPairLabels, withRunPairColumn } from './utils/alignmentDisplay';
+import {
+  RUN_PAIR_COLUMN,
+  isHiddenAlignmentRow,
+  normalizeHiddenFeatures,
+  runPairLabels,
+  withRunPairColumn,
+} from './utils/alignmentDisplay';
 import { apiFetch } from './utils/api';
 import {
   applyInterventions,
@@ -91,6 +97,11 @@ interface IliComparisonPageProps {
   readOnly?: boolean;
   sharedInterventions?: unknown[];
   sharedSections?: unknown[];
+  /**
+   * Feature classes the author had switched off. Carried on the share so the
+   * recipient opens the report the author was reading, not a wider one.
+   */
+  sharedHiddenFeatures?: unknown[];
   shareAccess?: {
     id: string;
     accessToken: string;
@@ -103,6 +114,7 @@ export default function IliComparisonPage({
   readOnly = false,
   sharedInterventions,
   sharedSections,
+  sharedHiddenFeatures,
   shareAccess,
 }: IliComparisonPageProps = {}) {
   const sharedId = shareAccess?.id;
@@ -133,11 +145,24 @@ export default function IliComparisonPage({
   const [sections, setSections] = useState<unknown[]>([]);
   const [pipelineExportData, setPipelineExportData] = useState<Record<string, unknown>>({});
   const [pairFilter, setPairFilter] = useState<string | null>(null);
+  // The Feature rules step's saved decision. It is applied here rather than in
+  // the engine because it is a report-visibility choice: the run still matched
+  // and conserved every row, and turning a class back on must not require a
+  // re-run.
+  const [hiddenFeatures, setHiddenFeatures] = useState<string[]>([]);
   const data = useMemo(
     () => applyInterventions(baseData, interventions),
     [baseData, interventions],
   );
-  const includedData = useMemo(() => includedInterventionRows(data), [data]);
+  // `data` stays complete: interventions address rows by index into it, and a
+  // hidden row is still a row the reviewer may have excluded or reassigned.
+  const reportData = useMemo(
+    () => (hiddenFeatures.length === 0
+      ? data
+      : data.filter((row) => !isHiddenAlignmentRow(row, hiddenFeatures))),
+    [data, hiddenFeatures],
+  );
+  const includedData = useMemo(() => includedInterventionRows(reportData), [reportData]);
   const requestedSessionId = resolveAlignmentSessionId({
     sharedSessionId,
     search: location.search,
@@ -164,9 +189,11 @@ export default function IliComparisonPage({
   // filtering them out here is what used to leave that tab permanently empty;
   // every consumer that must not see them (charts, exports) filters for itself.
   const visibleRows = useMemo(() => {
-    const indexed = data.map((row, index) => ({ row, index }));
+    const indexed = data
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => !isHiddenAlignmentRow(row, hiddenFeatures));
     return pairFilter ? indexed.filter(({ row }) => row[RUN_PAIR_COLUMN] === pairFilter) : indexed;
-  }, [data, pairFilter]);
+  }, [data, hiddenFeatures, pairFilter]);
   const visibleData = useMemo(() => visibleRows.map(({ row }) => row), [visibleRows]);
   const toSourceIndex = (visibleIndex: number) => visibleRows[visibleIndex]?.index ?? visibleIndex;
 
@@ -207,6 +234,7 @@ export default function IliComparisonPage({
         setAudit(undefined);
         setAlignmentJobId('');
         setSections([]);
+        setHiddenFeatures([]);
         setPipelineExportData({});
         setPairFilter(null);
         setSelectedRowIdx(null);
@@ -232,6 +260,7 @@ export default function IliComparisonPage({
             config: {
               interventions: (sharedInterventions ?? []) as InterventionEvent[],
               matchingSections: sharedSections ?? [],
+              hiddenFeatures: sharedHiddenFeatures ?? [],
             },
           })
           : apiFetch<SessionResponse>(
@@ -251,6 +280,7 @@ export default function IliComparisonPage({
           ? session.config.matchingSections
           : session.config?.sections;
         setSections(Array.isArray(configuredSections) ? configuredSections : []);
+        setHiddenFeatures(normalizeHiddenFeatures(session.config?.hiddenFeatures));
         setPipelineExportData(createPipelineExportData(session.config || {}));
       } catch (caughtError) {
         if ((caughtError as Error).name !== 'AbortError') {
@@ -528,6 +558,23 @@ export default function IliComparisonPage({
               </Suspense>
             )}
 
+            {/* Said out loud. Without it the row counts simply read low, and a
+                reviewer looking for a valve has no way to tell that the Feature
+                rules step is why it is not there. */}
+            {hiddenFeatures.length > 0 && data.length > reportData.length && (
+              <div
+                className="flex flex-wrap items-center gap-2 px-3 py-2"
+                style={{ borderRadius: 'var(--syn-radius-control)', border: '1px solid var(--syn-line)', background: 'var(--syn-surface)' }}
+              >
+                <span className="syn-kicker" style={{ fontSize: '0.6rem' }}>Feature rules</span>
+                <span className="text-xs" style={{ color: 'var(--syn-text-muted, #64748b)' }}>
+                  {(data.length - reportData.length).toLocaleString()} row(s) hidden by the saved
+                  visibility rules: {hiddenFeatures.join(', ')}. They were matched and conserved by
+                  the run — change the rules in the alignment wizard to bring them back.
+                </span>
+              </div>
+            )}
+
             {/* Run pair filter */}
             {pairLabels.length > 1 && (
               <div className="flex flex-wrap items-center gap-2 px-3 py-2" style={{ borderRadius: 'var(--syn-radius-control)', border: '1px solid var(--syn-line)', background: 'var(--syn-surface)' }}>
@@ -602,6 +649,7 @@ export default function IliComparisonPage({
                 jobId={alignmentJobId}
                 interventions={interventions}
                 sections={sections}
+                hiddenFeatures={hiddenFeatures}
               />
             </div>
           </div>

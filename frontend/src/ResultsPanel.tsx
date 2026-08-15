@@ -107,6 +107,12 @@ interface ResultsPanelProps {
    * viewer, who cannot call the authenticated session endpoint, still sees them.
    */
   sections?: unknown[];
+  /**
+   * Feature classes the Feature rules step switched off. The rows are already
+   * gone from `data` by the time they get here; this is carried only so a
+   * published link freezes the same visibility the author was reading.
+   */
+  hiddenFeatures?: string[];
 }
 
 /** Parse a clock value to hours (0..12) regardless of format ("HH:MM" or Excel serial fraction). */
@@ -363,6 +369,7 @@ export default function ResultsPanel({
   jobId = '',
   interventions: interventionsProp,
   sections: sectionsProp,
+  hiddenFeatures = [],
 }: ResultsPanelProps) {
   const data = useMemo(() => {
     let flattened: any[] = [];
@@ -1056,6 +1063,7 @@ export default function ResultsPanel({
                 buildState={() => buildAlignmentShareState({
                   interventions: interventionsProp,
                   sections,
+                  hiddenFeatures,
                 })}
                 summary={summaryCounts ? [
                   { label: 'GW locked', value: summaryCounts.gwLocked },
