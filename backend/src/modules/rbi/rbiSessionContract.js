@@ -15,7 +15,7 @@
 
 const { MAX_SNAPSHOT_BYTES, sanitizeState } = require('../publicShares/publicShareContract');
 
-/** Draft while it is being authored; issued once §16.5 sign-off is recorded. */
+/** Draft while it is being authored; issued once it has been signed off. */
 const STATUSES = new Set(['draft', 'issued']);
 
 function isRecord(value) {
@@ -96,7 +96,7 @@ function parseCreateRbiSession(body) {
  * Re-saving an assessment that already has a session.
  *
  * The document is replaced wholesale, because a half-updated API 580 record is
- * not an API 580 record — §16.2 asks for one that can be recreated, and a
+ * not a record at all — API 580 asks for one that can be recreated, and a
  * document merged from two authoring sessions cannot be. What the session
  * belongs to — its organization, its FFS evidence, its pipeline — is fixed at
  * creation and an update cannot move it.

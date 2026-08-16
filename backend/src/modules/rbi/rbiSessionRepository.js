@@ -85,7 +85,7 @@ async function insertRbiSession(pool, {
 }
 
 /**
- * Saves the authored document in place, stamping who touched it last — §16.5
+ * Saves the authored document in place, stamping who touched it last. API 580
  * asks for the personnel behind an assessment to be recorded, and the last
  * editor is part of that record, not audit trivia.
  *

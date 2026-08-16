@@ -32,7 +32,7 @@ export const navigationGroups: NavigationGroup[] = [
     label: 'Assessment',
     items: [
       { label: 'FFS · B31G', path: '/ffs', description: 'Corrosion remaining-strength screening' },
-      { label: 'Risk-based inspection', path: '/rbi', description: 'API 580 assessment: planning, damage mechanism review, POF and COF, inspection plan, sign-off' },
+      { label: 'Risk-based inspection', path: '/rbi', description: 'Pipeline RBI screening: which sections carry the most risk, and when to inspect each' },
     ],
   },
   {
