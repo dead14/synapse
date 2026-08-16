@@ -1,138 +1,176 @@
 /**
- * Risk-based inspection, API 580.
+ * Risk-based inspection, API RP 580 4th edition.
  *
- * The likelihood side is read from a filed FFS assessment rather than asked for:
- * the metal loss has already been measured and assessed to B31G, and that is
- * stronger evidence than any workshop scoring. The engineer supplies the
- * consequence side, which nothing in an ILI file can know, and the page is
- * explicit about which half of the risk is measured and which is judgement.
+ * This is a document, not a calculator. §16.2 asks for an RBI assessment to be
+ * captured completely enough that "the assessment can be recreated or updated at
+ * a later time by others who were not involved in the original assessment", and
+ * recommends holding it in a database — so the page is a ten-step authoring
+ * workspace over a stored session, following the practice's own sequence: plan
+ * the programme, name the team, collect and validate the data, review the damage
+ * mechanisms, assess probability and consequence, determine risk against stated
+ * criteria, plan inspection and mitigation, set the reassessment triggers, and
+ * sign it off.
+ *
+ * The one thing the engineer is not asked for is the probability of metal loss.
+ * That has already been measured: the line was inspected, the loss was sized,
+ * and a B31G assessment of it was run and filed. The wizard reads that filed
+ * case and re-derives the risk from it on every render, so a corrected
+ * fitness-for-service assessment flows straight through to the ranking instead
+ * of leaving a stale number in a database looking authoritative.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { FiAlertTriangle, FiDownload, FiRefreshCw, FiShield } from 'react-icons/fi';
+import {
+  FiAlertTriangle,
+  FiChevronLeft,
+  FiChevronRight,
+  FiDownload,
+  FiFilePlus,
+  FiRefreshCw,
+  FiSave,
+  FiTrash2,
+} from 'react-icons/fi';
 
 import PageMeta from '../../components/common/PageMeta';
-import SynButton from '../../components/ui/SynButton';
-import { Callout, Panel } from '../../components/ffs/FfsPrimitives';
+import {
+  ActionBar,
+  Badge,
+  Button,
+  Callout,
+  Panel,
+  PanelBody,
+  PanelHeader,
+  Select,
+} from '../../components/ds';
 import { fetchFfsSession, listFfsSessions, type FfsSessionListItem } from '../../lib/ffs/sessions';
 import { screenResults } from '../../lib/ffs/screening';
 import type { RevivedFfsShareState } from '../../lib/ffs/shareState';
-import { buildRbiAssessment } from '../../lib/rbi/fromFfs';
+import { evaluateChecklist, unmetForStep } from '../../lib/rbi/checklist';
 import { exportRbiWorkbook } from '../../lib/rbi/exports';
-import { RISK_LEVELS, RISK_MATRIX } from '../../lib/rbi/api580';
-import type { RbiAssessment, RbiConsequenceInput, RiskLevel } from '../../lib/rbi/types';
+import { buildRbiAssessment } from '../../lib/rbi/fromFfs';
+import {
+  RBI_STEPS,
+  emptyRbiRecord,
+  seedRecordFromFfs,
+} from '../../lib/rbi/record';
+import {
+  createRbiSession,
+  deleteRbiSession,
+  fetchRbiSession,
+  listRbiSessions,
+  summarize,
+  updateRbiSession,
+  type RbiSessionListItem,
+} from '../../lib/rbi/sessions';
+import type { RbiAssessment, RbiRecord, RbiStepId } from '../../lib/rbi/types';
 
-const DEFAULT_CONSEQUENCE: Omit<RbiConsequenceInput, 'outerDiameterMm' | 'operatingPressureMpa'> = {
-  fluid: 'crude-oil',
-  population: 'rural',
-  environment: 'moderate',
-  businessImpact: 'moderate',
-};
+import StepCof from './steps/StepCof';
+import StepData from './steps/StepData';
+import StepDmr from './steps/StepDmr';
+import StepDocumentation from './steps/StepDocumentation';
+import StepEvergreen from './steps/StepEvergreen';
+import StepPlan from './steps/StepPlan';
+import StepPlanning from './steps/StepPlanning';
+import StepPof from './steps/StepPof';
+import StepRisk from './steps/StepRisk';
+import StepTeam from './steps/StepTeam';
 
-const FLUIDS: { value: RbiConsequenceInput['fluid']; label: string }[] = [
-  { value: 'sour-gas', label: 'Sour gas (H₂S)' },
-  { value: 'sweet-gas', label: 'Sweet gas' },
-  { value: 'crude-oil', label: 'Crude oil' },
-  { value: 'refined-product', label: 'Refined product' },
-  { value: 'produced-water', label: 'Produced water' },
-  { value: 'water', label: 'Water' },
-];
-
-const POPULATIONS: { value: RbiConsequenceInput['population']; label: string }[] = [
-  { value: 'remote', label: 'Remote / no dwellings' },
-  { value: 'rural', label: 'Rural' },
-  { value: 'suburban', label: 'Suburban' },
-  { value: 'urban', label: 'Urban / high occupancy' },
-];
-
-const ENVIRONMENTS: { value: RbiConsequenceInput['environment']; label: string }[] = [
-  { value: 'low', label: 'Low sensitivity' },
-  { value: 'moderate', label: 'Moderate' },
-  { value: 'sensitive', label: 'Sensitive (waterway, aquifer)' },
-  { value: 'protected', label: 'Protected area' },
-];
-
-const BUSINESS: { value: RbiConsequenceInput['businessImpact']; label: string }[] = [
-  { value: 'low', label: 'Low' },
-  { value: 'moderate', label: 'Moderate' },
-  { value: 'high', label: 'High' },
-  { value: 'critical', label: 'Critical / no redundancy' },
-];
-
-const LEVEL_CLASS: Record<RiskLevel, string> = {
-  Low: 'rbi-cell rbi-cell--low',
-  Medium: 'rbi-cell rbi-cell--medium',
-  'Medium high': 'rbi-cell rbi-cell--medium-high',
-  High: 'rbi-cell rbi-cell--high',
-};
-
-function formatMetres(value: number | null): string {
-  return value === null ? '—' : `${value.toFixed(0)} m`;
-}
+type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
 export default function RbiPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const requestedSessionId = useMemo(
-    () => new URLSearchParams(location.search).get('ffsSessionId'),
+    () => new URLSearchParams(location.search).get('session'),
     [location.search],
   );
 
-  const [sessions, setSessions] = useState<FfsSessionListItem[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState<string>(requestedSessionId ?? '');
-  const [caseState, setCaseState] = useState<RevivedFfsShareState | null>(null);
-  const [caseLoading, setCaseLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [consequence, setConsequence] = useState(DEFAULT_CONSEQUENCE);
+  /* Registry -------------------------------------------------------------- */
+  const [sessions, setSessions] = useState<RbiSessionListItem[]>([]);
+  const [ffsSessions, setFfsSessions] = useState<FfsSessionListItem[]>([]);
+  const [loadingRegistry, setLoadingRegistry] = useState(true);
 
-  useEffect(() => {
-    let cancelled = false;
-    setSessionsLoading(true);
-    listFfsSessions(100)
-      .then((items) => {
-        if (cancelled) return;
-        setSessions(items);
-        setSelectedId((current) => (
-          current && items.some((item) => item.id === current) ? current : items[0]?.id ?? ''
-        ));
-      })
-      .catch((caught: unknown) => {
-        if (!cancelled) {
-          setError(caught instanceof Error ? caught.message : 'Filed FFS assessments could not be loaded.');
-        }
-      })
-      .finally(() => { if (!cancelled) setSessionsLoading(false); });
-    return () => { cancelled = true; };
+  /* The open assessment --------------------------------------------------- */
+  const [sessionId, setSessionId] = useState<string | null>(requestedSessionId);
+  const [record, setRecord] = useState<RbiRecord | null>(null);
+  const [status, setStatus] = useState<'draft' | 'issued'>('draft');
+  const [step, setStep] = useState<RbiStepId>('planning');
+  const [ffsState, setFfsState] = useState<RevivedFfsShareState | null>(null);
+  const [loadingCase, setLoadingCase] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<SaveState>('idle');
+
+  /**
+   * Guards the seeding effect. Seeding is idempotent but not free — it rewrites
+   * the record — and running it on every render of an attached case would fight
+   * the engineer's own edits to the fields it fills.
+   */
+  const seededFor = useRef<string | null>(null);
+
+  const refreshRegistry = useCallback(async () => {
+    setLoadingRegistry(true);
+    try {
+      const [rbi, ffs] = await Promise.all([listRbiSessions(50), listFfsSessions(100)]);
+      setSessions(rbi);
+      setFfsSessions(ffs);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The assessment register could not be loaded.');
+    } finally {
+      setLoadingRegistry(false);
+    }
   }, []);
 
+  useEffect(() => { void refreshRegistry(); }, [refreshRegistry]);
+
+  /* Open a stored assessment ---------------------------------------------- */
   useEffect(() => {
-    if (!selectedId) {
-      setCaseState(null);
+    if (!sessionId) return;
+    let cancelled = false;
+    setError(null);
+    fetchRbiSession(sessionId)
+      .then(({ session, record: stored }) => {
+        if (cancelled) return;
+        setRecord(stored);
+        setStatus(session.status);
+        setStep(session.currentStep ?? 'planning');
+        seededFor.current = null;
+      })
+      .catch((caught: unknown) => {
+        if (cancelled) return;
+        setError(caught instanceof Error ? caught.message : 'That assessment could not be opened.');
+      });
+    return () => { cancelled = true; };
+  }, [sessionId]);
+
+  /* Read the cited FFS case ------------------------------------------------ */
+  const ffsSessionId = record?.ffsSessionId ?? null;
+
+  useEffect(() => {
+    if (!ffsSessionId) {
+      setFfsState(null);
       return;
     }
     let cancelled = false;
-    setCaseLoading(true);
-    setError(null);
-    fetchFfsSession(selectedId)
+    setLoadingCase(true);
+    fetchFfsSession(ffsSessionId)
       .then((loaded) => {
         if (cancelled) return;
         if (!loaded) {
-          setCaseState(null);
+          setFfsState(null);
           setError('That FFS assessment carries no readable result, so no risk can be derived from it.');
           return;
         }
-        setCaseState(loaded.state);
+        setFfsState(loaded.state);
       })
       .catch((caught: unknown) => {
         if (cancelled) return;
-        setCaseState(null);
-        setError(caught instanceof Error ? caught.message : 'The FFS assessment could not be loaded.');
+        setFfsState(null);
+        setError(caught instanceof Error ? caught.message : 'The cited FFS assessment could not be read.');
       })
-      .finally(() => { if (!cancelled) setCaseLoading(false); });
+      .finally(() => { if (!cancelled) setLoadingCase(false); });
     return () => { cancelled = true; };
-  }, [selectedId]);
+  }, [ffsSessionId]);
 
   /**
    * The same screening the FFS workspace applies, from the same stored case.
@@ -141,355 +179,417 @@ export default function RbiPage() {
    * ranking and the assessment it cites from drifting apart.
    */
   const screened = useMemo(
-    () => (caseState ? screenResults(caseState.results, caseState.config, caseState.screening) : []),
-    [caseState],
+    () => (ffsState ? screenResults(ffsState.results, ffsState.config, ffsState.screening) : []),
+    [ffsState],
   );
 
-  const assessment: RbiAssessment | null = useMemo(() => {
-    if (!caseState || screened.length === 0) return null;
-    return buildRbiAssessment({
-      ffsSessionId: selectedId || null,
-      state: caseState,
-      screened,
-      consequence: {
-        ...consequence,
-        // Line size and pressure are properties of the line the assessment was
-        // run on, so they are read from the case rather than typed again.
-        outerDiameterMm: screened[0]?.nominal.od ?? 0,
-        operatingPressureMpa: screened[0]?.nominal.p0 ?? 0,
-      },
-    });
-  }, [caseState, screened, consequence, selectedId]);
+  // Fill in what the filed case already knows, once per attachment.
+  useEffect(() => {
+    if (!record || !ffsState || !ffsSessionId) return;
+    if (seededFor.current === ffsSessionId) return;
+    seededFor.current = ffsSessionId;
+    setRecord((current) => (current
+      ? seedRecordFromFfs(current, { ffsSessionId, state: ffsState, screened })
+      : current));
+  }, [record, ffsState, ffsSessionId, screened]);
 
-  const selectSession = useCallback((id: string) => {
-    setSelectedId(id);
-    navigate(id ? `/rbi?ffsSessionId=${encodeURIComponent(id)}` : '/rbi', { replace: true });
+  const assessment: RbiAssessment | null = useMemo(() => {
+    if (!record || !ffsState || screened.length === 0) return null;
+    return buildRbiAssessment({ record, state: ffsState, screened });
+  }, [record, ffsState, screened]);
+
+  const checklist = useMemo(
+    () => evaluateChecklist(record ?? emptyRbiRecord()),
+    [record],
+  );
+
+  /* Persistence ------------------------------------------------------------ */
+  const save = useCallback(async (
+    next: RbiRecord,
+    nextStatus: 'draft' | 'issued',
+    nextStep: RbiStepId,
+  ) => {
+    setSaveState('saving');
+    const payload = {
+      record: next,
+      status: nextStatus,
+      currentStep: nextStep,
+      summary: summarize(assessment, checklist),
+    };
+    try {
+      if (sessionId) {
+        await updateRbiSession(sessionId, payload);
+      } else {
+        const created = await createRbiSession(payload);
+        setSessionId(created);
+        navigate(`/rbi?session=${encodeURIComponent(created)}`, { replace: true });
+      }
+      setSaveState('saved');
+      void refreshRegistry();
+    } catch (caught) {
+      setSaveState('error');
+      setError(caught instanceof Error ? caught.message : 'The assessment could not be saved.');
+    }
+  }, [assessment, checklist, navigate, refreshRegistry, sessionId]);
+
+  const update = useCallback((mutate: (current: RbiRecord) => RbiRecord) => {
+    setRecord((current) => (current ? mutate(current) : current));
+    setSaveState('idle');
+  }, []);
+
+  const startNew = useCallback(() => {
+    setSessionId(null);
+    setRecord(emptyRbiRecord());
+    setStatus('draft');
+    setStep('planning');
+    setFfsState(null);
+    seededFor.current = null;
+    setError(null);
+    setSaveState('idle');
+    navigate('/rbi', { replace: true });
   }, [navigate]);
+
+  const openSession = useCallback((id: string) => {
+    setSessionId(id);
+    setSaveState('idle');
+    navigate(`/rbi?session=${encodeURIComponent(id)}`, { replace: true });
+  }, [navigate]);
+
+  const removeSession = useCallback(async (id: string) => {
+    try {
+      await deleteRbiSession(id);
+      if (id === sessionId) startNew();
+      void refreshRegistry();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'That assessment could not be deleted.');
+    }
+  }, [refreshRegistry, sessionId, startNew]);
+
+  /* Navigation ------------------------------------------------------------- */
+  const stepIndex = RBI_STEPS.findIndex((item) => item.id === step);
+  const goTo = useCallback((next: RbiStepId) => {
+    setStep(next);
+    if (record) void save(record, status, next);
+  }, [record, save, status]);
+
+  const attachFfs = useCallback((id: string) => {
+    seededFor.current = null;
+    update((current) => ({ ...current, ffsSessionId: id || null }));
+  }, [update]);
+
+  /* Render ----------------------------------------------------------------- */
+  if (!record) {
+    return (
+      <div className="syn-page syn-ui-kit">
+        <PageMeta
+          title="Risk-based inspection · Synapse"
+          description="API 580 risk assessment, from planning through to sign-off"
+        />
+        <Header saveState="idle" />
+        {error && <Callout tone="danger" icon={<FiAlertTriangle />} title="Something went wrong">{error}</Callout>}
+        <Registry
+          sessions={sessions}
+          loading={loadingRegistry}
+          activeId={null}
+          onOpen={openSession}
+          onNew={startNew}
+          onDelete={removeSession}
+          expanded
+        />
+      </div>
+    );
+  }
+
+  const stepProps = { record, update, assessment, checklist };
 
   return (
     <div className="syn-page syn-ui-kit">
-      <PageMeta title="Risk-based inspection · Synapse" description="API 580 risk ranking from filed FFS assessments" />
-
-      <div className="syn-page__header">
-        <div className="min-w-0">
-          <p className="syn-eyebrow">Assessment · API 580</p>
-          <h1 className="syn-page__title">Risk-based inspection</h1>
-          <p className="syn-page__subtitle">
-            Likelihood from the metal loss a filed FFS assessment already measured; consequence from what the
-            line carries and where it runs. The plan follows from where the two meet.
-          </p>
-        </div>
-        {assessment && (
-          <SynButton variant="lime" size="sm" onClick={() => exportRbiWorkbook(assessment)}>
-            <span className="inline-flex items-center gap-2"><FiDownload /> Export Excel</span>
-          </SynButton>
-        )}
-      </div>
+      <PageMeta
+        title="Risk-based inspection · Synapse"
+        description="API 580 risk assessment, from planning through to sign-off"
+      />
+      <Header saveState={saveState} />
 
       {error && (
-        <Callout tone="warn">
-          <span className="inline-flex items-start gap-2">
-            <FiAlertTriangle className="mt-0.5 shrink-0" aria-hidden="true" /><span>{error}</span>
-          </span>
-        </Callout>
+        <Callout tone="danger" icon={<FiAlertTriangle />} title="Something went wrong">{error}</Callout>
       )}
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
-        {/* Inputs */}
-        <div className="space-y-4">
+      <div className="rbi-shell" style={{ marginTop: '1rem' }}>
+        <div className="rbi-shell__rail">
           <Panel>
-            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Source assessment</p>
-            <label className="mt-2.5 block text-xs font-semibold text-slate-500">
-              Filed FFS assessment
-              <select
-                value={selectedId}
-                onChange={(event) => selectSession(event.target.value)}
-                disabled={sessionsLoading || caseLoading}
-                className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-              >
-                <option value="">Select a filed assessment</option>
-                {sessions.map((session) => (
-                  <option key={session.id} value={session.id}>
-                    {session.label} · {session.featureCount.toLocaleString()} features
-                  </option>
-                ))}
-              </select>
-            </label>
-            {sessionsLoading && <p className="mt-2 text-xs text-slate-500">Loading filed assessments…</p>}
-            {!sessionsLoading && sessions.length === 0 && (
-              <p className="mt-2 text-xs text-amber-600">
-                No FFS assessment has been filed yet. Run one from the{' '}
-                <Link to="/alignment-history" className="font-semibold text-indigo-600 hover:underline">
-                  ILI alignment registry
-                </Link>{' '}
-                first — API 580 needs measured damage to rank, and this product will not invent it.
-              </p>
-            )}
-            {caseLoading && (
-              <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-slate-500">
-                <FiRefreshCw className="animate-spin" aria-hidden="true" /> Reading the filed assessment…
-              </p>
-            )}
-            {assessment && (
-              <p className="mt-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-                {assessment.lineName} · {assessment.totals.features.toLocaleString()} assessed features ·
-                inspection dated {assessment.assessmentDateIso}
-                {assessment.totals.unassessed > 0
-                  && ` · ${assessment.totals.unassessed.toLocaleString()} anomalies carried no B31G result`}
-              </p>
-            )}
-          </Panel>
-
-          <Panel>
-            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Consequence of failure</p>
-            <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-              Entered, not measured. An inspection run knows the metal loss; it does not know what the line
-              carries or who lives beside it. Every value here is reported in the assessment as a stated input.
-            </p>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <label className="block text-xs font-semibold text-slate-500">
-                Fluid
-                <select
-                  value={consequence.fluid}
-                  onChange={(event) => setConsequence((previous) => ({
-                    ...previous, fluid: event.target.value as RbiConsequenceInput['fluid'],
-                  }))}
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            <PanelHeader
+              eyebrow="Assessment"
+              title={record.title.trim() || 'Untitled assessment'}
+              subtitle={status === 'issued' ? 'Issued' : 'Draft'}
+            />
+            <PanelBody>
+              <label className="ds-field">
+                <span className="ds-field__label">Evidence — filed FFS assessment</span>
+                <Select
+                  value={record.ffsSessionId ?? ''}
+                  onChange={(event) => attachFfs(event.target.value)}
                 >
-                  {FLUIDS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
+                  <option value="">Not attached</option>
+                  {ffsSessions.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label} · {item.featureCount.toLocaleString()} features
+                    </option>
                   ))}
-                </select>
-              </label>
-              <label className="block text-xs font-semibold text-slate-500">
-                Population exposure
-                <select
-                  value={consequence.population}
-                  onChange={(event) => setConsequence((previous) => ({
-                    ...previous, population: event.target.value as RbiConsequenceInput['population'],
-                  }))}
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                >
-                  {POPULATIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-xs font-semibold text-slate-500">
-                Environment
-                <select
-                  value={consequence.environment}
-                  onChange={(event) => setConsequence((previous) => ({
-                    ...previous, environment: event.target.value as RbiConsequenceInput['environment'],
-                  }))}
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                >
-                  {ENVIRONMENTS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-xs font-semibold text-slate-500">
-                Business impact
-                <select
-                  value={consequence.businessImpact}
-                  onChange={(event) => setConsequence((previous) => ({
-                    ...previous, businessImpact: event.target.value as RbiConsequenceInput['businessImpact'],
-                  }))}
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                >
-                  {BUSINESS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          </Panel>
-
-          {assessment && (
-            <Panel>
-              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Method and limits</p>
-              <p className="mt-1 text-[11px] font-semibold text-slate-700 dark:text-slate-200">
-                {assessment.provenance.edition} · {assessment.provenance.approach}
-              </p>
-              <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-                {assessment.provenance.rules.map((rule) => <li key={rule}>{rule}</li>)}
-              </ul>
-              <p className="mt-3 text-[11px] font-semibold text-slate-700 dark:text-slate-200">What this is not</p>
-              <ul className="mt-1 list-disc space-y-1 pl-4 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-                {assessment.provenance.limitations.map((limit) => <li key={limit}>{limit}</li>)}
-              </ul>
-            </Panel>
-          )}
-        </div>
-
-        {/* Results */}
-        <div className="space-y-4">
-          {!assessment && !caseLoading && (
-            <Callout tone="info">
-              <span className="inline-flex items-start gap-2">
-                <FiShield className="mt-0.5 shrink-0" aria-hidden="true" />
-                <span>
-                  Select a filed FFS assessment. Its measured metal loss becomes the likelihood side of the
-                  risk; nothing here is scored from opinion.
+                </Select>
+                <span className="ds-field__hint">
+                  The measured half of the probability. §16.2 e asks the assessment to cite the inputs it
+                  rests on, and this is the one that cannot be typed.
                 </span>
-              </span>
-            </Callout>
-          )}
+              </label>
 
-          {assessment && (
-            <>
-              <Panel>
-                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Risk matrix</p>
-                <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-                  Likelihood down, consequence across. The number in a cell is how many units of this line
-                  landed there.
+              {loadingCase && (
+                <p className="rbi-check__hint">
+                  <FiRefreshCw className="animate-spin" aria-hidden="true" /> Reading the filed assessment…
                 </p>
-                <div className="mt-3 overflow-x-auto">
-                  <table className="rbi-matrix">
-                    <caption className="sr-only">API 580 five by five risk matrix</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col" className="rbi-matrix__corner">L \ C</th>
-                        {[1, 2, 3, 4, 5].map((consequenceCategory) => (
-                          <th key={consequenceCategory} scope="col">{consequenceCategory}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[5, 4, 3, 2, 1].map((likelihood) => (
-                        <tr key={likelihood}>
-                          <th scope="row">{likelihood}</th>
-                          {[1, 2, 3, 4, 5].map((consequenceCategory) => {
-                            const level = RISK_MATRIX[likelihood - 1][consequenceCategory - 1];
-                            const occupants = assessment.units.filter((unit) => (
-                              unit.likelihood.category === likelihood
-                              && unit.consequence.category === consequenceCategory
-                            )).length;
-                            return (
-                              <td
-                                key={consequenceCategory}
-                                className={LEVEL_CLASS[level]}
-                                title={`Likelihood ${likelihood}, consequence ${consequenceCategory}: ${level}`}
-                              >
-                                {occupants > 0 ? occupants : ''}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-slate-500 dark:text-slate-400">
-                  {RISK_LEVELS.map((level) => (
-                    <span key={level} className="inline-flex items-center gap-1.5">
-                      <span className={`${LEVEL_CLASS[level]} rbi-swatch`} aria-hidden="true" />
-                      {level} · {assessment.totals.byLevel[level]}
-                    </span>
-                  ))}
-                </div>
-              </Panel>
+              )}
 
-              <Panel padded={false}>
-                <div className="border-b border-slate-200 px-5 py-3.5 dark:border-slate-700">
-                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
-                    Inspection plan by unit
-                  </p>
-                  <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-                    Units are the sections the alignment named, so the ranking divides the line the way the
-                    assessment behind it already did. Highest risk first.
-                  </p>
-                </div>
-                <div className="max-h-[32rem] overflow-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead className="sticky top-0 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-900/70">
-                      <tr>
-                        <th className="px-4 py-2">Unit</th>
-                        <th className="px-2 py-2 text-right">L</th>
-                        <th className="px-2 py-2 text-right">C</th>
-                        <th className="px-2 py-2">Risk</th>
-                        <th className="px-2 py-2 text-right">Interval</th>
-                        <th className="px-2 py-2">Next inspection</th>
-                        <th className="px-4 py-2">Driver</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {assessment.units.map((unit) => {
-                        const erf = unit.likelihood.drivers.find((driver) => driver.id === 'erf');
-                        const life = unit.likelihood.drivers.find((driver) => driver.id === 'remaining-life');
-                        return (
-                          <tr key={unit.id}>
-                            <td className="px-4 py-2">
-                              <span className="font-semibold text-slate-700 dark:text-slate-200">{unit.label}</span>
-                              <span className="block text-[10px] text-slate-400">
-                                {formatMetres(unit.fromM)} – {formatMetres(unit.toM)} ·{' '}
-                                {unit.featureCount.toLocaleString()} assessed
-                                {unit.likelihood.unassessedCount > 0
-                                  && ` · ${unit.likelihood.unassessedCount.toLocaleString()} unassessed`}
-                              </span>
-                            </td>
-                            <td className="px-2 py-2 text-right tabular-nums">{unit.likelihood.category}</td>
-                            <td className="px-2 py-2 text-right tabular-nums">{unit.consequence.category}</td>
-                            <td className="px-2 py-2">
-                              <span className={`${LEVEL_CLASS[unit.riskLevel]} rbi-tag`}>{unit.riskLevel}</span>
-                            </td>
-                            <td className="px-2 py-2 text-right tabular-nums">
-                              {unit.inspection.intervalYears === null
-                                ? '—'
-                                : `${unit.inspection.intervalYears} y`}
-                            </td>
-                            <td className="px-2 py-2">
-                              <span className="tabular-nums">{unit.inspection.dueDateIso ?? '—'}</span>
-                              <span className="block text-[10px] text-slate-400">
-                                {unit.inspection.basis === 'half-remaining-life'
-                                  ? 'Half remaining life'
-                                  : unit.inspection.basis === 'risk-target-interval'
-                                    ? 'Risk-based target'
-                                    : unit.inspection.basis === 'immediate-action'
-                                      ? 'Immediate action'
-                                      : 'No basis'}
-                              </span>
-                            </td>
-                            <td className="px-4 py-2 text-[11px] text-slate-500 dark:text-slate-400">
-                              ERF {erf?.value ?? '—'} · life {life?.value ?? '—'} y
-                              {unit.likelihood.growthAssumed && (
-                                <span className="ml-1.5 rounded border border-amber-300 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-amber-600 dark:border-amber-700 dark:text-amber-400">
-                                  assumed growth
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </Panel>
+              {!loadingCase && record.ffsSessionId && !ffsState && (
+                <Callout tone="warning" title="Evidence unavailable">
+                  The cited FFS assessment could not be read. The document is still editable, but nothing can
+                  be ranked until it is restored or another one is attached.
+                </Callout>
+              )}
 
-              <Panel>
-                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Recommendations</p>
-                <ul className="mt-2 space-y-2.5">
-                  {assessment.units.map((unit) => (
-                    <li key={unit.id} className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
-                      <span className="font-semibold text-slate-800 dark:text-slate-100">{unit.label}</span>
-                      {' — '}{unit.inspection.recommendation}
-                      {unit.governingFeature?.featureId && (
-                        <span className="block text-[10px] text-slate-400">
-                          Governed by {unit.governingFeature.featureId} at{' '}
-                          {formatMetres(unit.governingFeature.ldM)}
-                          {unit.governingFeature.erf !== null
-                            && ` · ERF ${unit.governingFeature.erf.toFixed(3)}`}
+              {ffsSessions.length === 0 && !loadingRegistry && (
+                <Callout tone="warning" title="No FFS assessment has been filed">
+                  Run one from the{' '}
+                  <Link to="/alignment-history">ILI alignment registry</Link>{' '}
+                  first. API 580 needs measured damage to rank, and this product will not invent it.
+                </Callout>
+              )}
+
+              {assessment && (
+                <p className="rbi-check__hint" style={{ marginTop: '0.5rem' }}>
+                  {assessment.lineName} · {assessment.totals.features.toLocaleString()} assessed features ·
+                  inspection dated {assessment.assessmentDateIso}
+                  {assessment.totals.unassessed > 0
+                    && ` · ${assessment.totals.unassessed.toLocaleString()} anomalies carried no B31G result`}
+                </p>
+              )}
+
+              <nav className="rbi-stepper" aria-label="API 580 assessment steps" style={{ marginTop: '0.75rem' }}>
+                {RBI_STEPS.map((item, index) => {
+                  const unmet = unmetForStep(checklist, item.id);
+                  const blocking = unmet.some((entry) => entry.level === 'shall');
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`rbi-step${item.id === step ? ' is-active' : ''}${unmet.length === 0 ? ' is-complete' : ''}`}
+                      aria-current={item.id === step ? 'step' : undefined}
+                      onClick={() => goTo(item.id)}
+                    >
+                      <span className="rbi-step__index">{index + 1}</span>
+                      <span>
+                        <span className="rbi-step__label">{item.label}</span>
+                        <span className="rbi-step__section">{item.section}</span>
+                      </span>
+                      {unmet.length > 0 && (
+                        <span
+                          className={`rbi-step__gap${blocking ? ' rbi-step__gap--blocking' : ''}`}
+                          title={`${unmet.length} outstanding item(s)`}
+                        >
+                          {unmet.length}
                         </span>
                       )}
-                    </li>
-                  ))}
-                </ul>
-              </Panel>
-            </>
+                    </button>
+                  );
+                })}
+              </nav>
+            </PanelBody>
+          </Panel>
+
+          <Registry
+            sessions={sessions}
+            loading={loadingRegistry}
+            activeId={sessionId}
+            onOpen={openSession}
+            onNew={startNew}
+            onDelete={removeSession}
+          />
+        </div>
+
+        <div className="rbi-shell__main">
+          <StepHeading stepIndex={stepIndex} />
+
+          {step === 'planning' && <StepPlanning {...stepProps} />}
+          {step === 'team' && <StepTeam {...stepProps} />}
+          {step === 'data' && <StepData {...stepProps} />}
+          {step === 'dmr' && <StepDmr {...stepProps} />}
+          {step === 'pof' && <StepPof {...stepProps} />}
+          {step === 'cof' && <StepCof {...stepProps} />}
+          {step === 'risk' && <StepRisk {...stepProps} />}
+          {step === 'plan' && <StepPlan {...stepProps} />}
+          {step === 'evergreen' && <StepEvergreen {...stepProps} />}
+          {step === 'documentation' && (
+            <StepDocumentation
+              {...stepProps}
+              status={status}
+              onGoToStep={goTo}
+              onExport={() => { if (assessment) exportRbiWorkbook(assessment); }}
+              onIssue={() => { setStatus('issued'); void save(record, 'issued', step); }}
+              onWithdraw={() => { setStatus('draft'); void save(record, 'draft', step); }}
+            />
           )}
+
+          <ActionBar
+            back={stepIndex > 0 && (
+              <Button
+                variant="secondary"
+                startIcon={<FiChevronLeft />}
+                onClick={() => goTo(RBI_STEPS[stepIndex - 1].id)}
+              >
+                {RBI_STEPS[stepIndex - 1].label}
+              </Button>
+            )}
+            center={(
+              <div className="ds-row">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  startIcon={<FiSave />}
+                  onClick={() => void save(record, status, step)}
+                >
+                  {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : 'Save'}
+                </Button>
+                {assessment && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    startIcon={<FiDownload />}
+                    onClick={() => exportRbiWorkbook(assessment)}
+                  >
+                    Export
+                  </Button>
+                )}
+              </div>
+            )}
+            next={stepIndex < RBI_STEPS.length - 1 && (
+              <Button
+                variant="primary"
+                endIcon={<FiChevronRight />}
+                onClick={() => goTo(RBI_STEPS[stepIndex + 1].id)}
+              >
+                {RBI_STEPS[stepIndex + 1].label}
+              </Button>
+            )}
+            help={checklist.blockers.length > 0
+              ? `${checklist.blockers.length} Appendix A shall-item(s) still outstanding across the document.`
+              : 'Every Appendix A shall-item is satisfied.'}
+          />
         </div>
       </div>
     </div>
+  );
+}
+
+function Header({ saveState }: { saveState: SaveState }) {
+  return (
+    <div className="syn-page__header">
+      <div className="min-w-0">
+        <p className="syn-eyebrow">Assessment · API RP 580 (4th edition, 2021)</p>
+        <h1 className="syn-page__title">Risk-based inspection</h1>
+        <p className="syn-page__subtitle">
+          A controlled document, authored through the practice's own sequence. Probability from the metal loss
+          a filed FFS assessment already measured and from the damage mechanisms it cannot see; consequence
+          from what the line carries and where it runs.
+        </p>
+      </div>
+      {saveState === 'error' && <Badge tone="danger" pill>Not saved</Badge>}
+      {saveState === 'saved' && <Badge tone="success" pill>Saved</Badge>}
+    </div>
+  );
+}
+
+function StepHeading({ stepIndex }: { stepIndex: number }) {
+  const item = RBI_STEPS[Math.max(0, stepIndex)];
+  return (
+    <div>
+      <p className="ds-eyebrow">
+        Step {Math.max(0, stepIndex) + 1} of {RBI_STEPS.length} · API 580 {item.section}
+      </p>
+      <h2 className="syn-page__title" style={{ fontSize: 'var(--ds-t-lg)' }}>{item.label}</h2>
+      <p className="rbi-check__hint">{item.blurb}</p>
+    </div>
+  );
+}
+
+function Registry({
+  sessions,
+  loading,
+  activeId,
+  onOpen,
+  onNew,
+  onDelete,
+  expanded,
+}: {
+  sessions: RbiSessionListItem[];
+  loading: boolean;
+  activeId: string | null;
+  onOpen: (id: string) => void;
+  onNew: () => void;
+  onDelete: (id: string) => void;
+  expanded?: boolean;
+}) {
+  return (
+    <Panel style={expanded ? { marginTop: '1rem' } : undefined}>
+      <PanelHeader
+        eyebrow="§16.2"
+        title="Assessment register"
+        subtitle="Every RBI assessment this organization holds, newest worked-on first."
+        actions={(
+          <Button variant="primary" size="sm" startIcon={<FiFilePlus />} onClick={onNew}>
+            New assessment
+          </Button>
+        )}
+      />
+      <PanelBody>
+        {loading && <p className="rbi-check__hint">Loading the register…</p>}
+
+        {!loading && sessions.length === 0 && (
+          <p className="rbi-empty">
+            No assessments yet. §16.2 asks for the record to be held somewhere it can be retrieved and
+            stewarded — start one and it will be here.
+          </p>
+        )}
+
+        <div className="rbi-registry">
+          {sessions.map((session) => (
+            <div key={session.id} className={`rbi-registry__row${session.id === activeId ? ' is-active' : ''}`}>
+              <button
+                type="button"
+                onClick={() => onOpen(session.id)}
+                style={{ all: 'unset', cursor: 'pointer', minWidth: 0 }}
+              >
+                <span className="rbi-registry__title">{session.label}</span>
+                <span className="rbi-registry__meta">
+                  {session.status === 'issued' ? 'Issued' : 'Draft'}
+                  {session.ffsLabel ? ` · ${session.ffsLabel}` : ' · no evidence attached'}
+                  {typeof session.summary.units === 'number' && ` · ${session.summary.units} sections`}
+                  {typeof session.summary.unacceptable === 'number' && session.summary.unacceptable > 0
+                    && ` · ${session.summary.unacceptable} unacceptable`}
+                  {typeof session.summary.shallMet === 'number'
+                    && ` · ${session.summary.shallMet}/${session.summary.shallTotal} shall-items`}
+                </span>
+              </button>
+              <Button
+                variant="ghost"
+                size="xs"
+                iconOnly
+                aria-label={`Delete ${session.label}`}
+                onClick={() => onDelete(session.id)}
+              >
+                <FiTrash2 />
+              </Button>
+            </div>
+          ))}
+        </div>
+      </PanelBody>
+    </Panel>
   );
 }

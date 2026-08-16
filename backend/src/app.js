@@ -138,6 +138,7 @@ const userRoutes = require('./modules/users/userRoutes');
 const organizationRoutes = require('./modules/organizations/organizationRoutes');
 const dashboardRoutes = require('./modules/dashboard/dashboardRoutes');
 const ffsRoutes = require('./modules/ffs/ffsRoutes');
+const rbiRoutes = require('./modules/rbi/rbiRoutes');
 const alignmentRoutes = require('./modules/alignment/alignmentRoutes');
 const inspectionRoutes = require('./modules/inspections/inspectionRoutes');
 const integrityRoutes = require('./modules/integrity/integrityRoutes');
@@ -161,6 +162,7 @@ app.use('/api/direct-assessments', directAssessmentRoutes);
 app.use('/api/field-measurements', fieldMeasurementRoutes);
 app.use('/api/public-shares', publicShareRoutes);
 app.use('/api', ffsRoutes); // for /api/download-template
+app.use('/api', rbiRoutes);
 app.use('/api', alignmentRoutes); // for /api/upload-csv and /api/run
 
 app.use('/api', (req, res) => {
