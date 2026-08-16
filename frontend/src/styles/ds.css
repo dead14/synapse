@@ -1626,10 +1626,303 @@
   line-height: 1.5;
 }
 
+/* ── Risk-based inspection, API 580 ──────────────────────────────────────────
+   Moved here out of synapse-tokens.css, where it was written against the older
+   --syn-* skin. One token set, one design language: a "high" risk cell is the
+   same red as a failed assessment elsewhere in the product, not a decorative
+   one of its own. Colour is never the only signal — every matrix cell carries
+   its level in a title attribute, and every risk tag carries the word.
+
+   The wizard below is a ten-step controlled document, so its rhythm is quieter
+   than a dashboard's: one column of panels, generous field spacing, and a rail
+   that shows how much of the practice is still unanswered. */
+
+/* Shell -------------------------------------------------------------------- */
+.rbi-shell {
+  display: grid;
+  gap: var(--ds-gap);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+@media (min-width: 68rem) {
+  .rbi-shell { grid-template-columns: 17rem minmax(0, 1fr); }
+  .rbi-shell__rail { position: sticky; top: 1rem; }
+}
+
+.rbi-shell__main { display: flex; flex-direction: column; gap: var(--ds-gap); min-width: 0; }
+
+/* Stepper ------------------------------------------------------------------ */
+.rbi-stepper { display: flex; flex-direction: column; gap: 0.125rem; }
+
+.rbi-step {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: start;
+  width: 100%;
+  padding: 0.4375rem 0.5rem;
+  border: 0;
+  border-radius: var(--ds-r-sm);
+  background: transparent;
+  color: var(--ds-ink-soft);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--ds-dur) var(--ds-ease);
+}
+
+.rbi-step:hover { background: var(--ds-primary-softer); }
+.rbi-step.is-active { background: var(--ds-primary-soft); color: var(--ds-primary-ink); }
+
+.rbi-step__index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--ds-r-pill);
+  background: var(--ds-surface-inset);
+  color: var(--ds-muted);
+  font-family: var(--ds-font-data);
+  font-size: var(--ds-t-micro);
+  font-weight: 700;
+}
+
+.rbi-step.is-active .rbi-step__index { background: var(--ds-primary); color: var(--ds-on-primary); }
+.rbi-step.is-complete .rbi-step__index { background: var(--ds-success-soft); color: var(--ds-success); }
+
+.rbi-step__label { display: block; font-size: var(--ds-t-sm); font-weight: 600; line-height: 1.3; }
+.rbi-step__section { display: block; color: var(--ds-muted); font-size: var(--ds-t-micro); }
+
+.rbi-step__gap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.125rem;
+  height: 1.125rem;
+  padding: 0 0.25rem;
+  border-radius: var(--ds-r-pill);
+  background: var(--ds-warning-soft);
+  color: var(--ds-warning);
+  font-family: var(--ds-font-data);
+  font-size: var(--ds-t-micro);
+  font-weight: 700;
+}
+
+.rbi-step__gap--blocking { background: var(--ds-danger-soft); color: var(--ds-danger); }
+
+/* Field layout ------------------------------------------------------------- */
+.rbi-grid { display: grid; gap: 0.875rem; grid-template-columns: minmax(0, 1fr); }
+
+@media (min-width: 44rem) {
+  .rbi-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rbi-grid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .rbi-grid__full { grid-column: 1 / -1; }
+}
+
+.rbi-grid + .rbi-grid { margin-top: 0.875rem; }
+
+.rbi-unit { color: var(--ds-faint); font-weight: 500; }
+
+/* Checkboxes --------------------------------------------------------------- */
+.rbi-checkgrid { display: grid; gap: 0.375rem; grid-template-columns: minmax(0, 1fr); margin-top: 0.25rem; }
+
+@media (min-width: 44rem) {
+  .rbi-checkgrid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rbi-checkgrid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+.rbi-check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: start;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--ds-r-sm);
+  cursor: pointer;
+}
+
+.rbi-check:hover { background: var(--ds-surface-sunken); }
+.rbi-check input { margin-top: 0.1875rem; accent-color: var(--ds-primary); }
+.rbi-check__label { display: block; color: var(--ds-ink); font-size: var(--ds-t-sm); line-height: 1.35; }
+.rbi-check__hint { display: block; color: var(--ds-muted); font-size: var(--ds-t-xs); line-height: 1.4; }
+
+.rbi-considered {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.5rem;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r-md);
+  background: var(--ds-surface-sunken);
+}
+
+/* Repeatable rows ---------------------------------------------------------- */
+.rbi-row-card {
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r-md);
+  background: var(--ds-surface);
+  overflow: hidden;
+}
+
+.rbi-row-card + .rbi-row-card { margin-top: 0.625rem; }
+
+.rbi-row-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4375rem 0.625rem;
+  border-bottom: 1px solid var(--ds-line);
+  background: var(--ds-surface-sunken);
+}
+
+.rbi-row-card__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--ds-ink);
+  font-size: var(--ds-t-sm);
+  font-weight: 650;
+}
+
+.rbi-row-card__body { padding: 0.75rem; }
+
+.rbi-empty {
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px dashed var(--ds-line-strong);
+  border-radius: var(--ds-r-md);
+  color: var(--ds-muted);
+  font-size: var(--ds-t-xs);
+  line-height: 1.5;
+}
+
+/* Values read from elsewhere ----------------------------------------------- */
+.rbi-derived {
+  display: flex;
+  flex-direction: column;
+  gap: 0.0625rem;
+  padding: 0.4375rem 0.625rem;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r-sm);
+  background: var(--ds-surface-inset);
+}
+
+.rbi-derived__label {
+  color: var(--ds-muted);
+  font-size: var(--ds-t-micro);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.rbi-derived__value { color: var(--ds-ink); font-family: var(--ds-font-data); font-size: var(--ds-t-base); }
+.rbi-derived__source { color: var(--ds-faint); font-size: var(--ds-t-xs); line-height: 1.4; }
+
+/* Risk matrix -------------------------------------------------------------- */
+.rbi-matrix { border-collapse: separate; border-spacing: 3px; font-size: var(--ds-t-xs); }
+
+.rbi-matrix th {
+  padding: 0.25rem 0.45rem;
+  color: var(--ds-muted);
+  font-size: var(--ds-t-micro);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.rbi-matrix__corner { color: var(--ds-faint); }
+
+.rbi-matrix td {
+  min-width: 2.6rem;
+  height: 2.2rem;
+  border-radius: var(--ds-r-xs);
+  text-align: center;
+  font-family: var(--ds-font-data);
+  font-weight: 700;
+}
+
+.rbi-cell--low { background: var(--ds-success-soft); color: var(--ds-success); }
+.rbi-cell--medium { background: var(--ds-info-soft); color: var(--ds-info); }
+.rbi-cell--medium-high { background: var(--ds-warning-soft); color: var(--ds-warning); }
+.rbi-cell--high { background: var(--ds-danger-soft); color: var(--ds-danger); }
+
+.rbi-swatch { display: inline-block; width: 0.8rem; height: 0.8rem; border-radius: var(--ds-r-xs); }
+
+.rbi-tag {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--ds-r-xs);
+  font-size: var(--ds-t-micro);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* Registry ----------------------------------------------------------------- */
+.rbi-registry { display: flex; flex-direction: column; gap: 0.375rem; }
+
+.rbi-registry__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r-md);
+  background: var(--ds-surface);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--ds-dur) var(--ds-ease), background-color var(--ds-dur) var(--ds-ease);
+}
+
+.rbi-registry__row:hover { border-color: var(--ds-primary-border); background: var(--ds-primary-softer); }
+.rbi-registry__row.is-active { border-color: var(--ds-primary); background: var(--ds-primary-soft); }
+.rbi-registry__title { display: block; color: var(--ds-ink); font-size: var(--ds-t-sm); font-weight: 650; }
+.rbi-registry__meta { display: block; color: var(--ds-muted); font-size: var(--ds-t-xs); line-height: 1.4; }
+
+/* Appendix A checklist ----------------------------------------------------- */
+.rbi-checklist { display: flex; flex-direction: column; gap: 0.375rem; }
+
+.rbi-checklist__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--ds-line);
+  border-left-width: 3px;
+  border-radius: var(--ds-r-sm);
+}
+
+.rbi-checklist__item.is-met { border-left-color: var(--ds-success); }
+.rbi-checklist__item.is-unmet-shall { border-left-color: var(--ds-danger); background: var(--ds-danger-soft); }
+.rbi-checklist__item.is-unmet-should { border-left-color: var(--ds-warning); background: var(--ds-warning-soft); }
+
+.rbi-checklist__req { display: block; color: var(--ds-ink); font-size: var(--ds-t-sm); line-height: 1.4; }
+.rbi-checklist__src { color: var(--ds-muted); font-family: var(--ds-font-data); font-size: var(--ds-t-micro); }
+.rbi-checklist__remedy { display: block; margin-top: 0.1875rem; font-size: var(--ds-t-xs); line-height: 1.5; }
+
+/* An inline jump to the field that answers an unmet requirement. A button, not
+   an anchor: it moves the wizard, it does not navigate. */
+.ds-linklike {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--ds-primary);
+  font: inherit;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.ds-linklike:hover { color: var(--ds-primary-hover); }
+
 @media (prefers-reduced-motion: reduce) {
   .ds-btn, .ds-segmented__option, .ds-switch, .ds-switch::after, .ds-table tbody tr,
   .ds-input, .ds-select, .ds-textarea, .sec-brush__section,
-  .section-band-legend__chip { transition-duration: 1ms !important; }
+  .section-band-legend__chip, .rbi-step, .rbi-registry__row { transition-duration: 1ms !important; }
   .ds-exec__caret { animation: none; }
   .ds-exec__track i { transition-duration: 1ms; }
 }
