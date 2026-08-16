@@ -70,15 +70,44 @@ function reviewRejection(session, review) {
     return null;
 }
 
-/** Combined verdict used by the FFS session picker. */
+/**
+ * Combined verdict used by the FFS session picker.
+ *
+ * Gate A is the hard gate and always was: without a completed engine run there
+ * is no result to assess. Gate B is no longer one. It used to be, and the effect
+ * was that an alignment holding thousands of anomalies offered nothing to FFS
+ * until someone had ticked features in Corrosion Analysis one at a time — so an
+ * assessment routinely covered a fraction of the run, and a feature the review
+ * never reached simply disappeared from the assessment with no trace.
+ *
+ * The review is now a *scope*, not a gate: it says which features an engineer
+ * deliberately released, and FFS can be run against that scope or against every
+ * anomaly the run reported. The verdict therefore carries the release state
+ * instead of withholding the session, so the setup screen can offer both and
+ * name which one it is using.
+ */
 function evaluateSession(session, review) {
     const gateA = finalPhaseRejection(session);
-    if (gateA) return { eligible: false, reason: gateA, stale: false };
+    if (gateA) {
+        return {
+            eligible: false,
+            reason: gateA,
+            stale: false,
+            release: { available: false, stale: false, reason: gateA },
+        };
+    }
     const gateB = reviewRejection(session, review);
     return {
-        eligible: gateB === null,
-        reason: gateB,
+        eligible: true,
+        reason: null,
         stale: gateB === GATE_REASONS.STALE_REVIEW,
+        release: {
+            // True only when a current review released at least one feature, which
+            // is the one case where "assess the release" means anything.
+            available: gateB === null,
+            stale: gateB === GATE_REASONS.STALE_REVIEW,
+            reason: gateB,
+        },
     };
 }
 

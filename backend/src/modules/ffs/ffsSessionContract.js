@@ -62,6 +62,13 @@ function parseSummary(value) {
     return output;
 }
 
+function assertStateFits(state) {
+    const serialized = JSON.stringify(state);
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_SNAPSHOT_BYTES) {
+        throw new Error(`state exceeds ${MAX_SNAPSHOT_BYTES} bytes`);
+    }
+}
+
 function parseCreateFfsSession(body) {
     if (!isRecord(body)) throw new Error('request body must be an object');
     if (!isRecord(body.state)) throw new Error('state must be an object');
@@ -77,11 +84,34 @@ function parseCreateFfsSession(body) {
         state,
     };
 
-    const serialized = JSON.stringify(session.state);
-    if (Buffer.byteLength(serialized, 'utf8') > MAX_SNAPSHOT_BYTES) {
-        throw new Error(`state exceeds ${MAX_SNAPSHOT_BYTES} bytes`);
-    }
+    assertStateFits(session.state);
     return session;
 }
 
-module.exports = { parseCreateFfsSession };
+/**
+ * Re-filing an assessment that is already stored.
+ *
+ * The reviewer's work continues after the run: repair dispositions, spool
+ * decisions and retuned screening assumptions are all part of the assessment,
+ * and until this existed the only way to keep them was to run the whole
+ * assessment again, which filed a second session for the same work. What a
+ * session belongs to — its organization, its alignment session, its pipeline —
+ * is fixed at creation and cannot be moved by an update.
+ */
+function parseUpdateFfsSession(body) {
+    if (!isRecord(body)) throw new Error('request body must be an object');
+    if (!isRecord(body.state)) throw new Error('state must be an object');
+
+    const session = {
+        label: requiredText(body.label, 'label', 200),
+        method: optionalText(body.method, 'method', 60),
+        featureCount: nonNegativeInteger(body.featureCount, 'featureCount'),
+        summary: parseSummary(body.summary),
+        state: sanitizeState(body.state),
+    };
+
+    assertStateFits(session.state);
+    return session;
+}
+
+module.exports = { parseCreateFfsSession, parseUpdateFfsSession };

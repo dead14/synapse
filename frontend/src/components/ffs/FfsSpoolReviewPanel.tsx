@@ -618,7 +618,8 @@ function SpoolCard({
                         <td className="px-3 py-1.5 text-right font-mono tabular-nums">{numericLd(member).toFixed(2)}</td>
                         <td className="px-3 py-1.5">{n.orient || '—'}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{n.maxDepthPct.toFixed(1)}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{n.length.toFixed(0)} × {n.width.toFixed(0)}</td>
+                        {/* Width is optional: an unreported one reads as "—", not as a zero-width defect. */}
+                        <td className="px-3 py-1.5 text-right tabular-nums">{n.length.toFixed(0)} × {n.width > 0 ? n.width.toFixed(0) : '—'}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{formatErf(n.ERF)}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{formatErf(member.conservative.ERF)}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{n.crDepth.toFixed(3)}</td>

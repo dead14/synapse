@@ -64,7 +64,7 @@ function LatestRun({ overview, loading }: { overview: DashboardOverview; loading
             <div><dt>Features</dt><dd>{run.featureCount.toLocaleString('en-GB')}</dd></div>
             <div><dt>Uploaded</dt><dd>{formatDateTime(run.uploadedAt)}</dd></div>
           </dl>
-          <Link to="/runs" className="integrity-text-link">Open inspection registry <FiArrowUpRight aria-hidden="true" /></Link>
+          <Link to="/alignment-history" className="integrity-text-link">Open alignment registry <FiArrowUpRight aria-hidden="true" /></Link>
         </>
       )}
     </article>

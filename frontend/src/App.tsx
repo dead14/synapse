@@ -8,9 +8,9 @@ import AppLayout from './layout/AppLayout';
 // Route-level splitting follows React's lazy/Suspense contract:
 // https://react.dev/reference/react/lazy
 const DashboardPage = lazy(() => import('./pages/Dashboard/DashboardPage'));
-const InspectionRegistryPage = lazy(() => import('./pages/Inspections/InspectionRegistryPage'));
 const AlignmentPage = lazy(() => import('./AlignmentPage'));
 const PipelineRuns = lazy(() => import('./PipelineRuns'));
+const RbiPage = lazy(() => import('./pages/RBI/RbiPage'));
 const IliComparisonPage = lazy(() => import('./IliComparisonPage'));
 const IliSectioningPage = lazy(() => import('./sectioning/IliSectioningPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
@@ -117,8 +117,11 @@ export default function App() {
         <Route element={<RequireAuth />}>
           <Route element={<AppLayout />}>
             <Route path="/" element={<DashboardPage />} />
-            <Route path="/data" element={<InspectionRegistryPage />} />
-            <Route path="/runs" element={<InspectionRegistryPage />} />
+            {/* The separate ILI-runs registry is gone: it listed the same survey
+                runs the alignment registry already reaches, with a second set of
+                actions on them. Old links land on the one table that remains. */}
+            <Route path="/data" element={<Navigate to="/alignment-history" replace />} />
+            <Route path="/runs" element={<Navigate to="/alignment-history" replace />} />
             <Route path="/alignment-history" element={<PipelineRuns />} />
             <Route path="/alignment" element={<AlignmentPage />} />
             <Route path="/ili-comparison" element={<IliComparisonPage />} />
@@ -126,6 +129,7 @@ export default function App() {
             <Route path="/alignment/:sessionId/corrosion" element={<CorrosionAnalysisPage />} />
             <Route path="/ffs" element={<FfsSetupPage />} />
             <Route path="/ffs/results" element={<FfsResultsPage />} />
+            <Route path="/rbi" element={<RbiPage />} />
             <Route path="/integrity/:capability" element={<CapabilityWorkspacePage />} />
             <Route path="/integrity-timeline" element={<IntegrityTimelinePage />} />
             <Route path="/integrity-workbench" element={<DecisionWorkbenchPage />} />

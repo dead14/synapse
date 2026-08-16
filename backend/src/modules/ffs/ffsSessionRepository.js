@@ -77,6 +77,41 @@ async function insertFfsSession(pool, {
     return result.rows[0];
 }
 
+/**
+ * Re-files an assessment in place. Returns null when this organization does not
+ * own the session, which the caller reports as "not found" rather than as a
+ * permission error — the two are indistinguishable to a caller who should never
+ * have known the row existed.
+ */
+async function updateOwnedFfsSession(pool, sessionId, orgId, {
+    label,
+    method,
+    featureCount,
+    summary,
+    state,
+}) {
+    const result = await pool.query(
+        `UPDATE ffs_sessions
+            SET label = $3,
+                method = $4,
+                feature_count = $5,
+                summary_json = $6::jsonb,
+                state_json = $7::jsonb
+          WHERE id = $1 AND organization_id = $2
+      RETURNING id, created_at`,
+        [
+            sessionId,
+            orgId,
+            label,
+            method,
+            featureCount,
+            JSON.stringify(summary || {}),
+            JSON.stringify(state),
+        ],
+    );
+    return result.rows[0] || null;
+}
+
 async function listFfsSessions(pool, orgId, { limit }) {
     const result = await pool.query(
         `SELECT ${LIST_COLUMNS}
@@ -121,4 +156,5 @@ module.exports = {
     insertFfsSession,
     listFfsSessions,
     serializeSession,
+    updateOwnedFfsSession,
 };

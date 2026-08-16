@@ -31,7 +31,7 @@ test('deriveNextAction points to the first evidence-backed workflow gap', () => 
   assert.deepEqual(deriveNextAction(empty), {
     label: 'Import an ILI run',
     description: 'Create a canonical, auditable inspection run before starting assessment.',
-    path: '/runs',
+    path: '/alignment',
   });
 
   const review = normalizeDashboardStats({

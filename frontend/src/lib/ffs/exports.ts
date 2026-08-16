@@ -2,7 +2,12 @@ import * as XLSX from 'xlsx';
 import type { DistributionTable, WorstRow } from './statistics.ts';
 import type { NarrativeBlock } from './narrative.ts';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from './types.ts';
-import type { AlignmentImportProvenance } from './alignmentImport.ts';
+import type {
+  AlignmentImportProvenance,
+  AlignmentImportSkipped,
+  FfsIntakeScope,
+  RejectedAlignmentRow,
+} from './alignmentImport.ts';
 import { analysisHorizonYears, formatRemnantLife, remnantLimitLabel } from './lifeProjection.ts';
 import { buildSectionDesignFactorSummary, buildSectionGrowthSummary } from './sectionSummary.ts';
 import { designLifeUsage, EMPTY_SERVICE_LIFE } from './remnantLife.ts';
@@ -40,6 +45,17 @@ export function safeFilename(name: string): string {
 
 function num(value: number | null, digits = 4): number | string {
   return value !== null && Number.isFinite(value) ? Number(value.toFixed(digits)) : '';
+}
+
+/**
+ * Circumferential width, blank where the run reported none.
+ *
+ * Width is optional — B31G never reads it — and the assessment carries an
+ * unreported one as 0. Exporting that zero would state a measurement nobody
+ * made, so the cell is left empty instead.
+ */
+function reportedWidth(value: number, digits = 2): number | string {
+  return num(Number.isFinite(value) && value > 0 ? value : null, digits);
 }
 
 /**
@@ -84,12 +100,28 @@ function scenarioRow(id: string, label: string, scenario: FfsScenarioSummary): (
 }
 
 /** Builds the auditable workbook without triggering a browser download. */
+/**
+ * The population this assessment was drawn from, for the Coverage sheet.
+ *
+ * Optional: a manual workbook has no run population to compare against, and the
+ * sheet is then omitted rather than filled with zeroes that would read as "the
+ * run reported nothing".
+ */
+export interface FfsCoverageExport {
+  scope?: FfsIntakeScope;
+  rejected: RejectedAlignmentRow[];
+  skipped?: AlignmentImportSkipped;
+  /** Metal-loss records the run reported, assessed or not. */
+  censusCount?: number | null;
+}
+
 export function buildResultsWorkbook(
   items: FfsScreenedResult[],
   config: FfsConfig,
   screening: FfsScreeningConfig,
   provenance: AlignmentImportProvenance[] = [],
   reportContext: FfsReportContext = createFfsReportContext(config),
+  coverage?: FfsCoverageExport,
 ): XLSX.WorkBook {
   const workbook = XLSX.utils.book_new();
   const reportCase = buildFfsReportCase(items, reportContext);
@@ -185,7 +217,7 @@ export function buildResultsWorkbook(
     const n = item.nominal;
     const life = n.remnantLife;
     return [
-      n.featureId ?? '', n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2), num(n.width, 2),
+      n.featureId ?? '', n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2), reportedWidth(n.width),
       num(n.wall, 2), num(n.od, 2), num(n.smys, 2), num(n.df, 4), designFactorSourceLabel(n.designFactorSource),
       num(n.safetyFactor, 4), safetyFactorSourceLabel(n.safetyFactorSource),
       num(n.p0, 4),
@@ -333,7 +365,7 @@ export function buildResultsWorkbook(
         record?.featureId ?? '', record?.sourceFeatureKey ?? '', record?.alignmentSessionId ?? '',
         record?.selectionReason ?? '',
         n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2),
-        num(n.width, 2), num(n.wall, 2), num(n.crDepth, 4), num(n.crLength, 4),
+        reportedWidth(n.width), num(n.wall, 2), num(n.crDepth, 4), num(n.crLength, 4),
         record?.growthEvidence.oldSurveyYear ?? '', record?.growthEvidence.newSurveyYear ?? '',
         record?.growthEvidence.intervalYears ?? '',
         growthObservationLabel(record?.growthEvidence.depth.observation),
@@ -348,7 +380,60 @@ export function buildResultsWorkbook(
     XLSX.utils.book_append_sheet(workbook, sourceSheet, 'Source data');
   }
 
+  appendCoverageSheet(workbook, items.length, coverage);
+
   return workbook;
+}
+
+/**
+ * What the assessment covered, and what it could not.
+ *
+ * The workbook is the deliverable, and until this sheet existed it contained
+ * only the features that produced a B31G number. An anomaly with no depth, or
+ * one a review had not reached, was simply absent — and absent from a report
+ * reads as "not on the pipe" rather than "not assessed", which is how a line
+ * ends up looking cleaner on paper than it is in the ground.
+ */
+function appendCoverageSheet(
+  workbook: XLSX.WorkBook,
+  assessedCount: number,
+  coverage: FfsCoverageExport | undefined,
+): void {
+  if (!coverage) return;
+
+  const scopeLabel = coverage.scope === 'all'
+    ? 'Every metal-loss anomaly reported by the NEW run'
+    : coverage.scope === 'released'
+      ? 'Only the features released by the Corrosion Analysis review'
+      : 'Not recorded';
+
+  const rows: (string | number)[][] = [
+    ['Assessment coverage'],
+    [],
+    ['Scope', scopeLabel],
+    ['Metal-loss anomalies reported by the NEW run', coverage.censusCount ?? 'Not recorded'],
+    ['Assessed to B31G', assessedCount],
+    ['In scope but not calculable', coverage.rejected.length],
+    ['Outside the released scope', coverage.skipped?.notReleased ?? 0],
+    ['Excluded from released outputs by a reviewer', coverage.skipped?.excluded ?? 0],
+    ['Not metal loss, so outside B31G (welds, fittings, dents, cracks)', coverage.skipped?.notMetalLoss ?? 0],
+    [],
+    ['An anomaly listed below has no fitness-for-service result. It is neither acceptable nor unacceptable '
+      + 'until the source data behind it is recovered.'],
+    [],
+    ['Feature ID', 'Source key', 'LD [m]', 'Reported depth [%WT]', 'Why it was not assessed'],
+    ...coverage.rejected.map((item) => [
+      item.featureId,
+      item.sourceKey ?? '',
+      item.ldM ?? '',
+      item.depthPct ?? '',
+      item.reason,
+    ]),
+  ];
+
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet['!cols'] = [{ wch: 22 }, { wch: 22 }, { wch: 12 }, { wch: 18 }, { wch: 70 }];
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Coverage');
 }
 
 export function exportResultsWorkbook(
@@ -357,8 +442,9 @@ export function exportResultsWorkbook(
   screening: FfsScreeningConfig,
   provenance: AlignmentImportProvenance[] = [],
   reportContext: FfsReportContext = createFfsReportContext(config),
+  coverage?: FfsCoverageExport,
 ): void {
-  const workbook = buildResultsWorkbook(items, config, screening, provenance, reportContext);
+  const workbook = buildResultsWorkbook(items, config, screening, provenance, reportContext, coverage);
   const reportCase = buildFfsReportCase(items, reportContext);
 
   const blob = new Blob([XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })], {

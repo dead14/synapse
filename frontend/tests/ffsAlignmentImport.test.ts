@@ -161,7 +161,120 @@ test('only features released by Corrosion Analysis are assessed', () => {
   assert.deepEqual(mapped.accepted.map((item) => item.provenance.sourceFeatureKey), ['new:2']);
   // A feature the review held back is a decision already made, not a failure.
   assert.deepEqual(mapped.rejected, []);
-  assert.deepEqual(mapped.skipped, { noNewFeature: 0, notReleased: 1 });
+  assert.deepEqual(mapped.skipped, {
+    noNewFeature: 0, notReleased: 1, notMetalLoss: 0, excluded: 0,
+  });
+});
+
+test('the whole-run scope assesses every anomaly, released or not', () => {
+  const rows = [
+    {
+      'Source Key NEW': 'new:1',
+      'Identif. NEW': 'A-1',
+      'Log Dist NEW (m)': 10,
+      'Depth NEW (%WT)': 20,
+      'Length NEW (mm)': 50,
+      'Width NEW (mm)': 20,
+      'Wall WT NEW (mm)': 10,
+    },
+    {
+      'Source Key NEW': 'new:2',
+      'Identif. NEW': 'A-2',
+      'Log Dist NEW (m)': 20,
+      'Depth NEW (%WT)': 30,
+      'Length NEW (mm)': 60,
+      'Width NEW (mm)': 25,
+      'Wall WT NEW (mm)': 10,
+    },
+    // Not metal loss, so not an FFS candidate under any scope.
+    {
+      'Source Key NEW': 'new:3',
+      'Result Group': 'GW',
+      'Identif. NEW': 'GW-9',
+      'Log Dist NEW (m)': 25,
+    },
+  ];
+
+  const mapped = mapAlignmentRowsToFfs(rows, engineering, '5', {
+    selectedKeys: new Set(['new:2']),
+    scope: 'all',
+  });
+
+  assert.deepEqual(
+    mapped.accepted.map((item) => item.provenance.sourceFeatureKey),
+    ['new:1', 'new:2'],
+  );
+  assert.equal(mapped.skipped.notReleased, 0);
+  assert.equal(mapped.skipped.notMetalLoss, 1);
+});
+
+test('corrosion labelled by its position is still corrosion', () => {
+  // The exclusion rule reads the free-text identification as well as the type,
+  // because some vendors classify there and nowhere else. Without the rescue,
+  // "corrosion at bend 12" matched "bend" and was thrown out of its own
+  // assessment — the exact silent loss this scope was widened to stop.
+  const mapped = mapAlignmentRowsToFfs([
+    {
+      'Source Key NEW': 'new:1',
+      'Feature Type NEW': 'Metal Loss',
+      'Feature Identification NEW': 'corrosion at bend 12',
+      'Identif. NEW': 'A-1',
+      'Log Dist NEW (m)': 10,
+      'Depth NEW (%WT)': 20,
+      'Length NEW (mm)': 50,
+      'Width NEW (mm)': 20,
+      'Wall WT NEW (mm)': 10,
+    },
+    // A dent stays a dent: its type is the thing being excluded.
+    {
+      'Source Key NEW': 'new:2',
+      'Feature Type NEW': 'Dent',
+      'Identif. NEW': 'D-1',
+      'Log Dist NEW (m)': 12,
+      'Depth NEW (%WT)': 4,
+      'Length NEW (mm)': 200,
+      'Width NEW (mm)': 200,
+      'Wall WT NEW (mm)': 10,
+    },
+  ], engineering, '5', { selectedKeys: new Set<string>(), scope: 'all' });
+
+  assert.deepEqual(mapped.accepted.map((item) => item.provenance.sourceFeatureKey), ['new:1']);
+  assert.equal(mapped.skipped.notMetalLoss, 1);
+});
+
+test('an anomaly a reviewer excluded is never assessed, whatever the scope', () => {
+  const mapped = mapAlignmentRowsToFfs([{
+    'Source Key NEW': 'new:1',
+    'Identif. NEW': 'A-1',
+    'Log Dist NEW (m)': 10,
+    'Depth NEW (%WT)': 20,
+    'Length NEW (mm)': 50,
+    'Width NEW (mm)': 20,
+    'Wall WT NEW (mm)': 10,
+    __excluded: true,
+  }], engineering, '5', { selectedKeys: new Set<string>(), scope: 'all' });
+
+  assert.deepEqual(mapped.accepted, []);
+  assert.equal(mapped.skipped.excluded, 1);
+});
+
+test('a run that reports no width is assessed, and says the width is missing', () => {
+  // B31G reads depth and axial length. Demanding a width refused whole runs
+  // whose vendor ships no width column, losing anomalies that had everything
+  // the calculation needed.
+  const mapped = mapAlignmentRowsToFfs([{
+    'Source Key NEW': 'new:1',
+    'Identif. NEW': 'A-1',
+    'Log Dist NEW (m)': 10,
+    'Depth NEW (%WT)': 20,
+    'Length NEW (mm)': 50,
+    'Wall WT NEW (mm)': 10,
+  }], engineering, '5', { selectedKeys: new Set<string>(), scope: 'all' });
+
+  assert.equal(mapped.rejected.length, 0);
+  assert.equal(mapped.accepted.length, 1);
+  assert.equal(mapped.accepted[0].row['Width [mm]'], '0');
+  assert.ok(mapped.accepted[0].warnings.some((warning) => /no circumferential width/i.test(warning)));
 });
 
 test('an assessment without a saved selection is refused outright', () => {
@@ -216,9 +329,14 @@ test('the OLD side of the comparison is skipped, not reported as a rejected feat
   // too, and being first in the array it became the message the operator saw.
   assert.deepEqual(mapped.rejected, [{
     featureId: 'A-2',
+    sourceKey: 'new:2',
+    ldM: 20,
+    depthPct: 25,
     reason: 'Missing or invalid measured field(s): Length NEW (mm).',
   }]);
-  assert.deepEqual(mapped.skipped, { noNewFeature: 1, notReleased: 0 });
+  assert.deepEqual(mapped.skipped, {
+    noNewFeature: 1, notReleased: 0, notMetalLoss: 0, excluded: 0,
+  });
 });
 
 test('the intake summary counts what a release can assess, and why the rest cannot', () => {
@@ -351,7 +469,7 @@ test('explains every condition that keeps the assessment disabled', () => {
   ]);
 });
 
-test('a loaded session with no released feature blocks the assessment', () => {
+test('a loaded session with no released feature offers the whole run instead of blocking', () => {
   assert.deepEqual(getAlignmentImportReadiness({
     lineName: 'HU CPA',
     iliDate: '2026-07-03',
@@ -364,7 +482,24 @@ test('a loaded session with no released feature blocks the assessment', () => {
     operatingPressureMpa: '7.2',
     fallbackDepthGrowthMmPerYear: '0',
     fallbackLengthGrowthMmPerYear: '0',
-  }), ['Release at least one feature in Corrosion Analysis for this session.']);
+  }), ['Release at least one feature in Corrosion Analysis for this session, or assess the whole run.']);
+
+  // Under the whole-run scope an empty population means the run reported no
+  // metal loss at all, which is a different sentence and a different fix.
+  assert.deepEqual(getAlignmentImportReadiness({
+    lineName: 'HU CPA',
+    iliDate: '2026-07-03',
+    selectedRunId: '12',
+    alignmentRowCount: 1_200,
+    scope: 'all',
+    selectedFeatureCount: 0,
+    outerDiameterMm: '508',
+    smysMpa: '359',
+    designFactor: '0.72',
+    operatingPressureMpa: '7.2',
+    fallbackDepthGrowthMmPerYear: '0',
+    fallbackLengthGrowthMmPerYear: '0',
+  }), ['This alignment result reports no metal-loss anomaly on the NEW run.']);
 });
 
 test('estimates NEW-only depth CGR from a disclosed zero baseline and survey interval', () => {

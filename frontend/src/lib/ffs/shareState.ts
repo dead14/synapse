@@ -11,8 +11,27 @@
 
 import type { FfsShareState } from '../sharing/publicShareSnapshot.ts';
 import { normaliseScreeningConfig } from './types.ts';
-import type { FfsConfig, FfsResult, FfsScreeningConfig } from './types.ts';
-import type { AlignmentImportProvenance, FfsGirthWeld, FfsSpoolCensusRow } from './alignmentImport.ts';
+import type {
+  FfsConfig,
+  FfsRepairDispositionPatch,
+  FfsResult,
+  FfsScreeningConfig,
+} from './types.ts';
+import type {
+  AlignmentImportProvenance,
+  AlignmentImportSkipped,
+  FfsGirthWeld,
+  FfsIntakeScope,
+  FfsSpoolCensusRow,
+  RejectedAlignmentRow,
+} from './alignmentImport.ts';
+import type { FfsSpoolDisposition } from './spoolReview.ts';
+
+/** The reviewer's own decisions, kept with the case they belong to. */
+export interface RevivedFfsReviewState {
+  repairOverrides: Record<number, FfsRepairDispositionPatch>;
+  spoolDispositions: Record<string, FfsSpoolDisposition>;
+}
 
 export interface RevivedFfsShareState {
   results: FfsResult[];
@@ -20,12 +39,16 @@ export interface RevivedFfsShareState {
   screening: FfsScreeningConfig;
   alignmentImport?: {
     sessionId: string;
+    /** How much of the run was assessed. Older cases carry no scope. */
+    scope?: FfsIntakeScope;
     accepted: AlignmentImportProvenance[];
-    rejected: unknown[];
+    rejected: RejectedAlignmentRow[];
+    skipped?: AlignmentImportSkipped;
     girthWelds?: FfsGirthWeld[];
     census?: FfsSpoolCensusRow[];
     warningCount: number;
   };
+  review: RevivedFfsReviewState;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -59,8 +82,14 @@ export function reviveFfsShareState(state: FfsShareState | null | undefined): Re
   const alignmentImport = isRecord(state.alignmentImport)
     ? {
       sessionId: String(state.alignmentImport.sessionId ?? ''),
+      ...(state.alignmentImport.scope === 'all' || state.alignmentImport.scope === 'released'
+        ? { scope: state.alignmentImport.scope as FfsIntakeScope }
+        : {}),
       accepted: asArray<AlignmentImportProvenance>(state.alignmentImport.accepted),
-      rejected: asArray<unknown>(state.alignmentImport.rejected),
+      rejected: asArray<RejectedAlignmentRow>(state.alignmentImport.rejected),
+      ...(isRecord(state.alignmentImport.skipped)
+        ? { skipped: state.alignmentImport.skipped as unknown as AlignmentImportSkipped }
+        : {}),
       girthWelds: asArray<FfsGirthWeld>(state.alignmentImport.girthWelds),
       census: asArray<FfsSpoolCensusRow>(state.alignmentImport.census),
       warningCount: Number(state.alignmentImport.warningCount ?? 0) || 0,
@@ -72,5 +101,39 @@ export function reviveFfsShareState(state: FfsShareState | null | undefined): Re
     config,
     screening: normaliseScreeningConfig(state.screening ?? undefined),
     ...(alignmentImport ? { alignmentImport } : {}),
+    review: reviveReviewState(state.review),
   };
+}
+
+/**
+ * The reviewer's decisions as the workspace holds them.
+ *
+ * Keys are read back defensively: a repair override is keyed by the result's
+ * position in the case, and JSON turns that number into a string. An override
+ * that came back under a string key silently applied to nothing.
+ */
+function reviveReviewState(value: unknown): RevivedFfsReviewState {
+  const repairOverrides: Record<number, FfsRepairDispositionPatch> = {};
+  const spoolDispositions: Record<string, FfsSpoolDisposition> = {};
+  if (!isRecord(value)) return { repairOverrides, spoolDispositions };
+
+  const storedRepairs = value.repairOverrides;
+  if (isRecord(storedRepairs)) {
+    for (const [key, patch] of Object.entries(storedRepairs)) {
+      const index = Number(key);
+      if (!Number.isInteger(index) || index < 0 || !isRecord(patch)) continue;
+      repairOverrides[index] = patch as unknown as FfsRepairDispositionPatch;
+    }
+  }
+
+  const storedSpools = value.spoolDispositions;
+  if (isRecord(storedSpools)) {
+    for (const [key, disposition] of Object.entries(storedSpools)) {
+      if (isRecord(disposition)) {
+        spoolDispositions[key] = disposition as unknown as FfsSpoolDisposition;
+      }
+    }
+  }
+
+  return { repairOverrides, spoolDispositions };
 }

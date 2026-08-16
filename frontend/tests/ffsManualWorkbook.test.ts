@@ -26,17 +26,19 @@ test('manual FFS template exposes calculation and repair-evidence columns with a
 });
 
 test('manual workbook parser accepts a valid workbook and normalizes cell values', () => {
+  // Width is not among the required columns: B31G does not read it, and a
+  // workbook that omits it is complete.
   const bytes = workbookBytes([
     [...REQUIRED_COLUMNS],
-    [100.5, 'Joint-1', 'Internal', 25, 45, 30, '06:00', 12.7, 0.1, 0.05, 0.72, 508, 358, 6.5],
+    [100.5, 'Joint-1', 'Internal', 25, 45, '06:00', 12.7, 0.1, 0.05, 0.72, 508, 358, 6.5],
   ]);
 
   const parsed = parseManualFfsWorkbook(bytes);
 
   assert.deepEqual(parsed.missingColumns, []);
   assert.equal(parsed.rows.length, 1);
-  assert.equal(parsed.rows[0][REQUIRED_COLUMNS[0]], '100.5');
-  assert.equal(parsed.rows[0][REQUIRED_COLUMNS[6]], '06:00');
+  assert.equal(parsed.rows[0]['LD [m]'], '100.5');
+  assert.equal(parsed.rows[0]['Orient. (hrs:mins)'], '06:00');
   assert.equal(parsed.rows[0]['Repair Status'], '', 'legacy workbooks default to an unrepaired disposition');
 });
 
@@ -44,14 +46,15 @@ test('manual workbook parser preserves optional feature and repair evidence', ()
   const bytes = workbookBytes([
     [...REQUIRED_COLUMNS, ...OPTIONAL_COLUMNS],
     [
-      100.5, 'Joint-1', 'Internal', 25, 45, 30, '06:00', 12.7, 0.1, 0.05, 0.72, 508, 358, 6.5,
-      'F-001', '1.39', 'Yes', 'Temporary repair', 'Composite wrap', '2025-01-20', 'REP-17', 'Permanent repair', 'Integrity',
+      100.5, 'Joint-1', 'Internal', 25, 45, '06:00', 12.7, 0.1, 0.05, 0.72, 508, 358, 6.5,
+      'F-001', 30, '1.39', 'Yes', 'Temporary repair', 'Composite wrap', '2025-01-20', 'REP-17', 'Permanent repair', 'Integrity',
     ],
   ]);
 
   const parsed = parseManualFfsWorkbook(bytes);
 
   assert.equal(parsed.rows[0]['Feature ID'], 'F-001');
+  assert.equal(parsed.rows[0]['Width [mm]'], '30');
   assert.equal(parsed.rows[0]['Repair Status'], 'Temporary repair');
   assert.equal(parsed.rows[0]['Repair Reference'], 'REP-17');
   assert.equal(parsed.rows[0]['Clustered Metal Loss'], 'Yes');
@@ -60,11 +63,11 @@ test('manual workbook parser preserves optional feature and repair evidence', ()
 
 test('manual workbook parser reports missing columns before assessment', () => {
   const parsed = parseManualFfsWorkbook(workbookBytes([
-    [REQUIRED_COLUMNS[0], REQUIRED_COLUMNS[1]],
+    ['LD [m]', 'Section'],
     [100.5, 'Joint-1'],
   ]));
 
-  assert.ok(parsed.missingColumns.includes(REQUIRED_COLUMNS[3]));
+  assert.ok(parsed.missingColumns.includes('Max Depth [%]'));
   assert.deepEqual(parsed.rows, []);
 });
 

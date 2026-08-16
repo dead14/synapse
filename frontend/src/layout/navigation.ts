@@ -20,8 +20,11 @@ export const navigationGroups: NavigationGroup[] = [
   {
     label: 'Data & alignment',
     items: [
-      { label: 'ILI runs', path: '/runs', description: 'Vendor-agnostic inspection data and provenance' },
-      { label: 'Alignments', path: '/alignment-history', description: 'Alignment sessions, their results, and FFS handoff' },
+      // One registry, not two. The ILI-runs page listed the same survey runs this
+      // table already reaches through its sessions, so a run appeared twice with
+      // two different sets of actions. Import now happens inside the alignment
+      // wizard, which is where a run is actually used.
+      { label: 'ILI alignment', path: '/alignment-history', description: 'Inspection runs, their alignment results, and FFS handoff' },
       { label: 'Activity log', path: '/activity-logs', description: 'What each user did, in order' },
     ],
   },
@@ -29,6 +32,7 @@ export const navigationGroups: NavigationGroup[] = [
     label: 'Assessment',
     items: [
       { label: 'FFS · B31G', path: '/ffs', description: 'Corrosion remaining-strength screening' },
+      { label: 'Risk-based inspection', path: '/rbi', description: 'API 580 risk ranking and inspection planning from filed FFS assessments' },
     ],
   },
   {

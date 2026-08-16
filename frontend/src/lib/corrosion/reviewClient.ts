@@ -37,6 +37,17 @@ export interface FfsEligibleSession {
   reviewedAt: string | null;
   selectedCount: number;
   reviewedCount: number;
+  /**
+   * Whether this session's saved review can be used as the FFS intake scope: a
+   * current review that released at least one feature. False does not withhold
+   * the session — every anomaly the run reported can still be assessed — it only
+   * says there is no release to narrow the assessment to.
+   */
+  releaseAvailable: boolean;
+  /** Why the release cannot be used, when it cannot. */
+  releaseReason: string | null;
+  /** True when the review was made against a superseded alignment result. */
+  releaseStale: boolean;
 }
 
 export interface FfsBlockedSession extends FfsEligibleSession {

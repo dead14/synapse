@@ -70,8 +70,16 @@ export function applicabilityChecks(item: FfsScreenedResult): FfsApplicabilityCh
     {
       id: 'geometry',
       label: 'Validated pipe and anomaly geometry',
-      status: n.wall > 0 && n.od > 0 && n.length > 0 && n.width > 0 ? 'pass' : 'fail',
-      detail: 'Positive wall, diameter, length, and width are required by the calculation contract.',
+      // Width is deliberately absent: it is not a B31G input, so a run that
+      // reports none does not make the geometry invalid. It is reported as a
+      // review note rather than a failure of the calculation contract.
+      status: n.wall > 0 && n.od > 0 && n.length > 0
+        ? (n.width > 0 ? 'pass' : 'review')
+        : 'fail',
+      detail: n.wall > 0 && n.od > 0 && n.length > 0 && n.width <= 0
+        ? 'Wall, diameter, and axial length are positive. The run reported no circumferential width, which '
+          + 'B31G does not use — only the circumferential interaction screen is affected.'
+        : 'Positive wall, diameter, and axial length are required by the calculation contract.',
     },
     {
       id: 'depth-domain',

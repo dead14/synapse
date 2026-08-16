@@ -50,6 +50,11 @@ function num(value: number | null | undefined, digits = 3): number | string {
     : '';
 }
 
+/** Width, blank where the run reported none. See reportedWidth in exports.ts. */
+function reportedWidth(value: number, digits = 1): number | string {
+  return num(Number.isFinite(value) && value > 0 ? value : null, digits);
+}
+
 function ld(item: FfsScreenedResult): number {
   const value = Number(item.nominal.ld);
   return Number.isFinite(value) ? Number(value.toFixed(3)) : 0;
@@ -304,7 +309,7 @@ export function buildSpoolReviewWorkbook(
         n.isClusteredMetalLoss ? 'Yes' : 'No',
         num(n.maxDepthPct, 1),
         num(n.length, 1),
-        num(n.width, 1),
+        reportedWidth(n.width),
         num(n.wall, 2),
         num(n.dt, 4),
         num(n.z, 4),

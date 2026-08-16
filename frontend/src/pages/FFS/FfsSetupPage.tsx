@@ -33,6 +33,7 @@ import {
   normalizedSectionKey,
   summariseReleasedIntake,
   type AlignmentSectionOption,
+  type FfsIntakeScope,
 } from '../../lib/ffs/alignmentImport';
 import { convertLength, convertPressure, toMegapascals, toMillimetres, type LengthUnit, type PressureUnit } from '../../lib/ffs/units';
 import {
@@ -86,6 +87,16 @@ export default function FfsSetupPage() {
   const [alignmentRowsWithExclusions, setAlignmentRowsWithExclusions] = useState<ComparisonRow[]>([]);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [reasons, setReasons] = useState<Record<string, string>>({});
+  /**
+   * How much of the run this assessment covers.
+   *
+   * Defaults to every anomaly. The release used to be both the scope and the
+   * gate, so an anomaly nobody had reviewed never reached the assessment and
+   * left no trace in the report that it existed.
+   */
+  const [intakeScope, setIntakeScope] = useState<FfsIntakeScope>('all');
+  /** Why the saved release cannot be used as a scope, when it cannot. */
+  const [releaseBlockReason, setReleaseBlockReason] = useState<string | null>(null);
   const [alignmentLoading, setAlignmentLoading] = useState(false);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [alignmentMessage, setAlignmentMessage] = useState('');
@@ -109,10 +120,9 @@ export default function FfsSetupPage() {
   const [designLifeYears, setDesignLifeYears] = useState('');
   const [commissioningYear, setCommissioningYear] = useState('');
 
-  // Sections come from the released features, and the factor for each is typed
+  // Sections come from the features in scope, and the factor for each is typed
   // once against a stretch the engineer has already named and reviewed. Keyed
   // by the normalised section name so a reload keeps the entered values.
-  const [sectionOptions, setSectionOptions] = useState<AlignmentSectionOption[]>([]);
   const [sectionFactors, setSectionFactors] = useState<Record<string, string>>({});
 
   const normalizeDisplayValue = (
@@ -147,6 +157,39 @@ export default function FfsSetupPage() {
     (value) => toMegapascals(value, pressureUnit),
   );
 
+  /**
+   * The stretches that will appear in this assessment.
+   *
+   * Derived rather than stored, because the scope can change after the session
+   * is loaded: switching from the release to the whole run brings in sections
+   * the review never touched, and a stale list would have assessed them at the
+   * line default without ever showing them.
+   */
+  const sectionOptions: AlignmentSectionOption[] = useMemo(
+    () => (alignmentRows.length === 0
+      ? []
+      : alignmentSectionOptions(alignmentRows, { selectedKeys, scope: intakeScope })),
+    [alignmentRows, selectedKeys, intakeScope],
+  );
+
+  // Every section shows what it will actually be assessed with, so a new one
+  // starts at the line default instead of blank. A value the engineer has typed
+  // is never overwritten.
+  useEffect(() => {
+    setSectionFactors((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const option of sectionOptions) {
+        const key = normalizedSectionKey(option.section);
+        if (next[key] === undefined) {
+          next[key] = designFactor;
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [sectionOptions, designFactor]);
+
   /** The overrides as the import layer wants them: named section, numeric factor. */
   const sectionDesignFactors = sectionOptions
     .map((option) => ({
@@ -157,7 +200,12 @@ export default function FfsSetupPage() {
 
   const invalidSectionFactors = sectionOptions.filter((option) => {
     const raw = sectionFactors[normalizedSectionKey(option.section)];
-    if (raw === undefined || raw.trim() === '') return true;
+    // A section that has not been seeded yet falls back to the line default,
+    // which is validated on its own. Treating it as invalid put a "enter a
+    // design factor" message on screen for the frame between a scope change and
+    // the seeding effect.
+    if (raw === undefined) return false;
+    if (raw.trim() === '') return true;
     const value = Number(raw);
     return !Number.isFinite(value) || value <= 0 || value > 1;
   });
@@ -187,8 +235,12 @@ export default function FfsSetupPage() {
    * instead of a thrown error after pressing Run.
    */
   const intake = useMemo(
-    () => summariseReleasedIntake(alignmentRowsWithExclusions, { selectedKeys }, nominalWallThicknessMm),
-    [alignmentRowsWithExclusions, selectedKeys, nominalWallThicknessMm],
+    () => summariseReleasedIntake(
+      alignmentRowsWithExclusions,
+      { selectedKeys, scope: intakeScope },
+      nominalWallThicknessMm,
+    ),
+    [alignmentRowsWithExclusions, selectedKeys, intakeScope, nominalWallThicknessMm],
   );
 
   const alignmentReadinessReasons = getAlignmentImportReadiness({
@@ -196,7 +248,10 @@ export default function FfsSetupPage() {
     iliDate,
     selectedRunId,
     alignmentRowCount: alignmentRows.length,
-    selectedFeatureCount: selectedKeys.size,
+    scope: intakeScope,
+    // Under the whole-run scope the population is the result itself, so the
+    // review's size is not a precondition for running anything.
+    selectedFeatureCount: intakeScope === 'all' ? intake.released : selectedKeys.size,
     assessableFeatureCount: intake.assessable,
     intakeBlockReason: describeEmptyIntake(intake),
     outerDiameterMm: outerDiameterMmForCalculation,
@@ -264,8 +319,8 @@ export default function FfsSetupPage() {
     setAlignmentRowsWithExclusions([]);
     setSelectedKeys(new Set());
     setReasons({});
-    setSectionOptions([]);
     setSectionFactors({});
+    setReleaseBlockReason(null);
     try {
       const [result, review, sessionConfig] = await Promise.all([
         fetchAlignmentResult(sessionId, (pct, message) => {
@@ -277,31 +332,31 @@ export default function FfsSetupPage() {
           `/api/wizard/session/${encodeURIComponent(sessionId)}`,
         ),
       ]);
-      if (review.stale) {
-        throw new Error('The alignment was re-run after the Corrosion Analysis review. Review it again before assessing.');
-      }
+      // A missing, empty or superseded review no longer stops the assessment —
+      // it only means there is no release to narrow it to. The session is loaded
+      // either way and the scope falls back to the whole run, which is the
+      // population the engineer asked to see.
       const keys = selectedKeysOf(review);
-      if (keys.size === 0) {
-        throw new Error('The Corrosion Analysis review for this session released no feature to FFS.');
-      }
+      const releaseBlocked = review.stale
+        ? 'The alignment was re-run after the Corrosion Analysis review, so that release no longer describes this result.'
+        : keys.size === 0
+          ? 'No Corrosion Analysis review has released features from this session.'
+          : null;
+      const scope: FfsIntakeScope = releaseBlocked === null ? intakeScope : 'all';
+      setReleaseBlockReason(releaseBlocked);
+      setIntakeScope(scope);
+
       const revisedRows = applyInterventions(result.comparison, sessionConfig.config?.interventions || []);
       const includedRows = includedInterventionRows(revisedRows);
       setAlignmentRowsWithExclusions(revisedRows);
       setAlignmentRows(includedRows);
       setSelectedKeys(keys);
-      const options = alignmentSectionOptions(includedRows, { selectedKeys: keys });
-      setSectionOptions(options);
-      // Seed every section with the line default so the table always shows what
-      // each stretch will actually be assessed with, not a blank the reader has
-      // to interpret.
-      setSectionFactors(Object.fromEntries(
-        options.map((option) => [normalizedSectionKey(option.section), designFactor]),
-      ));
       setReasons(Object.fromEntries(
         review.items.filter((item) => item.reason).map((item) => [item.sourceKey, item.reason as string]),
       ));
       setAlignmentMessage(
-        `${keys.size.toLocaleString()} released feature(s) out of ${includedRows.length.toLocaleString()} included comparison rows.`,
+        `${includedRows.length.toLocaleString()} included comparison rows loaded`
+        + (keys.size > 0 ? `, ${keys.size.toLocaleString()} of them released by review.` : '.'),
       );
       const session = sessions.find((item) => item.id === sessionId);
       if (!lineName && session) setLineName(session.pipelineName);
@@ -393,7 +448,7 @@ export default function FfsSetupPage() {
         fallbackDepthGrowthMmPerYear: Number(fallbackDepthGrowth),
         fallbackLengthGrowthMmPerYear: Number(fallbackLengthGrowth),
         nominalWallThicknessMm,
-      }, selectedRunId, { selectedKeys, reasons });
+      }, selectedRunId, { selectedKeys, reasons, scope: intakeScope });
 
       // The reason of whichever row happened to sit first used to be raised
       // here. That row is almost always the OLD side of the comparison, so the
@@ -420,9 +475,10 @@ export default function FfsSetupPage() {
           screening,
           alignmentImport: {
             sessionId: selectedRunId,
+            scope: intakeScope,
             accepted: imported.accepted.map((item) => item.provenance),
-            // Released features that could not be assessed, and why — not the
-            // OLD side of the comparison and not the features the review held
+            // In-scope anomalies that could not be assessed, and why — not the
+            // OLD side of the comparison and not the features a release held
             // back, which are counted separately.
             rejected: imported.rejected,
             skipped: imported.skipped,
@@ -708,12 +764,13 @@ export default function FfsSetupPage() {
                 <FiShield className="mt-0.5 h-5 w-5 shrink-0 text-indigo-600" />
                 <div>
                   <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                    Anomalies come from Corrosion Analysis only
+                    Anomalies come from a completed alignment
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
-                    A session appears here once its alignment reached the final phase and an engineer released
-                    features for assessment. NEW-run geometry and growth evidence keep their session, feature,
-                    survey interval, formula, and analysis-basis provenance.
+                    A session appears here once its alignment reached the final phase. NEW-run geometry and growth
+                    evidence keep their session, feature, survey interval, formula, and analysis-basis provenance.
+                    Whichever coverage you choose, every anomaly the run reported is accounted for: assessed, or
+                    listed with the reason it could not be.
                   </p>
                 </div>
               </div>
@@ -721,7 +778,7 @@ export default function FfsSetupPage() {
 
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Released alignment session
+                Completed alignment session
               </label>
               <div className="flex gap-2">
                 <select
@@ -730,10 +787,13 @@ export default function FfsSetupPage() {
                   disabled={alignmentLoading || sessionsLoading}
                   className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                 >
-                  <option value="">Select a released session</option>
+                  <option value="">Select a completed session</option>
                   {sessions.map((session) => (
                     <option key={session.id} value={session.id}>
-                      {session.pipelineName} · {session.selectedCount.toLocaleString()} released
+                      {session.pipelineName}
+                      {session.selectedCount > 0
+                        ? ` · ${session.selectedCount.toLocaleString()} released by review`
+                        : ' · whole run'}
                     </option>
                   ))}
                 </select>
@@ -752,16 +812,73 @@ export default function FfsSetupPage() {
               {sessionsLoading && <p className="mt-2 text-xs text-slate-500">Loading released sessions…</p>}
               {!sessionsLoading && sessions.length === 0 && (
                 <p className="mt-2 text-xs text-amber-600">
-                  No alignment session has released features yet. Finish an alignment, then complete its
-                  Corrosion Analysis review.
+                  No alignment has reached the final phase yet. Finish an alignment run, then assess it here.
                 </p>
               )}
               {alignmentMessage && <p className="mt-2 text-xs font-medium text-emerald-600">{alignmentMessage}</p>}
               {alignmentError && <p role="alert" className="mt-2 text-xs font-medium text-red-600">{alignmentError}</p>}
             </div>
 
-            {/* What the assessment would do with this release, before it runs. */}
-            {selectedKeys.size > 0 && !alignmentLoading && (
+            {/* How much of the run this assessment covers. */}
+            {alignmentRows.length > 0 && !alignmentLoading && (
+              <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
+                  Assessment coverage
+                </p>
+                <div role="radiogroup" aria-label="Assessment coverage" className="ds-segmented mt-2.5 w-max max-w-full">
+                  {([
+                    {
+                      value: 'all' as const,
+                      label: 'Every anomaly in the run',
+                      hint: 'Assesses all NEW-run metal loss, whether or not it matched the previous inspection.',
+                      disabled: false,
+                    },
+                    {
+                      value: 'released' as const,
+                      label: 'Only features released by review',
+                      hint: releaseBlockReason
+                        || 'Assesses only the features an engineer ticked in Corrosion Analysis.',
+                      disabled: releaseBlockReason !== null,
+                    },
+                  ]).map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={intakeScope === option.value}
+                      disabled={option.disabled}
+                      title={option.hint}
+                      className={`ds-segmented__option${intakeScope === option.value ? ' is-active' : ''}`}
+                      onClick={() => setIntakeScope(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                  {intakeScope === 'all'
+                    ? 'Unmatched anomalies are assessed too. Their depth growth is a disclosed zero-baseline '
+                      + 'estimate rather than a measured run-pair rate, and each one says so.'
+                    : `${selectedKeys.size.toLocaleString()} feature(s) were released by the Corrosion Analysis `
+                      + 'review. Anything outside that release is listed in the assessment as not assessed, '
+                      + 'never dropped.'}
+                </p>
+                {releaseBlockReason && (
+                  <p className="mt-1.5 text-[11px] font-medium leading-relaxed text-amber-700 dark:text-amber-400">
+                    {releaseBlockReason}{' '}
+                    <Link
+                      to={`/alignment/${encodeURIComponent(selectedRunId)}/corrosion`}
+                      className="font-semibold text-indigo-600 hover:underline"
+                    >
+                      Open Corrosion Analysis
+                    </Link>
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* What the assessment would do with this scope, before it runs. */}
+            {intake.released > 0 && !alignmentLoading && (
               <div
                 className={`rounded-xl border p-4 ${
                   intake.assessable === 0
@@ -772,13 +889,23 @@ export default function FfsSetupPage() {
                 }`}
               >
                 <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                  {intake.assessable.toLocaleString()} of {selectedKeys.size.toLocaleString()} released
-                  feature{selectedKeys.size === 1 ? '' : 's'} can be assessed
+                  {intake.assessable.toLocaleString()} of {intake.released.toLocaleString()}{' '}
+                  {intakeScope === 'all' ? 'anomal' : 'released featur'}
+                  {intake.released === 1
+                    ? (intakeScope === 'all' ? 'y' : 'e')
+                    : (intakeScope === 'all' ? 'ies' : 'es')}{' '}
+                  can be assessed
                 </p>
                 {intake.assessable > 0 && (
                   <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
                     Metal loss the NEW run reported for the first time is assessed too, on a disclosed
                     zero-depth baseline at the OLD survey rather than a measured run-pair rate.
+                  </p>
+                )}
+                {intake.assessable < intake.released && (
+                  <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                    The {(intake.released - intake.assessable).toLocaleString()} that cannot be calculated are
+                    carried into the assessment as unassessed anomalies, with the reason against each one.
                   </p>
                 )}
                 {intake.usingNominalWall > 0 && (
@@ -789,9 +916,10 @@ export default function FfsSetupPage() {
                 )}
                 {intake.excludedByIntervention > 0 && (
                   <p className="mt-2 text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
-                    {intake.excludedByIntervention.toLocaleString()} released feature
-                    {intake.excludedByIntervention === 1 ? ' was' : 's were'} excluded from the released outputs
-                    by a reviewer, so {intake.excludedByIntervention === 1 ? 'it is' : 'they are'} not assessed.
+                    {intake.excludedByIntervention.toLocaleString()} anomal
+                    {intake.excludedByIntervention === 1 ? 'y was' : 'ies were'} excluded from the released
+                    outputs by a reviewer, so {intake.excludedByIntervention === 1 ? 'it is' : 'they are'} not
+                    assessed.
                   </p>
                 )}
                 {intake.missingFromResult > 0 && (

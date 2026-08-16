@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {
     findOwnedSession,
     findLatestOwnedSession,
-    listOwnedSessions,
+    listOwnedSessionRegistry,
     createOwnedSession,
     updateOwnedSessionConfig,
     markOwnedSessionCompleted,
@@ -124,13 +124,32 @@ test('findLatestOwnedSession never falls back outside the organization', async (
     assert.deepEqual(pool.calls[0].values, [22]);
 });
 
-test('listOwnedSessions is tenant scoped and ordered newest first', async () => {
+test('the alignment registry is tenant scoped and ordered newest first', async () => {
     const pool = recordingPool({ rows: [], rowCount: 0 });
 
-    await listOwnedSessions(pool, 22);
+    await listOwnedSessionRegistry(pool, 22);
 
     assert.match(pool.calls[0].text, /COALESCE\(s\.organization_id, p\.organization_id\) = \$1/i);
     assert.match(pool.calls[0].text, /ORDER BY s\.started_at DESC/i);
+    assert.deepEqual(pool.calls[0].values, [22]);
+});
+
+test('the alignment registry carries run provenance, review state, and the filed FFS session', async () => {
+    const pool = recordingPool({ rows: [], rowCount: 0 });
+
+    await listOwnedSessionRegistry(pool, 22);
+    const { text } = pool.calls[0];
+
+    // The two survey runs behind the session, which is what the removed ILI-runs
+    // page used to show on its own.
+    assert.match(text, /LEFT JOIN survey_runs old_run ON old_run\.id = s\.run_old_id/i);
+    assert.match(text, /LEFT JOIN survey_runs new_run ON new_run\.id = s\.run_new_id/i);
+    // A result that can be opened or exported.
+    assert.match(text, /FROM alignment_jobs j[\s\S]*state = 'completed'/i);
+    // What the Corrosion Analysis review released, and the newest filed FFS
+    // assessment — both organization scoped so no tenant reads another's.
+    assert.match(text, /FROM ffs_candidates c/i);
+    assert.match(text, /FROM ffs_sessions f[\s\S]*f\.organization_id = \$1/i);
 });
 
 test('completion persists status, timestamp, and result summary only for owner', async () => {

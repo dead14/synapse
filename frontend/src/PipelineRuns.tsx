@@ -1,218 +1,412 @@
-import { useState, useEffect } from 'react';
-import { FiEye, FiSettings, FiBell, FiActivity, FiClock, FiCheckCircle, FiTrash2 } from 'react-icons/fi';
-import { useNavigate } from 'react-router-dom';
-import { format, isValid } from 'date-fns';
-import { apiFetch } from './utils/api';
-import ConfirmDialog from './components/common/ConfirmDialog';
+/**
+ * The ILI alignment registry.
+ *
+ * One table for survey data. The separate ILI-runs page showed the same runs
+ * through a different query with a different set of actions on them, so a run
+ * appeared twice and the two rows could disagree about what had been done to it.
+ * This is what is left, and it answers both halves: which inspections were
+ * compared, and what has happened to the comparison since.
+ */
 
-/** date-fns v4 format() throws a RangeError on invalid dates; one malformed
- * run date must not take down the whole history page. */
-function formatRunDate(value: string): string {
-  if (!value) return '-';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  FiActivity,
+  FiAlertTriangle,
+  FiCheckCircle,
+  FiClock,
+  FiDownload,
+  FiEye,
+  FiRefreshCw,
+  FiSearch,
+  FiShield,
+  FiTrash2,
+} from 'react-icons/fi';
+import { Link, useNavigate } from 'react-router-dom';
+import { format, isValid } from 'date-fns';
+
+import PageMeta from './components/common/PageMeta';
+import ConfirmDialog from './components/common/ConfirmDialog';
+import SynButton from './components/ui/SynButton';
+import { apiFetch, apiUrl } from './utils/api';
+import {
+  createAlignmentSessionExportPayload,
+  waitForAlignmentExport,
+  type AlignmentExportJob,
+} from './utils/alignmentExport';
+import { downloadFfsSessionReport } from './lib/ffs/sessions';
+import {
+  normalizeAlignmentRegistry,
+  presentAlignmentRow,
+  summarizeAlignmentRegistry,
+  type AlignmentRegistryRow,
+  type AlignmentRunSide,
+} from './domain/alignmentRegistry';
+
+/** date-fns v4 throws a RangeError on an invalid date; one malformed timestamp
+ * must not take down the whole registry. */
+function formatDate(value: string | null): string {
+  if (!value) return 'Not recorded';
   const parsed = new Date(value);
-  return isValid(parsed) ? format(parsed, 'dd MMM yyyy') : '-';
+  return isValid(parsed) ? format(parsed, 'dd MMM yyyy') : 'Not recorded';
 }
 
-interface PipelineRun {
-  id: string;
-  pipelineName: string;
-  date: string;
-  status: string;
-  matchRate?: number | null;
-  anomaliesFound: number;
-  vendorLama: string;
-  vendorBaru: string;
+/** One side of the comparison, as a single line: who flew it and when. */
+function describeRun(side: AlignmentRunSide, fallback: string): string {
+  const who = side.vendor || side.name || fallback;
+  const when = side.surveyYear !== null
+    ? String(side.surveyYear)
+    : side.surveyDate
+      ? side.surveyDate.slice(0, 4)
+      : null;
+  return when ? `${who} · ${when}` : who;
 }
 
 export default function PipelineRuns() {
   const navigate = useNavigate();
-  const [runs, setRuns] = useState<PipelineRun[]>([]);
+  const [rows, setRows] = useState<AlignmentRegistryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [downloadingAlignmentId, setDownloadingAlignmentId] = useState<string | null>(null);
+  const [downloadingFfsId, setDownloadingFfsId] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchRuns = async () => {
-      try {
-        setRuns(await apiFetch<PipelineRun[]>('/api/pipeline-runs'));
-      } catch (err) {
-        console.error('Failed to fetch pipeline runs:', err);
-        setError('The pipeline history could not be loaded.');
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchRuns();
-  }, []);
-
-  const deleteRun = async (runId: string) => {
+  async function loadRegistry() {
+    setLoading(true);
+    setError(null);
     try {
-      await apiFetch(`/api/pipeline-runs/${encodeURIComponent(runId)}`, { method: 'DELETE' });
-      setRuns((previous) => previous.filter((run) => run.id !== runId));
-    } catch (caughtError) {
-      console.error('Failed to delete pipeline run:', caughtError);
-      setError('The pipeline run could not be deleted.');
+      setRows(normalizeAlignmentRegistry(await apiFetch<unknown>('/api/pipeline-runs')));
+    } catch (caught) {
+      console.error('Failed to fetch the alignment registry:', caught);
+      setError('The alignment registry could not be loaded.');
+    } finally {
+      setLoading(false);
     }
-  };
+  }
+
+  useEffect(() => { void loadRegistry(); }, []);
+
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) => (
+      row.pipelineName.toLowerCase().includes(needle)
+      || (row.runs.old.vendor ?? '').toLowerCase().includes(needle)
+      || (row.runs.new.vendor ?? '').toLowerCase().includes(needle)
+      || row.id === needle
+    ));
+  }, [rows, query]);
+
+  const summary = useMemo(() => summarizeAlignmentRegistry(rows), [rows]);
+
+  async function deleteRun(sessionId: string) {
+    try {
+      await apiFetch(`/api/pipeline-runs/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+      setRows((previous) => previous.filter((row) => row.id !== sessionId));
+    } catch (caught) {
+      console.error('Failed to delete the alignment session:', caught);
+      setError('The alignment session could not be deleted.');
+    }
+  }
+
+  /** The alignment workbook, prepared by the API and streamed to the browser. */
+  async function downloadAlignmentReport(row: AlignmentRegistryRow) {
+    setDownloadingAlignmentId(row.id);
+    setError(null);
+    try {
+      const inspectionRuns = [row.runs.old, row.runs.new]
+        .filter((side) => side.runId !== null)
+        .map((side) => ({
+          runId: side.runId as number,
+          vendor: side.vendor || '',
+          year: side.surveyYear === null ? '' : String(side.surveyYear),
+        }));
+      const response = await fetch(apiUrl('/api/alignment/export-excel'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(createAlignmentSessionExportPayload(row.id, {
+          pipelineName: row.pipelineName,
+          inspectionRuns,
+        })),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error || `Unable to prepare the alignment download (${response.status}).`);
+      }
+      if (response.status === 202) {
+        const queued = await response.json() as AlignmentExportJob;
+        if (!queued.exportId) throw new Error('The alignment export did not return an identifier.');
+        await waitForAlignmentExport(
+          () => apiFetch<AlignmentExportJob>(`/api/alignment/exports/${encodeURIComponent(queued.exportId)}`),
+          () => new Promise((resolve) => window.setTimeout(resolve, 2_000)),
+        );
+        triggerDownload(apiUrl(`/api/alignment/exports/${encodeURIComponent(queued.exportId)}/download`));
+      } else {
+        const url = URL.createObjectURL(await response.blob());
+        triggerDownload(url);
+        URL.revokeObjectURL(url);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The alignment report could not be prepared.');
+    } finally {
+      setDownloadingAlignmentId(null);
+    }
+  }
+
+  /**
+   * The FFS workbook for the filed assessment, built in the browser from the
+   * stored case by the same builder the results workspace uses — so the file
+   * pulled from this table is the file the engineer would have exported.
+   */
+  async function downloadFfsReport(row: AlignmentRegistryRow) {
+    if (row.ffs === null) return;
+    setDownloadingFfsId(row.ffs.sessionId);
+    setError(null);
+    try {
+      await downloadFfsSessionReport(row.ffs.sessionId);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The FFS report could not be prepared.');
+    } finally {
+      setDownloadingFfsId(null);
+    }
+  }
 
   return (
-    <div className="app-light-page font-outfit flex flex-col items-center pb-12">
-      {/* Header Area */}
-      <div className="w-full border-b border-gray-200 bg-white py-6">
-        <div className="app-page-shell flex justify-between items-start">
+    <div className="syn-page">
+      <PageMeta title="ILI alignment · Synapse" description="Inspection runs, alignment results, and FFS handoff" />
+      <div className="syn-shell">
+        <header className="syn-registry-heading">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
-              <span className="bg-[#1a2130] text-white p-2 rounded-xl"><FiActivity size={24} /></span>
-              Pipeline Runs History
-            </h1>
-            <p className="text-gray-500 mt-2">Manage your previous ILI alignment runs, view data, or initiate Fitness For Service (FFS).</p>
+            <p className="syn-kicker">Data &amp; alignment · one registry</p>
+            <h1 className="syn-display">ILI alignment<br />registry.</h1>
+            <p className="syn-copy">
+              Every comparison this organization has run, the inspections behind it, and what has been done with
+              the result — reviewed, assessed for fitness-for-service, or still waiting.
+            </p>
           </div>
-          <div className="flex gap-4 items-center">
-            <button 
-              onClick={() => {
-                localStorage.removeItem('synapse_alignment_wizard_progress');
-                navigate('/alignment');
-              }}
-              className="px-4 py-2 bg-[#1a2130] hover:bg-black text-white rounded-xl text-sm font-semibold transition-colors shadow-sm"
-            >
-              + New Alignment Run
-            </button>
-            <button className="p-2 text-gray-400 hover:text-gray-900 bg-white border border-gray-200 rounded-full hover:bg-gray-50 transition-colors">
-              <FiBell size={20} />
-            </button>
-            <button className="p-2 text-gray-400 hover:text-gray-900 bg-white border border-gray-200 rounded-full hover:bg-gray-50 transition-colors">
-              <FiSettings size={20} />
-            </button>
-          </div>
-        </div>
-      </div>
+          <div className="syn-registry-heading__mark" aria-hidden="true"><FiActivity /></div>
+        </header>
 
-      {/* Main Content Area */}
-      <div className="app-page-shell mt-6 flex flex-col gap-5">
-        {error && <p role="alert" className="mx-6 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
-        
-        {/* Table Container */}
-        <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.06)]">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+        {error && (
+          <div className="syn-alert syn-alert--danger" role="alert">
+            <FiAlertTriangle aria-hidden="true" /><span>{error}</span>
+          </div>
+        )}
+
+        <section className="syn-panel syn-registry-table-panel" aria-labelledby="alignment-registry-title">
+          <header className="syn-section-heading">
+            <div>
+              <p className="syn-kicker">
+                {summary.total} alignment{summary.total === 1 ? '' : 's'} ·{' '}
+                {summary.assessed} assessed · {summary.awaitingAssessment} awaiting assessment
+                {summary.running > 0 ? ` · ${summary.running} running` : ''}
+              </p>
+              <h2 id="alignment-registry-title" className="syn-heading">Alignment sessions</h2>
+            </div>
+            <div className="syn-registry-actions">
+              <label className="syn-field syn-field--inline">
+                <span className="sr-only">Search alignments</span>
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Pipeline or vendor"
+                  aria-label="Search alignments by pipeline or vendor"
+                />
+              </label>
+              <SynButton variant="outline" size="sm" type="button" onClick={() => void loadRegistry()} disabled={loading}>
+                <FiRefreshCw aria-hidden="true" /> Refresh
+              </SynButton>
+              <SynButton
+                variant="solid"
+                size="sm"
+                type="button"
+                onClick={() => {
+                  localStorage.removeItem('synapse_alignment_wizard_progress');
+                  navigate('/alignment');
+                }}
+              >
+                New alignment
+              </SynButton>
+            </div>
+          </header>
+
+          <div className="syn-table-wrap">
+            <table className="syn-table syn-registry-table">
               <thead>
-                <tr className="bg-gray-50 border-b border-gray-100 text-xs uppercase tracking-wider text-gray-500">
-                  <th className="px-6 py-4 font-bold">Pipeline Line Name</th>
-                  <th className="px-6 py-4 font-bold">Upload Date</th>
-                  <th className="px-6 py-4 font-bold">Match Rate</th>
-                  <th className="px-6 py-4 font-bold">Status</th>
-                  <th className="px-6 py-4 font-bold text-right">Actions</th>
+                <tr>
+                  <th scope="col">Pipeline / session</th>
+                  <th scope="col">Inspections compared</th>
+                  <th scope="col">Result</th>
+                  <th scope="col">Process / actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
-                {loading ? (
+              <tbody>
+                {loading && (
                   <tr>
-                    <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
-                      Loading pipeline runs...
+                    <td colSpan={4}>
+                      <div className="syn-table-loading" role="status">
+                        <span className="syn-skeleton" /><span className="syn-skeleton" /><span className="syn-skeleton" />
+                      </div>
                     </td>
                   </tr>
-                ) : runs.length === 0 ? (
+                )}
+                {!loading && visible.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
-                      No pipeline runs found. Upload a CSV to start an alignment.
-                    </td>
-                  </tr>
-                ) : runs.map((run) => (
-                  <tr key={run.id} className="hover:bg-blue-50/30 transition-colors group">
-                    <td className="px-6 py-5">
-                      <div className="font-bold text-gray-800 text-[15px]">{run.pipelineName}</div>
-                      <div className="text-xs text-gray-500 mt-1 flex items-center gap-1">
-                        <FiEye size={12} /> {run.vendorLama} vs {run.vendorBaru}
-                      </div>
-                    </td>
-                    <td className="px-6 py-5">
-                      <div className="text-sm font-medium text-gray-700">
-                        {formatRunDate(run.date)}
-                      </div>
-                      <div className="text-xs text-gray-400">Total Anomalies: {run.anomaliesFound}</div>
-                    </td>
-                    <td className="px-6 py-5">
-                      <div className="inline-flex items-center justify-center px-3 py-1 rounded-full bg-blue-50 text-blue-700 font-bold text-sm">
-                        {typeof run.matchRate === 'number' ? `${run.matchRate.toFixed(1)}%` : 'N/A'}
-                      </div>
-                    </td>
-                    <td className="px-6 py-5">
-                      {run.status === 'completed' ? (
-                        <div className="flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full text-sm font-medium w-fit">
-                          <FiCheckCircle size={14} /> {run.status}
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5 text-amber-600 bg-amber-50 px-3 py-1 rounded-full text-sm font-medium w-fit">
-                          <FiClock size={14} /> {run.status}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-6 py-5 text-right">
-                      <div className="flex justify-end gap-3 opacity-80 group-hover:opacity-100 transition-opacity">
-                        
-                        {/* Action: View Data */}
-                        <button 
-                          onClick={() => navigate(`/ili-comparison?sessionId=${run.id}`)}
-                          className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-colors"
-                          title="View Alignment Data"
-                        >
-                          <FiEye /> View
-                        </button>
-                        
-                        <button
-                          onClick={() => navigate(`/ili-comparison?sessionId=${encodeURIComponent(run.id)}`)}
-                          className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-blue-600 bg-blue-50 border border-blue-100 rounded-lg hover:bg-blue-100 transition-colors"
-                          title="Open report"
-                        >
-                          <FiEye /> Report
-                        </button>
-
-                        {/* Action: FFS */}
-                        <button 
-                          onClick={() => navigate(`/ffs?sessionId=${encodeURIComponent(run.id)}`)}
-                          className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-gray-900 bg-[#cfff2e] rounded-lg hover:bg-[#bfee1a] shadow-sm transition-colors"
-                          title="Fitness For Service"
-                        >
-                          ⚙️ FFS
-                        </button>
-
-                        {/* Action: Delete */}
-                        <button
-                          onClick={() => setPendingDeleteId(run.id)}
-                          className="flex items-center justify-center p-2 text-red-500 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
-                          title="Delete Run"
-                          aria-label={`Delete run ${run.pipelineName}`}
-                        >
-                          <FiTrash2 size={18} />
-                        </button>
+                    <td colSpan={4}>
+                      <div className="syn-empty-table">
+                        <FiSearch aria-hidden="true" />
+                        <strong>{rows.length === 0 ? 'No alignment sessions yet' : 'No alignment matches that search'}</strong>
+                        <span>
+                          {rows.length === 0
+                            ? 'Start an alignment run to import inspection data and compare two surveys.'
+                            : 'Clear the search to see every session.'}
+                        </span>
                       </div>
                     </td>
                   </tr>
-                ))}
+                )}
+                {!loading && visible.map((row) => {
+                  const view = presentAlignmentRow(row);
+                  return (
+                    <tr key={row.id}>
+                      <td>
+                        <strong>{row.pipelineName}</strong>
+                        <small>
+                          Session {row.id} · started {formatDate(row.startedAt)}
+                          {row.algorithm ? ` · ${row.algorithm}` : ''}
+                        </small>
+                      </td>
+                      <td>
+                        <strong>{describeRun(row.runs.new, 'Newer run')}</strong>
+                        <small>
+                          vs {describeRun(row.runs.old, 'Older run')}
+                          {row.runs.new.rowCount !== null
+                            ? ` · ${row.runs.new.rowCount.toLocaleString('en-GB')} rows`
+                            : ''}
+                        </small>
+                      </td>
+                      <td>
+                        {row.status === 'completed' ? (
+                          <span className="syn-pill syn-pill--signal"><FiCheckCircle aria-hidden="true" /> Completed</span>
+                        ) : row.status === 'failed' ? (
+                          <span className="syn-pill syn-pill--warning"><FiAlertTriangle aria-hidden="true" /> Failed</span>
+                        ) : (
+                          <span className="syn-pill"><FiClock aria-hidden="true" /> {row.status}</span>
+                        )}
+                        <small>
+                          {row.matchRate === null ? 'Match rate not measured' : `${row.matchRate.toFixed(1)}% matched`}
+                          {' · '}{row.anomaliesFound.toLocaleString('en-GB')} anomalies
+                        </small>
+                      </td>
+                      <td>
+                        <div className="syn-registry-workflow">
+                          <div className={`syn-registry-stage syn-registry-stage--${view.tone}`}>
+                            <strong>{view.label}</strong>
+                            <small>{view.note}</small>
+                          </div>
+
+                          <div className="syn-registry-actions">
+                            {view.resultHref ? (
+                              <Link to={view.resultHref} className="syn-btn syn-btn--solid syn-btn--sm">
+                                <FiEye aria-hidden="true" /> Open result
+                              </Link>
+                            ) : (
+                              <Link to="/alignment" className="syn-btn syn-btn--outline syn-btn--sm">
+                                Open wizard
+                              </Link>
+                            )}
+                            {/* Exactly one FFS action per row, and only the one
+                                this session actually has: re-opening a filed
+                                assessment, or running the first one. */}
+                            {view.openFfsHref && (
+                              <Link to={view.openFfsHref} className="syn-btn syn-btn--outline syn-btn--sm">
+                                <FiShield aria-hidden="true" /> Open FFS
+                              </Link>
+                            )}
+                            {view.runFfsHref && (
+                              <Link to={view.runFfsHref} className="syn-btn syn-btn--outline syn-btn--sm">
+                                <FiShield aria-hidden="true" /> Run FFS
+                              </Link>
+                            )}
+                          </div>
+
+                          {(row.result.available || row.ffs !== null) && (
+                            <div className="syn-registry-actions">
+                              {row.result.available && (
+                                <SynButton
+                                  variant="outline"
+                                  size="sm"
+                                  type="button"
+                                  disabled={downloadingAlignmentId === row.id}
+                                  onClick={() => void downloadAlignmentReport(row)}
+                                >
+                                  <FiDownload aria-hidden="true" />
+                                  {downloadingAlignmentId === row.id ? 'Preparing…' : 'Alignment report'}
+                                </SynButton>
+                              )}
+                              {row.ffs !== null && (
+                                <SynButton
+                                  variant="outline"
+                                  size="sm"
+                                  type="button"
+                                  disabled={downloadingFfsId === row.ffs.sessionId}
+                                  onClick={() => void downloadFfsReport(row)}
+                                >
+                                  <FiDownload aria-hidden="true" />
+                                  {downloadingFfsId === row.ffs.sessionId ? 'Preparing…' : 'FFS report'}
+                                </SynButton>
+                              )}
+                            </div>
+                          )}
+
+                          <div className="syn-registry-actions syn-registry-actions--quiet">
+                            <SynButton
+                              variant="ghost"
+                              size="sm"
+                              type="button"
+                              className="syn-registry-delete"
+                              onClick={() => setPendingDeleteId(row.id)}
+                            >
+                              <FiTrash2 aria-hidden="true" /> Delete
+                            </SynButton>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-          
-          <div className="bg-white px-6 py-4 border-t border-gray-100 flex items-center justify-between">
-            <span className="text-sm text-gray-500">Total <span className="font-medium text-gray-900">{runs.length}</span> pipeline runs</span>
-          </div>
-        </div>
+        </section>
       </div>
 
       {pendingDeleteId !== null && (
         <ConfirmDialog
-          title="Delete this pipeline run?"
-          message="This permanently removes the run and its alignment results. This action cannot be undone."
-          confirmLabel="Delete Run"
+          title="Delete this alignment session?"
+          message="This permanently removes the session and its alignment result. Filed FFS assessments are kept, but lose the session they came from. This action cannot be undone."
+          confirmLabel="Delete session"
           danger
           onConfirm={() => {
-            const runId = pendingDeleteId;
+            const sessionId = pendingDeleteId;
             setPendingDeleteId(null);
-            void deleteRun(runId);
+            void deleteRun(sessionId);
           }}
           onCancel={() => setPendingDeleteId(null)}
         />
       )}
     </div>
   );
+}
+
+/** Clicks a temporary link, which is the only way to name a downloaded file. */
+function triggerDownload(href: string) {
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = 'synapse_alignment_report.xlsx';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }

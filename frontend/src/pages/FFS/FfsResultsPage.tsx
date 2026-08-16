@@ -7,6 +7,8 @@ import {
   FiDownload,
   FiFileText,
   FiGrid,
+  FiLayers,
+  FiSave,
   FiShield,
   FiSliders,
   FiTable,
@@ -24,15 +26,19 @@ import FfsSummaryCards from '../../components/ffs/FfsSummaryCards';
 import ShareSnapshotButton from '../../components/sharing/ShareSnapshotButton';
 import { buildFfsShareState, type FfsShareState } from '../../lib/sharing/publicShareSnapshot';
 import { reviveFfsShareState, type RevivedFfsShareState } from '../../lib/ffs/shareState';
-import { fetchFfsSession, saveFfsSession } from '../../lib/ffs/sessions';
+import { fetchFfsSession, saveFfsSession, updateFfsSession } from '../../lib/ffs/sessions';
 import { Callout, NumberField, Panel } from '../../components/ffs/FfsPrimitives';
 import { exportResultsWorkbook } from '../../lib/ffs/exports';
 import { methodProfileLabel, pressureBasisLabel } from '../../lib/ffs/assessmentProfile.ts';
 import type {
   AlignmentImportProvenance,
+  AlignmentImportSkipped,
   FfsGirthWeld,
+  FfsIntakeScope,
   FfsSpoolCensusRow,
+  RejectedAlignmentRow,
 } from '../../lib/ffs/alignmentImport';
+import FfsCoveragePanel from '../../components/ffs/FfsCoveragePanel';
 import type { FfsSpoolDisposition } from '../../lib/ffs/spoolReview';
 import { screenResults } from '../../lib/ffs/screening';
 import {
@@ -50,10 +56,13 @@ import {
   type FfsScreeningConfig,
 } from '../../lib/ffs/types';
 
-type TabId = 'results' | 'charts' | 'statistics' | 'integrity' | 'case' | 'narrative';
+type TabId = 'results' | 'coverage' | 'charts' | 'statistics' | 'integrity' | 'case' | 'narrative';
 
 const TABS: { id: TabId; label: string; icon: typeof FiTable }[] = [
   { id: 'results', label: 'Results', icon: FiTable },
+  // Every anomaly the run reported has to be accounted for somewhere, including
+  // the ones no B31G result could be produced for.
+  { id: 'coverage', label: 'Coverage', icon: FiLayers },
   { id: 'charts', label: 'Charts', icon: FiBarChart2 },
   { id: 'statistics', label: 'Statistics', icon: FiGrid },
   { id: 'integrity', label: 'Integrity review', icon: FiActivity },
@@ -70,9 +79,13 @@ interface LocationState {
   screening?: FfsScreeningConfig;
   alignmentImport?: {
     sessionId: string;
+    /** How much of the run was assessed. Absent on cases filed before scopes. */
+    scope?: FfsIntakeScope;
     accepted: AlignmentImportProvenance[];
-    /** Released features the import could not assess — never the OLD side. */
-    rejected: unknown[];
+    /** In-scope anomalies the import could not assess — never the OLD side. */
+    rejected: RejectedAlignmentRow[];
+    /** Rows that were never candidates, counted by why. */
+    skipped?: AlignmentImportSkipped;
     /** The run's weld ladder, which is what a spool is measured between. */
     girthWelds?: FfsGirthWeld[];
     /** Every metal-loss record of the run, released for assessment or not. */
@@ -121,6 +134,17 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
   // save from firing twice for one assessment.
   const [savedSessionId, setSavedSessionId] = useState<string | null>(requestedSessionId);
   const saveAttempted = useRef(false);
+  const [saving, setSaving] = useState(false);
+  /**
+   * Signature of the reviewer's work as it is stored on the server.
+   *
+   * The engineer keeps working after the run — repair dispositions, spool
+   * decisions, retuned screening — and none of that reached the filed session,
+   * so re-opening one came back with the judgement stripped off. Comparing this
+   * against the live signature is what lets the page say "saved" or "unsaved",
+   * truthfully, rather than claiming a save that only covered the numbers.
+   */
+  const [storedSignature, setStoredSignature] = useState<string | null>(null);
 
   useEffect(() => {
     if (!requestedSessionId || navigationState || sharedState) return;
@@ -145,6 +169,8 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
   }, [requestedSessionId, navigationState, sharedState]);
 
   const state = (shared ?? navigationState ?? storedState) as LocationState | null;
+  /** A case read back from storage, whose reviewer decisions have to be restored. */
+  const revived = shared ?? storedState;
 
   const [activeTab, setActiveTab] = useState<TabId>('results');
   const [selected, setSelected] = useState<FfsScreenedResult | null>(null);
@@ -286,37 +312,98 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
   const selectedItem = selectedIndex >= 0 ? screened[selectedIndex] : null;
 
   /**
-   * File the assessment the first time it is rendered from a fresh run.
+   * Restore the reviewer's decisions when a filed session or a link is opened.
+   *
+   * Runs once per revived case. Everything below it — the screened tiers, the
+   * report case, the spool review — is derived from these, so restoring them
+   * restores the assessment as its author left it.
+   */
+  useEffect(() => {
+    if (!revived) return;
+    setScreening(revived.screening);
+    setRepairOverrides(revived.review.repairOverrides);
+    setSpoolDispositions(revived.review.spoolDispositions);
+  }, [revived]);
+
+  /** What is on screen, as one comparable value. */
+  const liveSignature = useMemo(
+    () => JSON.stringify({ screening, repairOverrides, spoolDispositions }),
+    [screening, repairOverrides, spoolDispositions],
+  );
+  // A stored case starts in step with what was stored; only edits move it.
+  useEffect(() => {
+    if (revived) setStoredSignature(JSON.stringify({
+      screening: revived.screening,
+      repairOverrides: revived.review.repairOverrides,
+      spoolDispositions: revived.review.spoolDispositions,
+    }));
+  }, [revived]);
+
+  const unsaved = !readOnly && !shared && savedSessionId !== null && storedSignature !== liveSignature;
+
+  /**
+   * File the assessment, or re-file the one already stored.
    *
    * A completed FFS run is evidence, and evidence that only exists in one
    * browser tab is evidence nobody else can find. A failed save is reported but
    * never blocks the workspace: the results on screen are valid either way.
    */
-  useEffect(() => {
-    if (readOnly || shared || !navigationState || savedSessionId || saveAttempted.current) return;
+  const fileAssessment = useCallback(async () => {
     if (!config || screened.length === 0) return;
-    saveAttempted.current = true;
-    saveFfsSession({
+    const payload = {
       results,
       config,
       screening,
-      alignmentImport: navigationState.alignmentImport,
-      alignmentSessionId: navigationState.alignmentImport?.sessionId ?? null,
+      alignmentImport: state?.alignmentImport,
+      alignmentSessionId: state?.alignmentImport?.sessionId ?? null,
+      review: { repairOverrides, spoolDispositions },
       summary: {
         pass: screened.filter((item) => item.conservative.severity === 'pass').length,
         review: screened.filter((item) => item.conservative.severity === 'review').length,
         fail: screened.filter((item) => item.conservative.severity === 'fail').length,
+        unassessed: state?.alignmentImport?.rejected?.length ?? 0,
       },
-    })
-      .then(setSavedSessionId)
-      .catch((error: unknown) => {
-        setSessionError(
-          error instanceof Error
-            ? `The assessment could not be filed as a session: ${error.message}`
-            : 'The assessment could not be filed as a session.',
-        );
-      });
-  }, [readOnly, shared, navigationState, savedSessionId, config, screened, results, screening]);
+    };
+    const signature = JSON.stringify({ screening, repairOverrides, spoolDispositions });
+    setSaving(true);
+    setSessionError(null);
+    try {
+      if (savedSessionId) {
+        await updateFfsSession(savedSessionId, payload);
+      } else {
+        const id = await saveFfsSession(payload);
+        setSavedSessionId(id);
+        // The URL becomes the way back to this assessment. Without it a refresh
+        // filed the same case again, and every reload left another session
+        // behind for one piece of work.
+        navigate(`/ffs/results?ffsSessionId=${encodeURIComponent(id)}`, {
+          replace: true,
+          state: navigationState,
+        });
+      }
+      setStoredSignature(signature);
+    } catch (error: unknown) {
+      setSessionError(
+        error instanceof Error
+          ? `The assessment could not be filed as a session: ${error.message}`
+          : 'The assessment could not be filed as a session.',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }, [
+    config, screened, results, screening, state, repairOverrides, spoolDispositions,
+    savedSessionId, navigate, navigationState,
+  ]);
+
+  // The first save is automatic: an assessment that was run is evidence whether
+  // or not the engineer remembers to press anything.
+  useEffect(() => {
+    if (readOnly || shared || !navigationState || savedSessionId || saveAttempted.current) return;
+    if (!config || screened.length === 0) return;
+    saveAttempted.current = true;
+    void fileAssessment();
+  }, [readOnly, shared, navigationState, savedSessionId, config, screened, fileAssessment]);
 
   if (loadingSession) {
     return (
@@ -380,9 +467,38 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
           {sessionError && (
             <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">{sessionError}</p>
           )}
+          {!readOnly && !shared && !sessionError && (
+            <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+              {saving
+                ? 'Filing this assessment…'
+                : unsaved
+                  ? 'Your review has changes that are not filed yet.'
+                  : savedSessionId
+                    ? 'Filed — this assessment can be re-opened from the alignment registry.'
+                    : 'Not filed yet.'}
+            </p>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {!readOnly && !shared && (
+            <SynButton
+              variant={unsaved || savedSessionId === null ? 'solid' : 'outline'}
+              size="sm"
+              disabled={saving}
+              onClick={() => void fileAssessment()}
+            >
+              <span className="inline-flex items-center gap-2">
+                {/* Never claims a save that did not happen: a first save that
+                    failed leaves no session id, and the button says so. */}
+                <FiSave /> {saving
+                  ? 'Saving…'
+                  : savedSessionId === null
+                    ? 'File assessment'
+                    : unsaved ? 'Save review' : 'Saved'}
+              </span>
+            </SynButton>
+          )}
           {!readOnly && (
           <ShareSnapshotButton
             kind="FFS"
@@ -433,6 +549,14 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
               screening,
               state.alignmentImport?.accepted,
               reportContext,
+              // The workbook is the deliverable, so it carries the anomalies
+              // that produced no result as well as the ones that did.
+              state.alignmentImport && {
+                scope: state.alignmentImport.scope,
+                rejected: state.alignmentImport.rejected ?? [],
+                skipped: state.alignmentImport.skipped,
+                censusCount: state.alignmentImport.census?.length ?? null,
+              },
             )}
           >
             <span className="inline-flex items-center gap-2">
@@ -661,6 +785,23 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
             screening={screening}
             onSelect={setSelected}
           />
+        </div>
+
+        <div
+          role="tabpanel"
+          id="ffs-panel-coverage"
+          aria-labelledby="ffs-tab-coverage"
+          hidden={activeTab !== 'coverage'}
+        >
+          {activeTab === 'coverage' && (
+            <FfsCoveragePanel
+              assessedCount={screened.length}
+              scope={state.alignmentImport?.scope}
+              rejected={state.alignmentImport?.rejected}
+              skipped={state.alignmentImport?.skipped}
+              census={state.alignmentImport?.census}
+            />
+          )}
         </div>
 
         <div

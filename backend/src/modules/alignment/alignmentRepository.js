@@ -87,13 +87,72 @@ async function findLatestOwnedSession(pool, orgId, { requireData = false, status
     return result.rows[0] || null;
 }
 
-async function listOwnedSessions(pool, orgId) {
+/**
+ * The alignment registry, with everything a row of it has to state.
+ *
+ * This is the one table left for survey data: the separate ILI-runs registry
+ * listed the same runs through a second query and offered a second set of
+ * actions on them. So the workflow facts that page derived are derived here
+ * instead — the two survey runs behind the session, whether a completed result
+ * exists to open or export, what the Corrosion Analysis review released, and
+ * the newest filed FFS assessment.
+ *
+ * Every LATERAL is bounded to one row and keyed on an indexed column, so the
+ * cost is one lookup per session rather than a scan per join.
+ */
+async function listOwnedSessionRegistry(pool, orgId) {
     const result = await pool.query(
         `SELECT s.id, s.pipeline_id, s.started_at, s.completed_at, s.status, s.params_json,
-                s.xmin::text AS revision,
-                p.name AS stored_pipeline_name
+                p.name AS stored_pipeline_name,
+                old_run.vendor        AS old_vendor,
+                old_run.survey_year   AS old_survey_year,
+                old_run.survey_date   AS old_survey_date,
+                new_run.vendor        AS new_vendor,
+                new_run.survey_year   AS new_survey_year,
+                new_run.survey_date   AS new_survey_date,
+                new_run.row_count     AS new_row_count,
+                job.job_id            AS completed_job_id,
+                job.completed_at      AS result_completed_at,
+                COALESCE(review.reviewed_count, 0) AS reviewed_count,
+                COALESCE(review.selected_count, 0) AS selected_count,
+                ffs.id                AS ffs_session_id,
+                ffs.created_at        AS ffs_created_at,
+                ffs.feature_count     AS ffs_feature_count,
+                ffs.summary_json      AS ffs_summary,
+                COALESCE(ffs_all.session_count, 0) AS ffs_session_count
          FROM alignment_sessions s
          LEFT JOIN pipelines p ON p.id = s.pipeline_id
+         LEFT JOIN survey_runs old_run ON old_run.id = s.run_old_id
+         LEFT JOIN survey_runs new_run ON new_run.id = s.run_new_id
+         LEFT JOIN LATERAL (
+             SELECT j.job_id, j.completed_at
+             FROM alignment_jobs j
+             WHERE j.session_id = s.id
+               AND j.organization_id = $1
+               AND j.state = 'completed'
+             ORDER BY j.completed_at DESC NULLS LAST, j.created_at DESC
+             LIMIT 1
+         ) job ON true
+         LEFT JOIN LATERAL (
+             SELECT COUNT(c.id) AS reviewed_count,
+                    COUNT(c.id) FILTER (WHERE c.selected) AS selected_count
+             FROM ffs_candidates c
+             WHERE c.session_id = s.id
+         ) review ON true
+         LEFT JOIN LATERAL (
+             SELECT f.id, f.created_at, f.feature_count, f.summary_json
+             FROM ffs_sessions f
+             WHERE f.alignment_session_id = s.id
+               AND f.organization_id = $1
+             ORDER BY f.created_at DESC, f.id DESC
+             LIMIT 1
+         ) ffs ON true
+         LEFT JOIN LATERAL (
+             SELECT COUNT(f.id) AS session_count
+             FROM ffs_sessions f
+             WHERE f.alignment_session_id = s.id
+               AND f.organization_id = $1
+         ) ffs_all ON true
          WHERE COALESCE(s.organization_id, p.organization_id) = $1
          ORDER BY s.started_at DESC`,
         [orgId],
@@ -644,7 +703,7 @@ module.exports = {
     iterateOwnedAlignmentExportRows,
     listOwnedAlignmentJobResultPage,
     listOwnedAlignmentResultPage,
-    listOwnedSessions,
+    listOwnedSessionRegistry,
     serializeAlignmentResultPage,
     saveAlignmentJobRows,
     createOwnedSession,
