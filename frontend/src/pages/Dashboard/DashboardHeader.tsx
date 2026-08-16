@@ -66,7 +66,7 @@ export default function DashboardHeader({
           <button type="button" className="syn-action syn-action--outline" onClick={onRefresh} disabled={loading}>
             <FiRefreshCw aria-hidden="true" /> {loading ? 'Refreshing…' : 'Refresh'}
           </button>
-          <Link to="/runs" className="syn-action syn-action--ink">
+          <Link to="/alignment" className="syn-action syn-action--ink">
             Import ILI data <FiArrowUpRight aria-hidden="true" />
           </Link>
         </div>

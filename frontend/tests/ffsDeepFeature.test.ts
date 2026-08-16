@@ -32,20 +32,20 @@ const config: FfsConfig = {
 
 function row(overrides: Record<string, string> = {}) {
   return {
-    [REQUIRED_COLUMNS[0]]: '100',
-    [REQUIRED_COLUMNS[1]]: 'Joint-1',
-    [REQUIRED_COLUMNS[2]]: 'External',
-    [REQUIRED_COLUMNS[3]]: '85',
-    [REQUIRED_COLUMNS[4]]: '100',
-    [REQUIRED_COLUMNS[5]]: '30',
-    [REQUIRED_COLUMNS[6]]: '6:00',
-    [REQUIRED_COLUMNS[7]]: '10',
-    [REQUIRED_COLUMNS[8]]: '0.2',
-    [REQUIRED_COLUMNS[9]]: '0',
-    [REQUIRED_COLUMNS[10]]: '0.72',
-    [REQUIRED_COLUMNS[11]]: '500',
-    [REQUIRED_COLUMNS[12]]: '400',
-    [REQUIRED_COLUMNS[13]]: '5',
+    ['LD [m]']: '100',
+    ['Section']: 'Joint-1',
+    ['Surface']: 'External',
+    ['Max Depth [%]']: '85',
+    ['Length [mm]']: '100',
+    ['Width [mm]']: '30',
+    ['Orient. (hrs:mins)']: '6:00',
+    ['Nominal Wall Thickness [mm]']: '10',
+    ['CR Depth [mm/y]']: '0.2',
+    ['CR Length [mm/y]']: '0',
+    ['Design Factor']: '0.72',
+    ['Outer Diameter Ds']: '500',
+    ['SMYS [MPa]']: '400',
+    ['Operating Pressure P₀ [MPa]']: '5',
     ...overrides,
   };
 }
@@ -55,15 +55,15 @@ test('a feature past 80 %WT validates instead of aborting the assessment', () =>
 });
 
 test('metal loss that leaves no wall to assess is still refused', () => {
-  const errors = validateData([row({ [REQUIRED_COLUMNS[3]]: '101' })]);
+  const errors = validateData([row({ ['Max Depth [%]']: '101' })]);
   assert.equal(errors.length, 1);
-  assert.equal(errors[0].col, REQUIRED_COLUMNS[3]);
+  assert.equal(errors[0].col, 'Max Depth [%]');
   assert.match(errors[0].msg, /100/);
 });
 
 test('one deep feature no longer takes the whole population down with it', async () => {
   const results = await processAllRows(
-    [row({ [REQUIRED_COLUMNS[3]]: '30' }), row({ [REQUIRED_COLUMNS[3]]: '85' })],
+    [row({ ['Max Depth [%]']: '30' }), row({ ['Max Depth [%]']: '85' })],
     config,
   );
   assert.equal(results.length, 2);

@@ -1,11 +1,12 @@
 const pool = require('../../config/db');
-const { parseCreateFfsSession } = require('./ffsSessionContract');
+const { parseCreateFfsSession, parseUpdateFfsSession } = require('./ffsSessionContract');
 const {
     alignmentSessionBelongsToOrg,
     deleteOwnedFfsSession,
     getOwnedFfsSession,
     insertFfsSession,
     listFfsSessions,
+    updateOwnedFfsSession,
 } = require('./ffsSessionRepository');
 
 const MAX_LIST_LIMIT = 100;
@@ -57,6 +58,31 @@ exports.createSession = async (req, res) => {
         });
     } catch (error) {
         console.error('Create FFS session error:', error);
+        return res.status(500).json({ error: 'Failed to save the FFS session' });
+    }
+};
+
+/**
+ * Re-file an assessment the engineer has kept working on. The stored case is
+ * replaced wholesale, because a half-updated assessment is not an assessment.
+ */
+exports.updateSession = async (req, res) => {
+    const sessionId = parsePositiveId(req.params.id);
+    if (!sessionId) return res.status(400).json({ error: 'Invalid FFS session ID' });
+
+    let payload;
+    try {
+        payload = parseUpdateFfsSession(req.body);
+    } catch (error) {
+        return res.status(400).json({ error: error.message, code: 'INVALID_FFS_SESSION' });
+    }
+
+    try {
+        const updated = await updateOwnedFfsSession(pool, sessionId, req.user.orgId, payload);
+        if (!updated) return res.status(404).json({ error: 'FFS session not found' });
+        return res.json({ id: String(updated.id), createdAt: updated.created_at });
+    } catch (error) {
+        console.error('Update FFS session error:', error);
         return res.status(500).json({ error: 'Failed to save the FFS session' });
     }
 };

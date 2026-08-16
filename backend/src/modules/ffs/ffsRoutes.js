@@ -17,6 +17,10 @@ router.put('/alignment-sessions/:id/ffs-candidates', authMiddleware, ffsCandidat
 router.post('/ffs/sessions', authMiddleware, ffsSessionController.createSession);
 router.get('/ffs/sessions', authMiddleware, ffsSessionController.listSessions);
 router.get('/ffs/sessions/:id', authMiddleware, ffsSessionController.getSession);
+// Re-filing keeps the reviewer's later work — repair dispositions, spool
+// decisions, retuned screening — on the session it belongs to instead of
+// creating a second session for the same assessment.
+router.put('/ffs/sessions/:id', authMiddleware, ffsSessionController.updateSession);
 router.delete('/ffs/sessions/:id', authMiddleware, ffsSessionController.deleteSession);
 
 module.exports = router;

@@ -191,6 +191,14 @@ export interface FfsInput {
   surface: string;
   maxDepthPct: number;
   length: number;
+  /**
+   * Circumferential extent in mm, or 0 where the run reported none.
+   *
+   * Not a B31G input — the failure pressure follows from depth and axial length.
+   * Only the circumferential interaction screen and the spool area estimate read
+   * it, and both treat a non-positive value as unknown rather than as zero-width
+   * metal loss.
+   */
   width: number;
   orient: string;
   wall: number;
@@ -396,13 +404,17 @@ export interface FfsAction {
 
 export const REQUIRED_COLUMNS = [
   'LD [m]', 'Section', 'Surface', 'Max Depth [%]', 'Length [mm]',
-  'Width [mm]', 'Orient. (hrs:mins)', 'Nominal Wall Thickness [mm]',
+  'Orient. (hrs:mins)', 'Nominal Wall Thickness [mm]',
   'CR Depth [mm/y]', 'CR Length [mm/y]', 'Design Factor',
   'Outer Diameter Ds', 'SMYS [MPa]', 'Operating Pressure P₀ [MPa]'
 ] as const;
 
 export const OPTIONAL_COLUMNS = [
   'Feature ID',
+  // Not a B31G input: the failure pressure is a function of depth and axial
+  // length only. It is used by the circumferential interaction screen and the
+  // spool area estimate, both of which treat a missing width as unknown.
+  'Width [mm]',
   'Safety Factor',
   'Clustered Metal Loss',
   'Repair Status',

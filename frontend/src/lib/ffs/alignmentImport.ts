@@ -82,13 +82,76 @@ export interface AlignmentImportProvenance {
 export type FfsWallThicknessSource = 'run-reported' | 'line-nominal';
 
 /**
- * The Corrosion Analysis outcome. FFS is not allowed to widen this: a feature
- * that is not in `selectedKeys` was not released by an engineer and must not be
- * assessed. See docs/specs/ffs-alignment-gated-intake.md.
+ * How much of the run an assessment covers.
+ *
+ * `all` assesses every metal-loss anomaly the NEW run reported, matched to the
+ * previous run or not. `released` assesses only what an engineer ticked in
+ * Corrosion Analysis.
+ *
+ * `released` used to be the only option, and it was also the gate on reaching
+ * the assessment at all — so an anomaly nobody had got round to reviewing was
+ * absent from the FFS report with nothing to say it existed. Coverage is now a
+ * stated scope rather than an accident of how far a review got, and either way
+ * every anomaly the run reported is accounted for: assessed, or listed with the
+ * reason it was not.
+ */
+export type FfsIntakeScope = 'all' | 'released';
+
+/**
+ * The Corrosion Analysis outcome, and the scope it is being used at.
+ *
+ * Under `released`, FFS is not allowed to widen the selection: a feature that is
+ * not in `selectedKeys` was deliberately held back and must not be assessed.
+ * See docs/specs/ffs-alignment-gated-intake.md.
  */
 export interface AlignmentSelection {
   selectedKeys: Set<string>;
   reasons?: Record<string, string>;
+  /** Defaults to `released`, which is how every existing caller behaved. */
+  scope?: FfsIntakeScope;
+}
+
+/**
+ * True when this row is a metal-loss anomaly of the NEW run — something an FFS
+ * assessment is about at all.
+ *
+ * The same rule the spool census uses, so "every anomaly on the line" and
+ * "every anomaly FFS considered" cannot mean two different populations. Girth
+ * welds, fittings, dents, cracks and the OLD-only side of the comparison are
+ * not metal loss and are not candidates; an excluded row is a decision that the
+ * row is not real.
+ */
+export function isMetalLossCandidate(row: ComparisonRow): boolean {
+  if (row.__excluded === true) return false;
+  const group = text(row['Result Group'], '').toUpperCase();
+  if (NON_ANOMALY_GROUPS.has(group)) return false;
+  if (!text(row['Source Key NEW'], '')) return false;
+
+  const type = text(row['Feature Type NEW'], '');
+  const label = `${type} ${text(row['Feature Identification NEW'], '')}`;
+  if (!NON_METAL_LOSS_PATTERN.test(label)) return true;
+
+  // The exclusion pattern reads the free-text identification as well as the
+  // classification, because some vendors put the feature type there and nowhere
+  // else. That also means an ordinary corrosion feature labelled "corrosion at
+  // bend 12" matches "bend" and would be thrown out of its own assessment. An
+  // explicit metal-loss classification in the type column therefore wins —
+  // unless the type column is itself the thing being excluded, which is how a
+  // dent stays a dent.
+  return METAL_LOSS_TYPE_PATTERN.test(type) && !NON_METAL_LOSS_PATTERN.test(type);
+}
+
+/**
+ * Whether one row is in scope for this assessment.
+ *
+ * Under `all`, membership is a property of the row itself; under `released` it
+ * is the reviewer's decision. Both still require the row to be metal loss on the
+ * NEW run — releasing a girth weld to FFS would not make it assessable.
+ */
+function isInScope(row: ComparisonRow, selection: AlignmentSelection): boolean {
+  if (!isMetalLossCandidate(row)) return false;
+  if ((selection.scope ?? 'released') === 'all') return true;
+  return selection.selectedKeys.has(text(row['Source Key NEW'], ''));
 }
 
 export interface AcceptedAlignmentRow {
@@ -97,8 +160,18 @@ export interface AcceptedAlignmentRow {
   warnings: string[];
 }
 
+/**
+ * One in-scope anomaly the assessment could not calculate, and why.
+ *
+ * It carries enough to find the feature on the line, because this list is how
+ * the report accounts for an anomaly that has no B31G result: an anomaly that is
+ * neither assessed nor listed here has simply vanished from the assessment.
+ */
 export interface RejectedAlignmentRow {
   featureId: string;
+  sourceKey: string;
+  ldM: number | null;
+  depthPct: number | null;
   reason: string;
 }
 
@@ -132,16 +205,20 @@ export interface FfsSpoolCensusRow {
  * Rows the import never treated as candidates, counted rather than listed.
  *
  * A comparison result is not a list of assessment candidates: most of it is the
- * OLD run, the skeleton, and features the review deliberately held back. Those
- * are not rejections, and reporting them as such buried the handful of released
- * features that genuinely could not be assessed under thousands of rows nobody
- * ever asked to assess.
+ * OLD run, the skeleton, and — under the released scope — features the review
+ * deliberately held back. Those are not rejections, and reporting them as such
+ * buried the handful of candidates that genuinely could not be assessed under
+ * thousands of rows nobody ever asked to assess.
  */
 export interface AlignmentImportSkipped {
   /** Rows carrying no NEW-run feature — the OLD side of the comparison. */
   noNewFeature: number;
   /** NEW-run features the Corrosion Analysis review did not release. */
   notReleased: number;
+  /** NEW-run features that are not metal loss: welds, fittings, dents, cracks. */
+  notMetalLoss: number;
+  /** NEW-run metal loss a reviewer excluded from the released outputs. */
+  excluded: number;
 }
 
 export interface AlignmentImportResult {
@@ -200,6 +277,14 @@ const NON_METAL_LOSS_PATTERN =
   /weld|girth|\bgw\b|seam|valve|\btee\b|off[\s_-]?take|branch|flang|bend|elbow|anode|support|\bmarker\b|casing|sleeve|clamp|launcher|receiver|reducer|\bcap\b|dent|deform|ovality|buckle|wrinkle|crack|lamination/i;
 
 /**
+ * A classification that says "this is metal loss" in so many words.
+ *
+ * Used only to rescue a feature whose free-text label happens to contain a
+ * fitting name. See isMetalLossCandidate.
+ */
+const METAL_LOSS_TYPE_PATTERN = /metal\s*loss|corros|pitting|wall\s*loss|erosion|\bml\b/i;
+
+/**
  * Every metal-loss record the NEW run reported, whichever bucket it landed in.
  *
  * Deliberately wider than the assessment: a bypassed cluster and a feature the
@@ -212,18 +297,12 @@ export function extractSpoolCensus(
   comparison: readonly ComparisonRow[],
   selection?: AlignmentSelection,
 ): FfsSpoolCensusRow[] {
-  const released = selection?.selectedKeys;
   const census: FfsSpoolCensusRow[] = [];
   for (const row of comparison) {
-    if (row.__excluded === true) continue;
-    const group = text(row['Result Group'], '').toUpperCase();
-    if (NON_ANOMALY_GROUPS.has(group)) continue;
+    if (!isMetalLossCandidate(row)) continue;
     const sourceKey = text(row['Source Key NEW'], '');
-    if (!sourceKey) continue;
     const ldM = finiteNumber(row['Log Dist NEW (m)']);
     if (ldM === null) continue;
-    const label = `${text(row['Feature Type NEW'], '')} ${text(row['Feature Identification NEW'], '')}`;
-    if (NON_METAL_LOSS_PATTERN.test(label)) continue;
     census.push({
       sourceKey,
       featureId: text(row['Identif. NEW'], text(row['Feature ID NEW'], sourceKey)),
@@ -232,7 +311,7 @@ export function extractSpoolCensus(
       lengthMm: finiteNumber(row['Length NEW (mm)']),
       widthMm: finiteNumber(row['Width NEW (mm)']),
       isCluster: isClusteredAlignmentRow(row),
-      assessed: released ? released.has(sourceKey) : false,
+      assessed: selection ? isInScope(row, selection) : false,
     });
   }
   return census.sort((left, right) => left.ldM - right.ldM);
@@ -243,7 +322,9 @@ export interface AlignmentImportReadinessInput {
   iliDate: string;
   selectedRunId: string;
   alignmentRowCount: number;
-  /** Features released by the Corrosion Analysis review for this session. */
+  /** How much of the run the assessment covers. Defaults to `released`. */
+  scope?: FfsIntakeScope;
+  /** Features in scope: the whole NEW-run anomaly population, or the release. */
   selectedFeatureCount: number;
   outerDiameterMm: string;
   smysMpa: string;
@@ -294,6 +375,17 @@ interface MeasuredGeometry {
   distance: number;
   depth: number;
   length: number;
+  /**
+   * Circumferential extent, or 0 where the run did not report one.
+   *
+   * B31G is a longitudinal method: depth and axial length govern the remaining
+   * strength, and width appears nowhere in the failure-pressure calculation. It
+   * was nevertheless demanded of every feature, so an entire run from a vendor
+   * that ships no width column was refused in full — the assessment produced
+   * nothing while the data it needed was all there. It is now optional, and the
+   * two places that genuinely use it (the circumferential interaction screen and
+   * the spool area estimate) already treat a non-positive width as unknown.
+   */
   width: number;
   wall: number;
   wallSource: FfsWallThicknessSource;
@@ -333,11 +425,12 @@ function readMeasuredGeometry(
     : null;
   const wall = reportedWall ?? fallbackWall;
 
+  // Only what B31G actually consumes is required. Width is not one of those —
+  // see MeasuredGeometry.width.
   const missing: string[] = [];
   if (distance === null) missing.push('Log Dist NEW (m)');
   if (depth === null) missing.push('Depth NEW (%WT)');
   if (length === null) missing.push('Length NEW (mm)');
-  if (width === null) missing.push('Width NEW (mm)');
   if (wall === null) missing.push('Wall WT NEW (mm)');
   if (missing.length > 0) {
     return `Missing or invalid measured field(s): ${missing.join(', ')}.`;
@@ -350,7 +443,7 @@ function readMeasuredGeometry(
   if (
     (distance as number) < 0
     || (depth as number) < 0 || (depth as number) > 100
-    || (length as number) <= 0 || (width as number) <= 0 || (wall as number) <= 0
+    || (length as number) <= 0 || (wall as number) <= 0
   ) {
     return 'Measured NEW-run values are outside the supported FFS domain.';
   }
@@ -359,7 +452,9 @@ function readMeasuredGeometry(
     distance: distance as number,
     depth: depth as number,
     length: length as number,
-    width: width as number,
+    // A reported width that is zero or negative is not a measurement; it is
+    // carried as "not reported" rather than as a zero-width defect.
+    width: width !== null && (width as number) > 0 ? (width as number) : 0,
     wall: wall as number,
     wallSource: reportedWall === null ? 'line-nominal' : 'run-reported',
   };
@@ -381,7 +476,9 @@ export interface ReleasedIntakeBlocker {
  * which field is missing from how many of them.
  */
 export interface ReleasedIntakeSummary {
-  /** Released keys that were found in the loaded comparison result. */
+  /** The scope these numbers describe. */
+  scope: FfsIntakeScope;
+  /** Candidate features in scope that were found in the loaded comparison result. */
   released: number;
   /**
    * Released keys with no row in this result at all. Non-zero means the review
@@ -409,6 +506,7 @@ export function summariseReleasedIntake(
   nominalWallThicknessMm: number | null = null,
 ): ReleasedIntakeSummary {
   const selectedKeys = selection?.selectedKeys instanceof Set ? selection.selectedKeys : new Set<string>();
+  const scope: FfsIntakeScope = selection?.scope ?? 'released';
   const seen = new Set<string>();
   const excluded = new Set<string>();
   const blockers = new Map<string, ReleasedIntakeBlocker>();
@@ -417,11 +515,15 @@ export function summariseReleasedIntake(
 
   for (const source of comparison) {
     const sourceFeatureKey = text(source['Source Key NEW'], '');
-    if (!sourceFeatureKey || !selectedKeys.has(sourceFeatureKey)) continue;
+    if (!sourceFeatureKey) continue;
+    // An excluded row is filtered out by isMetalLossCandidate, so it is checked
+    // first: this summary is the one place that has to tell "a reviewer excluded
+    // it" apart from "this feature is not in the result at all".
     if (source.__excluded === true) {
-      excluded.add(sourceFeatureKey);
+      if (scope === 'all' || selectedKeys.has(sourceFeatureKey)) excluded.add(sourceFeatureKey);
       continue;
     }
+    if (!isInScope(source, { ...selection, selectedKeys, scope })) continue;
     seen.add(sourceFeatureKey);
     const reading = readMeasuredGeometry(source, nominalWallThicknessMm);
     if (typeof reading !== 'string') {
@@ -441,8 +543,13 @@ export function summariseReleasedIntake(
   }
 
   return {
+    scope,
     released: seen.size,
-    missingFromResult: selectedKeys.size - seen.size - excluded.size,
+    // Only a release can go missing: under `all` the population is read from the
+    // result itself, so there is nothing to be absent from it.
+    missingFromResult: scope === 'all'
+      ? 0
+      : Math.max(0, selectedKeys.size - seen.size - excluded.size),
     excludedByIntervention: excluded.size,
     assessable,
     blockers: [...blockers.values()].sort((left, right) => right.count - left.count),
@@ -452,6 +559,12 @@ export function summariseReleasedIntake(
 
 /** One sentence stating why an assessment produced nothing, for the operator. */
 export function describeEmptyIntake(summary: ReleasedIntakeSummary): string {
+  if (summary.scope === 'all' && summary.released === 0) {
+    return summary.excludedByIntervention > 0
+      ? `Every metal-loss anomaly in this result (${summary.excludedByIntervention.toLocaleString()}) was excluded `
+        + 'by a reviewer. Restore an exclusion, or align a run that reports metal loss.'
+      : 'This alignment result reports no metal-loss anomaly on the NEW run, so there is nothing to assess.';
+  }
   if (summary.released === 0 && summary.excludedByIntervention > 0 && summary.missingFromResult === 0) {
     return `All ${summary.excludedByIntervention.toLocaleString()} released feature(s) were excluded from the `
       + 'released outputs by a reviewer. Restore the exclusion, or release features that are still included.';
@@ -464,10 +577,12 @@ export function describeEmptyIntake(summary: ReleasedIntakeSummary): string {
   if (summary.released === 0) {
     return 'No released feature reached the assessment. Release the features in Corrosion Analysis first.';
   }
+  const noun = summary.scope === 'all' ? 'anomaly' : 'released anomaly';
   const [worst] = summary.blockers;
-  if (!worst) return 'No released anomaly carries the geometry an FFS assessment needs.';
+  if (!worst) return `No ${noun} carries the geometry an FFS assessment needs.`;
   const others = summary.blockers.length - 1;
-  return `${summary.released.toLocaleString()} released feature(s), none assessable. `
+  return `${summary.released.toLocaleString()} ${summary.scope === 'all' ? 'anomal' : 'released feature'}`
+    + `${summary.scope === 'all' ? 'ies' : '(s)'}, none assessable. `
     + `${worst.count.toLocaleString()} of them: ${worst.reason}`
     + (others > 0 ? ` (${others} other reason${others === 1 ? '' : 's'} affect the rest.)` : '');
 }
@@ -683,8 +798,7 @@ export function alignmentSectionOptions(
   const grouped = new Map<string, { section: string; featureCount: number; distances: number[] }>();
 
   for (const source of comparison) {
-    const sourceFeatureKey = text(source['Source Key NEW'], '');
-    if (!sourceFeatureKey || !selection.selectedKeys.has(sourceFeatureKey)) continue;
+    if (!isInScope(source, selection)) continue;
     const section = text(source['Section NEW'], text(source.Section));
     const key = normalizedSectionKey(section);
     const distance = finiteNumber(source['Log Dist NEW (m)']);
@@ -720,7 +834,9 @@ export function getAlignmentImportReadiness(input: AlignmentImportReadinessInput
   if (!input.selectedRunId) reasons.push('Select a completed alignment session.');
   else if (input.alignmentRowCount === 0) reasons.push('Load the selected alignment result first.');
   else if (input.selectedFeatureCount === 0) {
-    reasons.push('Release at least one feature in Corrosion Analysis for this session.');
+    reasons.push((input.scope ?? 'released') === 'all'
+      ? 'This alignment result reports no metal-loss anomaly on the NEW run.'
+      : 'Release at least one feature in Corrosion Analysis for this session, or assess the whole run.');
   } else if (input.assessableFeatureCount === 0) {
     reasons.push(input.intakeBlockReason
       || 'No released feature carries the geometry an FFS assessment needs.');
@@ -806,28 +922,45 @@ export function mapAlignmentRowsToFfs(
 
   const accepted: AcceptedAlignmentRow[] = [];
   const rejected: RejectedAlignmentRow[] = [];
-  const skipped: AlignmentImportSkipped = { noNewFeature: 0, notReleased: 0 };
+  const skipped: AlignmentImportSkipped = {
+    noNewFeature: 0, notReleased: 0, notMetalLoss: 0, excluded: 0,
+  };
+  const scope: FfsIntakeScope = selection.scope ?? 'released';
   const nominalWall = engineering.nominalWallThicknessMm ?? null;
 
   for (const source of comparison) {
     const sourceFeatureKey = text(source['Source Key NEW'], '');
     const featureId = text(source['Identif. NEW'], text(source['Feature ID NEW'], sourceFeatureKey || 'Unknown'));
-    // Neither of these is a rejection: the OLD side of the comparison was never
-    // a candidate, and a feature the review held back is a decision already
-    // made. Counted so the results page can state them, never listed as
-    // failures the engineer has to read past.
+    // None of these is a rejection: the OLD side of the comparison was never a
+    // candidate, a weld is not metal loss, an exclusion and a held-back feature
+    // are decisions already made. Counted so the results page can state them,
+    // never listed as failures the engineer has to read past.
     if (!sourceFeatureKey) {
       skipped.noNewFeature += 1;
       continue;
     }
-    if (!selection.selectedKeys.has(sourceFeatureKey)) {
+    if (source.__excluded === true) {
+      skipped.excluded += 1;
+      continue;
+    }
+    if (!isMetalLossCandidate(source)) {
+      skipped.notMetalLoss += 1;
+      continue;
+    }
+    if (scope === 'released' && !selection.selectedKeys.has(sourceFeatureKey)) {
       skipped.notReleased += 1;
       continue;
     }
 
     const reading = readMeasuredGeometry(source, nominalWall);
     if (typeof reading === 'string') {
-      rejected.push({ featureId, reason: reading });
+      rejected.push({
+        featureId,
+        sourceKey: sourceFeatureKey,
+        ldM: finiteNumber(source['Log Dist NEW (m)']),
+        depthPct: finiteNumber(source['Depth NEW (%WT)']),
+        reason: reading,
+      });
       continue;
     }
     const { distance, depth, length, width, wall, wallSource } = reading;
@@ -837,6 +970,13 @@ export function mapAlignmentRowsToFfs(
       warnings.push(
         `The run reported no wall thickness for this feature; the line nominal wall of ${numericText(wall)} mm `
         + 'was used, and both the depth in millimetres and the failure pressure follow from it.',
+      );
+    }
+    if (width === 0) {
+      warnings.push(
+        'The run reported no circumferential width for this feature. B31G does not use width, so the '
+        + 'remaining-strength result is unaffected — but the circumferential interaction screen cannot '
+        + 'judge this feature against its neighbours.',
       );
     }
     // Carried rather than dropped, but never carried quietly: past 80 %WT the

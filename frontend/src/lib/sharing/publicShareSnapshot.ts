@@ -54,6 +54,16 @@ export interface FfsShareState {
   config: Record<string, PublicShareValue>;
   screening: Record<string, PublicShareValue> | null;
   alignmentImport: Record<string, PublicShareValue> | null;
+  /**
+   * The reviewer's own work: repair dispositions per feature and decisions per
+   * spool.
+   *
+   * An assessment is not finished when the engine stops. Until this was carried,
+   * re-opening a filed session came back with every repair disposition and spool
+   * decision blank — the calculation survived and the engineering judgement on
+   * top of it did not, which is the half a reader actually needs.
+   */
+  review?: Record<string, PublicShareValue> | null;
 }
 
 export type PublicShareState = AlignmentShareState | FfsShareState;
@@ -143,15 +153,18 @@ export function buildFfsShareState(input: {
   config: unknown;
   screening?: unknown;
   alignmentImport?: unknown;
+  review?: unknown;
 }): FfsShareState {
   const config = shareRecord(input.config);
   if (!config) throw new TypeError('The FFS configuration is missing, so there is nothing to share.');
+  const review = shareRecord(input.review);
   return {
     kind: 'FFS',
     results: shareArray(input.results),
     config,
     screening: shareRecord(input.screening),
     alignmentImport: shareRecord(input.alignmentImport),
+    ...(review ? { review } : {}),
   };
 }
 

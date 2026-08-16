@@ -6,18 +6,40 @@ export interface ValidationError {
   msg: string;
 }
 
+/**
+ * Column rules, by name.
+ *
+ * These used to be positional indexes into REQUIRED_COLUMNS, which meant a
+ * column moving in or out of that list silently re-pointed every rule at its
+ * neighbour. Names cost nothing and cannot slip.
+ */
+const DEPTH_COLUMN = 'Max Depth [%]';
+const DESIGN_FACTOR_COLUMN = 'Design Factor';
+const OUTER_DIAMETER_COLUMN = 'Outer Diameter Ds';
+
 const NUMERIC_COLS = [
-  REQUIRED_COLUMNS[0], REQUIRED_COLUMNS[3], REQUIRED_COLUMNS[4], REQUIRED_COLUMNS[5],
-  REQUIRED_COLUMNS[7], REQUIRED_COLUMNS[8], REQUIRED_COLUMNS[9], REQUIRED_COLUMNS[10],
-  REQUIRED_COLUMNS[11], REQUIRED_COLUMNS[12], REQUIRED_COLUMNS[13],
+  'LD [m]', DEPTH_COLUMN, 'Length [mm]', 'Nominal Wall Thickness [mm]',
+  'CR Depth [mm/y]', 'CR Length [mm/y]', DESIGN_FACTOR_COLUMN,
+  OUTER_DIAMETER_COLUMN, 'SMYS [MPa]', 'Operating Pressure P₀ [MPa]',
 ];
 
 const POSITIVE_COLS = [
-  REQUIRED_COLUMNS[4], REQUIRED_COLUMNS[5], REQUIRED_COLUMNS[7], REQUIRED_COLUMNS[10],
-  REQUIRED_COLUMNS[11], REQUIRED_COLUMNS[12], REQUIRED_COLUMNS[13],
+  'Length [mm]', 'Nominal Wall Thickness [mm]', DESIGN_FACTOR_COLUMN,
+  OUTER_DIAMETER_COLUMN, 'SMYS [MPa]', 'Operating Pressure P₀ [MPa]',
 ];
 
-const NON_NEGATIVE_COLS = [REQUIRED_COLUMNS[0], REQUIRED_COLUMNS[3], REQUIRED_COLUMNS[8], REQUIRED_COLUMNS[9]];
+const NON_NEGATIVE_COLS = ['LD [m]', DEPTH_COLUMN, 'CR Depth [mm/y]', 'CR Length [mm/y]'];
+
+/**
+ * Columns that must hold a number when they hold anything at all.
+ *
+ * Width is the only one. B31G is a longitudinal method — depth and axial length
+ * govern the failure pressure and width appears in no formula — so demanding it
+ * of every feature refused whole runs from vendors that report no width column,
+ * losing anomalies the assessment had everything else it needed for. A blank
+ * width is carried as "not reported"; a present one still has to be a number.
+ */
+const OPTIONAL_NUMERIC_COLS = ['Width [mm]'];
 
 export function isIsoCalendarDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -44,6 +66,14 @@ export function validateData(rows: Record<string, string>[]): ValidationError[] 
         errors.push({ row: rowNumber, col: column, msg: 'Missing value' });
         continue;
       }
+      if (!Number.isFinite(Number(String(value).trim()))) {
+        errors.push({ row: rowNumber, col: column, msg: `"${value}" must be a finite number` });
+      }
+    }
+
+    for (const column of OPTIONAL_NUMERIC_COLS) {
+      const value = row[column];
+      if (value === undefined || value === null || String(value).trim() === '') continue;
       if (!Number.isFinite(Number(String(value).trim()))) {
         errors.push({ row: rowNumber, col: column, msg: `"${value}" must be a finite number` });
       }
@@ -78,23 +108,23 @@ export function validateData(rows: Record<string, string>[]): ValidationError[] 
     //
     // Past 100 %WT there is nothing left to assess — that is a through-wall
     // penetration or a data error, and it is still refused.
-    const depth = Number(String(row[REQUIRED_COLUMNS[3]]).trim());
+    const depth = Number(String(row[DEPTH_COLUMN]).trim());
     if (Number.isFinite(depth) && depth > 100) {
       errors.push({
         row: rowNumber,
-        col: REQUIRED_COLUMNS[3],
+        col: DEPTH_COLUMN,
         msg: `Must not exceed 100% of wall (got ${depth})`,
       });
     }
 
-    const designFactor = Number(String(row[REQUIRED_COLUMNS[10]]).trim());
+    const designFactor = Number(String(row[DESIGN_FACTOR_COLUMN]).trim());
     if (Number.isFinite(designFactor) && designFactor > 1) {
-      errors.push({ row: rowNumber, col: REQUIRED_COLUMNS[10], msg: `Must be <= 1 (got ${designFactor})` });
+      errors.push({ row: rowNumber, col: DESIGN_FACTOR_COLUMN, msg: `Must be <= 1 (got ${designFactor})` });
     }
 
-    const outerDiameter = Number(String(row[REQUIRED_COLUMNS[11]]).trim());
+    const outerDiameter = Number(String(row[OUTER_DIAMETER_COLUMN]).trim());
     if (Number.isFinite(outerDiameter) && outerDiameter < 50) {
-      errors.push({ row: rowNumber, col: REQUIRED_COLUMNS[11], msg: `Pipeline OD must be >= 50 mm (got ${outerDiameter})` });
+      errors.push({ row: rowNumber, col: OUTER_DIAMETER_COLUMN, msg: `Pipeline OD must be >= 50 mm (got ${outerDiameter})` });
     }
 
     const repairStatus = String(row['Repair Status'] ?? '').trim();

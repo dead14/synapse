@@ -107,7 +107,10 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
   const surface = row['Surface'];
   const maxDepthPct = parseFloat(row['Max Depth [%]']);
   const length = parseFloat(row['Length [mm]']);
-  const width = parseFloat(row['Width [mm]']);
+  // Optional: B31G uses depth and axial length, never width. Zero carries "not
+  // reported" — every consumer of `width` already treats a non-positive value
+  // as unknown, and a NaN here would have travelled into the report instead.
+  const width = optionalNumber(row['Width [mm]']) ?? 0;
   const orient = row['Orient. (hrs:mins)'];
   const wall = parseFloat(row['Nominal Wall Thickness [mm]']);
   const crDepth = parseFloat(row['CR Depth [mm/y]']);

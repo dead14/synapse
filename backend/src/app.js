@@ -88,9 +88,13 @@ const shareBodyLimit = process.env.PUBLIC_SHARE_BODY_LIMIT || PUBLIC_SHARE_BODY_
 const generalJsonParser = express.json({ limit: requestBodyLimit });
 const shareJsonParser = express.json({ limit: shareBodyLimit });
 // Saving an FFS session uploads the same frozen assessment a published link
-// does, so it needs the same ceiling for the same reason.
-const isLargeCaseUpload = (req) => req.method === 'POST'
-    && (req.path === '/api/public-shares' || req.path === '/api/ffs/sessions');
+// does, so it needs the same ceiling for the same reason — on the re-file (PUT)
+// as much as on the first save, which is the same document.
+const FFS_SESSION_PATH = /^\/api\/ffs\/sessions(\/\d+)?$/;
+const isLargeCaseUpload = (req) => (
+    (req.method === 'POST' && req.path === '/api/public-shares')
+    || ((req.method === 'POST' || req.method === 'PUT') && FFS_SESSION_PATH.test(req.path))
+);
 app.use((req, res, next) => (
     isLargeCaseUpload(req) ? shareJsonParser : generalJsonParser
 )(req, res, next));

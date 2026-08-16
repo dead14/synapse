@@ -216,7 +216,9 @@ export function deriveNextAction(stats: DashboardStats): DashboardAction {
     return {
       label: 'Import an ILI run',
       description: 'Create a canonical, auditable inspection run before starting assessment.',
-      path: '/runs',
+      // The import step lives inside the alignment wizard; there is no separate
+      // registry page to send the engineer to.
+      path: '/alignment',
     };
   }
   if (stats.kpi.unmatchedFeatures > 0) {

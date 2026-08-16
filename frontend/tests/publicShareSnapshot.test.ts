@@ -73,6 +73,40 @@ test('an FFS link carries the whole assessment and reopens with the same assumpt
   assert.equal(revived.alignmentImport?.sessionId, '42');
 });
 
+test('a filed assessment keeps the reviewer decisions, not only the numbers', () => {
+  // The engineering judgement on top of the calculation is half of what an
+  // assessment is. Until this was carried, re-opening a filed session came back
+  // with every repair disposition and spool decision blank.
+  const state = buildFfsShareState({
+    results: [{ key: 'ffs:1', ERF: 0.42 }],
+    config: { lineName: 'Line 12', iliDate: new Date('2026-03-14T00:00:00.000Z') },
+    review: {
+      repairOverrides: { 3: { repairStatus: 'temporary-repair', repairMethod: 'Composite wrap' } },
+      spoolDispositions: { 'spool:12': { decision: 'repair', note: 'Sleeve at next shutdown' } },
+    },
+  });
+
+  const revived = reviveFfsShareState(state);
+  assert.ok(revived);
+  // JSON turns a numeric key into a string; an override that came back under a
+  // string key silently applied to nothing.
+  assert.deepEqual(revived.review.repairOverrides[3], {
+    repairStatus: 'temporary-repair',
+    repairMethod: 'Composite wrap',
+  });
+  assert.equal(revived.review.spoolDispositions['spool:12'].decision, 'repair');
+});
+
+test('a case filed before reviewer decisions were carried revives with empty ones', () => {
+  const revived = reviveFfsShareState(buildFfsShareState({
+    results: [{ key: 'ffs:1' }],
+    config: { lineName: 'Line 12', iliDate: new Date('2026-03-14T00:00:00.000Z') },
+  }));
+
+  assert.ok(revived);
+  assert.deepEqual(revived.review, { repairOverrides: {}, spoolDispositions: {} });
+});
+
 test('an FFS link with no readable date or result is refused rather than half-rendered', () => {
   const base = buildFfsShareState({
     results: [{ key: 'ffs:1' }],

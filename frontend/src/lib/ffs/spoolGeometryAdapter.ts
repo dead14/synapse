@@ -72,7 +72,9 @@ export function spoolFeatureFromFfs(item: FfsScreenedResult): SpoolFeature {
     reportedM: maM,
     depthPct: n.maxDepthPct,
     lengthMm: n.length,
-    widthMm: n.width,
+    // Width is optional in the assessment; 0 means the run reported none, and
+    // the geometry panes already render a missing width as "—".
+    widthMm: n.width > 0 ? n.width : null,
     clockDeg: item.clockHour === null ? null : clockDeg,
     clockLabel: item.clockHour === null ? '—' : clockLabelFromDegrees(clockDeg),
     wtMm: n.wall,

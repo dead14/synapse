@@ -510,7 +510,7 @@ export default function IliComparisonPage({
                 alert carries the way out rather than leaving a dead screen. */}
             {!readOnly && !sessionId && (
               <div className="mt-2 flex flex-wrap gap-2">
-                <Link to="/runs" className="syn-btn syn-btn--solid syn-btn--sm">Go to ILI runs</Link>
+                <Link to="/alignment-history" className="syn-btn syn-btn--solid syn-btn--sm">Go to ILI alignment</Link>
                 <Link to="/alignment" className="syn-btn syn-btn--outline syn-btn--sm">Start an alignment</Link>
               </div>
             )}

@@ -172,6 +172,12 @@ exports.listEligibleSessions = async (req, res) => {
                 reviewedAt: row.reviewed_at,
                 selectedCount: Number(row.selected_count) || 0,
                 reviewedCount: Number(row.reviewed_count) || 0,
+                // Whether this session's saved review can be used as the intake
+                // scope. A session with none is still assessable — against every
+                // anomaly the run reported.
+                releaseAvailable: verdict.release.available,
+                releaseReason: verdict.release.reason,
+                releaseStale: verdict.release.stale,
             };
             if (verdict.eligible) items.push(entry);
             else blocked.push({ ...entry, reason: verdict.reason, stale: verdict.stale });

@@ -50,6 +50,8 @@ export interface SaveFfsSessionInput {
   screening: FfsScreeningConfig;
   alignmentImport?: unknown;
   alignmentSessionId?: string | null;
+  /** The reviewer's repair dispositions and spool decisions. */
+  review?: unknown;
   summary?: FfsSessionSummary;
 }
 
@@ -59,13 +61,6 @@ export interface SaveFfsSessionInput {
  * are still valid whether or not the save landed.
  */
 export async function saveFfsSession(input: SaveFfsSessionInput): Promise<string> {
-  const state = buildFfsShareState({
-    results: input.results,
-    config: input.config,
-    screening: input.screening,
-    alignmentImport: input.alignmentImport,
-  });
-
   const response = await apiFetch<{ id?: string }>('/api/ffs/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -75,12 +70,48 @@ export async function saveFfsSession(input: SaveFfsSessionInput): Promise<string
       alignmentSessionId: input.alignmentSessionId ?? null,
       featureCount: input.results.length,
       summary: input.summary ?? {},
-      state,
+      state: buildSessionState(input),
     }),
   });
 
   if (!response.id) throw new Error('The FFS session was saved without an identifier.');
   return response.id;
+}
+
+/**
+ * Re-file an assessment that already has a session.
+ *
+ * The reviewer keeps working after the run — repair dispositions, spool
+ * decisions, retuned screening assumptions — and all of it belongs to the same
+ * assessment. Without this the only way to keep that work was to run the whole
+ * thing again, which filed a second session for one piece of work and left the
+ * registry showing two assessments of the same features.
+ */
+export async function updateFfsSession(
+  sessionId: string,
+  input: SaveFfsSessionInput,
+): Promise<void> {
+  await apiFetch(`/api/ffs/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      label: input.config.lineName || 'FFS assessment',
+      method: input.config.method,
+      featureCount: input.results.length,
+      summary: input.summary ?? {},
+      state: buildSessionState(input),
+    }),
+  });
+}
+
+function buildSessionState(input: SaveFfsSessionInput) {
+  return buildFfsShareState({
+    results: input.results,
+    config: input.config,
+    screening: input.screening,
+    alignmentImport: input.alignmentImport,
+    review: input.review,
+  });
 }
 
 export async function listFfsSessions(limit = 30): Promise<FfsSessionListItem[]> {
@@ -130,5 +161,11 @@ export async function downloadFfsSessionReport(sessionId: string): Promise<void>
     screening,
     alignmentImport?.accepted ?? [],
     createFfsReportContext(config),
+    alignmentImport && {
+      scope: alignmentImport.scope,
+      rejected: alignmentImport.rejected ?? [],
+      skipped: alignmentImport.skipped,
+      censusCount: alignmentImport.census?.length ?? null,
+    },
   );
 }

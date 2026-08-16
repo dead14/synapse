@@ -6,7 +6,7 @@ const pool = require('../../config/db');
 const {
     findOwnedSession,
     findLatestOwnedSession,
-    listOwnedSessions,
+    listOwnedSessionRegistry,
     createOwnedSession,
     updateOwnedSessionConfig,
     deleteOwnedSession,
@@ -42,6 +42,7 @@ const {
     listAlignmentStrategyCapabilities,
 } = require('./alignmentStrategyCapabilities');
 const { buildTieInEvidence, signTieInEvidence, verifyTieInEvidence } = require('./tieInEvidence');
+const { serializeRegistryRow } = require('./alignmentRegistry');
 const ingestionController = require('../ingestion/ingestionController');
 const { toIngestionUploadErrorResponse } = require('../ingestion/ingestionErrors');
 const { parseSurveyDateInput } = require('../ingestion/surveyDate');
@@ -859,39 +860,20 @@ exports.saveIntervention = async (req, res) => {
     }
 };
 
+/**
+ * The ILI alignment registry.
+ *
+ * Answers with the run provenance, the review state and the filed FFS
+ * assessment as well as the alignment itself, because this is the only survey
+ * table left — see modules/alignment/alignmentRegistry.js.
+ */
 exports.getPipelineRuns = async (req, res) => {
     try {
-        const sessions = await listOwnedSessions(pool, req.user.orgId);
-
-        const runs = sessions.map(row => {
-            const params = row.params_json || {};
-            const summaryData = params.summaryData || {};
-            const resultSummary = params.resultSummary || {};
-            const pipelineName = summaryData.sessionName
-                || summaryData.pipelineName
-                || row.stored_pipeline_name
-                || `Run ${row.id}`;
-            const vendorOld = summaryData.oldRun?.name || 'Old';
-            const vendorNew = summaryData.newRun?.name || 'New';
-            
-            return {
-                id: row.id.toString(),
-                pipelineName: pipelineName,
-                date: row.started_at,
-                status: row.status,
-                matchRate: Number.isFinite(Number(resultSummary.matchRate))
-                    ? Number(resultSummary.matchRate)
-                    : null,
-                anomaliesFound: Number(resultSummary.anomaliesFound) || 0,
-                vendorLama: vendorOld,
-                vendorBaru: vendorNew
-            };
-        });
-        
-        res.json(runs);
+        const rows = await listOwnedSessionRegistry(pool, req.user.orgId);
+        res.json({ items: rows.map(serializeRegistryRow) });
     } catch (err) {
         console.error("Get pipeline runs error:", err);
-        res.status(500).json({ error: 'Failed to fetch pipeline runs' });
+        res.status(500).json({ error: 'Failed to fetch the alignment registry' });
     }
 };
 

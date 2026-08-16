@@ -8,20 +8,20 @@ import { validateData } from '../src/lib/ffs/validation.ts';
 
 function validRow(overrides: Record<string, string> = {}) {
   return {
-    [REQUIRED_COLUMNS[0]]: '100.5',
-    [REQUIRED_COLUMNS[1]]: 'Joint-1',
-    [REQUIRED_COLUMNS[2]]: 'Internal',
-    [REQUIRED_COLUMNS[3]]: '20',
-    [REQUIRED_COLUMNS[4]]: '100',
-    [REQUIRED_COLUMNS[5]]: '30',
-    [REQUIRED_COLUMNS[6]]: '6:00',
-    [REQUIRED_COLUMNS[7]]: '10',
-    [REQUIRED_COLUMNS[8]]: '0',
-    [REQUIRED_COLUMNS[9]]: '0',
-    [REQUIRED_COLUMNS[10]]: '0.72',
-    [REQUIRED_COLUMNS[11]]: '500',
-    [REQUIRED_COLUMNS[12]]: '400',
-    [REQUIRED_COLUMNS[13]]: '5',
+    ['LD [m]']: '100.5',
+    ['Section']: 'Joint-1',
+    ['Surface']: 'Internal',
+    ['Max Depth [%]']: '20',
+    ['Length [mm]']: '100',
+    ['Width [mm]']: '30',
+    ['Orient. (hrs:mins)']: '6:00',
+    ['Nominal Wall Thickness [mm]']: '10',
+    ['CR Depth [mm/y]']: '0',
+    ['CR Length [mm/y]']: '0',
+    ['Design Factor']: '0.72',
+    ['Outer Diameter Ds']: '500',
+    ['SMYS [MPa]']: '400',
+    ['Operating Pressure P₀ [MPa]']: '5',
     ...overrides,
   };
 }
@@ -35,7 +35,7 @@ const config: FfsConfig = {
 };
 
 test('accepts finite domain inputs including zero depth and zero growth rates', () => {
-  const row = validRow({ [REQUIRED_COLUMNS[3]]: '0' });
+  const row = validRow({ ['Max Depth [%]']: '0' });
   assert.deepEqual(validateData([row]), []);
 
   const result = processRow(row, config);
@@ -48,49 +48,60 @@ test('accepts finite domain inputs including zero depth and zero growth rates', 
 
 test('rejects partial numbers, NaN, and Infinity instead of parseFloat coercion', () => {
   const rows = [
-    validRow({ [REQUIRED_COLUMNS[4]]: '12mm' }),
-    validRow({ [REQUIRED_COLUMNS[12]]: 'NaN' }),
-    validRow({ [REQUIRED_COLUMNS[13]]: 'Infinity' }),
+    validRow({ ['Length [mm]']: '12mm' }),
+    validRow({ ['SMYS [MPa]']: 'NaN' }),
+    validRow({ ['Operating Pressure P₀ [MPa]']: 'Infinity' }),
   ];
   const errors = validateData(rows);
 
   assert.equal(errors.length, 3);
   assert.deepEqual(errors.map((error) => error.col), [
-    REQUIRED_COLUMNS[4],
-    REQUIRED_COLUMNS[12],
-    REQUIRED_COLUMNS[13],
+    'Length [mm]',
+    'SMYS [MPa]',
+    'Operating Pressure P₀ [MPa]',
   ]);
   assert.ok(errors.every((error) => /finite number/i.test(error.msg)));
 });
 
 test('rejects zero, negative, and out-of-domain engineering inputs', () => {
   const row = validRow({
-    [REQUIRED_COLUMNS[0]]: '-1',
+    ['LD [m]']: '-1',
     // Past full wall — the depth bound is the wall, not the 80 %WT line.
-    [REQUIRED_COLUMNS[3]]: '100.01',
-    [REQUIRED_COLUMNS[4]]: '0',
-    [REQUIRED_COLUMNS[5]]: '0',
-    [REQUIRED_COLUMNS[7]]: '10',
-    [REQUIRED_COLUMNS[8]]: '-0.1',
-    [REQUIRED_COLUMNS[9]]: '-0.1',
-    [REQUIRED_COLUMNS[10]]: '1.01',
-    [REQUIRED_COLUMNS[11]]: '20',
-    [REQUIRED_COLUMNS[12]]: '0',
-    [REQUIRED_COLUMNS[13]]: '0',
+    ['Max Depth [%]']: '100.01',
+    ['Length [mm]']: '0',
+    ['Width [mm]']: '0',
+    ['Nominal Wall Thickness [mm]']: '10',
+    ['CR Depth [mm/y]']: '-0.1',
+    ['CR Length [mm/y]']: '-0.1',
+    ['Design Factor']: '1.01',
+    ['Outer Diameter Ds']: '20',
+    ['SMYS [MPa]']: '0',
+    ['Operating Pressure P₀ [MPa]']: '0',
   });
   const errorColumns = new Set(validateData([row]).map((error) => error.col));
 
   for (const column of [
-    REQUIRED_COLUMNS[0], REQUIRED_COLUMNS[3], REQUIRED_COLUMNS[4], REQUIRED_COLUMNS[5],
-    REQUIRED_COLUMNS[8], REQUIRED_COLUMNS[9], REQUIRED_COLUMNS[10], REQUIRED_COLUMNS[11],
-    REQUIRED_COLUMNS[12], REQUIRED_COLUMNS[13],
+    'LD [m]', 'Max Depth [%]', 'Length [mm]',
+    'CR Depth [mm/y]', 'CR Length [mm/y]', 'Design Factor', 'Outer Diameter Ds',
+    'SMYS [MPa]', 'Operating Pressure P₀ [MPa]',
   ]) {
     assert.ok(errorColumns.has(column), `missing validation error for ${column}`);
   }
+
+  // Width is not one of them. B31G reads depth and axial length; requiring a
+  // width refused whole runs whose vendor reports none, dropping anomalies the
+  // calculation had everything it needed for. A blank width is accepted, and a
+  // present one still has to be a number.
+  assert.equal(errorColumns.has('Width [mm]'), false);
+  assert.deepEqual(validateData([validRow({ 'Width [mm]': '' })]), []);
+  assert.deepEqual(
+    validateData([validRow({ 'Width [mm]': '30mm' })]).map((error) => error.col),
+    ['Width [mm]'],
+  );
 });
 
 test('allows the 80% method boundary but never marks it acceptable', () => {
-  const row = validRow({ [REQUIRED_COLUMNS[3]]: '80' });
+  const row = validRow({ ['Max Depth [%]']: '80' });
   assert.deepEqual(validateData([row]), []);
 
   const result = processRow(row, config);
@@ -101,7 +112,7 @@ test('allows the 80% method boundary but never marks it acceptable', () => {
 });
 
 test('processRow and processAllRows fail closed for invalid inputs', async () => {
-  const invalid = validRow({ [REQUIRED_COLUMNS[7]]: '0' });
+  const invalid = validRow({ ['Nominal Wall Thickness [mm]']: '0' });
 
   assert.throws(() => processRow(invalid, config), FfsInputValidationError);
   await assert.rejects(processAllRows([invalid], config), FfsInputValidationError);

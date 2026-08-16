@@ -156,11 +156,30 @@ test('a re-run with a different configuration invalidates the saved review', () 
     assert.notEqual(currentResultSignature(rerun), signature);
 
     const review = { reviewed_count: 40, selected_count: 6, min_signature: signature, max_signature: signature };
-    assert.equal(evaluateSession(session, review).eligible, true);
+    assert.equal(evaluateSession(session, review).release.available, true);
 
+    // The session itself stays assessable — every anomaly the run found is still
+    // there. Only the saved release stops being usable, and says why.
     const verdict = evaluateSession(rerun, review);
-    assert.equal(verdict.eligible, false);
+    assert.equal(verdict.eligible, true);
     assert.equal(verdict.stale, true);
+    assert.equal(verdict.release.available, false);
+    assert.equal(verdict.release.reason, GATE_REASONS.STALE_REVIEW);
+});
+
+test('a completed alignment with no review is assessable, with no release to scope to', () => {
+    const verdict = evaluateSession(completedSession(), { reviewed_count: 0, selected_count: 0 });
+
+    assert.equal(verdict.eligible, true);
+    assert.equal(verdict.release.available, false);
+    assert.equal(verdict.release.reason, GATE_REASONS.NOT_REVIEWED);
+});
+
+test('a session that never completed is still refused', () => {
+    const verdict = evaluateSession({ status: 'in_progress', params_json: {} }, { reviewed_count: 0, selected_count: 0 });
+
+    assert.equal(verdict.eligible, false);
+    assert.equal(verdict.reason, GATE_REASONS.NOT_COMPLETED);
 });
 
 test('candidate queries stay scoped to the owning organization', async () => {
