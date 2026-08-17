@@ -4,6 +4,8 @@ import { severityOf } from '../../lib/corrosion/analytics';
 import type { CorrosionFeature } from '../../lib/corrosion/analysis';
 import { isMetalLoss } from '../../lib/corrosion/analysis';
 import { evaluateModifiedB31g } from '../../lib/ffs/remainingStrength';
+import { FFS_TEX } from '../../lib/ffs/notation';
+import { MathInline } from '../ds';
 import { SEVERITY_LABEL, SEVERITY_ORDER_VARS, VizFrame, useVizTooltip } from './vizPrimitives';
 
 export interface PipeGeometry {
@@ -116,8 +118,10 @@ export default function DepthLengthEnvelope({ features, geometry }: Props) {
           <>
             The curve is the Modified B31G acceptance limit at{' '}
             <strong>{geometry!.operatingPressureMpa.toFixed(1)} MPa</strong> on a{' '}
-            {geometry!.outerDiameterMm.toFixed(0)} mm × {envelope.wall.toFixed(1)} mm wall.{' '}
-            <strong>{outside.toLocaleString()}</strong> feature(s) plot above it and are not
+            {geometry!.outerDiameterMm.toFixed(0)} mm × {envelope.wall.toFixed(1)} mm wall — the depth
+            at each length for which{' '}
+            <MathInline tex={FFS_TEX.acceptance} label="safe pressure at least the required pressure" />
+            . <strong>{outside.toLocaleString()}</strong> feature(s) plot above it and are not
             acceptable as reported.
           </>
         ) : (

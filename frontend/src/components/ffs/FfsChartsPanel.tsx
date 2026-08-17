@@ -37,6 +37,7 @@ import {
   sectionTooltipLine,
 } from '../../lib/sections/sectionBandsPlugin';
 import SectionBandLegend from '../sections/SectionBandLegend';
+import { MathInline } from '../ds';
 import { formatRemnantLife } from '../../lib/ffs/lifeProjection';
 import ChartCard, { ColorControl, SettingsSectionLabel, type PointShape } from './ChartCard';
 import { Callout } from './FfsPrimitives';
@@ -651,9 +652,10 @@ export default function FfsChartsPanel({
           {lengthUniformity.distinctCount > 1
             ? ` (only ${lengthUniformity.distinctCount} distinct values in the whole population)`
             : ''}
-          . Every anomaly therefore plots on one vertical line, and the normalised length z = L²/(D·t)
-          — which selects the branch of the method and drives the Folias term — is the same for every
-          feature on a given wall. The screening view, the remaining-strength result, and the
+          . Every anomaly therefore plots on one vertical line, and the normalised length{' '}
+          <MathInline tex="z = \frac{L^{2}}{D\,t}" label="z equals L squared over D t" />
+          {' '}— which selects the branch of the method and drives the Folias term — is the same for
+          every feature on a given wall. The screening view, the remaining-strength result, and the
           remnant-life projection are all reading a column the tally did not fill. Check the length
           column mapping in the ILI import before relying on any of them.
         </Callout>
@@ -938,8 +940,9 @@ export default function FfsChartsPanel({
                 <p className="mt-1.5 text-[11px] leading-snug text-slate-500 dark:text-slate-400">
                   The Level 0 tables carry no pressure column: they are drawn for a line at its design
                   hoop stress with the matching safety factor, which puts the target failure stress at
-                  SMYS. Switching to operating pressure solves the same equations at this line's own P₀
-                  and SF — on a lightly loaded line that envelope sits far above the code's screen.
+                  SMYS. Switching to operating pressure solves the same equations at this line's own{' '}
+                  <MathInline tex="\Pop" label="P zero" /> and <MathInline tex="\SFac" label="safety factor" />
+                  {' '}— on a lightly loaded line that envelope sits far above the code's screen.
                 </p>
               </div>
               <div>

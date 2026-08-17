@@ -10,6 +10,7 @@ import {
 import { buildFfsReportCase, type FfsReportContext } from '../../lib/ffs/reportCase';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
 import SynButton from '../ui/SynButton';
+import { MathBlock } from '../ds';
 import FfsExecutiveSummary from './FfsExecutiveSummary';
 import { Callout, Panel } from './FfsPrimitives';
 
@@ -224,7 +225,17 @@ function NarrativeBlockView({
       );
 
     case 'formula':
-      return (
+      // Equations are typeset; a column-aligned readout is not. The block says
+      // which it is by carrying `linesTex` or not, so a padded listing of the
+      // governing feature keeps its monospace grid instead of being pulled
+      // through a maths renderer that would throw the alignment away.
+      return block.linesTex ? (
+        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/60">
+          {block.linesTex.map((tex, i) => (
+            <MathBlock key={i} tex={tex} label={block.lines[i]} />
+          ))}
+        </div>
+      ) : (
         <pre className="mb-4 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-[11.5px] leading-relaxed text-slate-700 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300">
           {block.lines.join('\n')}
         </pre>

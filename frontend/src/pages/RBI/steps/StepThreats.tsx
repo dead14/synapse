@@ -13,7 +13,8 @@
 
 import { FiAlertTriangle } from 'react-icons/fi';
 
-import { Badge, Callout } from '../../../components/ds';
+import { Badge, Callout, MathBlock } from '../../../components/ds';
+import { RBI_TEX } from '../../../lib/rbi/notation';
 import {
   COVERAGE_OPTIONS,
   RELEVANCE_OPTIONS,
@@ -58,6 +59,31 @@ export default function StepThreats({ record, update }: StepProps) {
           you answer it, and the assessment cannot be issued while any remain.
         </Callout>
       )}
+
+      {/* What the two dropdowns on every card below actually do. Stated once,
+          at the top, rather than left to be inferred from eight badges: the
+          relevance sets the base and the coverage moves it by one, which is why
+          an active threat nobody has inspected for scores worse than an active
+          threat somebody has. */}
+      <StepPanel
+        title="How a threat is scored"
+        blurb="Relevance sets the base category; inspection coverage adjusts it. Inspection does not change
+          the damage, only what is known about it."
+      >
+        <MathBlock tex={RBI_TEX.threatCategory} label="threat category rule" />
+        <p className="rbi-check__hint">
+          A method that would have found the threat earns a category back; no inspection at all costs one,
+          because the damage state is unknown. An active threat starts at 4 rather than 5 — category 5 is
+          reserved for a measured condition at or past its limit, and a judgement, however expert, is not
+          that.
+        </p>
+        <MathBlock tex={RBI_TEX.probability} label="probability is the worst of four readings" />
+        <p className="rbi-check__hint">
+          The section's probability is the worst of the three measured readings off the filed B31G
+          assessment and the worst judged threat. Worst, not averaged: a section is as likely to fail as
+          its most likely way of failing.
+        </p>
+      </StepPanel>
 
       {THREAT_GROUPS.map((group) => (
         <StepPanel key={group.id} title={group.label} blurb={group.blurb}>

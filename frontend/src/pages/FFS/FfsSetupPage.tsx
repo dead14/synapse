@@ -49,6 +49,8 @@ import {
   readManualFfsFile,
 } from '../../lib/ffs/manualWorkbook.ts';
 import { DEFAULT_FFS_ANALYSIS_HORIZON_YEARS } from '../../lib/ffs/lifeProjection.ts';
+import { areaTermTex, FFS_TEX } from '../../lib/ffs/notation.ts';
+import { MathInline, MathBlock } from '../../components/ds';
 
 /**
  * FFS intake supports either a reviewed alignment release or a separately
@@ -545,32 +547,42 @@ export default function FfsSetupPage() {
                   className={`flex flex-1 flex-col items-center rounded-md px-3 py-2 text-xs font-semibold transition-colors ${method === 'original' ? 'border border-emerald-200 bg-emerald-100 text-emerald-700 dark:border-emerald-800/50 dark:bg-emerald-900/30 dark:text-emerald-400' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
                 >
                   <span>Original B31G</span>
-                  <span className="text-[10px] opacity-70">0.67dL</span>
+                  {/* The parabola, written as the fraction the code states.
+                      `0.67dL` beside the neighbouring `0.85dL` read as two
+                      decimals of the same kind; they are a fraction and a
+                      fitted constant, and the notation now says so. */}
+                  <span className="text-[10px] opacity-70">
+                    <MathInline tex={areaTermTex('original')} label="two thirds d L" scale="sm" />
+                  </span>
                 </button>
                 <button
                   onClick={() => setMethod('modified')}
                   className={`flex flex-1 flex-col items-center rounded-md px-3 py-2 text-xs font-semibold transition-colors ${method === 'modified' ? 'border border-indigo-200 bg-indigo-100 text-indigo-700 dark:border-indigo-800/50 dark:bg-indigo-900/30 dark:text-indigo-400' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
                 >
                   <span>Modified B31G</span>
-                  <span className="text-[10px] opacity-70">0.85dL</span>
+                  <span className="text-[10px] opacity-70">
+                    <MathInline tex={areaTermTex('modified')} label="0.85 d L" scale="sm" />
+                  </span>
                 </button>
               </div>
 
               {method === 'modified' && (
                 <div className="mt-2 flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-900">
-                  <span className="text-xs font-medium text-slate-500">Modified S<sub>f</sub> formula:</span>
+                  <span className="text-xs font-medium text-slate-500">
+                    Modified <MathInline tex="\Sfail" label="failure stress" scale="sm" /> formula:
+                  </span>
                   <div className="flex rounded border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-800">
                     <button
                       onClick={() => setModifiedSa('smys69')}
                       className={`rounded px-2 py-1 text-[11px] font-medium ${modifiedSa === 'smys69' ? 'bg-indigo-50 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-400' : 'text-slate-500'}`}
                     >
-                      SMYS + 69 MPa
+                      <MathInline tex="\SMYS + 69\,\mathrm{MPa}" label="SMYS plus 69 MPa" scale="sm" />
                     </button>
                     <button
                       onClick={() => setModifiedSa('smys11')}
                       className={`rounded px-2 py-1 text-[11px] font-medium ${modifiedSa === 'smys11' ? 'bg-indigo-50 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-400' : 'text-slate-500'}`}
                     >
-                      1.1 × SMYS
+                      <MathInline tex="1.1 \times \SMYS" label="1.1 times SMYS" scale="sm" />
                     </button>
                   </div>
                 </div>
@@ -1183,9 +1195,12 @@ export default function FfsSetupPage() {
                 Safety factor
               </p>
               <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-                Divides the estimated failure pressure to give the safe operating pressure:
-                P<sub>S</sub> = P<sub>F</sub> / SF.
+                Divides the estimated failure pressure to give the safe operating pressure.
               </p>
+              <MathBlock
+                tex={FFS_TEX.safePressure}
+                label="safe pressure equals failure pressure over safety factor"
+              />
               <div role="radiogroup" aria-label="Safety factor basis" className="ds-segmented mt-2.5 w-max">
                 {([
                   { value: 'derived', label: 'Derive from design factor', hint: 'SF = 1/F per section. Historic B31G practice and the basis of the Level 0 tables; correct only at the design hoop stress.' },
@@ -1223,7 +1238,9 @@ export default function FfsSetupPage() {
                 </label>
               ) : (
                 <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400">
-                  Each section is assessed at SF = 1 / its design factor
+                  Each section is assessed at{' '}
+                  <MathInline tex={FFS_TEX.safetyFactorFromDesign} label="SF equals one over F" />
+                  {' '}on its own design factor
                   {sectionDesignFactors.length > 0 && (
                     <> — {[...new Set(sectionDesignFactors.map((rule) => rule.designFactor))]
                       .sort((a, b) => a - b)

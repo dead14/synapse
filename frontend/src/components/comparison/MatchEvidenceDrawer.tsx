@@ -1,6 +1,8 @@
 import { FiActivity, FiShield, FiX } from 'react-icons/fi';
 
 import Modal from '../common/Modal';
+import { MathInline, MathBlock } from '../ds';
+import { ALIGNMENT_TEX } from '../../lib/alignment/notation';
 import { MATCH_METHOD_LABELS } from '../../utils/alignmentDisplay';
 
 /**
@@ -47,7 +49,14 @@ const COST_CHANNEL_NOTES: Record<string, string> = {
   Odometer: 'Gate only — the odometer window admits or rejects a pair but adds nothing to its cost.',
 };
 
-const COST_CHANNEL_FORMULA = 'weight × (difference ÷ tolerance)';
+/**
+ * The penalty caption under every non-gate channel.
+ *
+ * Kept as a plain string as well as TeX: the caption is also the accessible
+ * label for the typeset version, and a screen reader announcing
+ * `c sub k equals w sub k` is less use than the words.
+ */
+const COST_CHANNEL_FORMULA = 'weight × (absolute difference ÷ tolerance)';
 
 function bayesianChannelNote(channel: Channel): string {
   const spread = Number(channel.nullSpread);
@@ -138,6 +147,11 @@ function CostEvidence({ evidence }: { evidence: MatchEvidence }) {
         its gate for the pair to be admitted at all; the penalties then decide which admissible set
         of pairs is cheapest overall. A lower cost is a better fit — it is not a probability.
       </p>
+      {/* The two relations the table's five columns are an instance of. The
+          division by the tolerance is what lets a metre, a millimetre and a
+          degree be added together in the total at the foot of the table. */}
+      <MathBlock tex={ALIGNMENT_TEX.costGate} label="every channel must fall inside its gate" />
+      <MathBlock tex={ALIGNMENT_TEX.costTotal} label="total cost is the weighted sum of normalised differences" />
       <table className="w-full text-left text-xs border-collapse">
         <thead>
           <tr className="border-b" style={HAIRLINE_STRONG}>
@@ -155,7 +169,13 @@ function CostEvidence({ evidence }: { evidence: MatchEvidence }) {
                 <strong>{channel.name}</strong>
                 <p className="text-[10px] ds-muted">
                   {COST_CHANNEL_NOTES[channel.name]
-                    ?? (channel.gateOnly ? '' : COST_CHANNEL_FORMULA)}
+                    ?? (channel.gateOnly ? '' : (
+                      <MathInline
+                        tex={ALIGNMENT_TEX.costChannel}
+                        label={COST_CHANNEL_FORMULA}
+                        scale="sm"
+                      />
+                    ))}
                 </p>
               </td>
               <td className="py-1.5 pr-2">{decimals(channel.observed)} {channel.unit}</td>
@@ -211,9 +231,12 @@ function BayesianEvidence({ evidence }: { evidence: MatchEvidence }) {
           at <strong>{decimals(drift.shiftM)} m</strong>
           {drift.scaleApplied ? <> with a scale of <strong>{decimals(drift.scale, 5)}</strong></> : null},
           supported by <strong>{drift.support ?? 0}</strong> defect(s). The spread of those
-          supporting residuals gives the noise scale used below:
-          σ = <strong>{decimals(drift.sigmaM)} m</strong> — measured from this run, not set by hand.
+          supporting residuals gives the noise scale used below:{' '}
+          <MathInline tex="\sigma" label="sigma" /> = <strong>{decimals(drift.sigmaM)} m</strong>
+          {' '}— measured from this run, not set by hand.
         </p>
+        <MathBlock tex={ALIGNMENT_TEX.drift} label="the section displacement" />
+        <MathBlock tex={ALIGNMENT_TEX.sigma} label="sigma is the spread of the supporting residuals" />
       </div>
 
       <div>
@@ -223,8 +246,12 @@ function BayesianEvidence({ evidence }: { evidence: MatchEvidence }) {
             <tr className="border-b" style={HAIRLINE_STRONG}>
               <th className="py-1.5 pr-2 font-semibold">Channel</th>
               <th className="py-1.5 pr-2 font-semibold">Observed</th>
-              <th className="py-1.5 pr-2 font-semibold">Spread (σ)</th>
-              <th className="py-1.5 pr-2 font-semibold">log LR</th>
+              <th className="py-1.5 pr-2 font-semibold">
+                Spread <MathInline tex="\sigma" label="sigma" scale="sm" />
+              </th>
+              <th className="py-1.5 pr-2 font-semibold">
+                <MathInline tex="\log \mathrm{LR}" label="log likelihood ratio" scale="sm" />
+              </th>
               <th className="py-1.5 font-semibold">Odds</th>
             </tr>
           </thead>
@@ -270,6 +297,12 @@ function BayesianEvidence({ evidence }: { evidence: MatchEvidence }) {
             </tr>
           </tfoot>
         </table>
+        {/* Four quantities in one table — a per-channel ratio, a prior in
+            log-odds, their sum, and a threshold on it — related by two
+            equations that used to appear nowhere on this screen. */}
+        <MathBlock tex={ALIGNMENT_TEX.logLikelihoodRatio} label="one channel's log likelihood ratio" scale="sm" />
+        <MathBlock tex={ALIGNMENT_TEX.logBayesFactor} label="the total log Bayes factor" scale="sm" />
+        <MathBlock tex={ALIGNMENT_TEX.acceptance} label="acceptance threshold" scale="sm" />
         <p className="text-[11px] ds-muted mt-1">
           Accepted because the total exceeds
           {' '}{decimals(evidence.acceptThresholdLogBayesFactor, 2)} — that is, because "same defect"
@@ -290,6 +323,8 @@ function BayesianEvidence({ evidence }: { evidence: MatchEvidence }) {
           reported confidence is the lower of the two: a pair counts as confident only when it is
           the best explanation of <em>both</em> defects.
         </p>
+        <MathBlock tex={ALIGNMENT_TEX.sidePosterior} label="one side normalised against its rivals" scale="sm" />
+        <MathBlock tex={ALIGNMENT_TEX.posterior} label="confidence is the lower of the two sides" scale="sm" />
         <p className="mt-2 text-base font-bold">
           Match confidence: {Number.isFinite(posterior) ? `${(posterior * 100).toFixed(2)}%` : '—'}
         </p>

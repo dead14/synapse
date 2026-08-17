@@ -16,3 +16,6 @@ export type { Tone } from './Feedback';
 
 export { Segmented, Switch, Toolbar, ToolbarSpacer, ActionBar } from './Controls';
 export type { SegmentedOption } from './Controls';
+
+export { MathInline, MathBlock } from './Math';
+export type { MathScale } from './Math';

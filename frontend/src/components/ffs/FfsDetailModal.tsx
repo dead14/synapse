@@ -19,6 +19,7 @@ import {
 } from '../../lib/ffs/assessmentProfile.ts';
 import type { FfsRepairCreditDecision } from '../../lib/ffs/reportCase';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
+import { MathInline, MathBlock } from '../ds';
 import { Callout, PriorityLabel, SeverityBadge, formatErf } from './FfsPrimitives';
 import FfsScenarioLab from './FfsScenarioLab.tsx';
 
@@ -38,6 +39,7 @@ function timesRequired(value: number, requiredPressureMpa: number): string {
 function InputCard({
   label,
   symbol,
+  symbolTex,
   value,
   unit,
   description,
@@ -45,7 +47,18 @@ function InputCard({
   showWorking = true,
 }: {
   label: string;
-  symbol: string;
+  /** A plain word standing in for a symbol — `Method`, `Owner`, `Ref`. */
+  symbol?: string;
+  /**
+   * The quantity's actual symbol, typeset.
+   *
+   * These were Unicode approximations — `Dₛ`, `ṙᵈ`, `ṙₗ`, `dₘₑₐₛ` — assembled
+   * out of whichever combining subscripts happened to exist. Half of them do
+   * not exist as Unicode at all, which is why the depth rate was spelled with
+   * a superscript `d` where it needed a subscript, and why the same rate
+   * appeared as `CR depth` two cards later. One notation, typeset once.
+   */
+  symbolTex?: string;
   value: string;
   unit?: string;
   description: string;
@@ -61,7 +74,9 @@ function InputCard({
         {unit && <span className="ffs-detail__input-unit">{unit}</span>}
       </p>
       <p className="ffs-detail__input-desc">
-        <span className="ffs-detail__input-symbol">{symbol}</span>
+        <span className="ffs-detail__input-symbol">
+          {symbolTex ? <MathInline tex={symbolTex} /> : symbol}
+        </span>
         {' = '}
         {description}
       </p>
@@ -99,8 +114,22 @@ function CalcStep({ step, showWorking }: { step: FfsCalcStep; showWorking: boole
             </p>
             {showWorking && (
               <>
-                <p className="ffs-detail__calc-formula">{step.formula}</p>
-                <p className="ffs-detail__calc-sub">= {step.substitution}</p>
+                {/* Typeset, not spelled out. The failure-stress step alone
+                    carries a fraction inside a fraction, which on one line of
+                    monospace was the single worst thing to read on this
+                    screen. */}
+                <div className="ffs-detail__calc-formula">
+                  <MathBlock tex={step.formulaTex} label={step.formula} />
+                </div>
+                {step.substitutionTex && (
+                  <div className="ffs-detail__calc-sub">
+                    <MathBlock
+                      tex={`= ${step.substitutionTex}`}
+                      label={`= ${step.substitution}`}
+                      scale="sm"
+                    />
+                  </div>
+                )}
                 <p className="ffs-detail__basis">{step.basis}</p>
               </>
             )}
@@ -120,6 +149,7 @@ function LifeCard({
   value,
   unit,
   description,
+  formulaTex,
   basis,
   showWorking = true,
   tone = 'default',
@@ -128,7 +158,16 @@ function LifeCard({
   value: string;
   unit?: string;
   description: string;
-  /** The rule or formula behind the figure, shown when working is on. */
+  /**
+   * The equation the figure comes from, typeset above the prose.
+   *
+   * Split out of `basis` rather than left embedded in it. These cards used to
+   * open with `P_F = 2·S_F·t/D — step 8.`, which put the one part of the
+   * sentence that is not prose in the middle of a paragraph set at 0.6rem, in
+   * the reading face, with a middle dot standing in for multiplication.
+   */
+  formulaTex?: string;
+  /** The rule behind the figure, in words, shown when working is on. */
   basis?: string;
   showWorking?: boolean;
   tone?: 'default' | 'accent' | 'good' | 'warn' | 'bad';
@@ -141,6 +180,11 @@ function LifeCard({
         {unit && <span className="ffs-detail__life-unit">{unit}</span>}
       </p>
       <p className="ffs-detail__life-desc">{description}</p>
+      {formulaTex && showWorking && (
+        <div className="ffs-detail__life-formula">
+          <MathBlock tex={formulaTex} scale="sm" />
+        </div>
+      )}
       {basis && showWorking && <p className="ffs-detail__basis">{basis}</p>}
     </div>
   );
@@ -242,7 +286,11 @@ export default function FfsDetailModal({
   const depthLimitRatio = (depthLimitPct / 100).toFixed(2);
   const caveats = remnantLifeCaveats(life);
   const isOriginal = config.method === 'original';
-  const areaLabel = isOriginal ? '⅔dL' : '0.85dL';
+  // The idealised metal-loss area. The Original method's parabola is two
+  // thirds of the depth × length box and the Modified method's is 0.85 of it —
+  // which the vulgar fraction `⅔dL` said in a glyph that does not exist at
+  // every font weight this application uses, beside a decimal that does.
+  const areaTex = isOriginal ? '\\tfrac{2}{3}\\,d\\,L' : '0.85\\,d\\,L';
   const failed = n.acceptance === 'Un-Acceptable';
   const repairCredited = repairCreditDecision?.credited === true;
   const methodChecks = applicabilityChecks(item);
@@ -298,7 +346,8 @@ export default function FfsDetailModal({
               </span>
             </div>
             <p className="ffs-detail__method-badge">
-              Method profile: {methodProfileLabel(config)} &middot; {areaLabel} area term
+              Method profile: {methodProfileLabel(config)} &middot;{' '}
+              <MathInline tex={areaTex} label="idealised metal-loss area" /> area term
             </p>
           </div>
         </div>
@@ -313,7 +362,8 @@ export default function FfsDetailModal({
                 value={fmt(n.Pf, 3)}
                 unit="MPa"
                 description={timesRequired(n.Pf, n.p0)}
-                basis="P_F = 2·S_F·t/D — step 8. An estimate of the pressure at which the corroded wall would fail, carrying no margin. It is never an operating limit."
+                formulaTex="\Pfail = \frac{2\,\Sfail\,t}{D}"
+                basis="Step 8. An estimate of the pressure at which the corroded wall would fail, carrying no margin. It is never an operating limit."
                 showWorking={showWorking}
               />
               <LifeCard
@@ -321,7 +371,8 @@ export default function FfsDetailModal({
                 value={fmt(n.safePressure, 3)}
                 unit="MPa"
                 description={timesRequired(n.safePressure, n.p0)}
-                basis={`P_S = P_F / SF — step 10, at SF = ${fmt(n.SF, 4)} (${safetyFactorSourceLabel(n.safetyFactorSource).toLowerCase()}). This is the pressure the assessment stands behind for this feature.`}
+                formulaTex={`\\Psafe = \\frac{\\Pfail}{\\SFac} \\quad\\text{at}\\quad \\SFac = ${fmt(n.SF, 4)}`}
+                basis={`Step 10, with the safety factor ${safetyFactorSourceLabel(n.safetyFactorSource).toLowerCase()}. This is the pressure the assessment stands behind for this feature.`}
                 showWorking={showWorking}
                 tone="good"
               />
@@ -337,7 +388,8 @@ export default function FfsDetailModal({
                 label="ERF"
                 value={formatErf(n.ERF)}
                 description={Number.isFinite(n.ERF) ? `${(n.ERF * 100).toFixed(1)}% of safe pressure used` : 'No safe-pressure basis'}
-                basis="ERF = P₀ / P_S — step 11. An operator convention, not a B31G term: the code criterion is that the safe pressure equals or exceeds the required pressure."
+                formulaTex="\ERF = \frac{\Pop}{\Psafe}"
+                basis="Step 11. An operator convention, not a B31G term: the code criterion is that the safe pressure equals or exceeds the required pressure."
                 showWorking={showWorking}
                 tone={n.ERF >= 1 ? 'bad' : n.ERF >= screening.reviewBandErf ? 'warn' : 'default'}
               />
@@ -358,7 +410,7 @@ export default function FfsDetailModal({
             <div className="ffs-detail__input-grid">
               <InputCard
                 label="Max Depth"
-                symbol={'dₘₑₐₛ'}
+                symbolTex="d_{\mathrm{meas}}"
                 value={`${n.maxDepthPct.toFixed(2)}%`}
                 description={`${n.maxDepthPct.toFixed(0)}% of wall`}
                 basis="ILI-reported maximum depth. No sizing tolerance is applied here — that is the conservative tier below."
@@ -366,7 +418,7 @@ export default function FfsDetailModal({
               />
               <InputCard
                 label="Wall Thickness (t)"
-                symbol="t"
+                symbolTex="t"
                 value={n.wall.toFixed(2)}
                 unit="mm"
                 description="Nominal"
@@ -375,7 +427,7 @@ export default function FfsDetailModal({
               />
               <InputCard
                 label="Outer Diameter (D)"
-                symbol={'Dₛ'}
+                symbolTex="D_{\mathrm{s}}"
                 value={n.od.toFixed(1)}
                 unit="mm"
                 description="Nominal"
@@ -384,7 +436,7 @@ export default function FfsDetailModal({
               />
               <InputCard
                 label="SMYS"
-                symbol="SMYS"
+                symbolTex="\SMYS"
                 value={n.smys.toFixed(1)}
                 unit="MPa"
                 description="Specified"
@@ -393,7 +445,7 @@ export default function FfsDetailModal({
               />
               <InputCard
                 label={'Required Pressure P₀'}
-                symbol={'P₀'}
+                symbolTex="\Pop"
                 value={n.p0.toFixed(3)}
                 unit="MPa"
                 description={pressureBasisLabel(config)}
@@ -402,7 +454,7 @@ export default function FfsDetailModal({
               />
               <InputCard
                 label="Design Factor"
-                symbol="DF"
+                symbolTex="\DFac"
                 value={n.df.toFixed(3)}
                 description={designFactorSourceLabel(n.designFactorSource)}
                 basis={
@@ -414,7 +466,7 @@ export default function FfsDetailModal({
               />
               <InputCard
                 label="Defect Length"
-                symbol="L"
+                symbolTex="L"
                 value={n.length.toFixed(0)}
                 unit="mm"
                 description="ILI measured"
@@ -423,7 +475,7 @@ export default function FfsDetailModal({
               />
               <InputCard
                 label="CR Depth"
-                symbol={'ṙᵈ'}
+                symbolTex="\CRd"
                 value={n.crDepth.toFixed(4)}
                 unit="mm/y"
                 description={growthAnalysisBasisLabel(n.growthEvidence?.depth.analysisBasis)}
@@ -432,7 +484,7 @@ export default function FfsDetailModal({
               />
               <InputCard
                 label="CR Length"
-                symbol={'ṙₗ'}
+                symbolTex="\CRl"
                 value={n.crLength.toFixed(4)}
                 unit="mm/y"
                 basis={n.growthEvidence?.length.note ?? 'No structured growth provenance was attached to this row.'}
@@ -517,7 +569,7 @@ export default function FfsDetailModal({
               />
               <InputCard
                 label="Repair status"
-                symbol="R"
+                symbol="Repair"
                 value={
                   n.repairStatus === 'permanent-repair-verified'
                     ? 'Permanent'
@@ -714,8 +766,13 @@ export default function FfsDetailModal({
                 label={`Years to ${depthLimitPct}% Depth`}
                 value={life.depthLimitYears === null ? '—' : life.depthLimitYears.toFixed(2)}
                 unit={life.depthLimitYears === null ? undefined : 'y'}
-                description={`(${depthLimitRatio} − d/t) × t / CR depth`}
-                basis={`Closed-form: (${depthLimitRatio} − ${fmt(n.dt, 4)}) × ${n.wall.toFixed(2)} / ${life.depthRateMmPerYear.toFixed(4)}. The ${depthLimitPct} %WT line is a project rejection threshold, not a B31G applicability limit.`}
+                description="Closed form, from the as-reported depth"
+                formulaTex={
+                  `t_{\\text{depth}} = \\frac{\\left(${depthLimitRatio} - \\frac{d}{t}\\right) t}{\\CRd}`
+                  + ` = \\frac{\\left(${depthLimitRatio} - ${fmt(n.dt, 4)}\\right)`
+                  + ` \\times ${n.wall.toFixed(2)}}{${life.depthRateMmPerYear.toFixed(4)}}`
+                }
+                basis={`The ${depthLimitPct} %WT line is a project rejection threshold, not a B31G applicability limit.`}
                 showWorking={showWorking}
               />
               <LifeCard
@@ -767,7 +824,8 @@ export default function FfsDetailModal({
               <LifeCard
                 label="ERF at Limit"
                 value={fmt(n.atFailure_ERF, 4)}
-                description={`ERF @ remnant life`}
+                description="At the remnant-life date"
+                formulaTex="\ERF\big|_{t = t_{\text{remnant}}}"
                 basis="The feature re-evaluated at the remnant-life date. It reads 1.0 when ERF governs, and below 1.0 when the depth limit or the design-life cap got there first."
                 showWorking={showWorking}
               />
@@ -775,15 +833,17 @@ export default function FfsDetailModal({
                 label="Depth % at Limit"
                 value={n.atFailure_depth === null ? '—' : n.atFailure_depth.toFixed(2)}
                 unit="%"
-                description={`d/t × 100 @ remnant life`}
+                description="At the remnant-life date"
+                formulaTex="d_{\%} = \frac{d + \CRd\,t_{\text{remnant}}}{t}\times 100"
                 basis="Projected depth at the remnant-life date, at the depth growth rate above."
                 showWorking={showWorking}
               />
               <LifeCard
-                label={'Sᶠ at Limit'}
+                label="Failure stress at limit"
                 value={fmt(n.atFailure_Sf, 4)}
                 unit="MPa"
-                description={`Sᶠ @ remnant life`}
+                description="At the remnant-life date"
+                formulaTex="\Sfail\big|_{t = t_{\text{remnant}}}"
                 basis="Failure stress recomputed at the projected depth and length, through the same equation as step 7."
                 showWorking={showWorking}
               />

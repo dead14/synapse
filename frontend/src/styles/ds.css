@@ -1902,6 +1902,109 @@
 
 .ds-linklike:hover { color: var(--ds-primary-hover); }
 
+/* Typeset mathematics ------------------------------------------------------
+ *
+ * MathJax is configured for SVG output through the lite adaptor, which means
+ * none of its own stylesheet is on the page. What it needs is small and stated
+ * here, next to everything else that sets a size in this application.
+ *
+ * The whole block is written in em, never px. An equation inherits the font
+ * size of whatever it is dropped into, so the same `\frac{P_F}{SF}` comes out
+ * caption-sized in a hint and heading-sized in a step title, with its x-height
+ * matching the prose either way. That is the proportion rule; --ds-math-scale
+ * is the only dial that bends it, and only by the amount a dense table row or
+ * a governing result actually needs.
+ */
+
+.ds-math {
+  --ds-math-scale: 1;
+  display: inline-block;
+  /* MathJax's own metrics assume a text face with a conventional x-height.
+     Outfit runs slightly small against the TeX fonts, so the equation is
+     lifted a touch to sit level with the words beside it. */
+  font-size: calc(1.06em * var(--ds-math-scale));
+  line-height: 0;
+  color: inherit;
+  /* An equation is one word: it never breaks mid-symbol. */
+  white-space: nowrap;
+}
+
+.ds-math--sm { --ds-math-scale: 0.9; }
+.ds-math--lg { --ds-math-scale: 1.18; }
+
+.ds-math mjx-container { display: inline-block; direction: ltr; line-height: 0; }
+.ds-math mjx-container[display="true"] { display: inline-block; margin: 0; }
+
+.ds-math mjx-container > svg {
+  display: inline-block;
+  /* MathJax sets a per-expression vertical-align in the style attribute, which
+     is what puts a subscript's descender on the text baseline. Do not override
+     it; it is the reason inline math sits in the line rather than on it. */
+  overflow: visible;
+  min-width: 1px;
+  min-height: 1px;
+  /* Glyphs are filled with currentColor, so tone comes from the parent. */
+  fill: currentColor;
+  stroke: currentColor;
+}
+
+/* Shown when there is no SVG. Deliberately plain and deliberately visible: a
+   formula that silently disappears is the failure this whole file exists to
+   avoid. */
+.ds-math--raw {
+  display: inline;
+  font-family: var(--ds-font-data);
+  font-size: 0.95em;
+  line-height: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ds-danger);
+}
+
+/* The engine is still on its way. This is the plain-text form of the same
+   formula — the notation this application used before it was typeset — so it
+   reads as content rather than as an error, and the swap when the chunk lands
+   changes the shape of the glyphs, not whether there is anything to read. */
+.ds-math--pending { color: inherit; opacity: 0.75; }
+
+/* A standalone equation on its own line ----------------------------------- */
+
+.ds-math-block {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  min-width: 0;
+  margin: 0.35em 0;
+}
+
+.ds-math-block--center { justify-content: center; }
+.ds-math-block--center .ds-math-block__body { text-align: center; }
+
+/* A long substitution is wider than the panel it is in more often than not.
+   It scrolls inside its own line rather than widening the panel, because the
+   alternative is a horizontal scrollbar on the whole drawer. */
+.ds-math-block__body {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.1em;
+  scrollbar-width: thin;
+}
+
+.ds-math-block__tag {
+  flex: 0 0 auto;
+  color: var(--ds-muted);
+  font-family: var(--ds-font-data);
+  font-size: var(--ds-t-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* The numbers put into the form, one step quieter than the form itself. */
+.ds-math-block--substitution { margin-top: 0.1em; color: var(--ds-muted); }
+
 @media (prefers-reduced-motion: reduce) {
   .ds-btn, .ds-segmented__option, .ds-switch, .ds-switch::after, .ds-table tbody tr,
   .ds-input, .ds-select, .ds-textarea, .sec-brush__section,
