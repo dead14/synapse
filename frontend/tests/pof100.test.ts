@@ -6,6 +6,8 @@ import {
   POF_COMPONENT_LABEL,
   POF_RUN_COMPARISON_STATUS,
   pofColumnTitle,
+  pofMatchOutcome,
+  pofMatchStatus,
 } from '../src/domain/pof100.ts';
 
 test('engine result keys are titled with the POF 100 column names', () => {
@@ -49,7 +51,40 @@ test('run comparison outcomes use the POF wording, not house words', () => {
   // POF §7.5 asks for "new or missed features"; Appendix 8 writes "… matched".
   assert.equal(POF_RUN_COMPARISON_STATUS.persistent, 'Matched');
   assert.equal(POF_RUN_COMPARISON_STATUS.new, 'New in this run');
-  assert.equal(POF_RUN_COMPARISON_STATUS.lost, 'Missed in next run');
+  assert.equal(POF_RUN_COMPARISON_STATUS.lost, 'Missing in next run');
+});
+
+test('a row the OLD run reported and the NEW run did not is missing', () => {
+  // The engine names the side it built the row from; the report names what the
+  // comparison concluded about the pipe.
+  assert.equal(pofMatchStatus('Only OLD'), 'Missing');
+  assert.equal(pofMatchStatus('Only NEW'), 'New');
+  assert.equal(pofMatchStatus('Matched'), 'Matched');
+  assert.equal(pofMatchStatus('Match'), 'Matched');
+});
+
+test('a bypassed row is not compared, which is not the same claim as missing', () => {
+  // A cluster was never offered to the matcher, so the NEW run saying nothing
+  // about it says nothing about the pipe. Reading these two as one word is how
+  // an unaligned cluster turns into a repair scope.
+  assert.equal(pofMatchStatus('Bypassed OLD'), 'Not compared (OLD)');
+  assert.equal(pofMatchStatus('Bypassed NEW'), 'Not compared (NEW)');
+  assert.equal(pofMatchOutcome('Bypassed OLD'), 'not-compared');
+  assert.notEqual(pofMatchOutcome('Bypassed OLD'), pofMatchOutcome('Only OLD'));
+});
+
+test('an outcome resolves the same from the engine word and from its POF wording', () => {
+  // The table filters and sorts on what it displays, so the badge has to reach
+  // the same outcome from the translated value.
+  assert.equal(pofMatchOutcome('Only OLD'), 'missing');
+  assert.equal(pofMatchOutcome('Missing'), 'missing');
+  assert.equal(pofMatchStatus(pofMatchStatus('Only OLD')), 'Missing');
+});
+
+test('an unknown status is shown as written rather than blanked', () => {
+  assert.equal(pofMatchStatus('Partially merged'), 'Partially merged');
+  assert.equal(pofMatchOutcome('Partially merged'), 'unknown');
+  assert.equal(pofMatchStatus('-'), '-');
 });
 
 test('pipe furniture is named from the POF component list', () => {

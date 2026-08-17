@@ -154,11 +154,13 @@ export default function AdvancedCharts({ data, variant = 'modal', onClose }: Adv
             </fieldset>
 
             <fieldset className="adv-charts__group">
-              <legend className="ds-panel__eyebrow">Unmatched ILI data</legend>
+              {/* The two POF outcomes of a run comparison, kept on their run
+                  labels: run 1 alone is a missing feature, run 2 alone a new one. */}
+              <legend className="ds-panel__eyebrow">Missing / new ILI data</legend>
               {['Run 1', 'Run 2', 'Both', 'Hide'].map(val => (
                 <label key={`um-${val}`} className="adv-charts__opt">
                   <input type="radio" name="unmatched-filter" checked={unmatchedFilter === val} onChange={() => setUnmatchedFilter(val)} />
-                  <span>{val === 'Hide' ? 'Do not display' : val === 'Run 1' ? 'Run 1 (old)' : val === 'Run 2' ? 'Run 2 (new)' : 'Both'}</span>
+                  <span>{val === 'Hide' ? 'Do not display' : val === 'Run 1' ? 'Run 1 (missing)' : val === 'Run 2' ? 'Run 2 (new)' : 'Both'}</span>
                 </label>
               ))}
             </fieldset>

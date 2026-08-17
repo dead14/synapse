@@ -128,7 +128,7 @@ export default function DepthVsDistanceChart({ data, filters, sectionBands }: De
       radius: 4,
     },
     {
-      label: 'Unmatched, old ILI',
+      label: 'Missing (old ILI only)',
       data: chartData.run1Unmatched,
       backgroundColor: 'transparent',
       borderColor: 'blue',
@@ -137,7 +137,7 @@ export default function DepthVsDistanceChart({ data, filters, sectionBands }: De
       radius: 4,
     },
     {
-      label: 'Unmatched, new ILI',
+      label: 'New (new ILI only)',
       data: chartData.run2Unmatched,
       backgroundColor: 'transparent',
       borderColor: 'red',
