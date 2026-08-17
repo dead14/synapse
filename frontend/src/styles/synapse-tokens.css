@@ -3046,8 +3046,28 @@ body {
   padding: 1.25rem;
 }
 
+/* Column widths come from the table's colgroup, so a cell is never wider than
+   its share and the row height stops depending on how the browser felt like
+   distributing the space. */
+.syn-table.syn-registry-table {
+  min-width: 58rem;
+  table-layout: fixed;
+}
+
+.syn-table.syn-registry-table th,
+.syn-table.syn-registry-table td {
+  padding: 0.7rem 0.9rem;
+  vertical-align: top;
+}
+
+.syn-registry-table td strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .syn-registry-table td small {
-  max-width: 15rem;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3057,18 +3077,18 @@ body {
   margin-bottom: 0.3rem;
 }
 
-/* The workflow cell: where the run stands, where it can be opened, and what it
-   can hand over — three separate rows, because stacking them into one wrapped
-   flex line is what made the actions unreadable. */
+/* The workflow cell: where the run stands, then what can be done about it. Two
+   lines, not four — the stacked action rows were taller than the data. */
 .syn-registry-workflow {
   display: flex;
-  min-width: 15rem;
+  min-width: 0;
   flex-direction: column;
-  gap: 0.45rem;
+  gap: 0.5rem;
 }
 
 .syn-registry-stage {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 0.1rem;
   padding-left: 0.5rem;
@@ -3082,8 +3102,11 @@ body {
 }
 
 .syn-registry-stage small {
+  overflow: hidden;
   color: var(--syn-muted);
   font-size: 0.66rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .syn-registry-stage--progress { border-left-color: var(--syn-info); }
@@ -3106,12 +3129,20 @@ body {
   gap: 0.4rem;
 }
 
-.syn-registry-actions--quiet {
-  padding-top: 0.15rem;
-  border-top: 1px solid var(--syn-line);
+/* A row of table actions, not a row of page-level calls to action: the shared
+   `--sm` size is overridden further down the sheet back to full height, which
+   is what made four buttons need four lines. */
+.syn-registry-workflow .syn-btn--sm {
+  min-height: 2rem;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.69rem;
 }
 
-.syn-registry-delete {
+/* Last in the action row, icon-only, and held off the button beside it: it is
+   the one control here that cannot be undone. */
+.syn-registry-workflow .syn-registry-delete {
+  margin-left: 0.5rem;
+  padding: 0.35rem 0.55rem;
   color: var(--syn-danger);
 }
 
