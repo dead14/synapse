@@ -110,7 +110,9 @@ export, the corrosion review and the FFS intake need no strategy branch:
 - `anomaly_only_old` / `anomaly_only_new` — no candidate passed the gate.
 - `bypassed_*` — clusters, structural-change zones, features outside the
   registered map, and pipe furniture. Excluded from alignment, never from the
-  report.
+  report. Clusters are here only under the default `ToleranceConfig.cluster_alignment`
+  of `bypass`; a session set to `align` hands them to the matcher as ordinary
+  metal loss, and they then appear in the anomaly buckets like anything else.
 - `filtered_*` — unreadable odometer or outside the tie-in domain.
 
 Every input source key appears exactly once; `audit.isConserved` is checked in

@@ -53,8 +53,10 @@ def _is_weld_kind(feature_type) -> bool:
 
 
 # Same rule as hungarian_engine._is_cluster_feature: a vendor-merged corrosion
-# group is never aligned across runs, because the grouping itself changes
-# between reports.  It is conserved as a bypass row so ERF / FFS still see it.
+# group is not aligned across runs by default, because the grouping itself
+# changes between reports.  It is conserved as a bypass row so ERF / FFS still
+# see it.  A session may opt out through `ToleranceConfig.cluster_alignment` —
+# keep the two engines' reading of that key identical.
 _CLUSTER_KIND_PATTERN = re.compile(r"\b(?:cluster|klaster|kluster)s?(?:ed|ing)?\b", re.IGNORECASE)
 
 CLUSTER_BYPASS_REASON = "Clustered metal loss — excluded from alignment"
@@ -67,6 +69,17 @@ def _is_cluster_feature(feature: ILIFeature | None) -> bool:
         _CLUSTER_KIND_PATTERN.search(str(label or ""))
         for label in (feature.feature_type, feature.feature_identification)
     )
+
+
+def _resolve_cluster_alignment(params: dict) -> bool:
+    """True when this session asked for clusters to be aligned like anomalies.
+
+    Mirrors ``hungarian_engine.resolve_cluster_alignment``: anything
+    unrecognised, including a session saved before the setting existed, keeps
+    the bypass rule.
+    """
+    tol_config = params.get("ToleranceConfig") or {}
+    return str(tol_config.get("cluster_alignment", "") or "").strip().lower() == "align"
 
 
 def _resolve_phylogenetic_runs(params_json: dict) -> list[dict]:
@@ -249,6 +262,7 @@ def perform_phylogenetic_alignment(session_id: int):
             raise RuntimeError(f"Session {session_id} not found")
 
         params = sess.params_json or {}
+        align_clusters = _resolve_cluster_alignment(params)
         runs = _resolve_phylogenetic_runs(params)
 
         if len(runs) < 2:
@@ -359,7 +373,9 @@ def perform_phylogenetic_alignment(session_id: int):
                     for match in block.matches:
                         src_feat = source_features.get(match.source_feature_id)
                         tgt_feat = target_features.get(match.target_feature_id)
-                        if _is_cluster_feature(src_feat) or _is_cluster_feature(tgt_feat):
+                        if not align_clusters and (
+                            _is_cluster_feature(src_feat) or _is_cluster_feature(tgt_feat)
+                        ):
                             # Neither id is marked consumed, so both sides fall
                             # through to the bypass sweep below and stay in the
                             # report as unaligned rows.
@@ -381,7 +397,7 @@ def perform_phylogenetic_alignment(session_id: int):
             for fid, feat in source_features.items():
                 if fid in matched_source_ids:
                     continue
-                clustered = _is_cluster_feature(feat)
+                clustered = not align_clusters and _is_cluster_feature(feat)
                 row = _feature_to_row(feat, "old", "Bypassed OLD" if clustered else "Only OLD")
                 row["pair_index"] = pair_idx
                 row["pair_label"] = f"{source_run.get('year', '?')}-{target_run.get('year', '?')}"
@@ -394,7 +410,7 @@ def perform_phylogenetic_alignment(session_id: int):
             for fid, feat in target_features.items():
                 if fid in matched_target_ids:
                     continue
-                clustered = _is_cluster_feature(feat)
+                clustered = not align_clusters and _is_cluster_feature(feat)
                 row = _feature_to_row(feat, "new", "Bypassed NEW" if clustered else "Only NEW")
                 row["pair_index"] = pair_idx
                 row["pair_label"] = f"{source_run.get('year', '?')}-{target_run.get('year', '?')}"

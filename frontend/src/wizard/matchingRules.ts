@@ -61,6 +61,34 @@ export const WALL_THICKNESS_SOURCES = [
 
 export type WallThicknessSource = (typeof WALL_THICKNESS_SOURCES)[number]['id'];
 
+/**
+ * Whether clustered metal loss takes part in alignment.
+ *
+ * A cluster is a vendor-merged group of pits, and most vendors redraw those
+ * groups on every run — so pairing one across runs compares two different
+ * populations and the growth rate is an artefact of the grouping. That is why
+ * `bypass` is the default. Some vendors instead report a cluster as a standing
+ * feature with the same grouping rules applied to both runs; `align` is for
+ * those, and it is a judgement about the uploaded reports, not a preference.
+ *
+ * Keep in step with `resolve_cluster_alignment` in
+ * `backend/src/python_engines/hungarian_engine.py`.
+ */
+export const CLUSTER_ALIGNMENT_MODES = [
+  {
+    id: 'bypass',
+    label: 'Keep clusters out of alignment',
+    hint: 'Clusters stay in the report as bypassed rows and still feed ERF / FFS, but are never paired OLD↔NEW.',
+  },
+  {
+    id: 'align',
+    label: 'Align clusters like anomalies',
+    hint: 'Clusters are offered to the matcher on the same terms as any other metal loss, and carry a measured growth rate when they pair.',
+  },
+] as const;
+
+export type ClusterAlignment = (typeof CLUSTER_ALIGNMENT_MODES)[number]['id'];
+
 export type ToleranceValues = {
   clock_tolerance: number;
   us_gw_distance_tolerance: number;
@@ -78,6 +106,12 @@ export type ToleranceValues = {
    * because the growth rates and the FFS intake are built from it.
    */
   wall_thickness_source: WallThicknessSource;
+  /**
+   * Not a gate either — it decides whether clustered metal loss is offered to
+   * the matcher at all. Every strategy reads it, so one saved decision governs
+   * the gated matcher, the drift matcher, AURORA and the phylogenetic chain.
+   */
+  cluster_alignment: ClusterAlignment;
   anomaly_matcher: AnomalyMatcher;
   /**
    * Permitted difference between the two runs' reported distance to their own
@@ -99,6 +133,7 @@ export const RECOMMENDED_TOLERANCES: ToleranceValues = {
   use_us_gw_distance: true,
   us_gw_distance_source: 'auto',
   wall_thickness_source: 'uploaded',
+  cluster_alignment: 'bypass',
   anomaly_matcher: 'hungarian',
   gw_offset_tolerance: 0.2,
   length_tolerance: 50,
@@ -139,6 +174,13 @@ export function toleranceValues(source: any, legacyDistance: unknown): Tolerance
       source?.wall_thickness_source,
       WALL_THICKNESS_SOURCES.map((item) => item.id),
       'uploaded',
+    ),
+    // Sessions saved before this setting existed held clusters out of
+    // alignment, so reopening one must not quietly start pairing them.
+    cluster_alignment: oneOf(
+      source?.cluster_alignment,
+      CLUSTER_ALIGNMENT_MODES.map((item) => item.id),
+      'bypass',
     ),
     anomaly_matcher: oneOf(
       source?.anomaly_matcher,

@@ -169,10 +169,13 @@ const CLUSTER_CLASSIFICATION_COLUMNS = [
 /**
  * Whether either side of a comparison row is clustered metal loss.
  *
- * The engine already keeps these out of matching; this is the same rule applied
- * to the manual reassignment path, so an engineer cannot pair by hand what the
- * algorithm refused to pair. The row stays in the table either way — clusters
- * are excluded from *alignment*, never from the report or from ERF.
+ * This answers "is this row a cluster", not "may it be reassigned". Callers
+ * pair it with the session's `ToleranceConfig.cluster_alignment`: under the
+ * default `bypass` the engine kept these out of matching, and the manual
+ * reassignment path applies the same rule so an engineer cannot pair by hand
+ * what the algorithm refused to pair. Under `align` the engine paired them, and
+ * the manual path must not contradict it. The row stays in the table either
+ * way — clusters are excluded from *alignment*, never from the report or ERF.
  */
 export function isClusteredAlignmentRow<T extends Record<string, unknown>>(row: T): boolean {
   return CLUSTER_CLASSIFICATION_COLUMNS.some((column) => {

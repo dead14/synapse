@@ -155,6 +155,24 @@ test('sameTolerances ignores keys outside the engine contract', () => {
   }));
 });
 
+test('an evidence decision counts as an unsaved change even though no gate moved', () => {
+  // A profile is still itself with either value set, so matchProfile ignores
+  // these — but the engineer changed what the engine will be given, and the
+  // step must not report that it matches the saved configuration.
+  assert.ok(!sameTolerances(RECOMMENDED_TOLERANCES, {
+    ...RECOMMENDED_TOLERANCES,
+    cluster_alignment: 'align',
+  }));
+  assert.ok(!sameTolerances(RECOMMENDED_TOLERANCES, {
+    ...RECOMMENDED_TOLERANCES,
+    wall_thickness_source: 'gw',
+  }));
+  assert.equal(
+    matchProfile({ ...RECOMMENDED_TOLERANCES, cluster_alignment: 'align' })?.id,
+    'default',
+  );
+});
+
 test('projection input is refused when intake has not produced counts', () => {
   assert.equal(projectionInputFrom(undefined), null);
   assert.equal(projectionInputFrom({ oldRun: { anomalies: 0 }, newRun: { anomalies: 10 } }), null);

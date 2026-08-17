@@ -5,15 +5,18 @@ import sys
 from hungarian_engine import CLUSTER_BYPASS_REASON, HungarianAnomalyAlignmentEngine
 
 
-def _manual_row(feature, side, status, result_group, old_year, new_year):
+def _manual_row(feature, side, status, result_group, old_year, new_year, align_clusters=False):
     is_old = side == "OLD"
     return {
         "match_status": status,
         "Match/Unmatch": status,
         "Result Group": result_group,
+        # Only a bypass this run actually applied is named.  A session that
+        # aligns clusters bypassed nothing, so the column stays empty.
         "Bypass Reason": (
             CLUSTER_BYPASS_REASON
-            if HungarianAnomalyAlignmentEngine._is_cluster_feature(feature)
+            if not align_clusters
+            and HungarianAnomalyAlignmentEngine._is_cluster_feature(feature)
             else "-"
         ),
         "Run Year OLD": old_year,
@@ -39,7 +42,7 @@ def _manual_row(feature, side, status, result_group, old_year, new_year):
     }
 
 
-def build_manual_output(old_features, new_features, old_year, new_year):
+def build_manual_output(old_features, new_features, old_year, new_year, align_clusters=False):
     HungarianAnomalyAlignmentEngine._ensure_source_keys(old_features, "OLD")
     HungarianAnomalyAlignmentEngine._ensure_source_keys(new_features, "NEW")
     output = {
@@ -59,7 +62,7 @@ def build_manual_output(old_features, new_features, old_year, new_year):
             if HungarianAnomalyAlignmentEngine._is_gw_feature(feature):
                 bucket = "gw_unmatched"
                 group = "GW"
-            elif HungarianAnomalyAlignmentEngine._is_matchable_anomaly(feature):
+            elif HungarianAnomalyAlignmentEngine._is_matchable_anomaly(feature, align_clusters):
                 bucket = "anomaly_only_old" if side == "OLD" else "anomaly_only_new"
                 group = "ANOMALY"
             else:
@@ -72,6 +75,7 @@ def build_manual_output(old_features, new_features, old_year, new_year):
                 group,
                 old_year,
                 new_year,
+                align_clusters,
             ))
 
     rows = [row for value in output.values() for row in value]
@@ -92,6 +96,7 @@ def main(session_id):
         new_features,
         engine.run_1_year,
         engine.run_2_year,
+        engine.align_clusters,
     )
     result_path = os.environ.get("ALIGNMENT_RESULT_FILE")
     if result_path:

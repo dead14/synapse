@@ -11,7 +11,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "python_engines"))
 
 import hungarian_engine
-from hungarian_engine import HungarianAnomalyAlignmentEngine
+from hungarian_engine import HungarianAnomalyAlignmentEngine, resolve_cluster_alignment
 
 
 class HungarianToleranceTests(unittest.TestCase):
@@ -651,6 +651,59 @@ class HungarianGwLockTests(unittest.TestCase):
             [feature["id"] for feature in bypassed],
             ["vendor-cluster", "vendor-cluster-reversed"],
         )
+
+    def test_session_can_opt_clusters_into_alignment(self):
+        # Some vendors report a cluster as a standing feature grouped by the
+        # same rule in both runs.  The engineer says so on the Tolerances step;
+        # nothing about the labels themselves changes.
+        features = [
+            {
+                "id": "single-defect",
+                "originalType": "metal loss",
+                "raw": {"feature_identification": "Corrosion"},
+            },
+            {
+                "id": "vendor-cluster",
+                "originalType": "metal loss",
+                "raw": {"feature_identification": "CLUSTER corrosion"},
+            },
+            {
+                "id": "support",
+                "originalType": "support",
+                "raw": {"feature_identification": "Pipe support"},
+            },
+        ]
+
+        self.assertTrue(
+            HungarianAnomalyAlignmentEngine._is_matchable_anomaly(features[1], True)
+        )
+        # Still a cluster — the flag governs eligibility, not classification.
+        self.assertTrue(HungarianAnomalyAlignmentEngine._is_cluster_feature(features[1]))
+
+        anomalies, bypassed = HungarianAnomalyAlignmentEngine._partition_hungarian_features(
+            features, True,
+        )
+
+        self.assertEqual(
+            [feature["id"] for feature in anomalies],
+            ["single-defect", "vendor-cluster"],
+        )
+        # Opting clusters in must not drag pipe furniture along with them.
+        self.assertEqual([feature["id"] for feature in bypassed], ["support"])
+
+    def test_cluster_alignment_defaults_to_bypass_for_every_unknown_value(self):
+        # A session saved before the setting existed, and any value that is not
+        # the explicit opt-in, keep the conservative rule.
+        for tol_config in (None, {}, {"cluster_alignment": ""},
+                           {"cluster_alignment": "bypass"},
+                           {"cluster_alignment": "yes please"}):
+            with self.subTest(tol_config=tol_config):
+                self.assertFalse(resolve_cluster_alignment(tol_config))
+
+        for tol_config in ({"cluster_alignment": "align"},
+                           {"cluster_alignment": " ALIGN "}):
+            with self.subTest(tol_config=tol_config):
+                self.assertTrue(resolve_cluster_alignment(tol_config))
 
     def test_scenario_depth_does_not_filter_matching_candidates(self):
         engine = HungarianAnomalyAlignmentEngine.__new__(HungarianAnomalyAlignmentEngine)

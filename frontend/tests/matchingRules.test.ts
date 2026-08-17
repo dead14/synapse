@@ -37,6 +37,10 @@ test('combined scenario and tolerance settings persist the exact engine contract
     // fill existed reported exactly what its pipetally carried, so reopening it
     // must not start inheriting thicknesses it never had.
     wall_thickness_source: 'uploaded',
+    // And again: a session saved before the cluster switch existed ran with
+    // clusters held out of alignment, so reopening it must not start pairing
+    // them and rewriting its growth rates.
+    cluster_alignment: 'bypass',
     // Absent from a saved session means the matcher that existed at the time.
     anomaly_matcher: 'hungarian',
     // A session saved before the weld-offset gate was separated from the
@@ -70,6 +74,27 @@ test('the tolerance step leaves hiddenFeatures alone', () => {
 test('feature rules emit hiddenFeatures only when something is hidden', () => {
   assert.deepEqual(buildFeatureRulesConfig(['bend', 'valve']).hiddenFeatures, ['bend', 'valve']);
   assert.equal(buildFeatureRulesConfig([]).hiddenFeatures, undefined);
+});
+
+test('an explicit cluster decision survives the round trip to the engine contract', () => {
+  const defaults = defaultMatchingRules({
+    ToleranceConfig: { cluster_alignment: 'align' },
+  });
+  const result = buildMatchingRulesConfig({
+    shared: defaults.shared,
+    byPair: {},
+    pairs: [],
+    perPairEnabled: false,
+  });
+
+  assert.equal(result.ToleranceConfig.cluster_alignment, 'align');
+  // Anything the engine would not recognise falls back to the safe rule
+  // rather than reaching it as a value it has to guess about.
+  assert.equal(
+    defaultMatchingRules({ ToleranceConfig: { cluster_alignment: 'sometimes' } })
+      .shared.cluster_alignment,
+    'bypass',
+  );
 });
 
 test('per-pair mode sends each run pair its own engine tolerances', () => {

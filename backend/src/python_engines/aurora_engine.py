@@ -100,9 +100,16 @@ class AuroraRowBuilder:
                 float(new_record["abs_distance_m"]) - float(old_record["abs_distance_m"]), 4
             )
 
-        if bypass_reason == _EMPTY and any(
-            record and HungarianAnomalyAlignmentEngine._is_cluster_feature(record)
-            for record in (old_record, new_record)
+        # Only a bypass this run actually applied is named.  When the session
+        # aligns clusters, a cluster row is an ordinary result and stamping the
+        # exclusion reason on it would describe a rule that never ran.
+        if (
+            bypass_reason == _EMPTY
+            and not getattr(self.engine, "align_clusters", False)
+            and any(
+                record and HungarianAnomalyAlignmentEngine._is_cluster_feature(record)
+                for record in (old_record, new_record)
+            )
         ):
             bypass_reason = CLUSTER_BYPASS_REASON
 
@@ -291,6 +298,9 @@ def build_aurora_output(
         new_run=getattr(engine, "_run_2_meta", {}),
         pipeline_key=pipeline_key,
         config_overrides=config_overrides,
+        # Resolved on the engine from the session's ToleranceConfig, so all
+        # three strategies read one saved decision.
+        align_clusters=getattr(engine, "align_clusters", False),
     )
 
     builder = AuroraRowBuilder(engine)
