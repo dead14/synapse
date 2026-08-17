@@ -996,7 +996,19 @@ export default function FfsChartsPanel({
                       backgroundColor: curve.color,
                       borderWidth: 1.75,
                       pointRadius: 0,
-                      tension: 0.25,
+                      // Straight segments, and it has to stay that way. This is
+                      // a scatter dataset drawn with `showLine`, and
+                      // `ScatterController` — unlike `LineController` — never
+                      // calls `updateControlPoints` before drawing. Any non-zero
+                      // tension therefore strokes a Bézier path whose control
+                      // points are still undefined: the path silently comes out
+                      // empty and the envelope disappears, legend entry and all,
+                      // with nothing logged. The curve is sampled at 121 points
+                      // across the domain anyway, so interpolation would buy no
+                      // smoothness — and on an acceptance boundary a spline that
+                      // overshoots between solved points draws a limit the
+                      // equations never gave.
+                      tension: 0,
                     })),
                   ...scatterDatasets(screeningScatter, screenStyle),
                 ],
