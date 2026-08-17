@@ -50,6 +50,11 @@ function formatDate(value: string | null): string {
   return isValid(parsed) ? format(parsed, 'dd MMM yyyy') : 'Not recorded';
 }
 
+/** The API's raw status, next to pills that read "Completed" and "Failed". */
+function sentenceCase(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 /** One side of the comparison, as a single line: who flew it and when. */
 function describeRun(side: AlignmentRunSide, fallback: string): string {
   const who = side.vendor || side.name || fallback;
@@ -234,6 +239,15 @@ export default function PipelineRuns() {
 
           <div className="syn-table-wrap">
             <table className="syn-table syn-registry-table">
+              {/* Fixed proportions. Left to itself the browser gave the pipeline
+                  name half the table and squeezed the actions into a four-line
+                  staircase, which is what drove the row height. */}
+              <colgroup>
+                <col style={{ width: '24%' }} />
+                <col style={{ width: '19%' }} />
+                <col style={{ width: '17%' }} />
+                <col style={{ width: '40%' }} />
+              </colgroup>
               <thead>
                 <tr>
                   <th scope="col">Pipeline / session</th>
@@ -293,7 +307,7 @@ export default function PipelineRuns() {
                         ) : row.status === 'failed' ? (
                           <span className="syn-pill syn-pill--warning"><FiAlertTriangle aria-hidden="true" /> Failed</span>
                         ) : (
-                          <span className="syn-pill"><FiClock aria-hidden="true" /> {row.status}</span>
+                          <span className="syn-pill"><FiClock aria-hidden="true" /> {sentenceCase(row.status)}</span>
                         )}
                         <small>
                           {row.matchRate === null ? 'Match rate not measured' : `${row.matchRate.toFixed(1)}% matched`}
@@ -307,6 +321,10 @@ export default function PipelineRuns() {
                             <small>{view.note}</small>
                           </div>
 
+                          {/* One line of actions. They used to be three stacked
+                              rows, which made every row of the table four
+                              buttons tall whether or not it had anything to
+                              show. */}
                           <div className="syn-registry-actions">
                             {view.resultHref ? (
                               <Link to={view.resultHref} className="syn-btn syn-btn--solid syn-btn--sm">
@@ -330,46 +348,42 @@ export default function PipelineRuns() {
                                 <FiShield aria-hidden="true" /> Run FFS
                               </Link>
                             )}
-                          </div>
-
-                          {(row.result.available || row.ffs !== null) && (
-                            <div className="syn-registry-actions">
-                              {row.result.available && (
-                                <SynButton
-                                  variant="outline"
-                                  size="sm"
-                                  type="button"
-                                  disabled={downloadingAlignmentId === row.id}
-                                  onClick={() => void downloadAlignmentReport(row)}
-                                >
-                                  <FiDownload aria-hidden="true" />
-                                  {downloadingAlignmentId === row.id ? 'Preparing…' : 'Alignment report'}
-                                </SynButton>
-                              )}
-                              {row.ffs !== null && (
-                                <SynButton
-                                  variant="outline"
-                                  size="sm"
-                                  type="button"
-                                  disabled={downloadingFfsId === row.ffs.sessionId}
-                                  onClick={() => void downloadFfsReport(row)}
-                                >
-                                  <FiDownload aria-hidden="true" />
-                                  {downloadingFfsId === row.ffs.sessionId ? 'Preparing…' : 'FFS report'}
-                                </SynButton>
-                              )}
-                            </div>
-                          )}
-
-                          <div className="syn-registry-actions syn-registry-actions--quiet">
+                            {row.result.available && (
+                              <SynButton
+                                variant="outline"
+                                size="sm"
+                                type="button"
+                                disabled={downloadingAlignmentId === row.id}
+                                onClick={() => void downloadAlignmentReport(row)}
+                              >
+                                <FiDownload aria-hidden="true" />
+                                {downloadingAlignmentId === row.id ? 'Preparing…' : 'Alignment report'}
+                              </SynButton>
+                            )}
+                            {row.ffs !== null && (
+                              <SynButton
+                                variant="outline"
+                                size="sm"
+                                type="button"
+                                disabled={downloadingFfsId === row.ffs.sessionId}
+                                onClick={() => void downloadFfsReport(row)}
+                              >
+                                <FiDownload aria-hidden="true" />
+                                {downloadingFfsId === row.ffs.sessionId ? 'Preparing…' : 'FFS report'}
+                              </SynButton>
+                            )}
+                            {/* Destructive, so it sits apart from the rest of
+                                the row rather than next to "Open result". */}
                             <SynButton
                               variant="ghost"
                               size="sm"
                               type="button"
                               className="syn-registry-delete"
+                              title="Delete this alignment session"
+                              aria-label={`Delete alignment session ${row.id}`}
                               onClick={() => setPendingDeleteId(row.id)}
                             >
-                              <FiTrash2 aria-hidden="true" /> Delete
+                              <FiTrash2 aria-hidden="true" />
                             </SynButton>
                           </div>
                         </div>
