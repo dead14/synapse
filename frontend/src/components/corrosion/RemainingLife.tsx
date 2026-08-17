@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 
 import { remainingLifeRanking } from '../../lib/corrosion/analytics';
 import type { CorrosionFeature } from '../../lib/corrosion/analysis';
-import { Callout } from '../ds';
+import { Callout, MathInline } from '../ds';
 import { SEVERITY_VAR, SeverityChip, VizFrame, useVizTooltip } from './vizPrimitives';
 import { maxBy } from '../../utils/numericRange.ts';
 
@@ -44,8 +44,16 @@ export default function RemainingLife({ features, limitPct = 80, limit = 12 }: P
       tooltip={node}
       note={
         <>
-          Projected at each feature&apos;s own measured rate to <strong>{limitPct} %WT</strong>. This is a
-          straight-line extrapolation of two runs, not a corrosion model —{' '}
+          Projected at each feature&apos;s own measured rate to <strong>{limitPct} %WT</strong>:{' '}
+          {/* The straight line the caption describes, written as the straight
+              line it is. The denominator is what makes the caveat below it
+              matter — a rate measured across two runs, divided into a distance
+              to a limit, and nothing in that quotient is a corrosion model. */}
+          <MathInline
+            tex={`t = \\frac{${limitPct}\\,\\%\\mathrm{WT} - d_{\\%}}{\\dot{d}_{\\%}}`}
+            label="remaining years is the distance to the limit over the measured depth growth rate"
+          />
+          . This is a straight-line extrapolation of two runs, not a corrosion model —{' '}
           {nonGrowing.toLocaleString()} feature(s) are excluded because they are not measurably growing.
         </>
       }

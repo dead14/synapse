@@ -13,7 +13,7 @@ import {
 import { apiFetch } from '../utils/api';
 import { pairTieIn, primaryRunPair, resolveRunPairs } from '../domain/runPairs';
 import { timelineLaneLabels } from '../domain/gwTimeline';
-import { Button } from '../components/ds';
+import { Button, MathInline } from '../components/ds';
 
 interface StepTieInConfigProps {
   onNext: (data: any) => void;
@@ -478,8 +478,16 @@ export default function StepTieInConfig({ onNext, onBack, config }: StepTieInCon
                     </p>
                     {tieInMetrics?.comparisonCoordinates && (
                       <p className="tiein-headline__note is-accent">
-                        Helper view: {laneLabels.old} + {tieInMetrics.comparisonCoordinates.provisionalOffsetM.toFixed(3)} m
-                        ≈ {laneLabels.new}. Raw odometers are unchanged.
+                        Helper view:{' '}
+                        <MathInline
+                          tex={
+                            `x_{\\text{${laneLabels.old}}} + `
+                            + `${tieInMetrics.comparisonCoordinates.provisionalOffsetM.toFixed(3)}`
+                            + `\\,\\mathrm{m} \\approx x_{\\text{${laneLabels.new}}}`
+                          }
+                          label={`${laneLabels.old} plus offset approximates ${laneLabels.new}`}
+                        />
+                        . Raw odometers are unchanged.
                       </p>
                     )}
                   </div>

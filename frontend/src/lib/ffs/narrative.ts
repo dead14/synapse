@@ -15,6 +15,13 @@ import {
   type FfsReportContext,
 } from './reportCase.ts';
 import { maxBy, maxOf, minOf } from '../../utils/numericRange.ts';
+import {
+  failureStressTex,
+  FFS_TEX,
+  flowStressTex,
+  flowStressText,
+  FOLIAS_TEX,
+} from './notation.ts';
 
 export interface NarrativeTableColumn {
   header: string;
@@ -34,7 +41,16 @@ export type NarrativeBlock =
   | { kind: 'paragraph'; text: string }
   | { kind: 'list'; items: string[] }
   | { kind: 'table'; table: NarrativeTable }
-  | { kind: 'formula'; lines: string[] }
+  /**
+   * A block of equations, or a padded monospace readout.
+   *
+   * `lines` is what the Word and HTML exports print — those have no typesetter,
+   * and a document holding `\frac{}{}` is worse than one holding a slash.
+   * `linesTex` is the same content for the screen, and is only present on the
+   * blocks that are genuinely equations: the governing-feature readout below is
+   * a column-aligned listing and belongs in a `<pre>` on every surface.
+   */
+  | { kind: 'formula'; lines: string[]; linesTex?: string[] }
   | { kind: 'figure'; caption: string; chartId: string };
 
 export interface NarrativeOptions {
@@ -53,11 +69,6 @@ const NARRATIVE_REPAIR_REGISTER_LIMIT = 100;
 
 function methodName(config: FfsConfig): string {
   return config.method === 'original' ? 'Original ASME B31G' : 'Modified ASME B31G';
-}
-
-function flowStressText(config: FfsConfig): string {
-  if (config.method === 'original') return '1.1 × SMYS';
-  return config.modifiedSa === 'smys11' ? '1.1 × SMYS' : 'SMYS + 69 MPa';
 }
 
 function fmt(value: number, digits = 3): string {
@@ -183,27 +194,61 @@ export function buildNarrative(
       `axial extent, is reported separately where an interacting group provides one.`,
   });
 
+  // The last two lines of this block used to read `P_safe = P_f × F` and
+  // `ERF = S₀ / (Sf × F)`. Neither is what the engine does, and both are the
+  // same defect `calcTrace` was rewritten to remove: the safe pressure is the
+  // failure pressure divided by the safety factor, and ERF is the required
+  // pressure over that safe pressure. On a line at F = 0.72 assessed at the
+  // para. 1.9 minimum of 1.25, the printed relations understated the safe
+  // pressure by 10 % and overstated ERF by 11 % against the numbers tabulated
+  // three pages later in the same report. The trace was fixed; this block was
+  // missed, and a report that contradicts itself is the one thing a
+  // fitness-for-service document cannot do.
   blocks.push({
     kind: 'formula',
     lines:
       config.method === 'original'
         ? [
             'z  = L² / (D · t)',
-            'M  = √(1 + 0.8 z)                        for z ≤ 20',
+            'M  = √(1 + 0.8 z)                             for z ≤ 20',
             'Sf = S_flow · (1 − ⅔ d/t) / (1 − ⅔ (d/t)/M)   for z ≤ 20',
-            'Sf = S_flow · (1 − d/t)                  for z > 20',
+            'Sf = S_flow · (1 − d/t)                       for z > 20',
             'S_flow = 1.1 × SMYS',
-            'P_f = 2 · Sf · t / D          P_safe = P_f × F',
-            'ERF = S₀ / (Sf × F)           S₀ = P₀ · D / (2t)',
+            'P_f = 2 · Sf · t / D          P_safe = P_f / SF',
+            'ERF = P₀ / P_safe             S₀ = P₀ · D / (2t)',
           ]
         : [
             'z  = L² / (D · t)',
-            'M  = √(1 + 0.6275 z − 0.003375 z²)       for z ≤ 50',
-            'M  = 0.032 z + 3.3                       for z > 50',
+            'M  = √(1 + 0.6275 z − 0.003375 z²)            for z ≤ 50',
+            'M  = 0.032 z + 3.3                            for z > 50',
             `S_flow = ${flowStressText(config)}`,
             'Sf = S_flow · (1 − 0.85 d/t) / (1 − 0.85 (d/t)/M)',
-            'P_f = 2 · Sf · t / D          P_safe = P_f × F',
-            'ERF = S₀ / (Sf × F)           S₀ = P₀ · D / (2t)',
+            'P_f = 2 · Sf · t / D          P_safe = P_f / SF',
+            'ERF = P₀ / P_safe             S₀ = P₀ · D / (2t)',
+          ],
+    linesTex:
+      config.method === 'original'
+        ? [
+            FFS_TEX.normalisedLength,
+            `${FOLIAS_TEX.original} \\cond{z \\le 20}`,
+            `${failureStressTex('original')} \\cond{z \\le 20}`,
+            '\\Sfail = \\Sflow\\left(1 - \\frac{d}{t}\\right) \\cond{z > 20}',
+            '\\Sflow = 1.1 \\times \\SMYS',
+            FFS_TEX.failurePressure,
+            FFS_TEX.safePressure,
+            FFS_TEX.hoopStress,
+            FFS_TEX.erf,
+          ]
+        : [
+            FFS_TEX.normalisedLength,
+            `${FOLIAS_TEX.modifiedShort} \\cond{z \\le 50}`,
+            `${FOLIAS_TEX.modifiedLong} \\cond{z > 50}`,
+            flowStressTex(config),
+            failureStressTex('modified'),
+            FFS_TEX.failurePressure,
+            FFS_TEX.safePressure,
+            FFS_TEX.hoopStress,
+            FFS_TEX.erf,
           ],
   });
 

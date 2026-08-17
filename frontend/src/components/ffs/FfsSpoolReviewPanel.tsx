@@ -26,6 +26,7 @@ import {
   FiTool,
   FiX,
 } from 'react-icons/fi';
+import { MathInline } from '../ds';
 import { formatRemnantLife, remnantLimitLabel } from '../../lib/ffs/lifeProjection';
 import {
   buildFfsSpools,
@@ -134,29 +135,41 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
  */
 function GoverningCalculation({ item }: { item: FfsScreenedResult }) {
   const n = item.nominal;
-  const rows: Array<[string, string]> = [
-    ['Method', `${n.method === 'original' ? 'Original' : 'Modified'} B31G · branch ${n.branch}`],
-    ['Reported depth d', `${n.d.toFixed(3)} mm of ${n.wall.toFixed(2)} mm wall (${n.maxDepthPct.toFixed(1)} %WT)`],
-    ['Depth ratio d/t', n.dt.toFixed(4)],
-    ['Length term z = L²/(D·t)', n.z.toFixed(4)],
-    ['Folias factor M', n.M === null ? 'not used on this branch' : n.M.toFixed(4)],
-    ['Flow stress S_flow', `${n.sflow.toFixed(2)} MPa (SMYS ${n.smys.toFixed(0)} MPa)`],
-    ['Failure stress S_f', `${n.Sf.toFixed(2)} MPa`],
-    ['Failure pressure P_f', `${n.Pf.toFixed(3)} MPa`],
-    ['Safety factor', `${n.SF.toFixed(3)} (${n.safetyFactorSource === 'explicit' ? 'supplied' : `derived from design factor ${n.df.toFixed(2)}`})`],
-    ['Safe pressure P_s = P_f / SF', `${n.safePressure.toFixed(3)} MPa`],
-    ['Required pressure P₀', `${n.p0.toFixed(3)} MPa`],
-    ['ERF = P₀ / P_s', `${formatErf(n.ERF)} → ${n.acceptance}`],
-    ['Depth growth used', `${n.crDepth.toFixed(4)} mm/y`],
-    ['Length growth used', n.crLength > 0 ? `${n.crLength.toFixed(4)} mm/y` : 'none established — length held constant'],
+  // Each row is a name, the symbol for the quantity, and the value. The symbol
+  // used to be spliced into the label — `Length term z = L²/(D·t)` — which put
+  // an equation in a table header cell set in the reading face, with a middle
+  // dot for multiplication and a superscript two that the data face renders at
+  // a different weight from the rest of the row.
+  const rows: Array<[string, string | null, string]> = [
+    ['Method', null, `${n.method === 'original' ? 'Original' : 'Modified'} B31G · branch ${n.branch}`],
+    ['Reported depth', 'd', `${n.d.toFixed(3)} mm of ${n.wall.toFixed(2)} mm wall (${n.maxDepthPct.toFixed(1)} %WT)`],
+    ['Depth ratio', '\\frac{d}{t}', n.dt.toFixed(4)],
+    ['Length term', 'z = \\frac{L^{2}}{D\\,t}', n.z.toFixed(4)],
+    ['Folias factor', 'M', n.M === null ? 'not used on this branch' : n.M.toFixed(4)],
+    ['Flow stress', '\\Sflow', `${n.sflow.toFixed(2)} MPa (SMYS ${n.smys.toFixed(0)} MPa)`],
+    ['Failure stress', '\\Sfail', `${n.Sf.toFixed(2)} MPa`],
+    ['Failure pressure', '\\Pfail', `${n.Pf.toFixed(3)} MPa`],
+    ['Safety factor', '\\SFac', `${n.SF.toFixed(3)} (${n.safetyFactorSource === 'explicit' ? 'supplied' : `derived from design factor ${n.df.toFixed(2)}`})`],
+    ['Safe pressure', '\\Psafe = \\frac{\\Pfail}{\\SFac}', `${n.safePressure.toFixed(3)} MPa`],
+    ['Required pressure', '\\Pop', `${n.p0.toFixed(3)} MPa`],
+    ['Estimated repair factor', '\\ERF = \\frac{\\Pop}{\\Psafe}', `${formatErf(n.ERF)} → ${n.acceptance}`],
+    ['Depth growth used', '\\CRd', `${n.crDepth.toFixed(4)} mm/y`],
+    ['Length growth used', '\\CRl', n.crLength > 0 ? `${n.crLength.toFixed(4)} mm/y` : 'none established — length held constant'],
   ];
   return (
     <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
       <table className="w-full text-left text-xs">
         <tbody className="divide-y divide-slate-100 dark:divide-slate-700/70">
-          {rows.map(([label, value]) => (
+          {rows.map(([label, tex, value]) => (
             <tr key={label} className="text-slate-700 dark:text-slate-300">
-              <td className="w-[46%] px-3 py-1.5 font-medium text-slate-500 dark:text-slate-400">{label}</td>
+              <td className="w-[46%] px-3 py-1.5 font-medium text-slate-500 dark:text-slate-400">
+                {label}
+                {tex && (
+                  <span className="ml-1.5 text-slate-800 dark:text-slate-200">
+                    <MathInline tex={tex} scale="sm" />
+                  </span>
+                )}
+              </td>
               <td className="px-3 py-1.5 font-mono text-[11px] text-slate-900 dark:text-slate-100">{value}</td>
             </tr>
           ))}

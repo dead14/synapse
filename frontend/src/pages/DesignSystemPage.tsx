@@ -8,6 +8,8 @@ import {
   Callout,
   Field,
   Input,
+  MathBlock,
+  MathInline,
   Panel,
   PanelBody,
   PanelHeader,
@@ -19,6 +21,9 @@ import {
   Switch,
 } from '../components/ds';
 import SectionRangeBrush from '../sectioning/SectionRangeBrush';
+import { failureStressTex, FFS_TEX } from '../lib/ffs/notation';
+import { RBI_TEX } from '../lib/rbi/notation';
+import { ALIGNMENT_TEX } from '../lib/alignment/notation';
 import type { LockedGwPair } from '../wizard/matchingSections';
 import ClockRose from '../components/corrosion/ClockRose';
 import DepthHistogram from '../components/corrosion/DepthHistogram';
@@ -166,6 +171,70 @@ export default function DesignSystemPage() {
             <Stat label="Review queue" value="24" tone="warning" />
             <Stat label="Missing" value="66" tone="danger" />
           </StatGrid>
+        </PanelBody>
+      </Panel>
+
+      {/* Notation is a design-system concern, not an FFS one: the same
+          primitives set the B31G working, the alignment evidence and the RBI
+          screening rules, and if they are not the same size as the prose beside
+          them on this page they will not be on any of those either. */}
+      <Panel>
+        <PanelHeader
+          plain
+          eyebrow="Notation"
+          title="Typeset mathematics"
+          subtitle="MathJax through the design system. Every equation inherits the font size around it."
+        />
+        <PanelBody className="ds-stack">
+          <p style={{ fontSize: 'var(--ds-t-base)', color: 'var(--ds-ink-soft)', margin: 0 }}>
+            Inline, inside a sentence: the estimating repair factor{' '}
+            <MathInline tex={FFS_TEX.erf} label="ERF equals P zero over P safe" /> is an operator
+            convention, and a feature is accepted while{' '}
+            <MathInline tex="\ERF < 1" label="ERF below one" />. Text style keeps the fraction on one
+            line so the paragraph leading does not jump.
+          </p>
+
+          <MathBlock
+            tex={failureStressTex('modified')}
+            label="Modified B31G failure stress"
+            tag="B31G para. 2.2"
+          />
+          <MathBlock tex={ALIGNMENT_TEX.logBayesFactor} label="total log Bayes factor" tag="Alignment" />
+          <MathBlock tex={RBI_TEX.interval} label="inspection interval" tag="API 580" />
+
+          {/* The three scales side by side. `md` is the contract — same size as
+              the text — and the other two exist for the two places the contract
+              is wrong: a tall expression inside a dense table row, and a
+              governing result that has to be found from across the room. */}
+          <div className="ds-row" style={{ alignItems: 'flex-end', gap: '1.5rem' }}>
+            {(['sm', 'md', 'lg'] as const).map((scale) => (
+              <div key={scale}>
+                <p className="ds-muted" style={{ fontSize: 'var(--ds-t-micro)', margin: 0 }}>
+                  scale {scale}
+                </p>
+                <MathInline tex={FFS_TEX.safePressure} scale={scale} label="safe pressure" />
+              </div>
+            ))}
+          </div>
+
+          {/* Proportion, demonstrated rather than asserted: one expression at
+              four surrounding type sizes, with no size of its own anywhere. */}
+          <div className="ds-stack" style={{ gap: '0.4rem' }}>
+            {([
+              ['--ds-t-xs', 'table cell'],
+              ['--ds-t-base', 'body'],
+              ['--ds-t-lg', 'section heading'],
+              ['--ds-t-xl', 'page title'],
+            ] as const).map(([token, where]) => (
+              <p key={token} style={{ fontSize: `var(${token})`, margin: 0 }}>
+                {where} — <MathInline tex={FFS_TEX.normalisedLength} label="normalised length" />
+              </p>
+            ))}
+          </div>
+
+          <Callout tone="info" title="An expression that cannot be parsed is shown, not swallowed">
+            <MathInline tex="\frac{a}" label="deliberately malformed" />
+          </Callout>
         </PanelBody>
       </Panel>
 

@@ -19,6 +19,8 @@ import { apiFetch, ApiError } from '../utils/api';
 import Modal from '../components/common/Modal';
 import { extentOf, maxOf, minOf } from '../utils/numericRange.ts';
 import { clampTooltipPosition } from '../utils/tooltipPosition';
+import { MathInline } from '../components/ds';
+import { ALIGNMENT_TEX } from '../lib/alignment/notation';
 import { gwReviewKey, normalizeGwReview, selectReviewedGwLocks, type GwReviewDisposition, type GwReviewState } from '../domain/alignmentReview';
 import {
   buildTimelineModel,
@@ -1441,8 +1443,12 @@ export default function StepGwSimulator({ initialOta, onNext, onBack, config: ra
                <span>Abs. Odo Diff:</span>
                <span>{tooltipState.row.rawOffset?.toFixed(3) || tooltipState.row.offset?.toFixed(3) || '-'} m</span>
             </div>
+            {/* The odometer variance this whole decision turns on. Written
+                out as ASCII it read as one token in a monospace run; the
+                absolute value bars and the ratio inside them are what the
+                engineer is being asked to check against the OTA below. */}
             <div className="pt-2 flex justify-between text-blue-800 font-bold">
-               <span>v = |(sOld/sNew)-1|×100</span>
+               <MathInline tex={ALIGNMENT_TEX.odometerVariance} label="v equals absolute s old over s new minus one, times 100 percent" />
                <span>{tooltipState.row.rawVarPct?.toFixed(2)}%</span>
             </div>
             {tooltipState.row.dtwOn && tooltipState.row.status === 'Match' && (

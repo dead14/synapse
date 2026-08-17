@@ -1235,18 +1235,22 @@
   letter-spacing: 0;
   color: var(--syn-muted);
 }
+/* The working is typeset now, so these two rules set the size the equation
+   inherits rather than a monospace face. 0.65rem was right for a run of
+   characters and is far too small for a fraction: a numerator and denominator
+   each land at roughly half of it, which put the failure-stress step's inner
+   d/t under five pixels tall. The form is set at reading size and the
+   substitution one step down, which is the hierarchy the two lines have. */
 .ffs-detail__calc-formula {
-  margin: 0.25rem 0 0;
-  font: 500 0.65rem var(--syn-font-data);
-  color: var(--syn-ink-soft);
-  word-break: break-all;
+  margin: 0.3rem 0 0;
+  font-size: 0.82rem;
+  color: var(--syn-ink);
   line-height: 1.5;
 }
 .ffs-detail__calc-sub {
-  margin: 0.1rem 0 0;
-  font: 400 0.58rem var(--syn-font-data);
+  margin: 0.05rem 0 0;
+  font-size: 0.74rem;
   color: var(--syn-muted);
-  word-break: break-all;
   line-height: 1.4;
 }
 .ffs-detail__calc-result {
@@ -1266,6 +1270,15 @@
   font-size: 0.55rem;
   font-weight: 400;
   color: var(--syn-muted);
+}
+
+/* The equation behind a metric card, above the prose that qualifies it. Sits
+   between the two so the reader's eye goes value → equation → caveat, which is
+   the order the questions arrive in. */
+.ffs-detail__life-formula {
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  color: var(--syn-ink-soft);
 }
 
 /* Where a figure comes from: clause, project rule, or input column. Set in the

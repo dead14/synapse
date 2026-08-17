@@ -31,6 +31,7 @@ import {
   ORIGINAL_B31G_Z_CUTOFF,
 } from './b31g.ts';
 import { pressureBasisLabel } from './assessmentProfile.ts';
+import { texMark, texNumber, texText } from '../math/tex.ts';
 import type { FfsConfig, FfsResult, FfsScreeningConfig } from './types.ts';
 
 export type FfsCalcTone = 'default' | 'accent' | 'good' | 'warn' | 'bad';
@@ -40,10 +41,21 @@ export interface FfsCalcStep {
   index: number;
   /** What the step produces, in words. */
   name: string;
-  /** The general form, in symbols. */
+  /**
+   * The general form, in symbols, as plain text.
+   *
+   * Still here alongside the TeX below because it is what the workbook and the
+   * Word report carry: a spreadsheet cell has no typesetter, and an `.xlsx`
+   * holding `\frac{P_F}{SF}` would be worse than one holding `P_F / SF`. The
+   * screen reads the TeX, the exports read this.
+   */
   formula: string;
-  /** The same form with this feature's numbers in it. */
+  /** The same form with this feature's numbers in it, as plain text. */
   substitution: string;
+  /** The general form as TeX, for the screen. */
+  formulaTex: string;
+  /** The substitution as TeX. Empty where the step substitutes nothing. */
+  substitutionTex: string;
   /** The engine's value for this step. Null where the step has no number. */
   value: number | null;
   /** Pre-formatted result, for steps whose answer is not a bare number. */
@@ -85,6 +97,11 @@ function num(value: number, digits: number): string {
   return Number.isFinite(value) ? value.toFixed(digits) : '∞';
 }
 
+/** The same number, spelled for a math list rather than for a spreadsheet cell. */
+function tex(value: number, digits: number): string {
+  return texNumber(value, digits);
+}
+
 /**
  * The working behind the nominal result, in the order it is calculated.
  *
@@ -106,6 +123,9 @@ export function buildCalcTrace(
   const usesUplift = !isOriginal && config.modifiedSa === 'smys69';
   const depthLimitPct = B31G_DEPTH_LIMIT_RATIO * 100;
   const explicitSf = n.safetyFactorSource === 'explicit';
+  // The area idealisation constant, typeset as the fraction the code states
+  // rather than as the decimal 0.667 the Original method never writes.
+  const kTex = isOriginal ? '\\tfrac{2}{3}' : '0.85';
 
   const steps: Omit<FfsCalcStep, 'index'>[] = [];
 
@@ -119,6 +139,12 @@ export function buildCalcTrace(
     substitution: explicitSf
       ? `${num(n.SF, 4)} entered on the assessment`
       : `1 / ${num(n.df, 3)}`,
+    formulaTex: explicitSf
+      ? `\\SFac = \\frac{P_{\\mathrm{hydrotest,\\,min}}}{\\MAOP}`
+      : '\\SFac = \\frac{1}{\\DFac}',
+    substitutionTex: explicitSf
+      ? `\\SFac = ${tex(n.SF, 4)} ${texText('entered on the assessment')}`
+      : `\\frac{1}{${tex(n.df, 3)}}`,
     value: n.SF,
     basis: explicitSf
       ? 'ASME B31G-2023 para. 1.9: the ratio of the minimum hydrostatic test pressure required for the construction type to the MAOP or MOP, usually not below 1.25. Entered directly, not inferred from the design factor.'
@@ -137,6 +163,8 @@ export function buildCalcTrace(
     name: 'Metal-loss depth',
     formula: 'd = (depth% / 100) × t',
     substitution: `(${num(n.maxDepthPct, 2)} / 100) × ${num(n.wall, 2)}`,
+    formulaTex: 'd = \\frac{d_{\\%}}{100}\\,t',
+    substitutionTex: `\\frac{${tex(n.maxDepthPct, 2)}}{100}\\times ${tex(n.wall, 2)}`,
     value: n.d,
     unit: 'mm',
     basis: 'ILI-reported maximum depth as a percentage of the nominal wall, converted to millimetres against the wall thickness on the same row.',
@@ -154,6 +182,8 @@ export function buildCalcTrace(
     name: 'Depth ratio',
     formula: 'd/t',
     substitution: `${num(n.d, 4)} / ${num(n.wall, 2)}`,
+    formulaTex: '\\frac{d}{t}',
+    substitutionTex: `\\frac{${tex(n.d, 4)}}{${tex(n.wall, 2)}}`,
     value: n.dt,
     basis: 'The fraction of wall lost. It drives the area term in the remaining-strength equation and is the quantity the 80 %WT line is drawn against.',
     tone: 'default',
@@ -167,6 +197,8 @@ export function buildCalcTrace(
     name: 'Normalised length',
     formula: 'z = L² / (D × t)',
     substitution: `${num(n.length, 0)}² / (${num(n.od, 1)} × ${num(n.wall, 2)})`,
+    formulaTex: 'z = \\frac{L^{2}}{D\\,t}',
+    substitutionTex: `\\frac{${tex(n.length, 0)}^{2}}{${tex(n.od, 1)}\\times ${tex(n.wall, 2)}}`,
     value: n.z,
     basis: 'The dimensionless axial extent that selects which branch of the method applies. D is the nominal outside diameter, matching the Barlow relation used for the pressures below.',
     tone: 'default',
@@ -184,6 +216,8 @@ export function buildCalcTrace(
       name: 'Bulging factor',
       formula: 'Not used on this branch',
       substitution: `z = ${num(n.z, 4)} exceeds ${ORIGINAL_B31G_Z_CUTOFF}`,
+      formulaTex: texText('not used on this branch'),
+      substitutionTex: `z = ${tex(n.z, 4)} > ${ORIGINAL_B31G_Z_CUTOFF}`,
       value: null,
       display: 'n/a',
       note: `z > ${ORIGINAL_B31G_Z_CUTOFF}`,
@@ -199,6 +233,8 @@ export function buildCalcTrace(
       name: 'Bulging factor (Folias)',
       formula: 'M = √(1 + 0.8z)',
       substitution: `√(1 + 0.8 × ${num(n.z, 4)})`,
+      formulaTex: 'M = \\sqrt{1 + 0.8\\,z}',
+      substitutionTex: `\\sqrt{1 + 0.8 \\times ${tex(n.z, 4)}}`,
       value: n.M,
       note: `z ≤ ${ORIGINAL_B31G_Z_CUTOFF}`,
       basis: 'The Original B31G short-anomaly bulging factor. It raises the stress a flaw of this length sees relative to a through-wall crack of the same extent.',
@@ -213,6 +249,9 @@ export function buildCalcTrace(
       name: 'Bulging factor (Folias)',
       formula: 'M = √(1 + 0.6275z − 0.003375z²)',
       substitution: `√(1 + 0.6275 × ${num(n.z, 4)} − 0.003375 × ${num(n.z, 4)}²)`,
+      formulaTex: 'M = \\sqrt{1 + 0.6275\\,z - 0.003375\\,z^{2}}',
+      substitutionTex:
+        `\\sqrt{1 + 0.6275 \\times ${tex(n.z, 4)} - 0.003375 \\times ${tex(n.z, 4)}^{2}}`,
       value: n.M,
       note: `z ≤ ${MODIFIED_B31G_Z_CUTOFF}`,
       basis: 'The Modified B31G polynomial bulging factor, fitted over a wider range of anomaly lengths than the Original square-root form.',
@@ -227,6 +266,8 @@ export function buildCalcTrace(
       name: 'Bulging factor (Folias)',
       formula: 'M = 0.032z + 3.3',
       substitution: `0.032 × ${num(n.z, 4)} + 3.3`,
+      formulaTex: 'M = 0.032\\,z + 3.3',
+      substitutionTex: `0.032 \\times ${tex(n.z, 4)} + 3.3`,
       value: n.M,
       note: `z > ${MODIFIED_B31G_Z_CUTOFF}`,
       basis: 'Past z = 50 the Modified polynomial turns over, so the method switches to the linear form to keep the factor increasing with length.',
@@ -247,6 +288,12 @@ export function buildCalcTrace(
     substitution: usesUplift
       ? `${num(n.smys, 1)} + ${num(uplift, 4)}`
       : `1.1 × ${num(n.smys, 1)}`,
+    formulaTex: usesUplift
+      ? '\\Sflow = \\SMYS + 10\\,\\mathrm{ksi}'
+      : '\\Sflow = 1.1 \\times \\SMYS',
+    substitutionTex: usesUplift
+      ? `${tex(n.smys, 1)} + ${tex(uplift, 4)}`
+      : `1.1 \\times ${tex(n.smys, 1)}`,
     value: n.sflow,
     unit: 'MPa',
     basis: usesUplift
@@ -272,6 +319,17 @@ export function buildCalcTrace(
     substitution: longOriginal
       ? `${num(n.sflow, 4)} × (1 − ${num(n.dt, 4)})`
       : `${num(n.sflow, 4)} × (1 − ${num(k, 4)} × ${num(n.dt, 4)}) / (1 − ${num(k, 4)} × ${num(n.dt, 4)} / ${num(n.M ?? 1, 4)})`,
+    // The one equation on this screen that most needed typesetting: written on
+    // a single line with slashes, the nested d/t inside the denominator's own
+    // division reads as three different groupings depending on who is looking.
+    formulaTex: longOriginal
+      ? '\\Sfail = \\Sflow\\left(1 - \\frac{d}{t}\\right)'
+      : `\\Sfail = \\Sflow\\,\\frac{1 - ${kTex}\\,\\frac{d}{t}}`
+        + `{1 - \\frac{${kTex}\\,\\frac{d}{t}}{M}}`,
+    substitutionTex: longOriginal
+      ? `${tex(n.sflow, 4)}\\left(1 - ${tex(n.dt, 4)}\\right)`
+      : `${tex(n.sflow, 4)}\\,\\frac{1 - ${tex(k, 4)} \\times ${tex(n.dt, 4)}}`
+        + `{1 - \\frac{${tex(k, 4)} \\times ${tex(n.dt, 4)}}{${tex(n.M ?? 1, 4)}}}`,
     value: n.Sf,
     unit: 'MPa',
     basis: longOriginal
@@ -291,6 +349,8 @@ export function buildCalcTrace(
     name: 'Estimated failure pressure',
     formula: 'P_F = 2 × S_F × t / D',
     substitution: `2 × ${num(n.Sf, 4)} × ${num(n.wall, 2)} / ${num(n.od, 1)}`,
+    formulaTex: '\\Pfail = \\frac{2\\,\\Sfail\\,t}{D}',
+    substitutionTex: `\\frac{2 \\times ${tex(n.Sf, 4)} \\times ${tex(n.wall, 2)}}{${tex(n.od, 1)}}`,
     value: n.Pf,
     unit: 'MPa',
     basis: 'The failure stress turned back into a pressure through the Barlow relation on the outside diameter. This is an estimate of the pressure at which the corroded pipe would fail, carrying no margin.',
@@ -306,6 +366,8 @@ export function buildCalcTrace(
     name: 'Hoop stress at required pressure',
     formula: 'S₀ = P₀ × D / (2t)',
     substitution: `${num(n.p0, 3)} × ${num(n.od, 1)} / (2 × ${num(n.wall, 2)})`,
+    formulaTex: '\\Shoop = \\frac{\\Pop\\,D}{2\\,t}',
+    substitutionTex: `\\frac{${tex(n.p0, 3)} \\times ${tex(n.od, 1)}}{2 \\times ${tex(n.wall, 2)}}`,
     value: n.So,
     unit: 'MPa',
     basis: `The stress the sound wall carries at the required pressure (${pressureBasisLabel(config)}). Shown for context: the acceptance criterion below is applied on pressures, not on this stress.`,
@@ -323,6 +385,8 @@ export function buildCalcTrace(
     name: 'Safe operating pressure',
     formula: 'P_S = P_F / SF',
     substitution: `${num(n.Pf, 4)} / ${num(n.SF, 4)}`,
+    formulaTex: '\\Psafe = \\frac{\\Pfail}{\\SFac}',
+    substitutionTex: `\\frac{${tex(n.Pf, 4)}}{${tex(n.SF, 4)}}`,
     value: n.safePressure,
     unit: 'MPa',
     basis: 'ASME B31G-2023 para. 2.2 Step 8: the estimated failure pressure reduced by the safety factor from step 1. This is the pressure the assessment stands behind for this feature.',
@@ -338,6 +402,8 @@ export function buildCalcTrace(
     name: 'Estimated repair factor',
     formula: 'ERF = P₀ / P_S',
     substitution: `${num(n.p0, 3)} / ${num(n.safePressure, 4)}`,
+    formulaTex: '\\ERF = \\frac{\\Pop}{\\Psafe}',
+    substitutionTex: `\\frac{${tex(n.p0, 3)}}{${tex(n.safePressure, 4)}}`,
     value: n.ERF,
     basis: 'How much of the safe pressure the required pressure consumes. ERF is an operator convention layered on the code, not a B31G term — the criterion in para. 2.2 Step 8 is that the safe pressure equals or exceeds the required pressure, and ERF ≥ 1 is the same statement inverted.',
     tone: n.ERF >= 1 ? 'bad' : n.ERF >= screening.reviewBandErf ? 'warn' : 'good',
@@ -353,6 +419,12 @@ export function buildCalcTrace(
     name: 'Acceptance',
     formula: `ERF < 1 and depth < ${num(depthLimitPct, 0)} %WT`,
     substitution: `ERF ${num(n.ERF, 4)} ${erfPasses ? '✓' : '✗'} · depth ${num(n.maxDepthPct, 2)} %WT ${depthPasses ? '✓' : '✗'}`,
+    formulaTex:
+      `\\ERF < 1 \\quad\\text{and}\\quad d_{\\%} < ${num(depthLimitPct, 0)}\\,\\%\\mathrm{WT}`,
+    substitutionTex:
+      `\\ERF = ${tex(n.ERF, 4)}${texMark(erfPasses)}`
+      + `\\quad\\text{and}\\quad d_{\\%} = ${tex(n.maxDepthPct, 2)}\\,\\%\\mathrm{WT}`
+      + `${texMark(depthPasses)}`,
     value: null,
     display: n.acceptance === 'Acceptable' ? 'Acceptable' : 'Not acceptable',
     basis: `ERF exactly 1.0 is the safe-pressure limit itself, so it does not pass. The ${num(depthLimitPct, 0)} %WT gate is a project rejection line, not a B31G applicability limit — para. 1.2(f) permits evaluation at any depth provided the sizing accuracy and the effective corrosion rate are justified, and it is the section 3 tables that stop at 80 %.`,

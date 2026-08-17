@@ -9,7 +9,8 @@
 
 import { FiPlus } from 'react-icons/fi';
 
-import { Badge, Button, Callout } from '../../../components/ds';
+import { Badge, Button, Callout, MathBlock } from '../../../components/ds';
+import { RBI_TEX } from '../../../lib/rbi/notation';
 import {
   BUSINESS_OPTIONS,
   ENVIRONMENT_OPTIONS,
@@ -99,7 +100,21 @@ export default function StepConsequence({ record, update, assessment }: StepProp
           The safety consequence is the fluid hazard bounded by the exposure, not the worse of the two — a
           water main under a city centre is not a catastrophic safety event, and crude oil forty kilometres
           from a road is not one either. Exposure never falls below the responder who has to walk up to it.
+          {/* The distinction the paragraph above is making is a min against a
+              max, and it is the one rule on this page a reviewer will want to
+              check character by character before signing the ranking. */}
+          <MathBlock tex={RBI_TEX.safety} label="safety is the lower of fluid hazard and exposure" />
+          <MathBlock tex={RBI_TEX.exposure} label="exposure is the greater of population and responder" />
         </Callout>
+
+        <MathBlock tex={RBI_TEX.consequence} label="consequence rule" />
+        <MathBlock tex={RBI_TEX.releaseScale} label="release scale from diameter and pressure" />
+        <p className="rbi-check__hint">
+          The three components are scored separately because they are reduced by completely different
+          actions: a safety consequence by moving people or shortening the release, a business one by
+          building a spare. The last bracket is one where the stored energy reaches 3 and zero
+          otherwise — a large high-pressure line empties faster into all three.
+        </p>
 
         {assessment && assessment.sections[0] && (
           <FieldGrid columns={2}>

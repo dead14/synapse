@@ -30,6 +30,8 @@ import { fetchFfsSession, saveFfsSession, updateFfsSession } from '../../lib/ffs
 import { Callout, NumberField, Panel } from '../../components/ffs/FfsPrimitives';
 import { exportResultsWorkbook } from '../../lib/ffs/exports';
 import { methodProfileLabel, pressureBasisLabel } from '../../lib/ffs/assessmentProfile.ts';
+import { flowStressTex, flowStressText } from '../../lib/ffs/notation.ts';
+import { MathInline } from '../../components/ds';
 import type {
   AlignmentImportProvenance,
   AlignmentImportSkipped,
@@ -438,12 +440,10 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
   }
 
   const methodLabel = config.method === 'original' ? 'Original B31G' : 'Modified B31G';
-  const saLabel =
-    config.method === 'original'
-      ? '1.1 × SMYS'
-      : config.modifiedSa === 'smys11'
-        ? '1.1 × SMYS'
-        : 'SMYS + 69 MPa';
+  // The header states the flow-stress basis in symbols and the export states it
+  // in words. Both come off the one definition in `notation`, so they cannot
+  // drift apart the way the four copies of this ternary used to.
+  const saLabel = flowStressText(config);
 
   return (
     <div className="syn-page syn-ui-kit">
@@ -458,7 +458,8 @@ export default function FfsResultsPage({ readOnly = false, sharedState }: FfsRes
           <p className="syn-eyebrow">Fitness-for-service</p>
           <h1 className="syn-page__title">Assessment results</h1>
           <p className="mt-1.5 text-sm text-slate-500 dark:text-slate-400">
-            {config.lineName} · {methodLabel} · S_flow {saLabel} · ILI{' '}
+            {config.lineName} · {methodLabel} ·{' '}
+            <MathInline tex={flowStressTex(config)} label={`flow stress ${saLabel}`} /> · ILI{' '}
             {config.iliDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} ·{' '}
             {results.length.toLocaleString()} features
             {state.alignmentImport && ' · imported from alignment'}

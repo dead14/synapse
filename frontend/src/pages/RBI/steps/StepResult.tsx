@@ -9,8 +9,9 @@
 
 import { FiCheck, FiDownload, FiX } from 'react-icons/fi';
 
-import { Badge, Button, Callout, Stat, StatGrid } from '../../../components/ds';
+import { Badge, Button, Callout, MathBlock, Stat, StatGrid } from '../../../components/ds';
 import { INTERVAL_BASIS_LABEL } from '../../../lib/rbi/catalogues';
+import { RBI_TEX } from '../../../lib/rbi/notation';
 import { RBI_STEPS, readiness } from '../../../lib/rbi/record';
 import RiskMatrix, { RiskTag } from '../RiskMatrix';
 import {
@@ -91,6 +92,12 @@ export default function StepResult({
         blurb="Probability up, consequence across. The number in a cell is how many sections landed there."
       >
         <RiskMatrix sections={assessment.sections} />
+        <MathBlock tex={RBI_TEX.risk} label="risk is a lookup on probability and consequence" />
+        <p className="rbi-check__hint">
+          A lookup, not a product. The asymmetry is the decision an operator signs: a consequence-5
+          section is never reported as low risk however unlikely failure is, which multiplying the two
+          categories would have allowed.
+        </p>
       </StepPanel>
 
       <StepPanel
@@ -98,6 +105,12 @@ export default function StepResult({
         blurb="Highest risk first. The interval is half the remaining life, capped by the risk level and then
           by any regulatory limit."
       >
+        <MathBlock tex={RBI_TEX.interval} label="inspection interval rule" />
+        <p className="rbi-check__hint" style={{ marginBottom: '0.75rem' }}>
+          Half the remaining life, so the line is looked at again while there is still time to act on what
+          is found. Where no remaining-life figure exists the caps are all there is, and the result is
+          reported as a target rather than as a calculated interval.
+        </p>
         <div className="ds-table-wrap">
           <table className="ds-table">
             <thead>
