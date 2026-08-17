@@ -1,3 +1,5 @@
+import { pofMatchStatus } from '../domain/pof100.ts';
+
 const ORIGINAL_DISTANCE_COLUMN: Record<string, string> = {
   'Log Dist OLD (m)': 'Original Log Dist OLD (m)',
   'Log Dist NEW (m)': 'Original Log Dist NEW (m)',
@@ -88,9 +90,23 @@ export function depthGrowthMmPerYear<T extends Record<string, unknown>>(row: T):
   return (growthPctPerYear / 100) * wallThickness;
 }
 
+/**
+ * Result columns whose values are the engine's own status words, shown in the
+ * POF 100 wording instead. The translation happens here rather than in the cell
+ * renderer so the column filter, the sort and the badge all work on the word
+ * the engineer is actually looking at — a table that displays "Missing" and
+ * then finds nothing when "Missing" is typed into its filter is worse than one
+ * that never translated at all.
+ */
+const MATCH_STATUS_COLUMNS = new Set(['Match/Unmatch', 'Match Status']);
+
 export function alignmentDisplayValue<T extends Record<string, unknown>>(row: T, column: string): T[string] {
   if (column === MASTER_AXIS_COLUMN) {
     return (alignmentMasterAxisDistance(row) ?? '-') as T[string];
+  }
+  if (MATCH_STATUS_COLUMNS.has(column)) {
+    const status = row[column];
+    return (typeof status === 'string' ? pofMatchStatus(status) : status) as T[string];
   }
   const originalColumn = ORIGINAL_DISTANCE_COLUMN[column];
   const originalDistance = originalColumn ? row[originalColumn] : undefined;

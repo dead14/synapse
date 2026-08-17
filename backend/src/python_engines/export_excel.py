@@ -129,11 +129,69 @@ THREE_DECIMAL_COLUMNS = frozenset(
     | _old(1, 5, 6, 7, 10, 11, 12)
 )
 ONE_DECIMAL_COLUMNS = frozenset(_new(9, 10, 11) | _old(9))
-STATUS_STYLES = (
-    ("matched", GREEN_FILL, MATCHED_FONT),
-    ("bypassed", YELLOW_FILL, BYPASSED_FONT),
-    ("only", ORANGE_FILL, ONLY_FONT),
-)
+# POF 100 run comparison wording for the engine's own match statuses. Keep in
+# step with `POF_MATCH_STATUS` in `frontend/src/domain/pof100.ts`: the workbook
+# and the screen are read side by side, and the header of this column already
+# says "Run comparison".
+#
+# The engine names a row after the side it was built from — "Only OLD" is a row
+# with an OLD feature and no NEW partner. That is a statement about the join,
+# not about the pipe. A feature the OLD run reported and the NEW run did not is
+# missing; one only the NEW run reported is new.
+#
+# "Not compared" is deliberately not "missing": a bypassed row was never offered
+# to the matcher (a vendor-merged cluster above all), so the NEW run saying
+# nothing about it says nothing about the pipe.
+POF_MATCH_STATUS = {
+    "match": ("Matched", "matched"),
+    "matched": ("Matched", "matched"),
+    "only old": ("Missing", "missing"),
+    "only new": ("New", "new"),
+    "bypassed old": ("Not compared (OLD)", "not-compared"),
+    "bypassed new": ("Not compared (NEW)", "not-compared"),
+    # The girth-weld bucket's own underscored statuses stay out of the
+    # missing/new pair: a weld with no counterpart is a weld the comparison
+    # could not match, not a weld that has gone.
+    "only_old": ("Not match (OLD)", "unmatched"),
+    "only_new": ("Not match (NEW)", "unmatched"),
+    "unmatch": ("Not match", "unmatched"),
+    "unmatched": ("Not match", "unmatched"),
+}
+
+STATUS_STYLES = {
+    "matched": (GREEN_FILL, MATCHED_FONT),
+    "not-compared": (YELLOW_FILL, BYPASSED_FONT),
+    "missing": (ORANGE_FILL, ONLY_FONT),
+    "new": (ORANGE_FILL, ONLY_FONT),
+    "unmatched": (ORANGE_FILL, ONLY_FONT),
+}
+
+# The same three colours for the streaming writer, which builds its formats
+# through xlsxwriter instead of openpyxl.
+STATUS_FORMAT_NAMES = {
+    "matched": "status_matched",
+    "not-compared": "status_bypassed",
+    "missing": "status_only",
+    "new": "status_only",
+    "unmatched": "status_only",
+}
+
+# Both vocabularies resolve to the same outcome, so the cell can be styled from
+# the word already written into it.
+STATUS_OUTCOMES = {
+    **{engine_value: outcome for engine_value, (_, outcome) in POF_MATCH_STATUS.items()},
+    **{label.lower(): outcome for label, outcome in POF_MATCH_STATUS.values()},
+}
+
+
+def pof_match_status(value):
+    """The POF 100 wording for an engine match status, or the value as written.
+
+    An unrecognised status is carried through rather than blanked: a status this
+    table has never seen is still evidence of how the row was produced.
+    """
+    entry = POF_MATCH_STATUS.get(str(value or "").strip().lower())
+    return entry[0] if entry else value
 
 XLSX_FILL_COLORS = {
     "dark_blue": "#1F4E79",
@@ -228,7 +286,7 @@ def comparison_values(row, new_values, old_values):
         as_number(first_value(row, "Depth Growth (%WT/yr)")),
         as_number(first_value(row, "Length Growth (mm/yr)")),
         surface_changed,
-        first_value(row, "Match/Unmatch", "match_status") or "-",
+        pof_match_status(first_value(row, "Match/Unmatch", "match_status")) or "-",
         completeness(new_values, old_values),
     ]
 
@@ -252,12 +310,9 @@ def set_column_widths(ws):
 
 
 def status_style(value):
-    """Fill and font for the Match Status cell, or (None, None)."""
-    status = str(value or "").lower()
-    for keyword, fill, font in STATUS_STYLES:
-        if keyword in status:
-            return fill, font
-    return None, None
+    """Fill and font for the Run comparison cell, or (None, None)."""
+    outcome = STATUS_OUTCOMES.get(str(value or "").strip().lower())
+    return STATUS_STYLES.get(outcome, (None, None))
 
 
 def styled_cell(worksheet, value, *, fill=None, font=None, alignment=None,
@@ -668,14 +723,13 @@ def initialize_xlsxwriter_comparison_sheet(workbook, row_count, formats):
 
 
 def xlsxwriter_status_format(value, formats):
-    status = str(value or "").lower()
-    if "matched" in status:
-        return formats["status_matched"]
-    if "bypassed" in status:
-        return formats["status_bypassed"]
-    if "only" in status:
-        return formats["status_only"]
-    return None
+    """`status_style` for the streaming writer, resolved the same way.
+
+    Keyword matching is what this used to do, and it cannot survive the POF
+    wording: "Not matched" contains "matched" and would have been filled green.
+    """
+    name = STATUS_FORMAT_NAMES.get(STATUS_OUTCOMES.get(str(value or "").strip().lower()))
+    return formats[name] if name else None
 
 
 def export_ndjson_with_xlsxwriter(metadata, rows_path, output_path):

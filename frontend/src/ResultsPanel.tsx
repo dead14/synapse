@@ -19,7 +19,7 @@ import {
   sortAlignmentRowsByMasterAxis,
   summarizeConservationAudit,
 } from './utils/alignmentDisplay';
-import { pofColumnTitle } from './domain/pof100';
+import { pofColumnTitle, pofMatchOutcome } from './domain/pof100';
 import MatchEvidenceDrawer, { type MatchEvidence } from './components/comparison/MatchEvidenceDrawer';
 import ShareSnapshotButton from './components/sharing/ShareSnapshotButton';
 import { buildAlignmentShareState } from './lib/sharing/publicShareSnapshot';
@@ -1068,8 +1068,8 @@ export default function ResultsPanel({
                 summary={summaryCounts ? [
                   { label: 'GW locked', value: summaryCounts.gwLocked },
                   { label: 'Anomaly matched', value: summaryCounts.anomalyMatched },
-                  { label: 'Only OLD', value: summaryCounts.anomalyOnlyOld },
-                  { label: 'Only NEW', value: summaryCounts.anomalyOnlyNew },
+                  { label: 'Anomaly missing', value: summaryCounts.anomalyOnlyOld },
+                  { label: 'Anomaly new', value: summaryCounts.anomalyOnlyNew },
                 ] : undefined}
                 notes={[
                   'Final ILI comparison view, frozen to this alignment run. Open any row to inspect the shared evidence; editing is disabled.',
@@ -1149,19 +1149,23 @@ export default function ResultsPanel({
                 <span>({summaryCounts.gwLocked} GW + {summaryCounts.fittingMatched} Fitting + {summaryCounts.anomalyMatched} Anom)</span>
               </div>
               <div>
-                <span>GW Orphan</span>
+                <span>GW Unmatched</span>
                 <span>{summaryCounts.gwUnmatched}</span>
               </div>
+              {/* POF wording: a feature the OLD run reported and the NEW run did
+                  not is missing; one only the NEW run reported is new. */}
               <div>
-                <span>Only OLD</span>
+                <span>Missing</span>
                 <span>{summaryCounts.anomalyOnlyOld}</span>
+                <span>(OLD, not in NEW)</span>
               </div>
               <div>
-                <span>Only NEW</span>
+                <span>New</span>
                 <span>{summaryCounts.anomalyOnlyNew}</span>
+                <span>(NEW, not in OLD)</span>
               </div>
               <div>
-                <span>Bypassed</span>
+                <span>Not Compared</span>
                 <span>{summaryCounts.bypassedOld + summaryCounts.bypassedNew}</span>
                 <span>(Non-Anomaly)</span>
               </div>
@@ -1174,7 +1178,7 @@ export default function ResultsPanel({
               {['All', 'GW', 'Anomaly', 'Bypassed', 'Distance', 'Chart'].map(f => (
                 <label key={f} className="flex items-center gap-1.5 cursor-pointer">
                   <input type="radio" name="filter" checked={radioFilter === f} onChange={() => setRadioFilter(f)} />
-                  <span>{f === 'GW' ? 'GWs' : f === 'Anomaly' ? 'Anomalies' : f}</span>
+                  <span>{f === 'GW' ? 'GWs' : f === 'Anomaly' ? 'Anomalies' : f === 'Bypassed' ? 'Not compared' : f}</span>
                 </label>
               ))}
               {radioFilter === 'Distance' && (
@@ -1188,12 +1192,22 @@ export default function ResultsPanel({
             </div>
             <div className="flex gap-1 items-center ml-auto" style={{ borderLeft: '1px solid var(--syn-line)', paddingLeft: '0.5rem' }}>
               <label className="flex items-center gap-1.5 cursor-pointer">
-                <input type="checkbox" checked={unmatchedOld} onChange={(e) => setUnmatchedOld(e.target.checked)} />
-                <span>Unmatched OLD</span>
+                <input
+                  type="checkbox"
+                  checked={unmatchedOld}
+                  onChange={(e) => setUnmatchedOld(e.target.checked)}
+                  aria-label="Show features the OLD run reported and the NEW run did not"
+                />
+                <span>Missing</span>
               </label>
               <label className="flex items-center gap-1.5 cursor-pointer">
-                <input type="checkbox" checked={unmatchedNew} onChange={(e) => setUnmatchedNew(e.target.checked)} />
-                <span>Unmatched NEW</span>
+                <input
+                  type="checkbox"
+                  checked={unmatchedNew}
+                  onChange={(e) => setUnmatchedNew(e.target.checked)}
+                  aria-label="Show features only the NEW run reported"
+                />
+                <span>New</span>
               </label>
             </div>
           </div>
@@ -1437,6 +1451,11 @@ export default function ResultsPanel({
                                 if (col.includes("O'Clock")) {
                                   val = formatClockDisplay(val);
                                 }
+                                // The run comparison cell already reads in POF wording; the badge
+                                // colour follows the outcome behind that word, never its spelling.
+                                const matchOutcome = col === 'Match/Unmatch' || col === 'Match Status'
+                                  ? pofMatchOutcome(val)
+                                  : null;
                                 return (
                                   <td
                                     key={j}
@@ -1456,10 +1475,10 @@ export default function ResultsPanel({
                                         <span className={getFeatureColor(val, row['Identif. OLD'] !== '-' && row['Identif. NEW'] !== '-')}>{val}</span>
                                       ) : col === 'Section' && val !== '-' ? (
                                         <span className="bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wider">{val}</span>
-                                      ) : col === 'Match/Unmatch' ? (
-                                        val === 'Matched' || val === 'Match' ? (
-                                          <span className="bg-green-600 text-white font-extrabold px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider shadow-sm">Match</span>
-                                        ) : val === 'Unmatch' || val === 'Only NEW' || val === 'Only OLD' ? (
+                                      ) : matchOutcome ? (
+                                        matchOutcome === 'matched' ? (
+                                          <span className="bg-green-600 text-white font-extrabold px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider shadow-sm">{val}</span>
+                                        ) : matchOutcome === 'missing' || matchOutcome === 'new' || matchOutcome === 'unmatched' ? (
                                           <span className="bg-red-600 text-white font-extrabold px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider shadow-sm">{val}</span>
                                         ) : val !== '-' ? (
                                           <span className="bg-gray-500 text-white font-semibold px-1.5 py-0.5 rounded text-[10px] tracking-wider shadow-sm">{val}</span>

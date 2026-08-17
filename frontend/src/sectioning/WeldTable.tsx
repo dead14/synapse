@@ -23,12 +23,18 @@ const numberFrom = (value: unknown): number | null => {
 };
 
 export default function WeldTable({ features }: Props) {
-  const [filter, setFilter] = useState<'ALL' | 'MATCHED' | 'MISSING'>('ALL');
+  // "Unmatched", not "missing": this filter holds both outcomes — welds the NEW
+  // run added and welds the OLD run reported that NEW did not.
+  const [filter, setFilter] = useState<'ALL' | 'MATCHED' | 'UNMATCHED'>('ALL');
   const rows = useMemo<WeldRow[]>(() => {
     const masterRows = features.gws.map((gw, index) => ({
       key: `master-${gw.id}-${gw.dist}-${index}`,
       run: `NEW ${gw.runYear || ''}`.trim(),
-      status: gw.status === 'MATCHED' ? 'MATCHED' : 'ONLY NEW',
+      // Never "missing": a weld with no counterpart is one the comparison could
+      // not match, and "missing" is the metal-loss finding. Same rule as
+      // `TIMELINE_STATUS_LABEL` in `domain/gwTimeline.ts`; the Run column
+      // already says which side the weld was reported on.
+      status: gw.status === 'MATCHED' ? 'MATCHED' : 'NOT MATCH',
       id: gw.id,
       distance: gw.dist,
       partnerId: String(gw.rawData.oldId ?? '-'),
@@ -39,7 +45,7 @@ export default function WeldTable({ features }: Props) {
     const historicalRows = features.historicalLanes.flatMap((lane) => lane.gws.map((gw, index) => ({
       key: `${lane.id}-${gw.id}-${gw.dist}-${index}`,
       run: `OLD ${lane.year || ''}`.trim(),
-      status: gw.status === 'MATCHED' ? 'MATCHED' : gw.status === 'MISSING_IN_MASTER' ? 'ONLY OLD' : 'UNRESOLVED',
+      status: gw.status === 'MATCHED' ? 'MATCHED' : gw.status === 'MISSING_IN_MASTER' ? 'NOT MATCH' : 'UNRESOLVED',
       id: gw.id,
       distance: numberFrom(gw.rawData.sourceDistance) ?? gw.dist,
       partnerId: String(gw.rawData.matchedMasterId ?? '-'),
@@ -61,7 +67,7 @@ export default function WeldTable({ features }: Props) {
         </div>
         <div className="sectioning-weld-table__controls">
           <div className="sectioning-weld-table__filters" role="group" aria-label="Weld status filter">
-            {(['ALL', 'MATCHED', 'MISSING'] as const).map((value) => <button key={value} type="button" className={filter === value ? 'is-active' : ''} onClick={() => setFilter(value)}>{value} <b>{value === 'ALL' ? rows.length : value === 'MATCHED' ? rows.filter((row) => !row.unmatched).length : rows.filter((row) => row.unmatched).length}</b></button>)}
+            {(['ALL', 'MATCHED', 'UNMATCHED'] as const).map((value) => <button key={value} type="button" className={filter === value ? 'is-active' : ''} onClick={() => setFilter(value)}>{value} <b>{value === 'ALL' ? rows.length : value === 'MATCHED' ? rows.filter((row) => !row.unmatched).length : rows.filter((row) => row.unmatched).length}</b></button>)}
           </div>
           <span className="text-xs font-semibold text-slate-600">{visibleRows.length.toLocaleString()} visible / {rows.length.toLocaleString()} rows</span>
         </div>

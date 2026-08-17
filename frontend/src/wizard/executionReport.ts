@@ -1,3 +1,5 @@
+import { pofMatchStatus } from '../domain/pof100.ts';
+
 type UnknownRecord = Record<string, any>;
 
 function numeric(value: unknown): number {
@@ -51,7 +53,9 @@ export function executionResultLines(result: UnknownRecord | undefined): string[
   const rows = Array.isArray(result?.comparison) ? result.comparison : [];
   const counts = new Map<string, number>();
   for (const row of rows) {
-    const status = String(row?.['Match/Unmatch'] ?? row?.match_status ?? 'Unclassified');
+    // Counted under the POF outcome, so this line and the result table report
+    // the same run comparison in the same words.
+    const status = pofMatchStatus(String(row?.['Match/Unmatch'] ?? row?.match_status ?? 'Unclassified'));
     counts.set(status, (counts.get(status) || 0) + 1);
   }
   const summary = [...counts.entries()]

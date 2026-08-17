@@ -120,6 +120,19 @@ test('interleaves unmatched OLD and NEW rows on the canonical master axis', () =
   );
 });
 
+test('the run comparison column is read in POF wording, so filter and sort see it too', () => {
+  // Translating in the cell renderer alone would leave the column filter
+  // matching "Only OLD" while the cell in front of the engineer says "Missing".
+  const missing = { 'Match/Unmatch': 'Only OLD' };
+  const bypassed = { 'Match/Unmatch': 'Bypassed NEW' };
+
+  assert.equal(alignmentDisplayValue(missing, 'Match/Unmatch'), 'Missing');
+  assert.equal(alignmentDisplayValue(bypassed, 'Match/Unmatch'), 'Not compared (NEW)');
+  // The engine row itself is untouched: it is the wire format the exports,
+  // the repository and the reassignment path all still read.
+  assert.equal(missing['Match/Unmatch'], 'Only OLD');
+});
+
 test('result columns are the union of every engine row, including status and later anomaly fields', () => {
   const columns = alignmentResultColumns([
     {

@@ -107,7 +107,7 @@ export default function CrVsDistanceChart({ data, filters, sectionBands }: CrVsD
       radius: 5,
     },
     {
-      label: 'Unmatched (New) Estimated CR',
+      label: 'New features, estimated CR',
       data: chartData.unmatchedNewCRs,
       backgroundColor: 'transparent',
       borderColor: 'purple',

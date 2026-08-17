@@ -65,7 +65,11 @@ class ExportExcelLayoutTests(unittest.TestCase):
                 workbook["Runcomp Report"]["C2"].value,
                 '[{"code":"REVIEW"}]',
             )
-            self.assertEqual(workbook["Runcomp Comparison"]["Z4"].value, "Only NEW")
+            # The formatted report reads in POF wording under its "Run
+            # comparison" header; the raw Runcomp sheet above keeps the engine's
+            # own words, because that sheet is the evidence dump.
+            self.assertEqual(workbook["Runcomp Comparison"]["Z4"].value, "New")
+            self.assertEqual(workbook["Runcomp Report"]["B3"].value, "Only NEW")
             self.assertEqual(
                 workbook["Runcomp Comparison"]["Z4"].fill.fgColor.rgb,
                 "FFFCE4D6",
@@ -253,12 +257,53 @@ class StreamedWorkbookTests(unittest.TestCase):
             self.assertFalse(sheet.sheet_view.showGridLines)
             self.assertEqual(sheet["Z3"].fill.fgColor.rgb, "00FCE4D6")
 
-    def test_status_style_matches_the_legacy_keyword_precedence(self):
+    def test_status_style_keeps_the_legacy_colours_for_every_engine_status(self):
         self.assertIs(export_excel.status_style("Matched")[0], export_excel.GREEN_FILL)
         self.assertIs(export_excel.status_style("Bypassed OLD")[0], export_excel.YELLOW_FILL)
         self.assertIs(export_excel.status_style("Only NEW")[0], export_excel.ORANGE_FILL)
         self.assertEqual(export_excel.status_style("-"), (None, None))
         self.assertEqual(export_excel.status_style(None), (None, None))
+
+    def test_status_style_reads_the_pof_wording_the_cell_actually_carries(self):
+        # The cell is written in POF wording, so the fill has to resolve from
+        # that word as well as from the engine's own.
+        self.assertIs(export_excel.status_style("Missing")[0], export_excel.ORANGE_FILL)
+        self.assertIs(
+            export_excel.status_style("Not compared (OLD)")[0], export_excel.YELLOW_FILL
+        )
+        self.assertIs(export_excel.status_style("Not match (NEW)")[0], export_excel.ORANGE_FILL)
+
+    def test_streaming_status_format_never_fills_a_not_matched_row_green(self):
+        # The streaming writer used to match keywords: "Not matched" contains
+        # "matched", so the POF wording would have coloured an unmatched weld
+        # like a confirmed pair.
+        formats = {
+            "status_matched": "green",
+            "status_bypassed": "yellow",
+            "status_only": "orange",
+        }
+        self.assertEqual(export_excel.xlsxwriter_status_format("Matched", formats), "green")
+        self.assertEqual(
+            export_excel.xlsxwriter_status_format("Not match (OLD)", formats), "orange"
+        )
+        self.assertEqual(
+            export_excel.xlsxwriter_status_format("Not compared (NEW)", formats), "yellow"
+        )
+        self.assertIsNone(export_excel.xlsxwriter_status_format("-", formats))
+
+    def test_a_bypassed_row_is_not_reported_as_a_missing_feature(self):
+        # POF wording: the OLD run reported it and the NEW run did not, so it is
+        # missing. A bypassed row was never offered to the matcher, and calling
+        # that missing is how an unaligned cluster becomes a repair scope.
+        self.assertEqual(export_excel.pof_match_status("Only OLD"), "Missing")
+        self.assertEqual(export_excel.pof_match_status("Only NEW"), "New")
+        self.assertEqual(export_excel.pof_match_status("Bypassed OLD"), "Not compared (OLD)")
+        # A girth weld with no counterpart is one the comparison could not
+        # match, never a missing feature.
+        self.assertEqual(export_excel.pof_match_status("ONLY_OLD"), "Not match (OLD)")
+        # A status this table has never seen is carried through, not blanked.
+        self.assertEqual(export_excel.pof_match_status("Partially merged"), "Partially merged")
+        self.assertIsNone(export_excel.pof_match_status(None))
 
     def test_style_objects_are_module_level_singletons(self):
         plan = export_excel.column_style_plan(export_excel.LAST_COLUMN)

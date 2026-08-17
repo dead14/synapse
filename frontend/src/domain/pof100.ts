@@ -70,12 +70,16 @@ export const POF_COMPONENT_LABEL: Record<string, string> = {
  * Appendix 8 writes the outcome in the Comment column as "Weld matched",
  * "Corrosion matched", "New corrosion", "New weld". These are that vocabulary,
  * generalised over the feature type.
+ *
+ * A feature the earlier run reported and the later run did not is *missing* —
+ * the same word `POF_MATCH_STATUS` uses for the single-pair case, so a lane
+ * timeline and a result row never name the same event differently.
  */
 export const POF_RUN_COMPARISON_STATUS: Record<string, string> = {
   persistent: 'Matched',
   new: 'New in this run',
-  lost: 'Missed in next run',
-  transient: 'New, then missed',
+  lost: 'Missing in next run',
+  transient: 'New, then missing',
   // Not a POF outcome: the run has no neighbour to be compared against.
   single: 'No comparison run',
 };
@@ -84,10 +88,105 @@ export const POF_RUN_COMPARISON_STATUS: Record<string, string> = {
 export const POF_RUN_COMPARISON_BADGE: Record<string, string> = {
   persistent: 'Matched',
   new: 'New',
-  lost: 'Missed next run',
-  transient: 'New, then missed',
+  lost: 'Missing next run',
+  transient: 'New, then missing',
   single: 'Single run',
 };
+
+/**
+ * What a run comparison concluded about one result row.
+ *
+ * `missing` and `new` are the POF outcomes; `not-compared` is not one, and the
+ * distinction is the point of this type. See `POF_MATCH_STATUS`.
+ */
+export type PofMatchOutcome = 'matched' | 'missing' | 'new' | 'not-compared' | 'unmatched' | 'unknown';
+
+/**
+ * The engine's `Match/Unmatch` value → the POF 100 wording for that outcome.
+ *
+ * The engine names a row after the side it was built from: "Only OLD" is a row
+ * carrying an OLD feature and no NEW partner. That is a statement about the
+ * join, not about the pipe, and it is not how a repeat inspection reads. POF
+ * 100 §7.5 asks the comparison to report which features both runs saw and which
+ * ones only one of them did: a feature the earlier run reported and the later
+ * run did not is **missing**, one only the later run reported is **new**.
+ *
+ * "Not compared" is deliberately not "missing". A bypassed row was never
+ * offered to the matcher — a vendor-merged cluster, or a feature class switched
+ * off in the rules — so the later run saying nothing about it says nothing
+ * about the pipe. POF names no such outcome because POF is not describing this
+ * app's matcher, so the wording stays plainly descriptive rather than dressing
+ * an app concept up as a standard one.
+ */
+export const POF_MATCH_STATUS: Record<string, string> = {
+  Match: 'Matched',
+  Matched: 'Matched',
+  'Only OLD': 'Missing',
+  'Only NEW': 'New',
+  'Bypassed OLD': 'Not compared (OLD)',
+  'Bypassed NEW': 'Not compared (NEW)',
+  // The girth-weld bucket writes its own underscored statuses, and they stay
+  // out of the missing/new pair on purpose: see `TIMELINE_STATUS_LABEL` in
+  // `domain/gwTimeline.ts`. A weld with no counterpart is a weld the comparison
+  // could not match, not a weld that has gone — "missing" is the metal-loss
+  // finding, and one word for both makes two findings look like one.
+  ONLY_OLD: 'Not match (OLD)',
+  ONLY_NEW: 'Not match (NEW)',
+  // Older results and the manual path wrote a side-less "Unmatch". It says the
+  // row has no partner without saying which run is short of one, so it cannot
+  // be resolved to missing or new.
+  Unmatch: 'Not match',
+  Unmatched: 'Not match',
+};
+
+const MATCH_OUTCOMES: Record<string, PofMatchOutcome> = {
+  Match: 'matched',
+  Matched: 'matched',
+  'Only OLD': 'missing',
+  'Only NEW': 'new',
+  'Bypassed OLD': 'not-compared',
+  'Bypassed NEW': 'not-compared',
+  ONLY_OLD: 'unmatched',
+  ONLY_NEW: 'unmatched',
+  Unmatch: 'unmatched',
+  Unmatched: 'unmatched',
+};
+
+/**
+ * Lookup over both vocabularies, so a caller holding an already-translated
+ * value — the table filters and sorts on what it displays — resolves to the
+ * same outcome as one holding the engine's own word.
+ */
+const MATCH_STATUS_INDEX: Record<string, { outcome: PofMatchOutcome; label: string }> = (() => {
+  const index: Record<string, { outcome: PofMatchOutcome; label: string }> = {};
+  for (const [engineValue, label] of Object.entries(POF_MATCH_STATUS)) {
+    const entry = { outcome: MATCH_OUTCOMES[engineValue] ?? 'unknown', label };
+    index[engineValue.toLowerCase()] = entry;
+    index[label.toLowerCase()] = entry;
+  }
+  return index;
+})();
+
+function matchStatusEntry(value: unknown) {
+  if (typeof value !== 'string') return undefined;
+  return MATCH_STATUS_INDEX[value.trim().toLowerCase()];
+}
+
+/**
+ * The POF 100 wording for a run comparison result, or the value as the engine
+ * wrote it when this is an outcome the glossary does not know. An unrecognised
+ * status is shown, not swallowed: a blank cell would hide a row's provenance.
+ */
+export function pofMatchStatus(value: unknown): string {
+  const entry = matchStatusEntry(value);
+  if (entry) return entry.label;
+  return typeof value === 'string' ? value : '';
+}
+
+/** What the comparison concluded, for callers that colour or filter by outcome. */
+export function pofMatchOutcome(value: unknown): PofMatchOutcome {
+  return matchStatusEntry(value)?.outcome ?? 'unknown';
+}
 
 /**
  * Engine result-column keys → the POF 100 column title for the same quantity.
@@ -162,7 +261,7 @@ const PLAIN_COLUMN_TITLES: Record<string, string> = {
   'Match Status': 'Run comparison',
   // App concepts with no POF equivalent — the engine's own bucketing.
   'Result Group': 'Result group',
-  'Bypass Reason': 'Not aligned — reason',
+  'Bypass Reason': 'Not compared — reason',
   'Match Method': 'Matching method',
   'Match Confidence (%)': 'Match confidence [%]',
   'Match Cost': 'Match cost',
