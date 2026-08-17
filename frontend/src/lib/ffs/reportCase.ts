@@ -414,8 +414,102 @@ export function buildFfsReportCase(
     findings.push(finding(
       'GROWTH_BASIS_UNAVAILABLE',
       'warning',
-      'Remaining life is not calculated where no positive depth or length growth basis is available.',
+      'No remaining life is projected for these features: the source reports a growth rate of zero for '
+      + 'them and no rate could be derived. A measured zero is inside the sizing tolerance of any run '
+      + 'pair, so it is not evidence that corrosion has stopped — enter a fallback growth rate, or a '
+      + 'commissioning year so a service-age rate can be derived, before the report is relied on.',
       noGrowthBasisCount,
+    ));
+  }
+
+  // Derived rates are the reason every corroding feature now carries a remnant
+  // life, and exactly the reason each one has to be named: the number is a
+  // stand-in for a measurement the run pair did not make.
+  const serviceAgeRateCount = activeItems.filter(
+    (item) => item.nominal.growthEvidence?.depth.analysisBasis === 'service-age',
+  ).length;
+  if (serviceAgeRateCount > 0) {
+    findings.push(finding(
+      'GROWTH_RATE_DERIVED_FROM_SERVICE_AGE',
+      'warning',
+      'Depth growth was derived from the measured metal loss over the service age of the line, because '
+      + 'no run-pair rate exists for these features. It assumes uniform loss since commissioning and '
+      + 'under-rates any defect that initiated late.',
+      serviceAgeRateCount,
+    ));
+  }
+
+  const populationRateCount = activeItems.filter(
+    (item) => item.nominal.growthEvidence?.depth.analysisBasis === 'population-percentile',
+  ).length;
+  if (populationRateCount > 0) {
+    findings.push(finding(
+      'GROWTH_RATE_DERIVED_FROM_POPULATION',
+      'warning',
+      'Depth growth was derived from the percentile rate of comparable measured features, because '
+      + 'neither a run-pair rate nor a service age was available. It is a population estimate, not a '
+      + 'measurement of these features.',
+      populationRateCount,
+    ));
+  }
+
+  // ASME B31.4-2025 para. 451.6.2.2 dispositions. These are Code requirements,
+  // not screening bands, so they are stated as requirements — and they are
+  // warnings rather than errors: an assessment that finds areas needing repair
+  // has done its job, and blocking the report over it would withhold the very
+  // finding the operator has to act on.
+  const b314RemoveOrRepairCount = activeItems.filter(
+    (item) => item.b314?.disposition === 'remove-or-repair',
+  ).length;
+  if (b314RemoveOrRepairCount > 0) {
+    findings.push(finding(
+      'B314_REMOVE_OR_REPAIR_REQUIRED',
+      'warning',
+      'ASME B31.4-2025 para. 451.6.2.2(a): these areas exceed 80% of the wall thickness and shall be '
+      + 'removed or repaired. No remaining-strength result admits them.',
+      b314RemoveOrRepairCount,
+    ));
+  }
+
+  const b314ReduceMopCount = activeItems.filter(
+    (item) => item.b314?.disposition === 'repair-replace-or-reduce-mop',
+  ).length;
+  if (b314ReduceMopCount > 0) {
+    findings.push(finding(
+      'B314_SAFE_PRESSURE_BELOW_MOP',
+      'warning',
+      'ASME B31.4-2025 para. 451.6.2.2(b): the safe operating pressure established for these areas is '
+      + 'below the maximum operating pressure, so each shall be removed or repaired, or the maximum '
+      + 'operating pressure reduced to the safe operating pressure or less.',
+      b314ReduceMopCount,
+    ));
+  }
+
+  const b314AnalysisCount = activeItems.filter(
+    (item) => item.b314?.disposition === 'engineering-analysis-required',
+  ).length;
+  if (b314AnalysisCount > 0) {
+    findings.push(finding(
+      'B314_ENGINEERING_ANALYSIS_REQUIRED',
+      'error',
+      'ASME B31.4-2025 para. 451.6.2.2(b): for a yield-to-tensile ratio above 0.93, or a line subject to '
+      + 'unusual axial loads, lateral movement, or settlement, an engineering analysis shall establish '
+      + 'the safe operating pressure. A B31G screen is not the Code disposition for these areas.',
+      b314AnalysisCount,
+    ));
+  }
+
+  const b314NoDesignThicknessCount = activeItems.filter(
+    (item) => item.b314DesignThicknessMm === null || item.b314DesignThicknessMm === undefined,
+  ).length;
+  if (b314NoDesignThicknessCount > 0) {
+    findings.push(finding(
+      'B314_DESIGN_THICKNESS_UNAVAILABLE',
+      'info',
+      'The ASME B31.4 para. 403.2.1 design thickness could not be established for these features, so the '
+      + 'para. 451.6.2.2(b) 20% no-repair band was not applied to them. They are dispositioned on the '
+      + 'safe operating pressure alone, which is the more conservative of the two.',
+      b314NoDesignThicknessCount,
     ));
   }
 

@@ -12,6 +12,7 @@ import { analysisHorizonYears, formatRemnantLife, remnantLimitLabel } from './li
 import { buildSectionDesignFactorSummary, buildSectionGrowthSummary } from './sectionSummary.ts';
 import { designLifeUsage, EMPTY_SERVICE_LIFE } from './remnantLife.ts';
 import {
+  b314DispositionLabel,
   designFactorSourceLabel,
   engineeringDisposition,
   safetyFactorSourceLabel,
@@ -204,6 +205,9 @@ export function buildResultsWorkbook(
     'CR length used [mm/y]', 'Length growth observation', 'Length analysis basis', 'Length growth evidence note',
     'd [mm]', 'd/t', 'z', 'M', 'S_flow [MPa]', 'Sf [MPa]', 'Pf [MPa]', 'S0 [MPa]',
     'P_safe [MPa]', 'ERF nominal', 'Acceptance',
+    // The Code disposition, beside the B31G acceptance rather than instead of
+    // it. They answer different questions and are allowed to differ.
+    'B31.4 design thickness t [mm]', 'Depth / t design', 'B31.4 disposition', 'B31.4 reference',
     'Remnant life [y]', 'Due date', 'Governing limit',
     `Years to ${depthLimitPct}% depth`, 'Years to ERF 1', 'Length held constant', 'Capped at design life',
     'Conservative depth [%]', 'Conservative length [mm]', 'ERF conservative', 'P_safe conservative [MPa]',
@@ -236,6 +240,9 @@ export function buildResultsWorkbook(
       n.growthEvidence?.length.note ?? '',
       num(n.d), num(n.dt), num(n.z), n.M === null ? 'n/a' : num(n.M), num(n.sflow), num(n.Sf),
       num(n.Pf), num(n.So), num(n.safePressure), num(n.ERF), n.acceptance,
+      num(item.b314DesignThicknessMm, 3),
+      num(item.b314.depthRatioOfDesignThickness, 3),
+      b314DispositionLabel(item.b314.disposition), item.b314.reference,
       formatRemnantLife(life), life.dueDateIso ?? '', remnantLimitLabel(life),
       life.depthLimitYears === null ? '' : num(life.depthLimitYears, 2),
       life.erfLimitYears === null ? '' : num(life.erfLimitYears, 2),

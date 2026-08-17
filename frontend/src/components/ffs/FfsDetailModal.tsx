@@ -13,6 +13,7 @@ import {
   growthAnalysisBasisLabel,
   growthObservationLabel,
   designFactorSourceLabel,
+  b314DispositionLabel,
   methodProfileLabel,
   pressureBasisLabel,
   safetyFactorSourceLabel,
@@ -300,6 +301,22 @@ export default function FfsDetailModal({
             <p className="ffs-detail__method-badge">
               Method profile: {methodProfileLabel(config)} &middot; {areaLabel} area term
             </p>
+            {/* The Code disposition, stated in the Code's own words. B31G says
+                what the pipe can hold; B31.4 says what has to be done about it,
+                and the two are allowed to differ. */}
+            {item.b314 && (
+              <p className="ffs-detail__method-badge">
+                {b314DispositionLabel(item.b314.disposition)}
+                {item.b314DesignThicknessMm !== null && item.b314DesignThicknessMm !== undefined && (
+                  <> &middot; t<sub>design</sub> = {fmt(item.b314DesignThicknessMm, 3)} mm
+                    {item.b314.depthRatioOfDesignThickness !== null && (
+                      <> &middot; d/t<sub>design</sub> = {fmt(item.b314.depthRatioOfDesignThickness, 3)}</>
+                    )}
+                  </>
+                )}
+                <span title={item.b314.reference}> — {item.b314.statement}</span>
+              </p>
+            )}
           </div>
         </div>
 

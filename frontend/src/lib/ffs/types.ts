@@ -1,6 +1,7 @@
 // Type-only, so the cycle with remnantLife.ts (which needs FfsLifeStatus) is
 // erased at compile time rather than becoming a runtime import cycle.
 import type { FfsRemnantLife, FfsServiceLifeInputs } from './remnantLife.ts';
+import type { B314DispositionResult, B314InteractionResult } from './b314.ts';
 
 export type { FfsRemnantLife, FfsRemnantLifeBasis, FfsRemnantLimit, FfsServiceLifeInputs } from './remnantLife.ts';
 
@@ -27,6 +28,25 @@ export interface FfsConfig {
    * of any depth given justified sizing accuracy. See `B31G_DEPTH_LIMIT_RATIO`.
    */
   depthRejectionPct?: number;
+  /**
+   * ASME B31.4-2025 Table 403.2.1-1 weld joint factor E, used only by the B31.4
+   * design-thickness calculation the para. 451.6.2.2(b) 20 % band is measured
+   * against. Defaults to 1.0 — seamless, ERW, and electric flash welded pipe,
+   * which is most line pipe. It is 0.80 for electric fusion welded and 0.60 for
+   * furnace butt welded, where it moves the band substantially.
+   */
+  weldJointFactor?: number;
+  /**
+   * Yield-to-tensile ratio of the pipe material, where the dossier gives one.
+   * Above 0.93, ASME B31.4-2025 para. 451.6.2.2(b) requires an engineering
+   * analysis rather than B31G to establish the safe operating pressure.
+   */
+  yieldToTensileRatio?: number | null;
+  /**
+   * True where the line is subject to unusual axial loads, lateral movement, or
+   * settlement — the other para. 451.6.2.2(b) trigger for engineering analysis.
+   */
+  unusualLoading?: boolean;
 }
 
 export type FfsPressureBasis = 'maop' | 'mop' | 'current-operating' | 'other-required';
@@ -38,7 +58,25 @@ export type FfsGrowthObservation =
   | 'manual-reported'
   | 'unavailable';
 
-export type FfsGrowthAnalysisBasis = 'reported' | 'estimated' | 'explicit-fallback' | 'none';
+/**
+ * What the projection actually consumed as a rate.
+ *
+ * The first three come from the source: a matched run pair, a NEW-only estimate,
+ * or the engineer's own fallback entry. The last two are derivations the
+ * assessment makes when none of those exist, so that a corroding feature is never
+ * left without a remnant life — see `growthResolution.ts`. They are labelled
+ * apart from the measured bases everywhere the rate is shown, and the source
+ * `observation` beside them still reads "unavailable".
+ */
+export type FfsGrowthAnalysisBasis =
+  | 'reported'
+  | 'estimated'
+  | 'explicit-fallback'
+  /** Measured metal loss divided by the service age of the line. */
+  | 'service-age'
+  /** The percentile rate of the comparable measured population. */
+  | 'population-percentile'
+  | 'none';
 
 export interface FfsGrowthComponentEvidence {
   /** What the source data actually says; never overwritten by an analysis fallback. */
@@ -130,6 +168,17 @@ export interface FfsScreeningConfig {
   interactionSpacingFactor: number;
   /** Depth at which a feature is rejected regardless of ERF, as % of wall. */
   depthRejectionPct: number;
+  /**
+   * Whether a feature with no source growth rate may be given a derived one.
+   *
+   * On by default, and it is what makes every assessed feature carry a remnant
+   * life. The derivation ladder is in `growthResolution.ts`; every derived rate
+   * is labelled as a derivation and raised as a readiness finding, never
+   * presented as a measurement. Turning it off restores the strict behaviour —
+   * an unmatched feature then reports no remaining life at all, which is honest
+   * but leaves ASME B31.4-2025 para. 451.6.2.2(b) unanswered for that feature.
+   */
+  deriveMissingGrowthRates: boolean;
 }
 
 export const DEFAULT_SCREENING_CONFIG: FfsScreeningConfig = {
@@ -141,6 +190,7 @@ export const DEFAULT_SCREENING_CONFIG: FfsScreeningConfig = {
   reviewBandErf: 0.9,
   interactionSpacingFactor: 3,
   depthRejectionPct: 80,
+  deriveMissingGrowthRates: true,
 };
 
 /**
@@ -162,7 +212,7 @@ export const DEFAULT_SCREENING_CONFIG: FfsScreeningConfig = {
 export function normaliseScreeningConfig(value: Partial<FfsScreeningConfig> | null | undefined): FfsScreeningConfig {
   const source = value ?? {};
   const numeric = (
-    key: Exclude<keyof FfsScreeningConfig, 'growthBasis'>,
+    key: Exclude<keyof FfsScreeningConfig, 'growthBasis' | 'deriveMissingGrowthRates'>,
   ): number => {
     const candidate = source[key];
     return typeof candidate === 'number' && Number.isFinite(candidate)
@@ -181,6 +231,12 @@ export function normaliseScreeningConfig(value: Partial<FfsScreeningConfig> | nu
     reviewBandErf: numeric('reviewBandErf'),
     interactionSpacingFactor: numeric('interactionSpacingFactor'),
     depthRejectionPct: numeric('depthRejectionPct'),
+    // A config restored from an entry written before this field existed comes
+    // back without it. Absent means the default, not "off": the alternative is
+    // that reloading a results page silently empties the remnant-life column.
+    deriveMissingGrowthRates: typeof source.deriveMissingGrowthRates === 'boolean'
+      ? source.deriveMissingGrowthRates
+      : DEFAULT_SCREENING_CONFIG.deriveMissingGrowthRates,
   };
 }
 
@@ -343,6 +399,18 @@ export interface FfsScreenedResult {
   clockHour: number | null;
   /** True when the feature sits in the 4–8 o'clock bottom quadrant. */
   bottomQuadrant: boolean;
+  /**
+   * What ASME B31.4-2025 para. 451.6.2.2 requires be done about this area.
+   *
+   * Held apart from `nominal.acceptance`, which is the B31G acceptance criterion.
+   * The two answer different questions and can differ legitimately: a feature at
+   * 15 % of the design thickness needs no repair under the Code while still
+   * carrying an ERF, and a feature past 80 %WT is removed or repaired under the
+   * Code whatever its ERF says.
+   */
+  b314: B314DispositionResult;
+  /** The B31.4 para. 403.2.1 pressure design thickness, mm. Null when unknown. */
+  b314DesignThicknessMm: number | null;
 }
 
 /**
@@ -392,6 +460,14 @@ export interface FfsInteractionPair {
    * would be over-conservative rather than correct.
    */
   combineRule: 'overall-length' | 'worst-longitudinal-section' | 'undetermined';
+  /**
+   * The same pair under ASME B31.4-2025 para. 451.6.2.2(d), which is the rule a
+   * liquid pipeline is actually operated under. Its triggers are not the 3t of
+   * B31G: one inch axially, six times the design thickness circumferentially.
+   * Both screens are reported because they disagree on ordinary geometry, and an
+   * engineer has to see which rule brought a pair into the list.
+   */
+  b314: B314InteractionResult;
 }
 
 export interface FfsAction {

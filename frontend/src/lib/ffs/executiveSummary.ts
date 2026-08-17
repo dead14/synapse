@@ -102,7 +102,7 @@ export function formatPipelineRemnantLife(
   switch (life.status) {
     case 'empty': return 'No active feature';
     case 'insufficient-growth-basis': return 'Not calculated';
-    case 'not-reached-within-horizon': return `Not reached in ${horizonYears} y`;
+    case 'not-reached-within-horizon': return `> ${horizonYears} y`;
     case 'mixed-unbounded': return 'Not established';
     default: return 'Not established';
   }

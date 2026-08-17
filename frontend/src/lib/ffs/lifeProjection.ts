@@ -26,7 +26,11 @@ export function formatLifeProjection(
   horizonYears: number,
 ): string {
   if (status === 'insufficient-growth-basis') return 'Not calculated';
-  if (status === 'not-reached-within-horizon') return `Not reached in ${horizonYears} y`;
+  // A limit past the search horizon is a remaining life, not a gap in the
+  // report: the projection knows the feature outlasts the horizon, it just did
+  // not go looking further. "Not reached in 30 y" read as a missing figure in a
+  // column of figures; "> 30 y" says the same thing as the bound it is.
+  if (status === 'not-reached-within-horizon') return `> ${horizonYears} y`;
   if (years === null) return 'Not calculated';
   if (years < 0.1) return 'Now';
   return `${years.toFixed(2)} y`;

@@ -6,6 +6,7 @@ import type {
   FfsGrowthObservation,
   FfsScreenedResult,
 } from './types.ts';
+import type { B314Disposition } from './b314.ts';
 
 export function pressureBasisLabel(config: FfsConfig): string {
   switch (config.pressureBasis) {
@@ -39,7 +40,28 @@ export function growthAnalysisBasisLabel(
     case 'estimated': return 'estimated rate';
     case 'explicit-fallback': return 'engineer-entered fallback';
     case 'uniform-assumption': return 'uniform screening assumption';
+    // Derivations, not measurements. Named as such in every column they reach —
+    // an engineer reading "derived" must never take it for a run-pair result.
+    case 'service-age': return 'derived: service-age rate';
+    case 'population-percentile': return 'derived: population rate';
     default: return 'not calculable';
+  }
+}
+
+/**
+ * The para. 451.6.2.2 disposition, phrased for a report column.
+ *
+ * Deliberately worded as the Code words it — "shall be removed or repaired", not
+ * "fail" — because this column is the Code requirement, not a screening band.
+ */
+export function b314DispositionLabel(disposition: B314Disposition): string {
+  switch (disposition) {
+    case 'remove-or-repair': return 'Remove or repair — over 80 %WT (451.6.2.2(a))';
+    case 'no-repair-required': return 'No repair required — 20 % or less of t (451.6.2.2(b))';
+    case 'safe-pressure-established': return 'May remain — safe pressure at or above MOP (451.6.2.2(b))';
+    case 'repair-replace-or-reduce-mop': return 'Repair, replace, or reduce MOP (451.6.2.2(b))';
+    case 'engineering-analysis-required': return 'Engineering analysis required (451.6.2.2(b))';
+    default: return 'Not established';
   }
 }
 
