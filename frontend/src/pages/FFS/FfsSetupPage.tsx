@@ -119,6 +119,12 @@ export default function FfsSetupPage() {
   const [safetyFactor, setSafetyFactor] = useState('1.39');
   const [designLifeYears, setDesignLifeYears] = useState('');
   const [commissioningYear, setCommissioningYear] = useState('');
+  // ASME B31.4-2025 inputs. E defaults to 1.0, which covers seamless, ERW, and
+  // electric flash welded pipe — most line pipe — and is the only value that
+  // leaves the design thickness where B31G practice would put it anyway.
+  const [weldJointFactor, setWeldJointFactor] = useState('1');
+  const [yieldToTensileRatio, setYieldToTensileRatio] = useState('');
+  const [unusualLoading, setUnusualLoading] = useState(false);
 
   // Sections come from the features in scope, and the factor for each is typed
   // once against a stretch the engineer has already named and reviewed. Keyed
@@ -226,6 +232,12 @@ export default function FfsSetupPage() {
         Number(commissioningYear) < 1900 ||
         Number(commissioningYear) > 2100)
       ? ['Commissioning year must be a four-digit year between 1900 and 2100, or left empty.']
+      : []),
+    ...(yieldToTensileRatio.trim() !== '' &&
+      (!Number.isFinite(Number(yieldToTensileRatio)) ||
+        Number(yieldToTensileRatio) <= 0 ||
+        Number(yieldToTensileRatio) > 1)
+      ? ['Yield-to-tensile ratio must be greater than 0 and not more than 1, or left empty.']
       : []),
   ];
 
@@ -415,6 +427,11 @@ export default function FfsSetupPage() {
         // The nominal acceptance column and the remnant-life limit answer to the
         // screening step's rejection line, not to a second hard-coded 80 %WT.
         depthRejectionPct: screening.depthRejectionPct,
+        // ASME B31.4-2025: these decide the Code disposition reported beside the
+        // B31G result, never the B31G result itself.
+        weldJointFactor: Number(weldJointFactor) > 0 ? Number(weldJointFactor) : 1,
+        yieldToTensileRatio: yieldToTensileRatio.trim() === '' ? null : Number(yieldToTensileRatio),
+        unusualLoading,
       };
 
       if (sourceMode === 'manual') {
@@ -714,6 +731,26 @@ export default function FfsSetupPage() {
                       step={1}
                     />
                   </div>
+                  <label className="mt-4 flex items-start gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={screening.deriveMissingGrowthRates}
+                      onChange={(event) =>
+                        setScreening((s) => ({ ...s, deriveMissingGrowthRates: event.target.checked }))
+                      }
+                      className="mt-0.5"
+                    />
+                    <span>
+                      Derive a growth rate where the run pair measured none
+                      <span className="mt-0.5 block text-[10px] font-normal leading-snug text-slate-500 dark:text-slate-400">
+                        Unmatched features, merged clusters, and pairs reporting an apparent decrease otherwise
+                        carry no remaining life at all. With this on they are projected from the measured metal
+                        loss over the service age of the line, or from the rate of comparable measured features —
+                        each labelled as a derivation and raised as a report finding. A measured rate, including a
+                        measured zero, is never replaced.
+                      </span>
+                    </span>
+                  </label>
                   <p className="mt-3 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
                     These are project screening decisions, not ASME B31G requirements. They can also be retuned
                     on the results page without re-running the assessment.
@@ -1261,9 +1298,56 @@ export default function FfsSetupPage() {
                   placeholder="e.g. 1985"
                   className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                 />
-                <span className="mt-1 block text-[10px] font-normal leading-snug">Reported as consumed design life; it does not change the calculation.</span>
+                <span className="mt-1 block text-[10px] font-normal leading-snug">Reported as consumed design life, and used to derive a service-age corrosion rate for any feature the run pair could not measure.</span>
               </label>
             </div>
+
+            {/* ASME B31.4-2025 inputs. They do not touch the B31G calculation —
+                they decide the Code disposition beside it: the para. 403.2.1
+                design thickness the 20 % no-repair band is a fraction of, and
+                the para. 451.6.2.2(b) triggers for engineering analysis. */}
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block text-xs font-semibold text-slate-500">
+                Weld joint factor E (B31.4 Table 403.2.1-1)
+                <select
+                  value={weldJointFactor}
+                  onChange={(event) => setWeldJointFactor(event.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                >
+                  <option value="1">1.00 — seamless, ERW, electric flash welded</option>
+                  <option value="0.8">0.80 — electric fusion welded</option>
+                  <option value="0.6">0.60 — furnace butt welded, continuous welded</option>
+                </select>
+                <span className="mt-1 block text-[10px] font-normal leading-snug">Sets the design thickness t = P·D / (2·F·E·SMYS) the B31.4 20 % no-repair band is measured against.</span>
+              </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                Yield-to-tensile ratio
+                <input
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="any"
+                  value={yieldToTensileRatio}
+                  onChange={(event) => setYieldToTensileRatio(event.target.value)}
+                  placeholder="e.g. 0.88"
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                />
+                <span className="mt-1 block text-[10px] font-normal leading-snug">Above 0.93, B31.4 para. 451.6.2.2(b) requires an engineering analysis instead of B31G. Leave empty if the dossier gives none.</span>
+              </label>
+            </div>
+
+            <label className="flex items-start gap-2 text-xs font-semibold text-slate-500">
+              <input
+                type="checkbox"
+                checked={unusualLoading}
+                onChange={(event) => setUnusualLoading(event.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Unusual axial loads, lateral movement, or settlement
+                <span className="mt-0.5 block text-[10px] font-normal leading-snug">B31.4 para. 451.6.2.2(b) requires an engineering analysis for these lines; the B31G screen is then reported but is not the Code disposition.</span>
+              </span>
+            </label>
 
             <p className="text-xs text-slate-500">Inputs are converted to MPa and mm before the ASME B31G calculation. ERF compares the selected required pressure basis with the calculated safe pressure; current operating pressure is not silently treated as MAOP.</p>
               </>

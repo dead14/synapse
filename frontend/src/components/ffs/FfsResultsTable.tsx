@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { FiChevronDown, FiChevronUp, FiSearch } from 'react-icons/fi';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
+import type { B314Disposition } from '../../lib/ffs/b314';
 import { formatRemnantLife, lifeSortValue, remnantLimitLabel } from '../../lib/ffs/lifeProjection';
 import { Callout, Panel, PriorityLabel, SeverityBadge, formatErf } from './FfsPrimitives';
 
@@ -17,6 +18,7 @@ type SortKey =
   | 'conservativeErf'
   | 'safePressure'
   | 'acceptance'
+  | 'b314'
   | 'remnantLife'
   | 'dueDate'
   | 'governingLimit'
@@ -44,6 +46,10 @@ const COLUMNS: Column[] = [
   { key: 'conservativeErf', header: 'ERF cons.', align: 'right', value: (i) => i.conservative.ERF },
   { key: 'safePressure', header: 'P_safe [MPa]', align: 'right', value: (i) => i.nominal.safePressure },
   { key: 'acceptance', header: 'Acceptance', align: 'center', value: (i) => i.nominal.acceptance },
+  // The Code disposition, beside the B31G acceptance rather than instead of it.
+  // Sorted from "must be repaired" down to "no repair required", so the column
+  // walks the register in the order the Code puts the work in.
+  { key: 'b314', header: 'B31.4 disposition', align: 'left', value: (i) => B314_RANK[i.b314?.disposition ?? 'undetermined'] },
   { key: 'remnantLife', header: 'Remnant life', align: 'right', value: (i) => lifeSortValue(i.nominal.remnantLife.years) },
   { key: 'dueDate', header: 'Due date', align: 'center', value: (i) => i.nominal.remnantLife.dueDateIso ?? '' },
   { key: 'governingLimit', header: 'Governing limit', align: 'left', value: (i) => i.nominal.remnantLife.governingLimit ?? i.nominal.remnantLife.status },
@@ -51,6 +57,41 @@ const COLUMNS: Column[] = [
   { key: 'disposition', header: 'Disposition', align: 'left', value: (i) => dispositionRank(i) },
   { key: 'priority', header: 'Priority', align: 'center', value: (i) => PRIORITY_RANK[i.priority] },
 ];
+
+/** Ranked as the Code ranks the work: removal first, no repair required last. */
+const B314_RANK: Record<B314Disposition, number> = {
+  'remove-or-repair': 5,
+  'repair-replace-or-reduce-mop': 4,
+  'engineering-analysis-required': 3,
+  undetermined: 2,
+  'safe-pressure-established': 1,
+  'no-repair-required': 0,
+};
+
+/** Short enough for a table cell; the full Code sentence is on the tooltip. */
+const B314_SHORT: Record<B314Disposition, string> = {
+  'remove-or-repair': 'Remove or repair',
+  'repair-replace-or-reduce-mop': 'Repair or reduce MOP',
+  'engineering-analysis-required': 'Engineering analysis',
+  undetermined: 'Not established',
+  'safe-pressure-established': 'May remain',
+  'no-repair-required': 'No repair required',
+};
+
+const B314_TONE: Record<B314Disposition, string> = {
+  'remove-or-repair': 'text-rose-600 dark:text-rose-400 font-semibold',
+  'repair-replace-or-reduce-mop': 'text-rose-600 dark:text-rose-400 font-semibold',
+  'engineering-analysis-required': 'text-amber-600 dark:text-amber-400 font-semibold',
+  undetermined: 'text-slate-500 dark:text-slate-400',
+  'safe-pressure-established': 'text-slate-600 dark:text-slate-300',
+  'no-repair-required': 'text-emerald-600 dark:text-emerald-400',
+};
+
+/** True when the projection ran on a derived rate rather than a measured one. */
+function isDerivedRate(item: FfsScreenedResult): boolean {
+  const basis = item.nominal.growthEvidence?.depth.analysisBasis;
+  return basis === 'service-age' || basis === 'population-percentile';
+}
 
 /**
  * What the spool review has said about this feature. A repair that has been
@@ -353,12 +394,30 @@ export default function FfsResultsTable({
                         label={failed ? 'Not acceptable' : 'Acceptable'}
                       />
                     </td>
+                    <td className="whitespace-nowrap px-2 py-2">
+                      <span
+                        className={B314_TONE[item.b314?.disposition ?? 'undetermined']}
+                        title={item.b314?.statement ?? ''}
+                      >
+                        {B314_SHORT[item.b314?.disposition ?? 'undetermined']}
+                      </span>
+                    </td>
                     <td
                       className={`px-2 py-2 text-right font-semibold tabular-nums ${
                         belowThreshold ? 'text-amber-600 dark:text-amber-400' : 'text-slate-700 dark:text-slate-200'
                       }`}
                     >
-                      {formatRemnantLife(life)}
+                      <span className="inline-flex items-center gap-1">
+                        {formatRemnantLife(life)}
+                        {isDerivedRate(item) && (
+                          <span
+                            title={item.nominal.growthEvidence?.depth.note ?? ''}
+                            className="rounded border border-amber-200 bg-amber-50 px-1 py-px text-[8px] font-bold uppercase tracking-wide text-amber-700 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-300"
+                          >
+                            DER
+                          </span>
+                        )}
+                      </span>
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 text-center tabular-nums text-slate-500 dark:text-slate-400">
                       {life.dueDateIso ?? '—'}

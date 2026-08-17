@@ -343,8 +343,12 @@ function measuredMetalLoss(bucket: Bucket): {
     const depth = finite(item.nominal.maxDepthPct);
     if (depth !== null && (deepest === null || depth > deepest)) deepest = depth;
 
+    // Anything that is not a measured run-pair rate is an assumption for RBI
+    // purposes — the zero-baseline estimate, the engineer's fallback, and both
+    // derivations. Listing the assumed bases meant every basis added later
+    // defaulted to "measured", which is the wrong way round for a likelihood.
     const basis = item.nominal.growthEvidence?.depth.analysisBasis;
-    if (basis === 'estimated' || basis === 'explicit-fallback' || basis === 'none') growthAssumed = true;
+    if (basis !== 'reported') growthAssumed = true;
   }
   if (governing === null && bucket.members.length > 0) governing = bucket.members[0];
 

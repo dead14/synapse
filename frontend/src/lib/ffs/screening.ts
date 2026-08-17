@@ -1,4 +1,5 @@
 import { evaluateB31g, type B31gGeometry } from './b31g.ts';
+import { b314DesignThicknessMm, b314Disposition, b314Interaction } from './b314.ts';
 import type {
   FfsAction,
   FfsConfig,
@@ -17,6 +18,13 @@ import type {
 import { buildFfsReportCase, type FfsReportCase, type FfsReportContext } from './reportCase.ts';
 import { analysisHorizonYears, formatLifeProjection, lifeSortValue } from './lifeProjection.ts';
 import { computeRemnantLife, EMPTY_SERVICE_LIFE, type FfsRemnantLife } from './remnantLife.ts';
+import {
+  buildGrowthResolutionContext,
+  deriveDepthRate,
+  withDerivedDepthRate,
+  type DerivedDepthRate,
+  type FfsGrowthResolutionContext,
+} from './growthResolution.ts';
 import { maxBy } from '../../utils/numericRange.ts';
 
 /** Features closer together than this along the pipeline form one location zone. */
@@ -52,59 +60,96 @@ function geometryOf(nominal: FfsResult): B31gGeometry {
  * depth rate. A reported zero stays zero; the configured rate is only an
  * explicit fallback when the evidence says the source rate is unavailable.
  */
-export function growthRateFor(nominal: FfsResult, screening: FfsScreeningConfig): number {
-  return growthApplicationFor(nominal, screening).rateMmPerYear;
+export function growthRateFor(
+  nominal: FfsResult,
+  screening: FfsScreeningConfig,
+  resolution?: FfsGrowthResolutionContext,
+): number {
+  return growthApplicationFor(nominal, screening, resolution).rateMmPerYear;
 }
 
 export interface FfsGrowthApplication {
   rateMmPerYear: number;
   observation: FfsGrowthObservation;
   analysisBasis: FfsGrowthAnalysisBasis | 'uniform-assumption';
+  /**
+   * The derivation behind the rate — its arithmetic and the sentence that has to
+   * travel with it — so the evidence record can carry it wherever the rate is
+   * shown. Null when the rate came straight from the source.
+   */
+  derived: DerivedDepthRate | null;
+}
+
+function application(
+  rateMmPerYear: number,
+  observation: FfsGrowthObservation,
+  analysisBasis: FfsGrowthApplication['analysisBasis'],
+): FfsGrowthApplication {
+  return { rateMmPerYear, observation, analysisBasis, derived: null };
 }
 
 /**
- * Resolves the rate and its provenance together. A zero reported rate remains
- * a reported zero; only an unavailable analysis basis may consume the explicit
- * screening fallback.
+ * Resolves the rate and its provenance together.
+ *
+ * The source is asked first, always. What changed is the end of the ladder: a
+ * feature the run pair could not measure used to arrive here with a rate of
+ * zero and leave with one, and a rate of zero produces no remnant life at all.
+ * Zero is only a real answer when something actually measured it — an unmatched
+ * feature, a bypassed cluster, and a pair reporting an apparent decrease are all
+ * *absences* of a measurement, and the derivation ladder in `growthResolution`
+ * fills them rather than reporting "Not calculated" for a corroding defect.
+ *
+ * `resolution` carries the population statistics that ladder needs. Without it
+ * the behaviour is exactly what it was — the derived steps are simply skipped —
+ * so every existing caller keeps its numbers.
  */
 export function growthApplicationFor(
   nominal: FfsResult,
   screening: FfsScreeningConfig,
+  resolution?: FfsGrowthResolutionContext,
 ): FfsGrowthApplication {
   const depthEvidence = nominal.growthEvidence?.depth;
   if (screening.growthBasis === 'uniform') {
-    return {
-      rateMmPerYear: screening.growthRateMmPerYear,
-      observation: depthEvidence?.observation ?? 'unavailable',
-      analysisBasis: 'uniform-assumption',
-    };
+    return application(
+      screening.growthRateMmPerYear,
+      depthEvidence?.observation ?? 'unavailable',
+      'uniform-assumption',
+    );
   }
   if (depthEvidence?.analysisRateMmPerYear !== null && depthEvidence?.analysisRateMmPerYear !== undefined) {
-    return {
-      rateMmPerYear: depthEvidence.analysisRateMmPerYear,
-      observation: depthEvidence.observation,
-      analysisBasis: depthEvidence.analysisBasis,
-    };
+    return application(
+      depthEvidence.analysisRateMmPerYear,
+      depthEvidence.observation,
+      depthEvidence.analysisBasis,
+    );
   }
   if (!depthEvidence && nominal.crDepth > 0) {
-    return {
-      rateMmPerYear: nominal.crDepth,
-      observation: 'manual-reported',
-      analysisBasis: 'reported',
-    };
+    return application(nominal.crDepth, 'manual-reported', 'reported');
   }
   if (screening.growthRateMmPerYear > 0) {
-    return {
-      rateMmPerYear: screening.growthRateMmPerYear,
-      observation: depthEvidence?.observation ?? 'unavailable',
-      analysisBasis: 'explicit-fallback',
-    };
+    return application(
+      screening.growthRateMmPerYear,
+      depthEvidence?.observation ?? 'unavailable',
+      'explicit-fallback',
+    );
   }
-  return {
-    rateMmPerYear: 0,
-    observation: depthEvidence?.observation ?? 'unavailable',
-    analysisBasis: 'none',
-  };
+  // Nothing measured this feature and no fallback was entered. Derive a rate
+  // rather than leave the feature without a projection — ASME B31.4-2025 para.
+  // 451.6.2.2(b) requires a safe operating pressure to be established for every
+  // area of metal loss between 20 % and 80 % of wall, and that is a statement
+  // about the future as much as the present.
+  if (resolution && screening.deriveMissingGrowthRates !== false) {
+    const derived = deriveDepthRate(nominal, resolution);
+    if (derived) {
+      return {
+        rateMmPerYear: derived.rateMmPerYear,
+        observation: depthEvidence?.observation ?? 'unavailable',
+        analysisBasis: derived.analysisBasis,
+        derived,
+      };
+    }
+  }
+  return application(0, depthEvidence?.observation ?? 'unavailable', 'none');
 }
 
 /**
@@ -282,6 +327,86 @@ function conservativeRemnantLife(
   });
 }
 
+/**
+ * The nominal result with its remnant life recomputed on the resolved rates.
+ *
+ * `processRow` projects from the row's own growth columns, which is all a single
+ * row can know. The growth basis, the explicit fallback, and the derivation
+ * ladder are decisions of this layer and the population it can see — so the
+ * as-reported life is settled here, from the same rates the tolerance-adjusted
+ * life uses. The dimensions are still the as-reported ones; only the rate is
+ * resolved, and the record carries the rate it was projected with.
+ *
+ * The source columns `crDepth` and `crLength` are left exactly as the source
+ * wrote them. A derived rate moves the analysis basis in the evidence record, it
+ * never rewrites the measurement column.
+ */
+function withResolvedGrowth(
+  nominal: FfsResult,
+  config: FfsConfig,
+  screening: FfsScreeningConfig,
+  growth: FfsGrowthApplication,
+  length: FfsLengthApplication,
+): FfsResult {
+  // The row-level engine already projected from these exact rates to this exact
+  // depth line over this exact horizon, so its record is the same calculation.
+  // Reusing it keeps the common case — a measured rate, screened as it was set
+  // up — to one bisection per feature rather than two.
+  const existing = nominal.remnantLife;
+  const alreadyResolved = growth.derived === null
+    && existing !== undefined
+    && existing.depthRateMmPerYear === growth.rateMmPerYear
+    && existing.lengthRateMmPerYear === length.rateMmPerYear
+    && existing.depthLimitPct === screening.depthRejectionPct
+    && existing.analysisHorizonYears === analysisHorizonYears(config);
+  if (alreadyResolved) return nominal;
+
+  const geometry = geometryOf(nominal);
+  const remnantLife = computeRemnantLife({
+    geometry,
+    method: config.method,
+    flowStressMode: config.modifiedSa,
+    basis: 'as-reported',
+    startDepthPct: nominal.maxDepthPct,
+    startLengthMm: nominal.length,
+    depthRateMmPerYear: growth.rateMmPerYear,
+    lengthRateMmPerYear: length.rateMmPerYear,
+    lengthRateAvailable: length.available,
+    horizonYears: analysisHorizonYears(config),
+    iliDate: config.iliDate,
+    service: config.serviceLife ?? EMPTY_SERVICE_LIFE,
+    depthLimitRatio: screening.depthRejectionPct / 100,
+  });
+
+  // The geometry at the governing limit, on the same rates. Recomputed rather
+  // than carried over, or the "at failure" columns would describe a projection
+  // the life figure beside them no longer comes from.
+  const atFailure = remnantLife.years === null ? null : evaluateB31g(
+    (nominal.maxDepthPct / 100) * nominal.wall + growth.rateMmPerYear * remnantLife.years,
+    Math.max(0.001, nominal.length + length.rateMmPerYear * remnantLife.years),
+    geometry,
+    config.method,
+    config.modifiedSa,
+  );
+  const round4 = (value: number) => (Number.isFinite(value) ? +value.toFixed(4) : value);
+
+  const growthEvidence = growth.derived === null || !nominal.growthEvidence
+    ? nominal.growthEvidence
+    : {
+      ...nominal.growthEvidence,
+      depth: withDerivedDepthRate(nominal.growthEvidence.depth, growth.derived),
+    };
+
+  return {
+    ...nominal,
+    growthEvidence,
+    remnantLife,
+    atFailure_ERF: atFailure ? round4(atFailure.erf) : null,
+    atFailure_depth: atFailure ? +atFailure.depthPct.toFixed(2) : null,
+    atFailure_Sf: atFailure ? +atFailure.failureStressMpa.toFixed(4) : null,
+  };
+}
+
 function derivePriority(
   nominal: FfsResult,
   conservative: FfsTier,
@@ -305,10 +430,24 @@ export function screenResults(
   config: FfsConfig,
   screening: FfsScreeningConfig,
 ): FfsScreenedResult[] {
-  return results.map((nominal, index) => {
-    const growthApplication = growthApplicationFor(nominal, screening);
+  // Built once over the whole population, before any feature is screened: the
+  // derived steps of the growth ladder read the rates their neighbours were
+  // measured at, and two features in the same section must not be handed two
+  // different "section rates".
+  const resolution = buildGrowthResolutionContext(results, config);
+
+  return results.map((original, index) => {
+    const growthApplication = growthApplicationFor(original, screening, resolution);
     const growth = growthApplication.rateMmPerYear;
-    const lengthApplication = lengthApplicationFor(nominal, screening);
+    const lengthApplication = lengthApplicationFor(original, screening);
+    // The as-reported remnant life is recomputed here rather than kept as the
+    // row-level engine left it. `processRow` sees one row and the column it
+    // carries; the growth basis, the explicit fallback and the derivation ladder
+    // are all decisions of this layer. Leaving the nominal figure behind meant
+    // the two remnant-life columns in the same table could be projected from two
+    // different rates — switching to the uniform basis moved one and not the
+    // other — which is the single most confusing thing a life column can do.
+    const nominal = withResolvedGrowth(original, config, screening, growthApplication, lengthApplication);
     const conservativeDepth = nominal.maxDepthPct + screening.depthTolerancePct;
     const conservativeLength = nominal.length + 2 * screening.lengthToleranceMm;
     const conservative = evaluateTier(
@@ -344,6 +483,19 @@ export function screenResults(
     );
     const clockHour = parseClockHour(nominal.orient);
 
+    // The Code disposition, alongside the B31G acceptance rather than instead of
+    // it. B31.4 para. 403.2.1 computes the design thickness from the pressure the
+    // area has to hold — the required assessment pressure this run was set up
+    // with — because that is the pressure para. 451.6.2.2(b) then compares the
+    // safe operating pressure against.
+    const b314DesignThickness = b314DesignThicknessMm({
+      internalDesignPressureMpa: nominal.p0,
+      outerDiameterMm: nominal.od,
+      smysMpa: nominal.smys,
+      designFactor: nominal.df,
+      weldJointFactor: config.weldJointFactor,
+    });
+
     return {
       key: nominal.featureId ?? `${nominal.section}|${nominal.ld}|${index}`,
       index,
@@ -360,6 +512,16 @@ export function screenResults(
       ),
       clockHour,
       bottomQuadrant: clockHour !== null && clockHour >= 4 && clockHour <= 8,
+      b314DesignThicknessMm: b314DesignThickness,
+      b314: b314Disposition({
+        depthRatioOfWall: nominal.maxDepthPct / 100,
+        wallThicknessMm: nominal.wall,
+        designThicknessMm: b314DesignThickness,
+        safeOperatingPressureMpa: nominal.safePressure,
+        maximumOperatingPressureMpa: nominal.p0,
+        yieldToTensileRatio: config.yieldToTensileRatio ?? null,
+        unusualLoading: config.unusualLoading === true,
+      }),
     };
   });
 }
@@ -501,6 +663,18 @@ export function findInteractions(
           : orientationAngleDeg < 45
             ? 'overall-length'
             : 'worst-longitudinal-section',
+        // The same two areas under the Code the line is operated to. B31.4 puts
+        // the axial trigger at a flat inch and the circumferential one at 6t of
+        // the *design* thickness, so on ordinary geometry it disagrees with the
+        // 3t screen above in both directions at once.
+        b314: b314Interaction({
+          axialSeparationMm: edgeGapMm,
+          circumferentialSeparationMm: circumferentialGapMm,
+          designThicknessMm: a.b314DesignThicknessMm,
+          wallThicknessMm: a.nominal.wall,
+          lengthAMm: a.nominal.length,
+          lengthBMm: b.nominal.length,
+        }),
       });
     }
   }
