@@ -103,19 +103,36 @@ export type FfsLifeStatus =
   | 'insufficient-growth-basis';
 
 /**
- * One design factor and the stretch of line it applies to.
+ * What one stretch of line is made of, and how it is assessed.
  *
- * A single line routinely carries more than one: buried line pipe at 0.72 and a
- * river crossing or riser at 0.60 is the ordinary case, not the exception, and
- * assessing the crossing at the line-pipe factor overstates its safe pressure.
+ * A single line routinely carries more than one of each of these. Buried line
+ * pipe at 0.72 with a river crossing or riser at 0.60 is the ordinary case, not
+ * the exception, and assessing the crossing at the line-pipe factor overstates
+ * its safe pressure. So is a line that leaves the station at 20 in and steps up
+ * to 24 in at a reducer: B31G's failure pressure carries D in the denominator
+ * and D·t in the Folias term, so assessing the 24 in run at the 20 in diameter
+ * is not a rounding difference — it moves the answer.
+ *
  * Sections come from the alignment sectioning that has already been reviewed,
- * so the engineer assigns a factor to a stretch they have already named rather
- * than typing distances again.
+ * so the engineer describes a stretch they have already named and bounded on
+ * girth welds rather than typing distances again.
  */
-export interface FfsSectionDesignFactor {
+export interface FfsSectionPipeSpec {
   /** Section name exactly as the alignment sectioning emitted it. */
   section: string;
   designFactor: number;
+  /**
+   * Outside diameter of the pipe in this section, in mm. Absent, null, or
+   * non-positive means the section is made of the line default pipe.
+   */
+  outerDiameterMm?: number | null;
+  /**
+   * Nominal wall for this section, in mm, used on the same terms as the line
+   * nominal wall: only where the run reported no wall for a feature. A section
+   * of a different diameter is almost always a different wall as well, and
+   * falling back to the line wall there would put the 20 in wall on 24 in pipe.
+   */
+  nominalWallThicknessMm?: number | null;
 }
 
 /**
@@ -123,6 +140,15 @@ export interface FfsSectionDesignFactor {
  * `row-supplied` is the manual workbook, where the engineer sets it per row.
  */
 export type FfsDesignFactorSource = 'section-override' | 'line-default' | 'row-supplied';
+
+/**
+ * Which rule produced the outside diameter a feature was assessed at.
+ *
+ * Deliberately the same three cases as `FfsDesignFactorSource`, and recorded on
+ * every feature for the same reason: on a line of more than one diameter, the
+ * D behind an ERF is a decision the report has to be able to show.
+ */
+export type FfsOuterDiameterSource = 'section-override' | 'line-default' | 'row-supplied';
 
 /**
  * Where the safety factor dividing the failure pressure came from.
@@ -290,6 +316,8 @@ export interface FfsInput {
   jointLengthM: number | null;
   /** Which rule supplied `df`. */
   designFactorSource: FfsDesignFactorSource;
+  /** Which rule supplied `od`. */
+  outerDiameterSource: FfsOuterDiameterSource;
   /** The divisor between failure pressure and safe pressure: P_S = P_F / SF. */
   safetyFactor: number;
   safetyFactorSource: FfsSafetyFactorSource;

@@ -55,6 +55,20 @@ function finite(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/**
+ * The largest usable value in a list, or 0 where the list holds none.
+ *
+ * Zero is the existing "no geometry" signal in this module, so it is returned
+ * rather than null — the callers already read it that way.
+ */
+function largestPositive(values: (number | null)[]): number {
+  let best = 0;
+  for (const value of values) {
+    if (value !== null && Number.isFinite(value) && value > best) best = value;
+  }
+  return best;
+}
+
 function calendarDate(date: Date): string {
   return [
     String(date.getFullYear()).padStart(4, '0'),
@@ -124,14 +138,33 @@ export function buildRbiAssessment(input: BuildRbiInput): RbiAssessment {
     extend(bucket, row.ldM ?? null);
   }
 
-  const geometry = {
-    outerDiameterMm: finite(screened[0]?.nominal.od) ?? 0,
-    operatingPressureMpa: finite(screened[0]?.nominal.p0) ?? 0,
+  /**
+   * The geometry consequence is scored on.
+   *
+   * Read per section, not off whichever feature happened to sort first. Release
+   * rate goes with the bore, so on a line that steps from 20 in to 24 in, using
+   * the first row's diameter for every section understates the consequence of
+   * every section made of the larger pipe. Within a section the largest
+   * diameter present governs, which is the conservative reading where a section
+   * straddles a reducer.
+   */
+  const lineGeometry = {
+    outerDiameterMm: largestPositive(screened.map((item) => finite(item.nominal.od))),
+    operatingPressureMpa: largestPositive(screened.map((item) => finite(item.nominal.p0))),
   };
+  const geometryOf = (bucket: Bucket) => ({
+    // A section holding only unassessed anomalies has no geometry of its own,
+    // so it falls back to the line's largest — never to zero, which would score
+    // it as though there were nothing to release.
+    outerDiameterMm: largestPositive(bucket.members.map((item) => finite(item.nominal.od)))
+      || lineGeometry.outerDiameterMm,
+    operatingPressureMpa: largestPositive(bucket.members.map((item) => finite(item.nominal.p0)))
+      || lineGeometry.operatingPressureMpa,
+  });
 
   const sections = [...buckets.values()]
     .filter((bucket) => bucket.members.length > 0 || bucket.unassessed > 0)
-    .map((bucket) => buildSection(bucket, record, geometry, assessmentDateIso))
+    .map((bucket) => buildSection(bucket, record, geometryOf(bucket), assessmentDateIso))
     .sort((left, right) => {
       const order: Record<RiskLevel, number> = { High: 0, 'Medium high': 1, Medium: 2, Low: 3 };
       return order[left.riskLevel] - order[right.riskLevel]

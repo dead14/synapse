@@ -1,12 +1,14 @@
 import type {
   FfsConfig,
   FfsDesignFactorSource,
+  FfsOuterDiameterSource,
   FfsSafetyFactorSource,
   FfsGrowthAnalysisBasis,
   FfsGrowthObservation,
   FfsScreenedResult,
 } from './types.ts';
 import type { B314Disposition } from './b314.ts';
+import type { FfsWallThicknessSource } from './alignmentImport.ts';
 
 export function pressureBasisLabel(config: FfsConfig): string {
   switch (config.pressureBasis) {
@@ -68,6 +70,32 @@ export function b314DispositionLabel(disposition: B314Disposition): string {
 export function designFactorSourceLabel(source: FfsDesignFactorSource): string {
   switch (source) {
     case 'section-override': return 'Section override';
+    case 'line-default': return 'Line default';
+    default: return 'Supplied per row';
+  }
+}
+
+/**
+ * Reads a wall provenance for the report, strongest evidence first.
+ *
+ * The two measured sources are named apart from the two typed ones. An
+ * inherited wall is the joint's own measurement — the pipetally rows — so it is
+ * not labelled as an assumption, but it is not labelled as a reading taken at
+ * the defect either.
+ */
+export function wallThicknessSourceLabel(source: FfsWallThicknessSource | undefined): string {
+  switch (source) {
+    case 'run-reported': return 'Reported at the feature';
+    case 'joint-inherited': return 'Read off the joint girth welds';
+    case 'section-nominal': return 'Section nominal wall';
+    case 'line-nominal': return 'Line nominal wall';
+    default: return 'Not recorded';
+  }
+}
+
+export function outerDiameterSourceLabel(source: FfsOuterDiameterSource): string {
+  switch (source) {
+    case 'section-override': return 'Section pipe spec';
     case 'line-default': return 'Line default';
     default: return 'Supplied per row';
   }

@@ -5,17 +5,23 @@ import type {
   FfsGrowthComponentEvidence,
   FfsGrowthEvidence,
   FfsGrowthObservation,
-  FfsSectionDesignFactor,
+  FfsOuterDiameterSource,
+  FfsSectionPipeSpec,
 } from './types.ts';
 import { maxOf, minOf } from '../../utils/numericRange.ts';
 
 export interface AlignmentEngineeringInputs {
+  /** Applied to any section without its own diameter. */
   outerDiameterMm: number;
   smysMpa: number;
   /** Applied to any section without its own override. */
   designFactor: number;
-  /** Per-section overrides, keyed by the section name the alignment emitted. */
-  sectionDesignFactors?: FfsSectionDesignFactor[];
+  /**
+   * Per-section pipe spec, keyed by the section name the alignment emitted.
+   * Carries the design factor, and the diameter and nominal wall where the
+   * stretch is not made of the line default pipe.
+   */
+  sectionPipeSpecs?: FfsSectionPipeSpec[];
   /**
    * The ratio B31G para. 1.9 asks for — minimum hydrostatic test pressure over
    * MAOP or MOP. Null means derive it from the design factor as 1/F, which is
@@ -38,25 +44,85 @@ export interface AlignmentEngineeringInputs {
 }
 
 /**
+ * The pipe spec an engineer entered against a named stretch, if any.
+ *
+ * Matching is on the reviewed section name and is case- and whitespace-
+ * insensitive, because the same crossing is written "RC#86" in one run and
+ * "RC #86" in another often enough to matter.
+ */
+function sectionSpecFor(
+  section: string,
+  specs: readonly FfsSectionPipeSpec[] | undefined,
+): FfsSectionPipeSpec | undefined {
+  const key = normalizedSectionKey(section);
+  if (!key) return undefined;
+  return specs?.find((rule) => normalizedSectionKey(rule.section) === key);
+}
+
+/** A positive, finite override value, or null where the entry supplies none. */
+function positiveOverride(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
  * Resolves the design factor for one feature.
  *
  * A line is not uniform: line pipe at 0.72 with a river crossing or riser at
- * 0.60 is the ordinary case. Matching is on the reviewed section name and is
- * case- and whitespace-insensitive, because the same crossing is written
- * "RC#86" in one run and "RC #86" in another often enough to matter.
+ * 0.60 is the ordinary case.
  */
 export function resolveDesignFactor(
   section: string,
   engineering: AlignmentEngineeringInputs,
 ): { designFactor: number; source: FfsDesignFactorSource } {
-  const key = normalizedSectionKey(section);
-  const override = key
-    ? engineering.sectionDesignFactors?.find((rule) => normalizedSectionKey(rule.section) === key)
-    : undefined;
+  const override = sectionSpecFor(section, engineering.sectionPipeSpecs);
   if (override && Number.isFinite(override.designFactor) && override.designFactor > 0) {
     return { designFactor: override.designFactor, source: 'section-override' };
   }
   return { designFactor: engineering.designFactor, source: 'line-default' };
+}
+
+/**
+ * Resolves the outside diameter for one feature.
+ *
+ * A line that steps from 20 in to 24 in at a reducer is one line with two
+ * diameters, and B31G has no line-level D to fall back on: the failure pressure
+ * is 2·S_f·t/D and the Folias term normalises length on D·t, so the diameter
+ * belongs to the stretch the feature sits in, not to the assessment. Absent a
+ * section value the line default stands, which is every single-diameter line
+ * and needs no entry at all.
+ */
+export function resolveOuterDiameter(
+  section: string,
+  engineering: AlignmentEngineeringInputs,
+): { outerDiameterMm: number; source: FfsOuterDiameterSource } {
+  const override = positiveOverride(
+    sectionSpecFor(section, engineering.sectionPipeSpecs)?.outerDiameterMm,
+  );
+  if (override !== null) return { outerDiameterMm: override, source: 'section-override' };
+  return { outerDiameterMm: engineering.outerDiameterMm, source: 'line-default' };
+}
+
+/**
+ * The nominal wall to fall back on for one feature, where the run reported none.
+ *
+ * A section carrying its own diameter almost always carries its own wall, and
+ * standing the line nominal wall up against 24 in pipe because the line is
+ * mostly 20 in is exactly the mistake the per-section spec exists to prevent.
+ * Null where neither the section nor the line supplied one — the feature is
+ * then rejected for want of a wall, as it was before.
+ */
+export function resolveNominalWall(
+  section: string,
+  fallback: NominalWallFallback | null,
+): { wallMm: number | null; source: FfsWallThicknessSource } {
+  const override = positiveOverride(
+    sectionSpecFor(section, fallback?.sectionPipeSpecs)?.nominalWallThicknessMm,
+  );
+  if (override !== null) return { wallMm: override, source: 'section-nominal' };
+  return {
+    wallMm: positiveOverride(fallback?.lineNominalWallMm),
+    source: 'line-nominal',
+  };
 }
 
 export function normalizedSectionKey(section: string): string {
@@ -74,12 +140,51 @@ export interface AlignmentImportProvenance {
   section: string;
   designFactor: number;
   designFactorSource: FfsDesignFactorSource;
+  /** The diameter this feature was assessed at, and which rule supplied it. */
+  outerDiameterMm: number;
+  outerDiameterSource: FfsOuterDiameterSource;
   isClusteredMetalLoss: boolean;
   /** Where the wall thickness the assessment used came from. */
   wallThicknessSource: FfsWallThicknessSource;
 }
 
-export type FfsWallThicknessSource = 'run-reported' | 'line-nominal';
+/**
+ * Where the wall the assessment used came from, strongest evidence first.
+ *
+ * `joint-inherited` is a thickness the alignment engine read off the girth
+ * welds bounding this feature's joint — the pipetally rows. It is a measurement
+ * of the same piece of pipe, not an assumption, so it is never a blocker; but
+ * it was taken at the weld rather than at the defect, and the report says which.
+ *
+ * `section-nominal` is the wall entered against this stretch in the pipe spec
+ * table; `line-nominal` is the one entered for the line as a whole. Those two
+ * are kept apart because on a line of more than one diameter they are different
+ * pipe, and a feature that used one should not read as having used the other.
+ */
+export type FfsWallThicknessSource =
+  | 'run-reported'
+  | 'joint-inherited'
+  | 'section-nominal'
+  | 'line-nominal';
+
+/** True for the two typed fallbacks, as opposed to either measured source. */
+export function isNominalWallSource(source: FfsWallThicknessSource): boolean {
+  return source === 'section-nominal' || source === 'line-nominal';
+}
+
+/**
+ * The wall-thickness provenance the alignment engine wrote on the NEW side.
+ *
+ * `gw_joint` means the engine filled a blank from the bounding girth welds —
+ * see `wall_thickness_inheritance.py`, switched on by the `wall_thickness_source`
+ * tolerance. Anything else, including the `-` an unmatched side carries, is the
+ * value exactly as the tool reported it.
+ */
+function reportedWallSourceOf(source: ComparisonRow): FfsWallThicknessSource {
+  return text(source['Wall WT Source NEW'], '').trim().toLowerCase() === 'gw_joint'
+    ? 'joint-inherited'
+    : 'run-reported';
+}
 
 /**
  * How much of the run an assessment covers.
@@ -411,17 +516,17 @@ type MeasuredReading = MeasuredGeometry | string;
  */
 function readMeasuredGeometry(
   source: ComparisonRow,
-  nominalWallThicknessMm: number | null,
+  nominalWall: { wallMm: number | null; source: FfsWallThicknessSource },
 ): MeasuredReading {
   const distance = finiteNumber(source['Log Dist NEW (m)']);
   const depth = finiteNumber(source['Depth NEW (%WT)']);
   const length = finiteNumber(source['Length NEW (mm)']);
   const width = finiteNumber(source['Width NEW (mm)']);
   const reportedWall = finiteNumber(source['Wall WT NEW (mm)']);
-  const fallbackWall = nominalWallThicknessMm !== null
-    && Number.isFinite(nominalWallThicknessMm)
-    && nominalWallThicknessMm > 0
-    ? nominalWallThicknessMm
+  const fallbackWall = nominalWall.wallMm !== null
+    && Number.isFinite(nominalWall.wallMm)
+    && nominalWall.wallMm > 0
+    ? nominalWall.wallMm
     : null;
   const wall = reportedWall ?? fallbackWall;
 
@@ -456,7 +561,7 @@ function readMeasuredGeometry(
     // carried as "not reported" rather than as a zero-width defect.
     width: width !== null && (width as number) > 0 ? (width as number) : 0,
     wall: wall as number,
-    wallSource: reportedWall === null ? 'line-nominal' : 'run-reported',
+    wallSource: reportedWall === null ? nominalWall.source : reportedWallSourceOf(source),
   };
 }
 
@@ -492,8 +597,22 @@ export interface ReleasedIntakeSummary {
   excludedByIntervention: number;
   assessable: number;
   blockers: ReleasedIntakeBlocker[];
-  /** Assessable features that will use the line nominal wall, not a measured one. */
+  /** Assessable features that will use a nominal wall, not a measured one. */
   usingNominalWall: number;
+}
+
+/**
+ * The nominal wall the preview should fall back on, resolved the way the import
+ * will resolve it — the section's own wall first, then the line's.
+ *
+ * The setup screen and the import have to answer from one rule. When they did
+ * not, the screen said a session was ready and the run then refused every
+ * feature in it.
+ */
+export interface NominalWallFallback {
+  /** Applied to any section that carries no wall of its own. */
+  lineNominalWallMm: number | null;
+  sectionPipeSpecs?: FfsSectionPipeSpec[];
 }
 
 /**
@@ -503,7 +622,7 @@ export interface ReleasedIntakeSummary {
 export function summariseReleasedIntake(
   comparison: readonly ComparisonRow[],
   selection: AlignmentSelection,
-  nominalWallThicknessMm: number | null = null,
+  nominalWall: NominalWallFallback | null = null,
 ): ReleasedIntakeSummary {
   const selectedKeys = selection?.selectedKeys instanceof Set ? selection.selectedKeys : new Set<string>();
   const scope: FfsIntakeScope = selection?.scope ?? 'released';
@@ -525,10 +644,16 @@ export function summariseReleasedIntake(
     }
     if (!isInScope(source, { ...selection, selectedKeys, scope })) continue;
     seen.add(sourceFeatureKey);
-    const reading = readMeasuredGeometry(source, nominalWallThicknessMm);
+    // Resolved per section, because a section carrying its own wall makes rows
+    // assessable that the line wall alone would not — and the preview has to
+    // count what the import will actually accept.
+    const section = text(source['Section NEW'], text(source.Section));
+    const reading = readMeasuredGeometry(source, resolveNominalWall(section, nominalWall));
     if (typeof reading !== 'string') {
       assessable += 1;
-      if (reading.wallSource === 'line-nominal') usingNominalWall += 1;
+      // A joint-inherited wall is a measurement of the same pipe, so it is not
+      // counted here. Only the two values an engineer typed are.
+      if (isNominalWallSource(reading.wallSource)) usingNominalWall += 1;
       continue;
     }
     let blocker = blockers.get(reading);
@@ -892,10 +1017,38 @@ function assertEngineeringInputs(inputs: AlignmentEngineeringInputs): void {
       throw new Error('Safety factor must be greater than zero.');
     }
   }
-  for (const rule of inputs.sectionDesignFactors ?? []) {
+  for (const rule of inputs.sectionPipeSpecs ?? []) {
     if (!Number.isFinite(rule.designFactor) || rule.designFactor <= 0 || rule.designFactor > 1) {
       throw new Error(
         `Design factor for section "${rule.section}" must be greater than 0 and not more than 1.`,
+      );
+    }
+    // Absent is the ordinary case — it means "made of the line default pipe".
+    // Present and unusable is not, and must not fall through to the line value
+    // as though the engineer had said nothing.
+    if (rule.outerDiameterMm !== null && rule.outerDiameterMm !== undefined) {
+      if (!Number.isFinite(rule.outerDiameterMm) || rule.outerDiameterMm < 50) {
+        throw new Error(
+          `Outer diameter for section "${rule.section}" must be at least 50 mm, or left empty.`,
+        );
+      }
+    }
+    if (rule.nominalWallThicknessMm !== null && rule.nominalWallThicknessMm !== undefined) {
+      if (!Number.isFinite(rule.nominalWallThicknessMm) || rule.nominalWallThicknessMm <= 0) {
+        throw new Error(
+          `Nominal wall thickness for section "${rule.section}" must be greater than 0 mm, or left empty.`,
+        );
+      }
+    }
+    const od = positiveOverride(rule.outerDiameterMm) ?? inputs.outerDiameterMm;
+    const wall = positiveOverride(rule.nominalWallThicknessMm);
+    // A wall of half the diameter or more is not thin-wall pipe, and B31G's
+    // failure pressure is derived for thin wall. Caught here rather than as a
+    // NaN in the Folias term forty rows into the results table.
+    if (wall !== null && od <= 2 * wall) {
+      throw new Error(
+        `Section "${rule.section}" has a nominal wall of ${wall} mm on a ${od} mm outer diameter, `
+        + 'which leaves no bore. Check the two figures against each other.',
       );
     }
   }
@@ -926,7 +1079,10 @@ export function mapAlignmentRowsToFfs(
     noNewFeature: 0, notReleased: 0, notMetalLoss: 0, excluded: 0,
   };
   const scope: FfsIntakeScope = selection.scope ?? 'released';
-  const nominalWall = engineering.nominalWallThicknessMm ?? null;
+  const nominalWall: NominalWallFallback = {
+    lineNominalWallMm: engineering.nominalWallThicknessMm ?? null,
+    sectionPipeSpecs: engineering.sectionPipeSpecs,
+  };
 
   for (const source of comparison) {
     const sourceFeatureKey = text(source['Source Key NEW'], '');
@@ -952,7 +1108,10 @@ export function mapAlignmentRowsToFfs(
       continue;
     }
 
-    const reading = readMeasuredGeometry(source, nominalWall);
+    // Read before the geometry, because the pipe a feature sits in decides both
+    // the diameter it is assessed at and the wall it falls back on.
+    const section = text(source['Section NEW'], text(source.Section));
+    const reading = readMeasuredGeometry(source, resolveNominalWall(section, nominalWall));
     if (typeof reading === 'string') {
       rejected.push({
         featureId,
@@ -966,10 +1125,20 @@ export function mapAlignmentRowsToFfs(
     const { distance, depth, length, width, wall, wallSource } = reading;
 
     const warnings: string[] = [];
-    if (wallSource === 'line-nominal') {
+    if (isNominalWallSource(wallSource)) {
       warnings.push(
-        `The run reported no wall thickness for this feature; the line nominal wall of ${numericText(wall)} mm `
+        'The run reported no wall thickness for this feature; the '
+        + `${wallSource === 'section-nominal' ? 'section' : 'line'} nominal wall of ${numericText(wall)} mm `
         + 'was used, and both the depth in millimetres and the failure pressure follow from it.',
+      );
+    } else if (wallSource === 'joint-inherited') {
+      // Disclosed, but deliberately not phrased as a shortfall: a joint is one
+      // piece of pipe rolled to one thickness, so the bounding welds measure the
+      // metal this defect is in. The engineer still gets to see that the figure
+      // was taken at the weld rather than at the defect.
+      warnings.push(
+        `The run reported no wall thickness at this feature; ${numericText(wall)} mm was read off the girth `
+        + 'welds bounding its joint, which are the same piece of pipe.',
       );
     }
     if (width === 0) {
@@ -998,8 +1167,14 @@ export function mapAlignmentRowsToFfs(
     // the evidence record is what downstream consumers read to decide whether
     // this zero is a measurement or the absence of one.
     const lengthGrowthMm = growthEvidence.length.analysisRateMmPerYear ?? 0;
-    const section = text(source['Section NEW'], text(source.Section));
     const { designFactor, source: designFactorSource } = resolveDesignFactor(section, engineering);
+    const {
+      outerDiameterMm, source: outerDiameterSource,
+    } = resolveOuterDiameter(section, engineering);
+    // A section diameter raises no warning, for the same reason a section design
+    // factor does not: it is an input the engineer entered deliberately, not a
+    // caveat on the result. It is recorded on the row and in the provenance, and
+    // the section sheet of the report states it.
     const explicitSafetyFactor = engineering.safetyFactor ?? null;
     if (isClusteredMetalLoss) {
       warnings.push(
@@ -1025,7 +1200,8 @@ export function mapAlignmentRowsToFfs(
         // Left blank when derived, so the engine records which of the two the
         // figure is rather than presenting a derived value as a measured ratio.
         'Safety Factor': explicitSafetyFactor === null ? '' : numericText(explicitSafetyFactor),
-        'Outer Diameter Ds': numericText(engineering.outerDiameterMm),
+        'Outer Diameter Ds': numericText(outerDiameterMm),
+        'Outer Diameter Source': outerDiameterSource,
         'SMYS [MPa]': numericText(engineering.smysMpa),
         'Operating Pressure P₀ [MPa]': numericText(engineering.operatingPressureMpa),
         'Clustered Metal Loss': isClusteredMetalLoss ? 'Yes' : 'No',
@@ -1050,6 +1226,8 @@ export function mapAlignmentRowsToFfs(
         section,
         designFactor,
         designFactorSource,
+        outerDiameterMm,
+        outerDiameterSource,
         isClusteredMetalLoss,
         wallThicknessSource: wallSource,
       },

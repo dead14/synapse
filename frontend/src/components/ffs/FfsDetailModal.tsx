@@ -13,6 +13,7 @@ import {
   growthAnalysisBasisLabel,
   growthObservationLabel,
   designFactorSourceLabel,
+  outerDiameterSourceLabel,
   b314DispositionLabel,
   methodProfileLabel,
   pressureBasisLabel,
@@ -447,8 +448,8 @@ export default function FfsDetailModal({
                 symbolTex="D_{\mathrm{s}}"
                 value={n.od.toFixed(1)}
                 unit="mm"
-                description="Nominal"
-                basis="Nominal outside diameter. Used for both the normalised length and the Barlow relation, which is why the two are consistent."
+                description={outerDiameterSourceLabel(n.outerDiameterSource)}
+                basis="Nominal outside diameter of the pipe this feature sits in — a line of more than one diameter carries one per section. Used for both the normalised length and the Barlow relation, which is why the two are consistent."
                 showWorking={showWorking}
               />
               <InputCard

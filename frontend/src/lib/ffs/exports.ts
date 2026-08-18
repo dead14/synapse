@@ -9,11 +9,13 @@ import type {
   RejectedAlignmentRow,
 } from './alignmentImport.ts';
 import { analysisHorizonYears, formatRemnantLife, remnantLimitLabel } from './lifeProjection.ts';
-import { buildSectionDesignFactorSummary, buildSectionGrowthSummary } from './sectionSummary.ts';
+import { buildSectionPipeSpecSummary, buildSectionGrowthSummary } from './sectionSummary.ts';
 import { designLifeUsage, EMPTY_SERVICE_LIFE } from './remnantLife.ts';
 import {
   b314DispositionLabel,
   designFactorSourceLabel,
+  outerDiameterSourceLabel,
+  wallThicknessSourceLabel,
   engineeringDisposition,
   safetyFactorSourceLabel,
   growthAnalysisBasisLabel,
@@ -197,7 +199,7 @@ export function buildResultsWorkbook(
 
   const header = [
     'Feature ID', 'LD [m]', 'Section', 'Surface', 'Orientation', 'Max depth [%]', 'Length [mm]', 'Width [mm]',
-    'Wall [mm]', 'OD [mm]', 'SMYS [MPa]', 'Design factor', 'Design factor source',
+    'Wall [mm]', 'OD [mm]', 'OD source', 'SMYS [MPa]', 'Design factor', 'Design factor source',
     'Safety factor', 'Safety factor source', 'P0 [MPa]',
     'Clustered metal loss',
     'CR depth used [mm/y]', 'Depth growth observation', 'Depth analysis basis',
@@ -222,7 +224,8 @@ export function buildResultsWorkbook(
     const life = n.remnantLife;
     return [
       n.featureId ?? '', n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2), reportedWidth(n.width),
-      num(n.wall, 2), num(n.od, 2), num(n.smys, 2), num(n.df, 4), designFactorSourceLabel(n.designFactorSource),
+      num(n.wall, 2), num(n.od, 2), outerDiameterSourceLabel(n.outerDiameterSource),
+      num(n.smys, 2), num(n.df, 4), designFactorSourceLabel(n.designFactorSource),
       num(n.safetyFactor, 4), safetyFactorSourceLabel(n.safetyFactorSource),
       num(n.p0, 4),
       n.isClusteredMetalLoss ? 'Yes' : 'No',
@@ -286,14 +289,17 @@ export function buildResultsWorkbook(
   repairSheet['!freeze'] = { xSplit: 0, ySplit: 1 };
   XLSX.utils.book_append_sheet(workbook, repairSheet, 'Repair register');
 
-  // Section roll-ups: the design factor each stretch was assessed with, and the
-  // growth that stretch is actually experiencing. Both are read section-first in
-  // a report, so they get a sheet rather than being buried in the row export.
+  // Section roll-ups: the pipe each stretch is made of and the factors it was
+  // assessed with, and the growth that stretch is actually experiencing. Both
+  // are read section-first in a report, so they get a sheet rather than being
+  // buried in the row export.
   const designFactorHeader = [
-    'Section', 'From [m]', 'To [m]', 'Features', 'Design factor', 'Source', 'Safety factor',
+    'Section', 'From [m]', 'To [m]', 'Features', 'OD [mm]', 'OD source',
+    'Design factor', 'Source', 'Safety factor',
   ];
-  const designFactorRows = buildSectionDesignFactorSummary(items).map((row) => [
+  const designFactorRows = buildSectionPipeSpecSummary(items).map((row) => [
     row.section, num(row.startLd, 3), num(row.endLd, 3), row.featureCount,
+    num(row.outerDiameterMm, 2), outerDiameterSourceLabel(row.outerDiameterSource),
     num(row.designFactor, 4), designFactorSourceLabel(row.source), num(row.safetyFactor, 4),
   ]);
 
@@ -315,7 +321,7 @@ export function buildResultsWorkbook(
 
   const usage = designLifeUsage(config.serviceLife ?? EMPTY_SERVICE_LIFE, config.iliDate);
   const sectionSheet = XLSX.utils.aoa_to_sheet([
-    ['Design factor by section'],
+    ['Pipe spec by section'],
     designFactorHeader,
     ...designFactorRows,
     [],
@@ -361,7 +367,8 @@ export function buildResultsWorkbook(
     const sourceHeader = [
       'Feature ID', 'Alignment source key', 'Alignment session', 'Selection reason',
       'LD [m]', 'Section', 'Surface', 'Orientation', 'Max depth [%WT]', 'Length [mm]',
-      'Width [mm]', 'Nominal wall thickness [mm]', 'CR depth used [mm/y]', 'CR length used [mm/y]',
+      'Width [mm]', 'Nominal wall thickness [mm]', 'Wall source',
+      'CR depth used [mm/y]', 'CR length used [mm/y]',
       'OLD survey year', 'NEW survey year', 'Interval [years]', 'Depth growth observation',
       'Depth analysis basis', 'Raw depth growth [mm/y]', 'Depth growth formula', 'Depth growth note',
     ];
@@ -372,7 +379,8 @@ export function buildResultsWorkbook(
         record?.featureId ?? '', record?.sourceFeatureKey ?? '', record?.alignmentSessionId ?? '',
         record?.selectionReason ?? '',
         n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2),
-        reportedWidth(n.width), num(n.wall, 2), num(n.crDepth, 4), num(n.crLength, 4),
+        reportedWidth(n.width), num(n.wall, 2), wallThicknessSourceLabel(record?.wallThicknessSource),
+        num(n.crDepth, 4), num(n.crLength, 4),
         record?.growthEvidence.oldSurveyYear ?? '', record?.growthEvidence.newSurveyYear ?? '',
         record?.growthEvidence.intervalYears ?? '',
         growthObservationLabel(record?.growthEvidence.depth.observation),

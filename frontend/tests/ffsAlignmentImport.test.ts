@@ -63,6 +63,7 @@ test('maps the NEW-run alignment anomaly and converts depth growth from %WT/year
     'Design Factor Source': 'line-default',
     'Safety Factor': '',
     'Outer Diameter Ds': '508',
+    'Outer Diameter Source': 'line-default',
     'SMYS [MPa]': '359',
     'Operating Pressure P₀ [MPa]': '7.2',
     'Clustered Metal Loss': 'No',
@@ -85,6 +86,8 @@ test('maps the NEW-run alignment anomaly and converts depth growth from %WT/year
     section: 'KP 0-5',
     designFactor: 0.72,
     designFactorSource: 'line-default',
+    outerDiameterMm: 508,
+    outerDiameterSource: 'line-default',
     isClusteredMetalLoss: false,
     wallThicknessSource: 'run-reported',
     growthEvidence: {
@@ -373,7 +376,7 @@ test('the intake summary counts what a release can assess, and why the rest cann
     examples: ['A-2', 'A-3'],
   }]);
 
-  const withNominalWall = summariseReleasedIntake(rows, selection, 9.5);
+  const withNominalWall = summariseReleasedIntake(rows, selection, { lineNominalWallMm: 9.5 });
   assert.equal(withNominalWall.assessable, 3);
   assert.equal(withNominalWall.usingNominalWall, 2);
   assert.deepEqual(withNominalWall.blockers, []);
