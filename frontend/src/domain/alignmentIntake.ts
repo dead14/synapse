@@ -144,6 +144,30 @@ export function buildPersistedIliRun(
   };
 }
 
+export interface IngestionFileProgress {
+  name: string;
+  /** Server-reported completion of that one file, 0-100. */
+  percent: number;
+}
+
+/**
+ * One line describing an intake that imports every selected run at once.
+ *
+ * The uploader used to write a label per file from whichever status poll
+ * answered last, so a two-run intake showed "Processing <first file>: 100%"
+ * while the second run was still at 20 % — an import that looks finished and
+ * hung at the same time. The figure reported here covers the whole intake, and
+ * names how many runs are already in.
+ */
+export function describeIngestionProgress(files: IngestionFileProgress[]): string {
+  if (files.length === 0) return '';
+  const measured = files.map((file) => (Number.isFinite(file.percent) ? file.percent : 0));
+  const overall = Math.floor(measured.reduce((sum, percent) => sum + percent, 0) / files.length);
+  if (files.length === 1) return `Processing ${files[0].name}: ${overall}%`;
+  const imported = measured.filter((percent) => percent >= 100).length;
+  return `Processing ${files.length} runs: ${overall}% (${imported} of ${files.length} imported)`;
+}
+
 export async function ingestPersistedInspectionRunPair<TFile>({
   datasets,
   masterIndex,

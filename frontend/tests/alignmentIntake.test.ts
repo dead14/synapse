@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildPersistedIliRun,
+  describeIngestionProgress,
   ingestPersistedInspectionRunPair,
 } from '../src/domain/alignmentIntake.ts';
 
@@ -186,4 +187,34 @@ test('starts every selected run ingestion before waiting for the first completio
     releaseFirst?.();
     await pairPromise;
   }
+});
+
+test('reports one figure for the whole intake while runs import concurrently', () => {
+  // The case that made a working import look hung: the first run is in, the
+  // second is a fifth of the way through, and the old per-file label showed
+  // whichever poll answered last — routinely the finished one, at 100 %.
+  assert.equal(
+    describeIngestionProgress([
+      { name: 'HU_CPA_2012.xlsx', percent: 100 },
+      { name: 'HU_CPA_2026.xlsx', percent: 20 },
+    ]),
+    'Processing 2 runs: 60% (1 of 2 imported)',
+  );
+
+  assert.equal(
+    describeIngestionProgress([{ name: 'HU_CPA_2026.xlsx', percent: 45 }]),
+    'Processing HU_CPA_2026.xlsx: 45%',
+  );
+
+  assert.equal(describeIngestionProgress([]), '');
+});
+
+test('counts an intake as complete only once every run has been imported', () => {
+  assert.equal(
+    describeIngestionProgress([
+      { name: 'a.xlsx', percent: 100 },
+      { name: 'b.xlsx', percent: 100 },
+    ]),
+    'Processing 2 runs: 100% (2 of 2 imported)',
+  );
 });

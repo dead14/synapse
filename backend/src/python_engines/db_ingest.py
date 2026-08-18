@@ -51,6 +51,7 @@ NUMERIC_FIELDS = {
 FLOAT_FIELDS = NUMERIC_FIELDS - {"joint_number"}
 INSERT_BATCH_SIZE = 5_000
 TRAILING_EMPTY_ROW_LIMIT = 256
+NO_ILI_HEADER_MESSAGE = "No worksheet contains a recognisable ILI header row."
 XLSX_MAGIC = b"PK"
 LEGACY_XLS_MAGIC = bytes.fromhex("D0CF11E0")
 PARSER_VERSION = "agnostic-ili-parser-2026.07"
@@ -225,7 +226,93 @@ def _unique_headers(header_row):
     return headers
 
 
-def _load_xlsx_table(file_path, synonym_lookup, preview_rows):
+def _tabulate_sheet(rows, synonym_lookup, preview_rows):
+    """Turn one worksheet's rows into a frame, or None when it holds no header.
+
+    Shared by both readers below so the fast path and the fallback cannot drift
+    apart on what counts as a header row, a blank row, or a short row.
+    """
+    preview = rows[:preview_rows]
+    if not preview:
+        return None
+    try:
+        header_index, matched_fields = detect_header_row(
+            pd.DataFrame(preview),
+            synonym_lookup,
+            preview_rows,
+        )
+    except ValueError:
+        return None
+
+    headers = _unique_headers(rows[header_index])
+    width = len(headers)
+    data_rows = []
+    trailing_empty_rows = 0
+
+    for row in rows[header_index + 1:]:
+        values = tuple(row[:width])
+        if _row_has_value(values):
+            trailing_empty_rows = 0
+            # A row whose trailing cells were never written arrives short, and
+            # pandas rejects a ragged list outright — one such row aborted the
+            # whole ingestion. Rows are padded to the header width instead,
+            # which is what the missing cells mean.
+            data_rows.append(
+                values if len(values) == width else values + (None,) * (width - len(values))
+            )
+        else:
+            trailing_empty_rows += 1
+            if trailing_empty_rows >= TRAILING_EMPTY_ROW_LIMIT:
+                break
+
+    return matched_fields, pd.DataFrame(data_rows, columns=headers), header_index
+
+
+def _calamine_cell(value):
+    """Translate one calamine value into what openpyxl would have returned.
+
+    Two differences matter downstream. An unset cell arrives as "" rather than
+    None, and the importer reads None — ``dropna``, ``combine_first`` and the
+    blank-row audit all change meaning against an empty string. A whole number
+    arrives as float, so a vendor's integer feature number would reach a text
+    column as "7001.0".
+    """
+    if value == "":
+        return None
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _read_sheets_calamine(file_path):
+    """Yield each worksheet's rows using the Rust reader, or None when absent.
+
+    openpyxl spends most of an ILI import inside its own XML layer: on a
+    120k-row workbook it costs about 17 s where calamine costs under 2 s, and
+    that single stage was three quarters of the wall clock an operator waits
+    through on the intake screen. The dependency is optional so an environment
+    that has not installed it yet still imports, only slowly.
+    """
+    try:
+        from python_calamine import CalamineWorkbook
+    except ImportError:
+        return None
+
+    workbook = CalamineWorkbook.from_path(str(file_path))
+
+    def sheets():
+        for sheet_name in workbook.sheet_names:
+            sheet = workbook.get_sheet_by_name(sheet_name)
+            # skip_empty_area=False keeps leading blank rows, so a header sits
+            # at the same index openpyxl would report it at.
+            rows = sheet.to_python(skip_empty_area=False)
+            yield [tuple(_calamine_cell(cell) for cell in row) for row in rows]
+
+    return sheets()
+
+
+def _read_sheets_openpyxl(file_path):
+    """Yield each worksheet's rows with openpyxl, one sheet at a time."""
     source = Path(file_path).open("rb")
     try:
         workbook = load_workbook(
@@ -237,63 +324,60 @@ def _load_xlsx_table(file_path, synonym_lookup, preview_rows):
     except Exception:
         source.close()
         raise
-
     try:
-        selected = None
         for worksheet in workbook.worksheets:
-            preview = []
-            row_iterator = worksheet.iter_rows(values_only=True)
-            for _ in range(preview_rows):
-                try:
-                    preview.append(tuple(next(row_iterator)))
-                except StopIteration:
-                    break
-            if not preview:
-                continue
-            try:
-                header_index, matched_fields = detect_header_row(
-                    pd.DataFrame(preview),
-                    synonym_lookup,
-                    preview_rows,
-                )
-            except ValueError:
-                continue
-            if selected is None or matched_fields > selected[3]:
-                selected = (worksheet, preview, header_index, matched_fields)
-
-        if selected is None:
-            raise ValueError("No worksheet contains a recognisable ILI header row.")
-
-        worksheet, preview, header_index, matched_fields = selected
-        headers = _unique_headers(preview[header_index])
-        data_rows = []
-        trailing_empty_rows = 0
-
-        for row_index, row in enumerate(worksheet.iter_rows(values_only=True)):
-            if row_index <= header_index:
-                continue
-            values = tuple(row[: len(headers)])
-            if _row_has_value(values):
-                trailing_empty_rows = 0
-                data_rows.append(values)
-            else:
-                trailing_empty_rows += 1
-                if trailing_empty_rows >= TRAILING_EMPTY_ROW_LIMIT:
-                    break
-
-        # openpyxl's read-only iterator can yield a short tuple for a row whose
-        # trailing cells were never written, and pandas rejects a ragged list
-        # outright — one such row aborted the whole ingestion. Rows are padded
-        # to the header width instead, which is what the missing cells mean.
-        width = len(headers)
-        data_rows = [
-            row if len(row) == width else tuple(row) + (None,) * (width - len(row))
-            for row in data_rows
-        ]
-        return pd.DataFrame(data_rows, columns=headers), header_index, matched_fields
+            yield [tuple(row) for row in worksheet.iter_rows(values_only=True)]
     finally:
         workbook.close()
         source.close()
+
+
+def _select_ili_sheet(sheets, synonym_lookup, preview_rows):
+    selected = None
+    for rows in sheets:
+        tabulated = _tabulate_sheet(rows, synonym_lookup, preview_rows)
+        if tabulated is None:
+            continue
+        # Only the best sheet is retained; the rest are released as we go, so a
+        # multi-sheet workbook costs one sheet of memory rather than all of them.
+        if selected is None or tabulated[0] > selected[0]:
+            selected = tabulated
+
+    if selected is None:
+        raise ValueError(NO_ILI_HEADER_MESSAGE)
+
+    matched_fields, frame, header_index = selected
+    return frame, header_index, matched_fields
+
+
+def _load_xlsx_table(file_path, synonym_lookup, preview_rows):
+    sheets = _read_sheets_calamine(file_path)
+    if sheets is not None:
+        try:
+            return _select_ili_sheet(sheets, synonym_lookup, preview_rows)
+        except ValueError:
+            # The workbook was read and holds no ILI header. openpyxl reads the
+            # same cells, so retrying only doubles the wait before the operator
+            # sees the same message.
+            raise
+        except Exception as error:
+            # A workbook the fast reader cannot decode must still import. The
+            # fallback is the reader every file was accepted by until now, so
+            # the file is retried rather than rejected — recorded on stderr so
+            # a file that keeps needing the slow path can be found.
+            print(
+                json.dumps({
+                    "event": "xlsx_fast_reader_fallback",
+                    "file": Path(file_path).name,
+                    "error": f"{type(error).__name__}: {error}",
+                }),
+                file=sys.stderr,
+            )
+    return _select_ili_sheet(
+        _read_sheets_openpyxl(file_path),
+        synonym_lookup,
+        preview_rows,
+    )
 
 
 def load_source_table(file_path, synonym_lookup, preview_rows=30):
