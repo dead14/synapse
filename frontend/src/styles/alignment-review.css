@@ -36,8 +36,6 @@ body:has(.alignment-workspace--gw) {
 
 .alignment-review-run-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
 .alignment-review-run { min-width: 0; border: 1px solid var(--syn-line); border-radius: var(--syn-radius-control); background: var(--syn-surface); padding: 0.9rem; }
-.alignment-review-run--master { border-top: 3px solid var(--syn-accent-strong); }
-.alignment-review-run--historical { border-top: 3px solid var(--syn-info); }
 .alignment-review-run > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--syn-line); }
 .alignment-review-run > header span { color: var(--syn-muted); font: 700 0.58rem var(--syn-font-data); letter-spacing: 0.07em; text-transform: uppercase; }
 .alignment-review-run > header h3 { overflow-wrap: anywhere; margin: 0.25rem 0 0; color: var(--syn-ink); font-size: 0.9rem; }
@@ -2447,14 +2445,14 @@ label.feature-row:hover { background: var(--ds-surface-inset); }
 
 .gw-table tbody tr { cursor: pointer; }
 .gw-table tbody tr:hover td { background: var(--color-gw-paper-raised); }
-.gw-table tbody tr.is-selected td { background: var(--color-gw-accent-soft); }
 
 /* A pinned row is one of the two welds feeding the spool view. It has to stay
-   findable while the reader scrolls, without stealing the status colour the
-   row is otherwise carrying. */
-.gw-table tbody tr.is-pinned td:first-child {
-  box-shadow: inset 3px 0 0 var(--color-gw-warning);
-}
+   findable while the reader scrolls; the status colour the row carries lives in
+   its chip, so tinting the row itself does not collide with it. Declared before
+   the selected row so that a row which is both reads as selected. */
+.gw-table tbody tr.is-pinned td { background: var(--color-gw-warning-soft); }
+
+.gw-table tbody tr.is-selected td { background: var(--color-gw-accent-soft); }
 
 .gw-table__empty {
   padding-block: var(--space-gw-xl) !important;
@@ -2774,8 +2772,8 @@ label.feature-row:hover { background: var(--ds-surface-inset); }
 }
 
 .tiein-card.is-selected {
-  border-color: var(--ds-primary-border);
-  box-shadow: inset 3px 0 0 var(--ds-primary);
+  border-color: var(--ds-primary);
+  background: var(--ds-primary-softer);
 }
 
 .tiein-card.is-disabled { opacity: 0.7; }
@@ -2965,7 +2963,7 @@ label.feature-row:hover { background: var(--ds-surface-inset); }
   cursor: pointer;
 }
 
-.tiein-signoff.is-selected { box-shadow: inset 3px 0 0 var(--ds-warning); }
+.tiein-signoff.is-selected { border-color: var(--ds-warning); }
 
 .tiein-signoff__head {
   display: flex;

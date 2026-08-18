@@ -208,7 +208,6 @@ export default function KpDensity({ features, windowM = 500 }: Props) {
 
       <StatGrid>
         <Stat
-          lead
           compact
           label="Primary hotspot"
           value={profile.hotspot ? `KP ${(profile.hotspot.startM / 1000).toFixed(1)}–${(profile.hotspot.endM / 1000).toFixed(1)}` : 'None'}

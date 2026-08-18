@@ -663,7 +663,6 @@
 .ds-stat__value--sm { font-size: 1rem; }
 .ds-stat__hint { color: var(--ds-muted); font-size: var(--ds-t-xs); line-height: 1.35; }
 
-.ds-stat--primary { border-left: 3px solid var(--ds-primary); }
 .ds-stat--success .ds-stat__value { color: var(--ds-success); }
 .ds-stat--warning .ds-stat__value { color: var(--ds-warning); }
 .ds-stat--danger .ds-stat__value { color: var(--ds-danger); }
@@ -1033,8 +1032,6 @@
 /* Chart frame inside a DS panel */
 .viz-frame { position: relative; display: grid; gap: 0.625rem; }
 
-/* Corrosion overview: the operating question comes before the evidence. */
-.corrosion-review-brief { border-top: 3px solid var(--ds-primary) !important; }
 .corrosion-review-route {
   display: grid;
   gap: 0.5rem;
@@ -1874,13 +1871,12 @@
   gap: 0.5rem;
   padding: 0.5rem 0.625rem;
   border: 1px solid var(--ds-line);
-  border-left-width: 3px;
   border-radius: var(--ds-r-sm);
 }
 
-.rbi-checklist__item.is-met { border-left-color: var(--ds-success); }
-.rbi-checklist__item.is-unmet-shall { border-left-color: var(--ds-danger); background: var(--ds-danger-soft); }
-.rbi-checklist__item.is-unmet-should { border-left-color: var(--ds-warning); background: var(--ds-warning-soft); }
+/* A met item carries no tint: the tick in the first column is the whole signal. */
+.rbi-checklist__item.is-unmet-shall { border-color: var(--ds-danger-border); background: var(--ds-danger-soft); }
+.rbi-checklist__item.is-unmet-should { border-color: var(--ds-warning-border); background: var(--ds-warning-soft); }
 
 .rbi-checklist__req { display: block; color: var(--ds-ink); font-size: var(--ds-t-sm); line-height: 1.4; }
 .rbi-checklist__src { color: var(--ds-muted); font-family: var(--ds-font-data); font-size: var(--ds-t-micro); }

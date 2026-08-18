@@ -150,7 +150,6 @@ export default function AuroraEvidencePanel({ artifacts }: AuroraEvidencePanelPr
 
         <StatGrid>
           <Stat
-            lead
             label="Structural anchors registered"
             value={summary.anchorPairs.toLocaleString()}
             hint={anchorMap

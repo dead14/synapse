@@ -165,7 +165,7 @@ export default function DesignSystemPage() {
             Sections must not overlap.
           </Callout>
           <StatGrid>
-            <Stat lead label="Total features" value="4,835" hint="Master run" />
+            <Stat label="Total features" value="4,835" hint="Master run" />
             <Stat label="GW anchors" value="1,146" hint="Reference points" />
             <Stat label="Matched" value="92.3%" tone="success" />
             <Stat label="Review queue" value="24" tone="warning" />
