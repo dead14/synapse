@@ -30,7 +30,9 @@ import {
   MODIFIED_B31G_Z_CUTOFF,
   ORIGINAL_B31G_Z_CUTOFF,
 } from './b31g.ts';
-import { pressureBasisLabel } from './assessmentProfile.ts';
+import { growthAnalysisBasisLabel, pressureBasisLabel } from './assessmentProfile.ts';
+import { resolvedDepthRate, resolvedLengthRate } from './growthResolution.ts';
+import { formatLifeProjection } from './lifeProjection.ts';
 import { texMark, texNumber, texText } from '../math/tex.ts';
 import type { FfsConfig, FfsResult, FfsScreeningConfig } from './types.ts';
 
@@ -85,6 +87,20 @@ export interface FfsCalcStep {
 
 /** Relative tolerance for the self-check, loose enough for the stored rounding. */
 const AUDIT_TOLERANCE = 1e-3;
+
+/**
+ * Year figures agree to the precision they are stored at.
+ *
+ * A remnant life is rounded to two decimals before it is stored, so on a short
+ * life the relative check below rejects a step that is in fact exact — half a
+ * hundredth of a year is 0.2 % of 2.5 years. Years get an absolute tolerance
+ * matched to that rounding instead.
+ */
+function agreesYears(engine: number | null, recomputed: number | null): boolean {
+  if (engine === null || recomputed === null) return engine === recomputed;
+  if (!Number.isFinite(engine) || !Number.isFinite(recomputed)) return engine === recomputed;
+  return Math.abs(engine - recomputed) <= 0.011;
+}
 
 function agrees(engine: number | null, recomputed: number | null): boolean {
   if (engine === null || recomputed === null) return engine === recomputed;
@@ -433,6 +449,103 @@ export function buildCalcTrace(
     audit: {
       recomputed: null,
       matches: (erfPasses && depthPasses) === (n.acceptance === 'Acceptable'),
+    },
+  });
+
+  // 13-15 — the projection. These steps carry the most assumption in the whole
+  // assessment and used to carry none of its protection: the trace stopped at
+  // acceptance, so the growth rate and the remnant life were the two figures a
+  // reviewer could not check against their own working. A rate the growth
+  // ladder substituted is exactly the number that most needs its derivation
+  // printed beside it.
+  const life = n.remnantLife;
+  const depthRate = resolvedDepthRate(n);
+  const lengthRate = resolvedLengthRate(n);
+  const basisLabel = growthAnalysisBasisLabel(n.growthEvidence?.depth.analysisBasis);
+
+  steps.push({
+    id: 'growth-rate',
+    name: 'Depth growth rate used',
+    formula: 'CR_d resolved by the growth ladder',
+    substitution: n.growthEvidence?.depth.formula ?? basisLabel,
+    formulaTex: '\\CRd',
+    substitutionTex: texText(basisLabel),
+    value: depthRate,
+    unit: 'mm/y',
+    basis: n.growthEvidence?.depth.note
+      ?? 'No structured growth provenance was attached to this row.',
+    tone: n.growthEvidence?.depth.analysisBasis === 'reported' ? 'good' : 'warn',
+    governing: false,
+    audit: {
+      // The projection is the authority: this step exists to show that the rate
+      // printed here is the one the remnant life beside it was run on.
+      recomputed: life.depthRateMmPerYear,
+      matches: agrees(depthRate, life.depthRateMmPerYear),
+    },
+  });
+
+  const depthLimitMm = (life.depthLimitPct / 100) * n.wall;
+  const depthLimitRecomputed = depthRate > 0 && n.d < depthLimitMm
+    ? (depthLimitMm - n.d) / depthRate
+    : null;
+  const depthLimitInHorizon = depthLimitRecomputed !== null
+    && depthLimitRecomputed <= life.analysisHorizonYears;
+  steps.push({
+    id: 'years-to-depth-limit',
+    name: `Years to ${num(life.depthLimitPct, 0)} %WT`,
+    formula: `(${num(life.depthLimitPct, 0)}% x t - d) / CR_d`,
+    substitution: depthLimitRecomputed === null
+      ? 'No positive depth rate, so the depth limit is never reached'
+      : `(${num(depthLimitMm, 3)} - ${num(n.d, 3)}) / ${num(depthRate, 4)}`,
+    formulaTex: `\\frac{${num(life.depthLimitPct, 0)}\\% \\times t - d}{\\CRd}`,
+    substitutionTex: depthLimitRecomputed === null
+      ? texText('no positive depth rate')
+      : `\\frac{${tex(depthLimitMm, 3)} - ${tex(n.d, 3)}}{${tex(depthRate, 4)}}`,
+    value: life.depthLimitYears,
+    unit: life.depthLimitYears === null ? undefined : 'y',
+    display: life.depthLimitYears === null
+      ? `Not reached in ${life.analysisHorizonYears} y`
+      : undefined,
+    basis: 'The depth line is a project rejection threshold and the applicability boundary of the section 3 tables. Reported only where it falls inside the analysis horizon.',
+    tone: 'default',
+    governing: false,
+    audit: {
+      recomputed: depthLimitInHorizon ? depthLimitRecomputed : null,
+      // Null on both sides is agreement: the limit lies outside the horizon.
+      matches: agreesYears(life.depthLimitYears, depthLimitInHorizon ? depthLimitRecomputed : null),
+    },
+  });
+
+  const earlierLimit = life.depthLimitYears === null && life.erfLimitYears === null
+    ? null
+    : Math.min(
+      life.depthLimitYears ?? Number.POSITIVE_INFINITY,
+      life.erfLimitYears ?? Number.POSITIVE_INFINITY,
+    );
+  steps.push({
+    id: 'remnant-life',
+    name: 'Remnant life',
+    formula: 'min(years to depth limit, years to ERF 1)',
+    substitution: `depth ${life.depthLimitYears ?? 'not reached'} · ERF ${life.erfLimitYears ?? 'not reached'}`,
+    formulaTex: '\\min(t_{d}, t_{\\ERF})',
+    substitutionTex: texText(
+      lengthRate === null
+        ? 'axial length held constant, so the ERF limit is non-conservative in the length direction'
+        : `axial length grows at ${num(lengthRate, 4)} mm/y`,
+    ),
+    value: life.years,
+    unit: life.years === null ? undefined : 'y',
+    display: life.years === null
+      ? formatLifeProjection(life.years, life.status, life.analysisHorizonYears)
+      : undefined,
+    basis: life.lengthHeldConstant
+      ? 'Projected with the axial length held constant, because no length growth rate was established. A defect that lengthens loses capacity through the Folias term as well, and that path is not in this figure.'
+      : 'Projected with both dimensions growing, so the Folias term tracks the lengthening as well as the deepening.',
+    tone: life.lengthHeldConstant ? 'warn' : 'default',
+    governing: true,
+    audit: {
+      recomputed: life.designLifeCapApplied ? life.years : earlierLimit,
+      matches: life.designLifeCapApplied || agreesYears(life.years, earlierLimit),
     },
   });
 

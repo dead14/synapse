@@ -89,10 +89,16 @@ export function buildColonyLevel2Assessments(
     const built = buildIliColonyProfile(zone.members);
     if (!built) continue;
 
-    const geometry = geometryOf(zone.members[0]);
+    // `built.members` is the subset that survived profile assembly — boxes with
+    // a finite extent and a positive depth. Level 1 used to merge over
+    // `zone.members` instead, so the "pressure recovered by describing the
+    // profile" compared a flaw the two levels did not agree on. Both levels read
+    // the same list now.
+    const members = built.members;
+    const geometry = geometryOf(members[0]);
     // Every member must share the line geometry, or the two levels would be
     // comparing different pipes rather than different methods.
-    const uniform = zone.members.every((member) =>
+    const uniform = members.every((member) =>
       member.nominal.od === geometry.outerDiameter &&
       member.nominal.smys === geometry.smysMpa &&
       member.nominal.safetyFactor === geometry.safetyFactor &&
@@ -100,7 +106,7 @@ export function buildColonyLevel2Assessments(
     if (!uniform) continue;
 
     const mergedLengthMm = built.profile[built.profile.length - 1].positionMm - built.profile[0].positionMm;
-    const maxDepthPct = maxBy(zone.members, (member) => member.nominal.maxDepthPct);
+    const maxDepthPct = maxBy(members, (member) => member.nominal.maxDepthPct);
     const merged = evaluateB31g(
       (maxDepthPct / 100) * geometry.wallThickness,
       mergedLengthMm,
@@ -115,9 +121,9 @@ export function buildColonyLevel2Assessments(
 
     assessments.push({
       id: zone.id,
-      members: built.members,
-      startLd: numericLd(zone.members[0]),
-      endLd: numericLd(zone.members[zone.members.length - 1]),
+      members,
+      startLd: numericLd(members[0]),
+      endLd: numericLd(members[members.length - 1]),
       mergedLengthMm,
       maxDepthPct,
       level1SafePressureMpa: merged.safePressureMpa,

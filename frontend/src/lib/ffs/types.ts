@@ -29,6 +29,20 @@ export interface FfsConfig {
    */
   depthRejectionPct?: number;
   /**
+   * Internal design gauge pressure, MPa — the P of ASME B31.4-2025 para. 403.2.1.
+   *
+   * The design thickness the para. 451.6.2.2(b) 20 % no-repair band is measured
+   * against is `t = P·D / 2SE`, and the Code's P is the pressure the line was
+   * *designed* for, not the one it is operated at. With no field for it the
+   * assessment substituted the required operating pressure, which on a line
+   * designed above its MOP produces a design thickness that is too small and a
+   * no-repair band that is correspondingly too narrow. Conservative, but a
+   * substitution the report never declared.
+   *
+   * Left undefined, the operating pressure is still used and the report says so.
+   */
+  internalDesignPressureMpa?: number | null;
+  /**
    * ASME B31.4-2025 Table 403.2.1-1 weld joint factor E, used only by the B31.4
    * design-thickness calculation the para. 451.6.2.2(b) 20 % band is measured
    * against. Defaults to 1.0 — seamless, ERW, and electric flash welded pipe,
@@ -226,6 +240,26 @@ export interface FfsScreeningConfig {
    * but leaves ASME B31.4-2025 para. 451.6.2.2(b) unanswered for that feature.
    */
   deriveMissingGrowthRates: boolean;
+  /**
+   * Whether an unmatched feature may be given a derived *axial* growth rate.
+   *
+   * Off by default, deliberately, and not for symmetry's sake. Axial extent is
+   * the dimension ILI sizes worst: a tolerance of ±10 mm per end is ordinary,
+   * while the true lengthening across a two-year interval is usually smaller
+   * than that. So the population of "measured" length rates is substantially
+   * re-boxing noise, and a percentile taken from it is as likely to describe the
+   * tool as the corrosion. On the HU_CPA_2026 register the measured length rates
+   * ran twenty times the measured depth rates, which is not a credible physical
+   * ratio.
+   *
+   * The depth ladder has no equivalent objection, which is why that one is on.
+   * Turning this on holds the projection to the same standard in both
+   * dimensions, and the length figure is labelled a derivation exactly as depth
+   * is; leaving it off holds the length constant and discloses that instead.
+   * What is not offered either way is a zero-baseline length estimate — a defect
+   * never had zero length, so there is no baseline to grow from.
+   */
+  deriveMissingLengthRates: boolean;
 }
 
 export const DEFAULT_SCREENING_CONFIG: FfsScreeningConfig = {
@@ -238,6 +272,7 @@ export const DEFAULT_SCREENING_CONFIG: FfsScreeningConfig = {
   interactionSpacingFactor: 3,
   depthRejectionPct: 80,
   deriveMissingGrowthRates: true,
+  deriveMissingLengthRates: false,
 };
 
 /**
@@ -259,7 +294,10 @@ export const DEFAULT_SCREENING_CONFIG: FfsScreeningConfig = {
 export function normaliseScreeningConfig(value: Partial<FfsScreeningConfig> | null | undefined): FfsScreeningConfig {
   const source = value ?? {};
   const numeric = (
-    key: Exclude<keyof FfsScreeningConfig, 'growthBasis' | 'deriveMissingGrowthRates'>,
+    key: Exclude<
+      keyof FfsScreeningConfig,
+      'growthBasis' | 'deriveMissingGrowthRates' | 'deriveMissingLengthRates'
+    >,
   ): number => {
     const candidate = source[key];
     return typeof candidate === 'number' && Number.isFinite(candidate)
@@ -284,6 +322,9 @@ export function normaliseScreeningConfig(value: Partial<FfsScreeningConfig> | nu
     deriveMissingGrowthRates: typeof source.deriveMissingGrowthRates === 'boolean'
       ? source.deriveMissingGrowthRates
       : DEFAULT_SCREENING_CONFIG.deriveMissingGrowthRates,
+    deriveMissingLengthRates: typeof source.deriveMissingLengthRates === 'boolean'
+      ? source.deriveMissingLengthRates
+      : DEFAULT_SCREENING_CONFIG.deriveMissingLengthRates,
   };
 }
 
@@ -305,8 +346,25 @@ export interface FfsInput {
   width: number;
   orient: string;
   wall: number;
-  crDepth: number;
-  crLength: number;
+  /**
+   * The depth growth rate exactly as the source wrote it — never the rate the
+   * projection used.
+   *
+   * These two are deliberately not called `crDepth`/`crLength` any more. A
+   * feature the run pair never matched arrives here with a zero, and the growth
+   * ladder in `growthResolution.ts` then supplies the rate the assessment is
+   * actually projected with. Thirteen display, export and chart sites were
+   * reading this column and printing it as "CR depth used", so a workbook could
+   * state a rate of 0 beside a remnant life computed from 0.9 mm/y — a published
+   * figure unreachable from its published inputs.
+   *
+   * The rate the projection consumed lives on `remnantLife`, and
+   * `resolvedDepthRate`/`resolvedLengthRate` in `growthResolution.ts` are the
+   * only supported way to read it. Reach for these two only where the *source*
+   * value is the subject, such as the Scenario Lab's as-reported preset.
+   */
+  crDepthSource: number;
+  crLengthSource: number;
   df: number;
   od: number;
   smys: number;

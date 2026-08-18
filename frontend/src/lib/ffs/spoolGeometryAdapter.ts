@@ -17,6 +17,7 @@ import type { SpoolFeature, SpoolMatchStatus, SpoolSide } from '../../domain/spo
 import { clockLabelFromDegrees } from '../../domain/spoolFeatures.ts';
 import type { FfsScreenedResult } from './types.ts';
 import type { FfsSpool } from './spoolReview.ts';
+import { resolvedDepthRate, resolvedLengthRate } from './growthResolution.ts';
 
 const ABSENT_SIDE: SpoolSide = {
   present: false,
@@ -58,7 +59,16 @@ function externalOf(surface: string | null | undefined): boolean | null {
  */
 function statusOf(item: FfsScreenedResult): SpoolMatchStatus {
   if (item.nominal.isClusteredMetalLoss) return 'bypassed';
-  return item.nominal.crDepth > 0 ? 'matched-growth' : 'matched-no-growth';
+  // Read the source observation, never the rate. Testing `rate > 0` called a
+  // feature "matched" whenever the growth ladder had supplied it a derived
+  // rate — so a NEW-only anomaly the run pair never saw was outlined as a
+  // matched box with no growth, which is two wrong claims in one colour.
+  const observation = item.nominal.growthEvidence?.depth.observation;
+  if (observation === 'new-only-zero-baseline-estimate') return 'new';
+  if (observation === 'matched-measured' || observation === 'manual-reported') {
+    return resolvedDepthRate(item.nominal) > 0 ? 'matched-growth' : 'matched-no-growth';
+  }
+  return 'matched-no-growth';
 }
 
 export function spoolFeatureFromFfs(item: FfsScreenedResult): SpoolFeature {
@@ -109,8 +119,8 @@ export function spoolFeatureFromFfs(item: FfsScreenedResult): SpoolFeature {
     erfDelta: null,
     remainingWtDeltaMm: null,
     maShiftM: null,
-    depthGrowthPctPerYear: n.wall > 0 ? (n.crDepth / n.wall) * 100 : null,
-    lengthGrowthMmPerYear: n.crLength > 0 ? n.crLength : null,
+    depthGrowthPctPerYear: n.wall > 0 ? (resolvedDepthRate(n) / n.wall) * 100 : null,
+    lengthGrowthMmPerYear: resolvedLengthRate(n),
     intervalYears: null,
     section: n.section,
     bypassReason: n.isClusteredMetalLoss

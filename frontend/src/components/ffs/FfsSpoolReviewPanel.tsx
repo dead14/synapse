@@ -52,6 +52,7 @@ import type {
 import { isIsoCalendarDate } from '../../lib/ffs/validation';
 import SynButton from '../ui/SynButton';
 import { Callout, Panel, PanelHeader, Stat, formatErf } from './FfsPrimitives';
+import { resolvedDepthRate, resolvedLengthRate } from '../../lib/ffs/growthResolution.ts';
 import FfsSpoolGeometryPanes from './FfsSpoolGeometry';
 
 const SEVERITY_STYLE: Record<FfsSeverity, string> = {
@@ -135,6 +136,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
  */
 function GoverningCalculation({ item }: { item: FfsScreenedResult }) {
   const n = item.nominal;
+  // The rate the projection consumed, never the source column.
+  const lengthRate = resolvedLengthRate(n);
   // Each row is a name, the symbol for the quantity, and the value. The symbol
   // used to be spliced into the label — `Length term z = L²/(D·t)` — which put
   // an equation in a table header cell set in the reading face, with a middle
@@ -153,8 +156,8 @@ function GoverningCalculation({ item }: { item: FfsScreenedResult }) {
     ['Safe pressure', '\\Psafe = \\frac{\\Pfail}{\\SFac}', `${n.safePressure.toFixed(3)} MPa`],
     ['Required pressure', '\\Pop', `${n.p0.toFixed(3)} MPa`],
     ['Estimated repair factor', '\\ERF = \\frac{\\Pop}{\\Psafe}', `${formatErf(n.ERF)} → ${n.acceptance}`],
-    ['Depth growth used', '\\CRd', `${n.crDepth.toFixed(4)} mm/y`],
-    ['Length growth used', '\\CRl', n.crLength > 0 ? `${n.crLength.toFixed(4)} mm/y` : 'none established — length held constant'],
+    ['Depth growth used', '\\CRd', `${resolvedDepthRate(n).toFixed(4)} mm/y`],
+    ['Length growth used', '\\CRl', lengthRate !== null ? `${lengthRate.toFixed(4)} mm/y` : 'none established — length held constant'],
   ];
   return (
     <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
@@ -635,7 +638,7 @@ function SpoolCard({
                         <td className="px-3 py-1.5 text-right tabular-nums">{n.length.toFixed(0)} × {n.width > 0 ? n.width.toFixed(0) : '—'}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{formatErf(n.ERF)}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{formatErf(member.conservative.ERF)}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{n.crDepth.toFixed(3)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{resolvedDepthRate(n).toFixed(3)}</td>
                         <td className="px-3 py-1.5">{formatRemnantLife(n.remnantLife)}</td>
                         <td className="px-3 py-1.5">
                           {n.repairStatus === 'permanent-repair-verified'

@@ -124,6 +124,7 @@ export default function FfsSetupPage() {
   // ASME B31.4-2025 inputs. E defaults to 1.0, which covers seamless, ERW, and
   // electric flash welded pipe — most line pipe — and is the only value that
   // leaves the design thickness where B31G practice would put it anyway.
+  const [internalDesignPressure, setInternalDesignPressure] = useState('');
   const [weldJointFactor, setWeldJointFactor] = useState('1');
   const [yieldToTensileRatio, setYieldToTensileRatio] = useState('');
   const [unusualLoading, setUnusualLoading] = useState(false);
@@ -559,6 +560,9 @@ export default function FfsSetupPage() {
         depthRejectionPct: screening.depthRejectionPct,
         // ASME B31.4-2025: these decide the Code disposition reported beside the
         // B31G result, never the B31G result itself.
+        internalDesignPressureMpa: internalDesignPressure.trim() === ''
+          ? null
+          : toMegapascals(Number(internalDesignPressure), pressureUnit),
         weldJointFactor: Number(weldJointFactor) > 0 ? Number(weldJointFactor) : 1,
         yieldToTensileRatio: yieldToTensileRatio.trim() === '' ? null : Number(yieldToTensileRatio),
         unusualLoading,
@@ -611,10 +615,30 @@ export default function FfsSetupPage() {
         return;
       }
       const calculatedResults = await processAllRows(rows, config, setProgress);
-      const ffsResults = calculatedResults.map((result, index) => ({
-        ...result,
-        growthEvidence: imported.accepted[index].provenance.growthEvidence,
-      }));
+      // Provenance is paired to results by position, which holds only while the
+      // row processor stays sequential, order-preserving, and abort-on-error.
+      // That is true today and nothing enforces it — a future change that
+      // filtered or parallelised the loop would hand every feature its
+      // neighbour's growth history, silently, with the report still reading as
+      // a clean assessment. The pairing is checked instead of assumed.
+      if (calculatedResults.length !== imported.accepted.length) {
+        throw new Error(
+          `Growth provenance could not be matched to the calculated results (${calculatedResults.length} `
+          + `results against ${imported.accepted.length} accepted rows). No assessment was produced.`,
+        );
+      }
+      const ffsResults = calculatedResults.map((result, index) => {
+        const accepted = imported.accepted[index];
+        const expectedId = String(accepted.row['Feature ID'] ?? '');
+        if (String(result.featureId ?? '') !== expectedId) {
+          throw new Error(
+            `Growth provenance is out of step with the calculated results at row ${index + 1}: the result is `
+            + `feature "${result.featureId ?? ''}" and the provenance is for "${expectedId}". No assessment `
+            + 'was produced.',
+          );
+        }
+        return { ...result, growthEvidence: accepted.provenance.growthEvidence };
+      });
       navigate('/ffs/results', {
         state: {
           results: ffsResults,
@@ -888,6 +912,28 @@ export default function FfsSetupPage() {
                         loss over the service age of the line, or from the rate of comparable measured features —
                         each labelled as a derivation and raised as a report finding. A measured rate, including a
                         measured zero, is never replaced.
+                      </span>
+                    </span>
+                  </label>
+                  <label className="mt-3 flex items-start gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={screening.deriveMissingLengthRates}
+                      onChange={(event) =>
+                        setScreening((s) => ({ ...s, deriveMissingLengthRates: event.target.checked }))
+                      }
+                      className="mt-0.5"
+                    />
+                    <span>
+                      Derive an axial length rate too
+                      <span className="mt-0.5 block text-[10px] font-normal leading-snug text-slate-500 dark:text-slate-400">
+                        Off by default, and not for symmetry's sake. Axial extent is the dimension ILI sizes
+                        worst — a tolerance of ±10 mm per end is ordinary, while real lengthening across one
+                        survey interval is usually smaller than that — so the measured population is
+                        substantially re-boxing noise. Left off, the projection holds the length constant and
+                        the report states that the ERF limit is non-conservative in the length direction. Turned
+                        on, unmatched features take the percentile of the measured axial rates, labelled as a
+                        derivation. No zero-baseline length is ever assumed: a defect was never 0 mm long.
                       </span>
                     </span>
                   </label>
@@ -1561,6 +1607,18 @@ export default function FfsSetupPage() {
                 design thickness the 20 % no-repair band is a fraction of, and
                 the para. 451.6.2.2(b) triggers for engineering analysis. */}
             <div className="grid grid-cols-2 gap-3">
+              <label className="block text-xs font-semibold text-slate-500">
+                Internal design pressure [{pressureUnit}]
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={internalDesignPressure}
+                  onChange={(event) => setInternalDesignPressure(event.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                />
+                <span className="mt-1 block text-[10px] font-normal leading-snug">The P of para. 403.2.1, from the pipe dossier. Left blank, the required operating pressure stands in — which understates t and narrows the 20 % no-repair band. The report states which was used.</span>
+              </label>
               <label className="block text-xs font-semibold text-slate-500">
                 Weld joint factor E (B31.4 Table 403.2.1-1)
                 <select

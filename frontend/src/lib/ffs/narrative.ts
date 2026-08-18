@@ -8,6 +8,7 @@ import {
   remnantLimitLabel,
 } from './lifeProjection.ts';
 import { designLifeUsage, EMPTY_SERVICE_LIFE } from './remnantLife.ts';
+import { resolvedDepthRate } from './growthResolution.ts';
 import { buildSectionPipeSpecSummary, buildSectionGrowthSummary } from './sectionSummary.ts';
 import {
   designFactorSourceLabel,
@@ -467,7 +468,7 @@ export function buildNarrative(
           n.maxDepthPct.toFixed(1),
           n.length.toFixed(0),
           n.orient || '—',
-          n.crDepth.toFixed(3),
+          resolvedDepthRate(n).toFixed(3),
           n.remnantLife.lengthHeldConstant ? 'Not calculated' : n.remnantLife.lengthRateMmPerYear.toFixed(3),
           formatRemnantLife(n.remnantLife),
           n.remnantLife.dueDateIso ?? '—',

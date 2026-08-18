@@ -21,8 +21,10 @@ import { computeRemnantLife, EMPTY_SERVICE_LIFE, type FfsRemnantLife } from './r
 import {
   buildGrowthResolutionContext,
   deriveDepthRate,
+  populationLengthRate,
   withDerivedDepthRate,
   type DerivedDepthRate,
+  type DerivedLengthRate,
   type FfsGrowthResolutionContext,
 } from './growthResolution.ts';
 import { maxBy } from '../../utils/numericRange.ts';
@@ -123,8 +125,8 @@ export function growthApplicationFor(
       depthEvidence.analysisBasis,
     );
   }
-  if (!depthEvidence && nominal.crDepth > 0) {
-    return application(nominal.crDepth, 'manual-reported', 'reported');
+  if (!depthEvidence && nominal.crDepthSource > 0) {
+    return application(nominal.crDepthSource, 'manual-reported', 'reported');
   }
   if (screening.growthRateMmPerYear > 0) {
     return application(
@@ -157,7 +159,7 @@ export function growthApplicationFor(
  *
  * This is the counterpart the depth resolver never had, and its absence is what
  * made the length column untrustworthy in two separate ways. The forecast tier
- * read `nominal.crLength` directly, so switching the growth basis to a uniform
+ * read `nominal.crLengthSource` directly, so switching the growth basis to a uniform
  * assumed rate overrode depth and silently left length on the measured value;
  * and the remaining-life search ignored length entirely, so a defect that was
  * lengthening rather than deepening projected as if it were static.
@@ -171,11 +173,14 @@ export interface FfsLengthApplication {
   available: boolean;
   observation: FfsGrowthObservation;
   analysisBasis: FfsGrowthAnalysisBasis | 'uniform-assumption';
+  /** Set only when the ladder derived the rate, so the note can travel with it. */
+  derived?: DerivedLengthRate;
 }
 
 export function lengthApplicationFor(
   nominal: FfsResult,
   screening: FfsScreeningConfig,
+  resolution?: FfsGrowthResolutionContext,
 ): FfsLengthApplication {
   const evidence = nominal.growthEvidence?.length;
 
@@ -204,13 +209,28 @@ export function lengthApplicationFor(
   }
   // The manual workbook has no evidence record; its column is the engineer's
   // own entry, so a positive value there is a supplied rate.
-  if (!evidence && nominal.crLength > 0) {
+  if (!evidence && nominal.crLengthSource > 0) {
     return {
-      rateMmPerYear: nominal.crLength,
+      rateMmPerYear: nominal.crLengthSource,
       available: true,
       observation: 'manual-reported',
       analysisBasis: 'reported',
     };
+  }
+  // The one derived rung, and only on request. Off by default because axial
+  // sizing tolerance routinely exceeds the real lengthening over a survey
+  // interval, so this percentile carries as much tool as corrosion.
+  if (resolution && screening.deriveMissingLengthRates === true) {
+    const derived = populationLengthRate(resolution);
+    if (derived) {
+      return {
+        rateMmPerYear: derived.rateMmPerYear,
+        available: true,
+        observation: evidence?.observation ?? 'unavailable',
+        analysisBasis: derived.analysisBasis,
+        derived,
+      };
+    }
   }
   return {
     rateMmPerYear: 0,
@@ -263,6 +283,20 @@ function evaluateTier(
     growthObservation: growthApplication?.observation,
     growthAnalysisBasis: growthApplication?.analysisBasis,
   };
+}
+
+/**
+ * The pressure the B31.4 design thickness is computed from.
+ *
+ * The dossier's internal design pressure where one was entered, and the
+ * feature's required operating pressure otherwise. Never silently: the fallback
+ * raises a readiness finding, because the 20 % no-repair band moves with it.
+ */
+export function b314DesignPressureMpa(config: FfsConfig, nominal: FfsResult): number {
+  const declared = config.internalDesignPressureMpa;
+  return declared !== null && declared !== undefined && Number.isFinite(declared) && declared > 0
+    ? declared
+    : nominal.p0;
 }
 
 export function severityOf(
@@ -337,7 +371,7 @@ function conservativeRemnantLife(
  * life uses. The dimensions are still the as-reported ones; only the rate is
  * resolved, and the record carries the rate it was projected with.
  *
- * The source columns `crDepth` and `crLength` are left exactly as the source
+ * The source columns `crDepthSource` and `crLengthSource` are left exactly as the source
  * wrote them. A derived rate moves the analysis basis in the evidence record, it
  * never rewrites the measurement column.
  */
@@ -390,12 +424,29 @@ function withResolvedGrowth(
   );
   const round4 = (value: number) => (Number.isFinite(value) ? +value.toFixed(4) : value);
 
-  const growthEvidence = growth.derived === null || !nominal.growthEvidence
-    ? nominal.growthEvidence
-    : {
-      ...nominal.growthEvidence,
-      depth: withDerivedDepthRate(nominal.growthEvidence.depth, growth.derived),
+  // Both axes rewrite the same way: the source observation is preserved and
+  // only the basis, the rate and the note move. Length used to be left behind
+  // here, so a derived axial rate reached the projection while the card beside
+  // it still read "not calculable".
+  let growthEvidence = nominal.growthEvidence;
+  if (growthEvidence && growth.derived !== null) {
+    growthEvidence = {
+      ...growthEvidence,
+      depth: withDerivedDepthRate(growthEvidence.depth, growth.derived),
     };
+  }
+  if (growthEvidence && length.derived) {
+    growthEvidence = {
+      ...growthEvidence,
+      length: {
+        ...growthEvidence.length,
+        analysisBasis: length.derived.analysisBasis,
+        analysisRateMmPerYear: length.derived.rateMmPerYear,
+        formula: length.derived.formula,
+        note: length.derived.note,
+      },
+    };
+  }
 
   return {
     ...nominal,
@@ -439,7 +490,7 @@ export function screenResults(
   return results.map((original, index) => {
     const growthApplication = growthApplicationFor(original, screening, resolution);
     const growth = growthApplication.rateMmPerYear;
-    const lengthApplication = lengthApplicationFor(original, screening);
+    const lengthApplication = lengthApplicationFor(original, screening, resolution);
     // The as-reported remnant life is recomputed here rather than kept as the
     // row-level engine left it. `processRow` sees one row and the column it
     // carries; the growth basis, the explicit fallback and the derivation ladder
@@ -484,12 +535,13 @@ export function screenResults(
     const clockHour = parseClockHour(nominal.orient);
 
     // The Code disposition, alongside the B31G acceptance rather than instead of
-    // it. B31.4 para. 403.2.1 computes the design thickness from the pressure the
-    // area has to hold — the required assessment pressure this run was set up
-    // with — because that is the pressure para. 451.6.2.2(b) then compares the
-    // safe operating pressure against.
+    // it. Para. 403.2.1 computes the design thickness from the *internal design
+    // pressure*, which is a property of the pipe dossier and not of this run.
+    // Where the dossier did not supply one the required operating pressure
+    // stands in — narrowing the 20 % no-repair band rather than widening it —
+    // and `B314_DESIGN_PRESSURE_ASSUMED` states the substitution in the report.
     const b314DesignThickness = b314DesignThicknessMm({
-      internalDesignPressureMpa: nominal.p0,
+      internalDesignPressureMpa: b314DesignPressureMpa(config, nominal),
       outerDiameterMm: nominal.od,
       smysMpa: nominal.smys,
       designFactor: nominal.df,

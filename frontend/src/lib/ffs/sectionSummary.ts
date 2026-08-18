@@ -11,6 +11,7 @@
 
 import { isInternal } from './statistics.ts';
 import { lifeSortValue } from './lifeProjection.ts';
+import { resolvedDepthRate } from './growthResolution.ts';
 import type {
   FfsDesignFactorSource,
   FfsOuterDiameterSource,
@@ -85,7 +86,7 @@ export function buildSectionGrowthSummary(items: FfsScreenedResult[]): FfsSectio
     const external = members.filter((item) => !isInternal(item));
 
     const depthRates = (group: FfsScreenedResult[]) =>
-      group.map((item) => item.nominal.crDepth).filter((rate) => Number.isFinite(rate) && rate > 0);
+      group.map((item) => resolvedDepthRate(item.nominal)).filter((rate) => Number.isFinite(rate) && rate > 0);
     const lengthRates = (group: FfsScreenedResult[]) =>
       group
         .filter((item) => !item.nominal.remnantLife.lengthHeldConstant)

@@ -68,8 +68,21 @@ export const MIN_SECTION_SAMPLES = 3;
 const DAYS_PER_YEAR = 365.25;
 const MS_PER_YEAR = DAYS_PER_YEAR * 24 * 60 * 60 * 1000;
 
-/** The analysis bases that count as a measurement of this feature. */
-const MEASURED_BASES: ReadonlySet<FfsGrowthAnalysisBasis> = new Set(['reported', 'estimated']);
+/**
+ * The analysis bases that count as a measurement of this feature.
+ *
+ * `'reported'` only. This set used to admit `'estimated'` as well — the NEW-only
+ * zero-baseline rate — which quietly defeated the purpose of the population
+ * rung: on a run where most anomalies are unmatched, the "measured population"
+ * became overwhelmingly the unmatched ones, and an unmatched feature was handed
+ * the percentile of other features that had never been measured either. On the
+ * HU_CPA_2026 register that pool was 5,785 estimates against 392 measurements,
+ * and the rate it produced was 2.05x the percentile of the real ones.
+ *
+ * A zero-baseline estimate is an assumption about one feature. Averaging many of
+ * them does not turn them into evidence about a different feature.
+ */
+const MEASURED_BASES: ReadonlySet<FfsGrowthAnalysisBasis> = new Set(['reported']);
 
 export interface FfsGrowthResolutionContext {
   iliDate: Date;
@@ -83,6 +96,38 @@ export interface FfsGrowthResolutionContext {
   populationRate: number | null;
   /** How many features contributed a measured rate. */
   measuredSampleCount: number;
+  /** Percentile axial rate over every run-pair measured feature, or null. */
+  lengthPopulationRate: number | null;
+  /** How many features contributed a measured axial rate. */
+  lengthMeasuredSampleCount: number;
+}
+
+/**
+ * The depth rate this feature's projection actually consumed.
+ *
+ * The one supported way to read a growth rate for display, export, or any
+ * statistic. `FfsResult.crDepthSource` is the source column and is zero for
+ * every feature the run pair did not match; the remnant-life record carries the
+ * rate the ladder resolved and the projection was run on. Reading the source
+ * column instead is what let a workbook print "CR depth used = 0" beside a life
+ * computed from 0.908 mm/y.
+ */
+export function resolvedDepthRate(result: FfsResult): number {
+  const rate = result.remnantLife?.depthRateMmPerYear;
+  return rate !== undefined && Number.isFinite(rate) ? rate : result.crDepthSource;
+}
+
+/**
+ * The length rate the projection consumed, or null when none was established.
+ *
+ * Null rather than zero, and callers have to handle it: a zero in a rate column
+ * reads as "this defect is not lengthening", which is a measurement nobody made.
+ */
+export function resolvedLengthRate(result: FfsResult): number | null {
+  const life = result.remnantLife;
+  if (!life) return result.crLengthSource > 0 ? result.crLengthSource : null;
+  if (life.lengthHeldConstant) return null;
+  return Number.isFinite(life.lengthRateMmPerYear) ? life.lengthRateMmPerYear : null;
 }
 
 /** Linear-interpolated percentile over an ascending sample. */
@@ -106,7 +151,21 @@ export function comparableGroupKey(result: FfsResult): string {
 /** True when this feature's own depth rate is a measurement of this feature. */
 function measuredDepthRateOf(result: FfsResult): number | null {
   const evidence = result.growthEvidence?.depth;
-  if (!evidence) return result.crDepth > 0 ? result.crDepth : null;
+  if (!evidence) return result.crDepthSource > 0 ? result.crDepthSource : null;
+  if (!MEASURED_BASES.has(evidence.analysisBasis)) return null;
+  const rate = evidence.analysisRateMmPerYear;
+  return rate !== null && Number.isFinite(rate) && rate > 0 ? rate : null;
+}
+
+/**
+ * This feature's own axial rate, where a run pair measured it.
+ *
+ * No zero-baseline counterpart exists and none is invented: a defect never had
+ * zero length, so an unmatched feature contributes nothing to this pool.
+ */
+function measuredLengthRateOf(result: FfsResult): number | null {
+  const evidence = result.growthEvidence?.length;
+  if (!evidence) return result.crLengthSource > 0 ? result.crLengthSource : null;
   if (!MEASURED_BASES.has(evidence.analysisBasis)) return null;
   const rate = evidence.analysisRateMmPerYear;
   return rate !== null && Number.isFinite(rate) && rate > 0 ? rate : null;
@@ -141,8 +200,11 @@ export function buildGrowthResolutionContext(
   const commissioningYear = config.serviceLife?.commissioningYear ?? null;
   const grouped = new Map<string, number[]>();
   const all: number[] = [];
+  const allLength: number[] = [];
 
   for (const result of results) {
+    const lengthRate = measuredLengthRateOf(result);
+    if (lengthRate !== null) allLength.push(lengthRate);
     const rate = measuredDepthRateOf(result);
     if (rate === null) continue;
     all.push(rate);
@@ -160,6 +222,13 @@ export function buildGrowthResolutionContext(
   }
 
   const populationRate = percentileOf([...all].sort((a, b) => a - b), POPULATION_RATE_PERCENTILE);
+  // Line-wide only. The axial rate is not sectioned the way depth is: the
+  // sample is an order of magnitude smaller, and a three-sample section
+  // percentile of a quantity this noisy is a number pretending to be a
+  // statistic.
+  const lengthPopulationRate = percentileOf(
+    [...allLength].sort((a, b) => a - b), POPULATION_RATE_PERCENTILE,
+  );
 
   return {
     iliDate: config.iliDate,
@@ -168,6 +237,10 @@ export function buildGrowthResolutionContext(
     sectionRates,
     populationRate: populationRate !== null && populationRate > 0 ? populationRate : null,
     measuredSampleCount: all.length,
+    lengthPopulationRate: lengthPopulationRate !== null && lengthPopulationRate > 0
+      ? lengthPopulationRate
+      : null,
+    lengthMeasuredSampleCount: allLength.length,
   };
 }
 
@@ -232,12 +305,47 @@ export function populationDepthRate(
   return {
     rateMmPerYear: round6(rate),
     analysisBasis: 'population-percentile',
-    formula: `P${Math.round(POPULATION_RATE_PERCENTILE * 100)} of ${context.measuredSampleCount} measured depth rate(s), ${scope}`,
+    formula: `P${Math.round(POPULATION_RATE_PERCENTILE * 100)} of ${context.measuredSampleCount} run-pair measured depth rate(s), ${scope}`,
     note:
-      `Derived: the ${Math.round(POPULATION_RATE_PERCENTILE * 100)}th-percentile measured depth rate of the `
+      `Derived: the ${Math.round(POPULATION_RATE_PERCENTILE * 100)}th-percentile run-pair measured depth rate of the `
       + `${scope}, because neither a run-pair rate nor a service age was available for this feature. `
       + 'It is a stand-in for a measurement that was not made, not a measurement of this feature.',
   };
+}
+
+/**
+ * The axial rate the measured population is lengthening at.
+ *
+ * The one derived rung length is offered, and only where the engineer asked for
+ * it — see `FfsScreeningConfig.deriveMissingLengthRates`. There is deliberately
+ * no zero-baseline and no service-age counterpart: both would divide this
+ * feature's whole axial extent by an interval, and a defect has never at any
+ * point been zero millimetres long.
+ */
+export function populationLengthRate(
+  context: FfsGrowthResolutionContext,
+): DerivedLengthRate | null {
+  const rate = context.lengthPopulationRate;
+  if (rate === null || !(rate > 0)) return null;
+  const percentile = Math.round(POPULATION_RATE_PERCENTILE * 100);
+  return {
+    rateMmPerYear: round6(rate),
+    analysisBasis: 'population-percentile',
+    formula: `P${percentile} of ${context.lengthMeasuredSampleCount} run-pair measured length rate(s), whole assessed population`,
+    note:
+      `Derived: the ${percentile}th-percentile run-pair measured axial growth rate of the assessed `
+      + 'population, because this feature carries none of its own. It is a stand-in for a measurement that '
+      + 'was not made, and axial extent is the dimension ILI sizes least precisely — treat it as a '
+      + 'sensitivity, not as a rate this defect was observed to lengthen at.',
+  };
+}
+
+/** A derived axial rate, with the sentence that has to travel with it. */
+export interface DerivedLengthRate {
+  rateMmPerYear: number;
+  analysisBasis: Extract<FfsGrowthAnalysisBasis, 'population-percentile'>;
+  formula: string;
+  note: string;
 }
 
 /**

@@ -20,6 +20,7 @@ import { buildFfsReportCase, type FfsPipelineRemnantLife, type FfsReportContext 
 import { buildSectionGrowthSummary, type FfsSectionGrowthRow } from './sectionSummary.ts';
 import { bucketIndexFor, isInternal, type DepthBucket } from './statistics.ts';
 import { MEGAPASCALS_PER_BAR } from './units.ts';
+import { resolvedDepthRate } from './growthResolution.ts';
 import type {
   FfsConfig,
   FfsScreenedResult,
@@ -77,6 +78,34 @@ export interface FfsExecutiveSummary {
 
   /** Counts behind the caveats that must travel with the figures above. */
   dataGaps: { label: string; count: number; detail: string }[];
+  /**
+   * How much of this assessment rests on a measurement.
+   *
+   * Every figure above is projected from a growth rate, and on a run where the
+   * alignment matched little, most of those rates are substitutions the ladder
+   * supplied rather than anything an inspection measured. Presenting the
+   * register as one population let a reader take "782 features under the review
+   * threshold" as 782 measurements, when four of them were. These counts travel
+   * with the summary so the reader can see which half of the register the
+   * urgency came from.
+   */
+  growthEvidenceBase: FfsGrowthEvidenceBase;
+}
+
+/** The split between what was measured and what was substituted. */
+export interface FfsGrowthEvidenceBase {
+  /** A run pair measured this feature's own depth rate. */
+  measuredCount: number;
+  /** NEW-only, projected from an assumed zero-depth baseline. */
+  zeroBaselineCount: number;
+  /** Service-age or population-percentile stand-ins from the ladder. */
+  derivedCount: number;
+  /** No positive rate could be established at all. */
+  noneCount: number;
+  /** Features below the review threshold, and how many of those were measured. */
+  belowReviewThreshold: number;
+  belowReviewThresholdMeasured: number;
+  reviewThresholdYears: number;
 }
 
 function locationOf(item: FfsScreenedResult): string {
@@ -191,7 +220,36 @@ export function buildExecutiveSummary(
     };
   });
 
+  // Classified off the evidence record, which `withResolvedGrowth` rewrites when
+  // the ladder supplies a rate — so this is what each feature was actually
+  // projected on, not what its source column happened to hold.
+  const depthBasisOf = (item: FfsScreenedResult) =>
+    item.nominal.growthEvidence?.depth.analysisBasis ?? 'none';
+  const reviewThresholdYears = config.highlightYears;
+  const belowThreshold = active.filter((item) => {
+    const { status, years } = item.nominal.remnantLife;
+    return status === 'calculated' && years !== null && years < reviewThresholdYears;
+  });
+  const growthEvidenceBase: FfsGrowthEvidenceBase = {
+    measuredCount: active.filter((item) => depthBasisOf(item) === 'reported').length,
+    zeroBaselineCount: active.filter((item) => depthBasisOf(item) === 'estimated').length,
+    derivedCount: active.filter((item) => {
+      const basis = depthBasisOf(item);
+      return basis === 'service-age' || basis === 'population-percentile' || basis === 'explicit-fallback';
+    }).length,
+    noneCount: active.filter((item) => depthBasisOf(item) === 'none').length,
+    belowReviewThreshold: belowThreshold.length,
+    belowReviewThresholdMeasured: belowThreshold.filter((item) => depthBasisOf(item) === 'reported').length,
+    reviewThresholdYears,
+  };
+
   const dataGaps = [
+    {
+      label: 'Depth growth not measured',
+      count: active.length - growthEvidenceBase.measuredCount,
+      detail: 'The projection ran on a rate the growth ladder substituted, not on one a run pair measured '
+        + 'for these features. Their remnant lives are estimates of an estimate.',
+    },
     {
       label: 'Length growth not established',
       count: active.filter((item) => item.nominal.remnantLife.lengthHeldConstant).length,
@@ -273,7 +331,7 @@ export function buildExecutiveSummary(
     ),
     fastestDepthGrowth: extreme(
       active,
-      (item) => (item.nominal.crDepth > 0 ? item.nominal.crDepth : null),
+      (item) => (resolvedDepthRate(item.nominal) > 0 ? resolvedDepthRate(item.nominal) : null),
       'max',
       (_item, value) => `${value.toFixed(3)} mm/y`,
     ),
@@ -294,6 +352,7 @@ export function buildExecutiveSummary(
     sections: buildSectionGrowthSummary(items),
 
     dataGaps,
+    growthEvidenceBase,
   };
 }
 

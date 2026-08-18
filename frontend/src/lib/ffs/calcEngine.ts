@@ -221,7 +221,8 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
 
   return {
     featureId, ld: parseFloat(ld as string) || ld as any, section, surface, maxDepthPct, length, width, orient, wall,
-    crDepth, crLength, df, od, smys, p0, repairStatus, repairMethod, repairDate, repairReference,
+    crDepthSource: crDepth, crLengthSource: crLength,
+    df, od, smys, p0, repairStatus, repairMethod, repairDate, repairReference,
     recommendation, actionOwner, isClusteredMetalLoss,
     jointNumber, usGwDistanceM, jointLengthM, designFactorSource, outerDiameterSource, smysSource,
     safetyFactor: +safetyFactor.toFixed(4), safetyFactorSource,

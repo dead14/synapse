@@ -87,6 +87,12 @@ export interface FfsReportContext {
   asOfDateIso: string;
   /** Remnant life below which a feature enters the repair programme. */
   reviewThresholdYears: number;
+  /**
+   * True when the B31.4 design thickness fell back to the operating pressure
+   * because the dossier supplied no internal design pressure. Carried on the
+   * context so the readiness findings can declare the substitution.
+   */
+  b314DesignPressureAssumed: boolean;
 }
 
 export type FfsScenarioLifeSummaryStatus =
@@ -169,6 +175,12 @@ export function createFfsReportContext(
     inspectionDateIso: config.iliDate.toISOString().slice(0, 10),
     asOfDateIso: formatLocalCalendarDate(asOfDate),
     reviewThresholdYears: config.highlightYears,
+    b314DesignPressureAssumed: !(
+      config.internalDesignPressureMpa !== null
+      && config.internalDesignPressureMpa !== undefined
+      && Number.isFinite(config.internalDesignPressureMpa)
+      && config.internalDesignPressureMpa > 0
+    ),
   };
 }
 
@@ -551,8 +563,57 @@ export function buildFfsReportCase(
     findings.push(finding(
       'LENGTH_GROWTH_UNAVAILABLE',
       'warning',
-      'No axial length growth rate was established, so the projection holds the length constant. The ERF limit is non-conservative in the length direction for these features.',
+      // The count is deliberately narrower than "features with no length rate",
+      // and says so. Four defensible counts exist for this one idea — no source,
+      // no usable rate, length frozen, and length frozen while a life was still
+      // quoted — and publishing one of them unlabelled sent a reader to
+      // reconcile a figure against three others that did not match it. This is
+      // the last of the four, because it is the only one where the
+      // non-conservatism reaches a number somebody acts on.
+      'No axial length growth rate was established, so the projection holds the length constant and quotes a '
+      + 'remnant life anyway. The ERF limit is non-conservative in the length direction for these features. '
+      + 'Counted where a life was actually calculated, which is narrower than the count of features carrying '
+      + 'no length rate at all.',
       lengthHeldConstantCount,
+    ));
+  }
+
+  // The headline caveat of the whole report. Every remnant life, every priority
+  // and every review date is projected from a growth rate, and where the run
+  // pair matched little those rates are mostly substitutions. Stating the count
+  // of urgent features without stating how many of them rest on a measurement
+  // invites the reader to act on the substitutions as if they were data.
+  // The 20 % no-repair band of para. 451.6.2.2(b) is a fraction of the design
+  // thickness, and the design thickness follows from the design pressure. With
+  // no dossier figure the operating pressure stands in, which narrows the band.
+  if (context.b314DesignPressureAssumed && activeItems.length > 0) {
+    findings.push(finding(
+      'B314_DESIGN_PRESSURE_ASSUMED',
+      'info',
+      'No internal design pressure was supplied, so the B31.4 para. 403.2.1 design thickness was computed '
+      + 'from the required operating pressure. Where the line was designed above its operating pressure the '
+      + 'design thickness is understated and the 20 % no-repair band is narrower than the Code allows — '
+      + 'conservative, but not the Code figure.',
+      activeItems.length,
+    ));
+  }
+
+  const measuredDepthCount = activeItems.filter(
+    (item) => item.nominal.growthEvidence?.depth.analysisBasis === 'reported',
+  ).length;
+  const unmeasuredDepthCount = activeItems.length - measuredDepthCount;
+  if (unmeasuredDepthCount > 0 && activeItems.length > 0) {
+    const share = Math.round((unmeasuredDepthCount / activeItems.length) * 100);
+    findings.push(finding(
+      'GROWTH_RATE_NOT_MEASURED',
+      // Past half the register this stops being a footnote about some features
+      // and becomes a statement about what the assessment is.
+      unmeasuredDepthCount * 2 > activeItems.length ? 'warning' : 'info',
+      `${share}% of the assessed features carry no run-pair measured depth growth rate. Their remnant lives, `
+      + 'priorities and review dates are projected from rates the growth ladder substituted — a zero-baseline '
+      + 'estimate, an engineer-entered fallback, a service-age rate, or the percentile of the measured '
+      + 'population. Read every count of urgent features against this one.',
+      unmeasuredDepthCount,
     ));
   }
 

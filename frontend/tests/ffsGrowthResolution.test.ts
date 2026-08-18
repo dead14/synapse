@@ -133,7 +133,7 @@ test('the derivation moves the analysis basis but never the source observation',
   assert.ok(evidence.note.startsWith('Derived:'), evidence.note);
   assert.match(evidence.formula ?? '', /since 2000/);
   // The source column is untouched: a derived rate is not a measurement.
-  assert.equal(item.nominal.crDepth, 0);
+  assert.equal(item.nominal.crDepthSource, 0);
 });
 
 /* ── The population step ───────────────────────────────────────────────── */
