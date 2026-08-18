@@ -5,3 +5,4 @@ pandas==3.0.3
 psycopg2-binary==2.9.12
 scipy==1.18.0
 SQLAlchemy==2.0.51
+python-calamine==0.8.2

@@ -173,6 +173,106 @@ class ParserIngestTests(unittest.TestCase):
         self.assertGreaterEqual(matched_fields, 4)
         self.assertEqual(len(frame), 1)
 
+    def test_fast_and_fallback_workbook_readers_agree(self):
+        """The Rust reader must produce exactly what openpyxl produced.
+
+        The importer keeps openpyxl as a fallback for environments without
+        python-calamine installed, so the two readers are two ways to answer
+        the same question. Anything they disagree on — a blank cell, an integer
+        that arrives as a float, a header row counted from a different origin —
+        would make an import's result depend on which wheels a deployment
+        happens to have.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "quirky.xlsx"
+            workbook = Workbook()
+            decoy = workbook.active
+            decoy.title = "Cover"
+            decoy.append(["Inspection summary"])
+            decoy.append(["No ILI columns here"])
+            sheet = workbook.create_sheet("Data")
+            sheet.append([None, None, None, None, None])
+            sheet.append(["ILI UNIVERSAL DATA TEMPLATE v2.1"])
+            sheet.append(["Feature #", "Abs. distance (m)", "Joint number", "Feature type *", "Comment"])
+            sheet.append([7001, 0.0, 10, "Weld", None])
+            sheet.append([7002, 1.5, 10, "Metal Loss", 42])
+            sheet.append([None, None, None, None, None])
+            sheet.append([7003, 3.25, 11, "Valve", "note"])
+            sheet.append(["7004", 4.5, None, "Bend"])
+            workbook.save(source)
+
+            fast = db_ingest.load_source_table(source, self.lookup)
+            with patch.object(db_ingest, "_read_sheets_calamine", return_value=None):
+                fallback = db_ingest.load_source_table(source, self.lookup)
+
+        fast_frame, fast_header, fast_matched = fast
+        fallback_frame, fallback_header, fallback_matched = fallback
+        self.assertEqual(fast_header, fallback_header)
+        self.assertEqual(fast_matched, fallback_matched)
+        self.assertEqual(fast_frame.attrs, fallback_frame.attrs)
+        self.assertEqual(list(fast_frame.columns), list(fallback_frame.columns))
+        # Compared as (type, repr) pairs rather than by value: an object column
+        # holding 7001 and one holding 7001.0 compare equal under ==, and that
+        # is exactly the drift this test exists to catch — the float reaches a
+        # text column as "7001.0".
+        def typed(frame):
+            return frame.map(lambda cell: (type(cell).__name__, repr(cell)))
+
+        pd.testing.assert_frame_equal(typed(fast_frame), typed(fallback_frame))
+        # The decoy sheet has no recognisable header, so the reader must not
+        # settle for it just because it comes first.
+        self.assertIn("Feature #", fast_frame.columns)
+
+    def test_workbook_the_fast_reader_cannot_decode_still_imports(self):
+        """A file the fast reader chokes on is retried, not rejected.
+
+        openpyxl accepted every workbook this importer has ever ingested, so a
+        decode failure in the newer reader must not turn a working upload into
+        a failed job.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "run.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(["Feature #", "Abs. distance (m)", "Joint number", "Feature type *"])
+            sheet.append([1, 0.0, 10, "Weld"])
+            workbook.save(source)
+
+            def exploding_reader(_file_path):
+                def sheets():
+                    raise RuntimeError("unsupported workbook encoding")
+                    yield  # pragma: no cover - generator marker
+
+                return sheets()
+
+            with patch.object(db_ingest, "_read_sheets_calamine", exploding_reader):
+                frame, header_index, matched_fields = db_ingest.load_source_table(
+                    source,
+                    self.lookup,
+                )
+
+        self.assertEqual(header_index, 0)
+        self.assertGreaterEqual(matched_fields, 4)
+        self.assertEqual(len(frame), 1)
+
+    def test_workbook_without_an_ili_header_is_not_read_twice(self):
+        """A "no header" verdict is final; re-reading only doubles the wait."""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "unrelated.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(["Quarterly budget", "Owner"])
+            sheet.append(["Coating survey", "Ops"])
+            workbook.save(source)
+
+            with patch.object(
+                db_ingest,
+                "_read_sheets_openpyxl",
+                side_effect=AssertionError("fallback reader must not run"),
+            ):
+                with self.assertRaisesRegex(ValueError, "recognisable ILI header"):
+                    db_ingest.load_source_table(source, self.lookup)
+
     def test_database_insert_failure_rolls_back_pipeline_run_and_features(self):
         database = create_engine("sqlite+pysqlite:///:memory:")
         Base.metadata.create_all(database)

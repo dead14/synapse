@@ -6,8 +6,10 @@ import { useToast } from '../components/common/ToastProvider';
 import { formatIngestionImportError } from '../domain/ingestionError';
 import {
   buildPersistedIliRun,
+  describeIngestionProgress,
   ingestPersistedInspectionRunPair,
   runChronology,
+  type IngestionFileProgress,
   type IngestionResponse,
 } from '../domain/alignmentIntake';
 
@@ -138,8 +140,7 @@ function wait(milliseconds: number, signal?: AbortSignal): Promise<void> {
 
 async function waitForIngestion(
   jobId: string,
-  fileName: string,
-  setLabel: (value: string) => void,
+  reportProgress: (percent: number) => void,
   signal?: AbortSignal,
 ) {
   for (let attempt = 0; attempt < 900; attempt += 1) {
@@ -147,8 +148,9 @@ async function waitForIngestion(
     // this loop alive for up to 15 minutes.
     if (signal?.aborted) throw abortError();
     const job = await apiFetch<IngestionResponse>(`/api/ingestion-jobs/${encodeURIComponent(jobId)}`, { signal });
-    setLabel(`Processing ${fileName}: ${Number(job.progress || 0)}%`);
+    reportProgress(Number(job.progress || 0));
     if (job.state === 'completed') {
+      reportProgress(100);
       return {
         ...job,
         pipeline_run_id: job.result?.pipelineRunId,
@@ -175,7 +177,11 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   const [algorithm, setAlgorithm] = useState('dtw_hungarian_onedirection');
   const [enablePartialRun, setEnablePartialRun] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [processingLabel, setProcessingLabel] = useState('');
+  // Runs are imported concurrently, so a single label written by whichever
+  // poll fired last showed one file at 100 % while another was still at 20 %,
+  // which reads as a stalled import. Progress is tracked per file and reported
+  // as one figure covering the whole intake.
+  const [fileProgress, setFileProgress] = useState<IngestionFileProgress[]>([]);
   const [sessionName, setSessionName] = useState('');
   const [pipelineData, setPipelineData] = useState({
     segmentRoute: '',
@@ -270,6 +276,8 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
     }
   }, [algorithm]);
 
+  const processingLabel = describeIngestionProgress(fileProgress);
+
   const allFilesUploaded = datasets.every((ds) => (
     ds.file !== null
     && isUsableSurveyDate(String(ds.surveyDate || '').trim())
@@ -291,10 +299,16 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
 
   const handleInitialize = async () => {
     const signal = unmountAbortRef.current?.signal;
-    const setLabelIfMounted = (value: string) => {
-      if (!signal?.aborted) setProcessingLabel(value);
+    const reportFileProgress = (index: number, name: string, percent: number) => {
+      if (signal?.aborted) return;
+      setFileProgress((current) => {
+        const next = current.slice();
+        next[index] = { name, percent };
+        return next;
+      });
     };
     setIsProcessing(true);
+    setFileProgress(datasets.map((dataset) => ({ name: dataset.file?.name || '', percent: 0 })));
     try {
       const masterFile = datasets[masterIndex]?.file as File | null;
       const pipelineName = sessionName.trim() || fileStem(masterFile?.name || 'ILI Alignment');
@@ -307,7 +321,6 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
       summaryData.oldRun = { name: 'Waiting for data...', vendor: '', year: '', tool: '', total: 0, anomalies: 0, welds: 0, valves: 0, tees: 0, offtakes: 0, bends: 0, others: 0 };
 
       const ingestCallback = async (dataset: any, index: number) => {
-        setLabelIfMounted(`Importing ${index + 1} of ${datasets.length}: ${dataset.file.name}`);
         const formData = new FormData();
         formData.append('file', dataset.file);
         formData.append('pipelineName', pipelineName);
@@ -322,8 +335,13 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           signal,
         });
         const response = queued.jobId
-          ? await waitForIngestion(String(queued.jobId), dataset.file.name, setLabelIfMounted, signal)
+          ? await waitForIngestion(
+            String(queued.jobId),
+            (percent) => reportFileProgress(index, dataset.file.name, percent),
+            signal,
+          )
           : queued;
+        reportFileProgress(index, dataset.file.name, 100);
         return buildPersistedIliRun(response, {
           name: dataset.file.name,
           vendor: dataset.vendor,
@@ -394,7 +412,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
     } finally {
       if (!signal?.aborted) {
         setIsProcessing(false);
-        setProcessingLabel('');
+        setFileProgress([]);
       }
     }
   };
