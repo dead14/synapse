@@ -65,6 +65,7 @@ test('maps the NEW-run alignment anomaly and converts depth growth from %WT/year
     'Outer Diameter Ds': '508',
     'Outer Diameter Source': 'line-default',
     'SMYS [MPa]': '359',
+    'SMYS Source': 'line-default',
     'Operating Pressure P₀ [MPa]': '7.2',
     'Clustered Metal Loss': 'No',
     // The run in this fixture reported no joint columns, so they arrive blank
@@ -88,6 +89,8 @@ test('maps the NEW-run alignment anomaly and converts depth growth from %WT/year
     designFactorSource: 'line-default',
     outerDiameterMm: 508,
     outerDiameterSource: 'line-default',
+    smysMpa: 359,
+    smysSource: 'line-default',
     isClusteredMetalLoss: false,
     wallThicknessSource: 'run-reported',
     growthEvidence: {

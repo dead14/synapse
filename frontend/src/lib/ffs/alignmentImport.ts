@@ -7,19 +7,21 @@ import type {
   FfsGrowthObservation,
   FfsOuterDiameterSource,
   FfsSectionPipeSpec,
+  FfsSmysSource,
 } from './types.ts';
 import { maxOf, minOf } from '../../utils/numericRange.ts';
 
 export interface AlignmentEngineeringInputs {
   /** Applied to any section without its own diameter. */
   outerDiameterMm: number;
+  /** Applied to any section without its own grade. */
   smysMpa: number;
   /** Applied to any section without its own override. */
   designFactor: number;
   /**
    * Per-section pipe spec, keyed by the section name the alignment emitted.
-   * Carries the design factor, and the diameter and nominal wall where the
-   * stretch is not made of the line default pipe.
+   * Carries the design factor, and the diameter, nominal wall and grade where
+   * the stretch is not made of the line default pipe.
    */
   sectionPipeSpecs?: FfsSectionPipeSpec[];
   /**
@@ -103,6 +105,27 @@ export function resolveOuterDiameter(
 }
 
 /**
+ * Resolves the SMYS for one feature.
+ *
+ * A line carries more than one grade as routinely as it carries more than one
+ * diameter — an X60 replacement spool welded into an X52 line, or a heavier
+ * grade through a crossing. SMYS sets the flow stress, and the flow stress
+ * multiplies the failure pressure, so assessing an X60 stretch at the line's
+ * X52 is not conservative bookkeeping: it is a different pipe. Absent a section
+ * value the line default stands, which is every single-grade line.
+ */
+export function resolveSmys(
+  section: string,
+  engineering: AlignmentEngineeringInputs,
+): { smysMpa: number; source: FfsSmysSource } {
+  const override = positiveOverride(
+    sectionSpecFor(section, engineering.sectionPipeSpecs)?.smysMpa,
+  );
+  if (override !== null) return { smysMpa: override, source: 'section-override' };
+  return { smysMpa: engineering.smysMpa, source: 'line-default' };
+}
+
+/**
  * The nominal wall to fall back on for one feature, where the run reported none.
  *
  * A section carrying its own diameter almost always carries its own wall, and
@@ -143,6 +166,9 @@ export interface AlignmentImportProvenance {
   /** The diameter this feature was assessed at, and which rule supplied it. */
   outerDiameterMm: number;
   outerDiameterSource: FfsOuterDiameterSource;
+  /** The grade this feature was assessed on, and which rule supplied it. */
+  smysMpa: number;
+  smysSource: FfsSmysSource;
   isClusteredMetalLoss: boolean;
   /** Where the wall thickness the assessment used came from. */
   wallThicknessSource: FfsWallThicknessSource;
@@ -1040,6 +1066,13 @@ function assertEngineeringInputs(inputs: AlignmentEngineeringInputs): void {
         );
       }
     }
+    if (rule.smysMpa !== null && rule.smysMpa !== undefined) {
+      if (!Number.isFinite(rule.smysMpa) || rule.smysMpa <= 0) {
+        throw new Error(
+          `SMYS for section "${rule.section}" must be greater than 0 MPa, or left empty.`,
+        );
+      }
+    }
     const od = positiveOverride(rule.outerDiameterMm) ?? inputs.outerDiameterMm;
     const wall = positiveOverride(rule.nominalWallThicknessMm);
     // A wall of half the diameter or more is not thin-wall pipe, and B31G's
@@ -1171,10 +1204,11 @@ export function mapAlignmentRowsToFfs(
     const {
       outerDiameterMm, source: outerDiameterSource,
     } = resolveOuterDiameter(section, engineering);
-    // A section diameter raises no warning, for the same reason a section design
-    // factor does not: it is an input the engineer entered deliberately, not a
-    // caveat on the result. It is recorded on the row and in the provenance, and
-    // the section sheet of the report states it.
+    const { smysMpa, source: smysSource } = resolveSmys(section, engineering);
+    // A section diameter or grade raises no warning, for the same reason a
+    // section design factor does not: it is an input the engineer entered
+    // deliberately, not a caveat on the result. Each is recorded on the row and
+    // in the provenance, and the section sheet of the report states it.
     const explicitSafetyFactor = engineering.safetyFactor ?? null;
     if (isClusteredMetalLoss) {
       warnings.push(
@@ -1202,7 +1236,8 @@ export function mapAlignmentRowsToFfs(
         'Safety Factor': explicitSafetyFactor === null ? '' : numericText(explicitSafetyFactor),
         'Outer Diameter Ds': numericText(outerDiameterMm),
         'Outer Diameter Source': outerDiameterSource,
-        'SMYS [MPa]': numericText(engineering.smysMpa),
+        'SMYS [MPa]': numericText(smysMpa),
+        'SMYS Source': smysSource,
         'Operating Pressure P₀ [MPa]': numericText(engineering.operatingPressureMpa),
         'Clustered Metal Loss': isClusteredMetalLoss ? 'Yes' : 'No',
         // Skeleton position, carried so the assessment can be reviewed spool by
@@ -1228,6 +1263,8 @@ export function mapAlignmentRowsToFfs(
         designFactorSource,
         outerDiameterMm,
         outerDiameterSource,
+        smysMpa,
+        smysSource,
         isClusteredMetalLoss,
         wallThicknessSource: wallSource,
       },

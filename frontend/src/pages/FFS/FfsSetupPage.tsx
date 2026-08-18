@@ -143,6 +143,16 @@ export default function FfsSetupPage() {
   const [sectionDiameters, setSectionDiameters] = useState<Record<string, string>>({});
   /** Nominal wall per section, in the displayed diameter unit; blank is normal. */
   const [sectionWalls, setSectionWalls] = useState<Record<string, string>>({});
+  /**
+   * SMYS per section, in the displayed pressure unit.
+   *
+   * Blank means the stretch is the line default grade. Filled in where the line
+   * changes grade — an X60 replacement spool welded into an X52 line, or a
+   * heavier grade through a crossing. SMYS sets the flow stress, which
+   * multiplies the failure pressure, so the grade cannot be averaged over a
+   * line any more than the diameter can.
+   */
+  const [sectionSmys, setSectionSmys] = useState<Record<string, string>>({});
 
   const normalizeDisplayValue = (
     value: string,
@@ -221,12 +231,20 @@ export default function FfsSetupPage() {
     return Number.isFinite(value) ? toMillimetres(value, diameterUnit) : Number.NaN;
   };
 
+  /** A section's typed SMYS in MPa, or null where it is blank. */
+  const sectionSmysMpa = (raw: string | undefined): number | null => {
+    if (raw === undefined || raw.trim() === '') return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? toMegapascals(value, pressureUnit) : Number.NaN;
+  };
+
   /** The spec as the import layer wants it: named section, numbers in mm. */
   const sectionPipeSpecs = sectionOptions
     .map((option) => {
       const key = normalizedSectionKey(option.section);
       const od = sectionLengthMm(sectionDiameters[key]);
       const wall = sectionLengthMm(sectionWalls[key]);
+      const smys = sectionSmysMpa(sectionSmys[key]);
       return {
         section: option.section,
         designFactor: Number(sectionFactors[key] ?? designFactor),
@@ -235,6 +253,7 @@ export default function FfsSetupPage() {
         // have every section reporting a "section override" it never carried.
         outerDiameterMm: od !== null && Number.isFinite(od) ? od : null,
         nominalWallThicknessMm: wall !== null && Number.isFinite(wall) ? wall : null,
+        smysMpa: smys !== null && Number.isFinite(smys) ? smys : null,
       };
     })
     .filter((rule) => Number.isFinite(rule.designFactor) && rule.designFactor > 0);
@@ -287,6 +306,23 @@ export default function FfsSetupPage() {
       : Number(outerDiameterMmForCalculation);
     return Number.isFinite(effectiveOd) && effectiveOd > 0 && effectiveOd <= 2 * wall;
   });
+
+  const invalidSectionSmys = sectionOptions.filter((option) => {
+    const smys = sectionSmysMpa(sectionSmys[normalizedSectionKey(option.section)]);
+    return smys !== null && (!Number.isFinite(smys) || smys <= 0);
+  });
+
+  /**
+   * Every grade this assessment will actually use, in MPa and sorted.
+   *
+   * Read off the resolved spec for the same reason the diameters are: a section
+   * left blank is the line grade, not a section that drops out of the count.
+   */
+  const distinctSectionSmys = [...new Set(
+    sectionPipeSpecs
+      .map((rule) => rule.smysMpa ?? Number(smysMpaForCalculation))
+      .filter((value) => Number.isFinite(value) && value > 0),
+  )].sort((a, b) => a - b);
 
   const explicitSafetyFactor = safetyFactorMode === 'explicit' ? Number(safetyFactor) : null;
   const safetyFactorReasons = safetyFactorMode === 'explicit' &&
@@ -374,6 +410,10 @@ export default function FfsSetupPage() {
     ...(sourceMode === 'released' && invalidSectionWalls.length > 0
       ? ['Section nominal wall must be greater than zero and leave a bore on its own diameter, '
         + `or left blank: ${invalidSectionWalls.map((option) => option.section).join(', ')}.`]
+      : []),
+    ...(sourceMode === 'released' && invalidSectionSmys.length > 0
+      ? ['Section SMYS must be greater than zero, or left blank to use the line default: '
+        + `${invalidSectionSmys.map((option) => option.section).join(', ')}.`]
       : []),
     ...safetyFactorReasons,
     ...serviceLifeReasons,
@@ -1156,6 +1196,14 @@ export default function FfsSetupPage() {
                     const next = event.target.value as PressureUnit;
                     setSmysMpa((value) => normalizeDisplayValue(value, (numeric) => convertPressure(numeric, pressureUnit, next)));
                     setOperatingPressureMpa((value) => normalizeDisplayValue(value, (numeric) => convertPressure(numeric, pressureUnit, next)));
+                    // Held in the displayed unit like the section diameters, so
+                    // a typed 415 MPa must not become 415 psi on the switch.
+                    setSectionSmys((previous) => Object.fromEntries(
+                      Object.entries(previous).map(([key, value]) => [
+                        key,
+                        normalizeDisplayValue(value, (numeric) => convertPressure(numeric, pressureUnit, next)),
+                      ]),
+                    ));
                     setPressureUnit(next);
                   }}
                   className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
@@ -1261,9 +1309,10 @@ export default function FfsSetupPage() {
                     {sectionOptions.length} section{sectionOptions.length === 1 ? '' : 's'} carry released
                     features, each bounded on the girth welds you sectioned the alignment on. Buried line pipe
                     and a river crossing or riser rarely share a design factor, and a line that steps from one
-                    diameter to another at a reducer does not share a diameter either. Leave the diameter blank
-                    wherever the stretch is line default pipe. Wall is a last resort: where the tally carries
-                    it, the run reports it or it is read off the joint's girth welds, and nothing here is used.
+                    diameter or grade to another at a reducer or a tie-in does not share those either. Leave
+                    the diameter and SMYS blank wherever the stretch is line default pipe. Wall is a last
+                    resort: where the tally carries it, the run reports it or it is read off the joint's girth
+                    welds, and nothing here is used.
                     Each feature records which values it was assessed with.
                   </p>
                 </div>
@@ -1276,6 +1325,7 @@ export default function FfsSetupPage() {
                         <th className="px-2 py-2 text-right">Range [m]</th>
                         <th className="px-2 py-2 text-right">OD [{diameterUnit}]</th>
                         <th className="px-2 py-2 text-right">Wall [{diameterUnit}]</th>
+                        <th className="px-2 py-2 text-right">SMYS [{pressureUnit}]</th>
                         <th className="px-4 py-2 text-right">Design factor</th>
                       </tr>
                     </thead>
@@ -1287,14 +1337,17 @@ export default function FfsSetupPage() {
                         const invalid = value.trim() === '' || !Number.isFinite(numeric) || numeric <= 0 || numeric > 1;
                         const odValue = sectionDiameters[key] ?? '';
                         const wallValue = sectionWalls[key] ?? '';
+                        const smysValue = sectionSmys[key] ?? '';
                         const odInvalid = invalidSectionDiameters.includes(option);
                         const wallInvalid = invalidSectionWalls.includes(option);
+                        const smysInvalid = invalidSectionSmys.includes(option);
                         // Only what the engineer actually set apart from the
                         // line is marked. A blank diameter is the ordinary
                         // answer, not an omission.
                         const overridden = (value !== designFactor && !invalid)
                           || (odValue.trim() !== '' && !odInvalid)
-                          || (wallValue.trim() !== '' && !wallInvalid);
+                          || (wallValue.trim() !== '' && !wallInvalid)
+                          || (smysValue.trim() !== '' && !smysInvalid);
                         const cellClass = (bad: boolean) => `w-24 rounded-lg border bg-slate-50 px-2 py-1.5 text-right text-xs tabular-nums text-slate-800 focus:outline-none dark:bg-slate-900 dark:text-slate-200 ${
                           bad
                             ? 'border-rose-400 focus:border-rose-500'
@@ -1346,6 +1399,21 @@ export default function FfsSetupPage() {
                                 className={cellClass(wallInvalid)}
                               />
                             </td>
+                            <td className="px-2 py-2 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={smysValue}
+                                placeholder={smysMpa || 'line'}
+                                aria-label={`SMYS for ${option.section}`}
+                                aria-invalid={smysInvalid}
+                                onChange={(event) =>
+                                  setSectionSmys((previous) => ({ ...previous, [key]: event.target.value }))
+                                }
+                                className={cellClass(smysInvalid)}
+                              />
+                            </td>
                             <td className="px-4 py-2 text-right">
                               <input
                                 type="number"
@@ -1375,6 +1443,17 @@ export default function FfsSetupPage() {
                       {distinctSectionDiameters.map((value) => `${value} mm`).join(', ')}. B31G carries the
                       diameter in the failure pressure and in the Folias term, so the same depth and length
                       do not give the same ERF on both.
+                    </p>
+                  </div>
+                )}
+                {distinctSectionSmys.length > 1 && (
+                  <div className="border-t border-slate-200 px-4 py-2.5 dark:border-slate-700">
+                    <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                      This line will be assessed at {distinctSectionSmys.length} grades
+                      {' — '}
+                      {distinctSectionSmys.map((value) => `${value} MPa`).join(', ')}. SMYS sets the flow
+                      stress, which multiplies the estimated failure pressure, so the same defect gives a
+                      different safe pressure on each.
                     </p>
                   </div>
                 )}

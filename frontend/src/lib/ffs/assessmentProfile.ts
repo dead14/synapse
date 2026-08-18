@@ -2,6 +2,7 @@ import type {
   FfsConfig,
   FfsDesignFactorSource,
   FfsOuterDiameterSource,
+  FfsSmysSource,
   FfsSafetyFactorSource,
   FfsGrowthAnalysisBasis,
   FfsGrowthObservation,
@@ -94,6 +95,14 @@ export function wallThicknessSourceLabel(source: FfsWallThicknessSource | undefi
 }
 
 export function outerDiameterSourceLabel(source: FfsOuterDiameterSource): string {
+  switch (source) {
+    case 'section-override': return 'Section pipe spec';
+    case 'line-default': return 'Line default';
+    default: return 'Supplied per row';
+  }
+}
+
+export function smysSourceLabel(source: FfsSmysSource): string {
   switch (source) {
     case 'section-override': return 'Section pipe spec';
     case 'line-default': return 'Line default';

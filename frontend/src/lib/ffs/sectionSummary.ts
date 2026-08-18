@@ -14,6 +14,7 @@ import { lifeSortValue } from './lifeProjection.ts';
 import type {
   FfsDesignFactorSource,
   FfsOuterDiameterSource,
+  FfsSmysSource,
   FfsSafetyFactorSource,
   FfsScreenedResult,
 } from './types.ts';
@@ -129,6 +130,9 @@ export interface FfsSectionPipeSpecRow {
   /** The pipe this stretch was assessed on, and which rule supplied it. */
   outerDiameterMm: number;
   outerDiameterSource: FfsOuterDiameterSource;
+  /** The grade this stretch was assessed on, and which rule supplied it. */
+  smysMpa: number;
+  smysSource: FfsSmysSource;
   featureCount: number;
   startLd: number;
   endLd: number;
@@ -138,11 +142,11 @@ export interface FfsSectionPipeSpecRow {
  * The pipe spec each section was actually assessed with, read back off the
  * results rather than off the form.
  *
- * A section that somehow carries two design factors — or two diameters — is
- * emitted as two rows, because silently showing one of them would hide a
- * misconfigured override. On a line that steps from 20 in to 24 in that is the
- * table an engineer checks first, so the diameter is grouped on as strictly as
- * the factor is.
+ * A section that somehow carries two design factors — or two diameters, or two
+ * grades — is emitted as two rows, because silently showing one of them would
+ * hide a misconfigured override. On a line that steps from 20 in to 24 in, or
+ * from X52 into X60, that is the table an engineer checks first, so diameter
+ * and SMYS are grouped on as strictly as the factor is.
  */
 export function buildSectionPipeSpecSummary(
   items: FfsScreenedResult[],
@@ -150,7 +154,7 @@ export function buildSectionPipeSpecSummary(
   const grouped = new Map<string, FfsScreenedResult[]>();
   for (const item of items) {
     const key = `${sectionNameOf(item)}|${item.nominal.df}|${item.nominal.safetyFactor}`
-      + `|${item.nominal.od}`;
+      + `|${item.nominal.od}|${item.nominal.smys}`;
     const bucket = grouped.get(key);
     if (bucket) bucket.push(item);
     else grouped.set(key, [item]);
@@ -169,6 +173,8 @@ export function buildSectionPipeSpecSummary(
         safetyFactorSource: members[0].nominal.safetyFactorSource,
         outerDiameterMm: members[0].nominal.od,
         outerDiameterSource: members[0].nominal.outerDiameterSource,
+        smysMpa: members[0].nominal.smys,
+        smysSource: members[0].nominal.smysSource,
         featureCount: members.length,
         startLd: minOf(distances),
         endLd: maxOf(distances),
