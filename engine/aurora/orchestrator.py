@@ -178,14 +178,20 @@ class AuroraResult:
 
 def _partition_features(
     features: list[CanonicalFeature],
+    align_clusters: bool = False,
 ) -> tuple[list[CanonicalFeature], list[CanonicalFeature], list[tuple[CanonicalFeature, str]]]:
     """Split a run into anchors, matchable metal loss, and bypassed evidence.
 
-    A clustered record is metal loss but is never aligned: its extent is a
-    bounding box over several pits that the vendor regroups differently on
+    A clustered record is metal loss but is not aligned by default: its extent
+    is a bounding box over several pits that the vendor regroups differently on
     every run, so pairing it compares two different populations.  It is
     conserved as a bypass row instead — excluded from alignment, never from the
     report.
+
+    ``align_clusters`` is the session's decision to treat clusters as ordinary
+    metal loss instead, for vendors that report a cluster as a standing feature
+    with the same grouping rules applied to both runs.  It defaults to the
+    conservative rule.
     """
     anchors: list[CanonicalFeature] = []
     metal_loss: list[CanonicalFeature] = []
@@ -194,7 +200,10 @@ def _partition_features(
         if feature.is_anchor:
             anchors.append(feature)
         elif feature.feature_class == CLUSTER:
-            bypassed.append((feature, BYPASS_CLUSTER))
+            if align_clusters:
+                metal_loss.append(feature)
+            else:
+                bypassed.append((feature, BYPASS_CLUSTER))
         elif feature.feature_class == METAL_LOSS:
             metal_loss.append(feature)
         else:
@@ -285,6 +294,7 @@ def run_aurora_alignment(
     new_run: dict | None = None,
     pipeline_key: str = "pipeline",
     config_overrides: dict | None = None,
+    align_clusters: bool = False,
 ) -> AuroraResult:
     """Execute the normative pipeline for one run pair."""
     config = resolve_config(config_overrides)
@@ -302,8 +312,12 @@ def run_aurora_alignment(
     for feature in new_unpositioned:
         result.bypassed_new.append((feature, "No readable odometer position"))
 
-    old_anchor_features, old_metal_loss, old_bypassed = _partition_features(old_positioned)
-    new_anchor_features, new_metal_loss, new_bypassed = _partition_features(new_positioned)
+    old_anchor_features, old_metal_loss, old_bypassed = _partition_features(
+        old_positioned, align_clusters,
+    )
+    new_anchor_features, new_metal_loss, new_bypassed = _partition_features(
+        new_positioned, align_clusters,
+    )
     result.bypassed_old.extend(old_bypassed)
     result.bypassed_new.extend(new_bypassed)
 

@@ -62,6 +62,28 @@ class ManualAlignmentEngineTests(unittest.TestCase):
         # The cluster is held back from matching, never dropped from the report.
         self.assertTrue(output["audit"]["isConserved"])
 
+    def test_a_session_that_aligns_clusters_reports_them_as_anomalies(self):
+        old_features = [
+            {
+                "id": "old-cluster",
+                "source_key": "OLD:cluster",
+                "abs_distance_m": 7.0,
+                "originalType": "metal loss",
+                "depth_pct": 22.0,
+                "raw": {"feature_identification": "CLUSTER corrosion"},
+            },
+        ]
+
+        output = manual_alignment_engine.build_manual_output(
+            old_features, [], 2020, 2026, True,
+        )
+
+        self.assertEqual([row["Identif. OLD"] for row in output["anomaly_only_old"]], ["old-cluster"])
+        self.assertEqual(output["bypassed_old"], [])
+        # No bypass happened, so no bypass is claimed.
+        self.assertEqual(output["anomaly_only_old"][0]["Bypass Reason"], "-")
+        self.assertTrue(output["audit"]["isConserved"])
+
 
 if __name__ == "__main__":
     unittest.main()

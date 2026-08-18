@@ -440,6 +440,39 @@ class InsufficientEvidenceTests(unittest.TestCase):
             "Clustered metal loss" in reason for _f, reason in result.bypassed_old
         ))
 
+    def test_a_session_may_offer_clusters_to_the_matcher(self):
+        # The same two runs, with the engineer's decision that this vendor's
+        # clusters are stable enough to carry an identity across runs.
+        positions = joint_positions(count=10)
+        old, new = build_pair(positions, features_per_joint=1)
+        old.append({
+            "id": "OLDC", "source_key": "OLD:cluster",
+            "abs_distance_m": positions[2] + 4.0, "originalType": "metal loss",
+            "clock_position": "6:00", "depth_pct": 40.0,
+            "raw": {"feature_identification": "CLUSTER corrosion"},
+        })
+        new.append({
+            "id": "NEWC", "source_key": "NEW:cluster",
+            "abs_distance_m": positions[2] + 4.0, "originalType": "metal loss",
+            "clock_position": "6:00", "depth_pct": 45.0,
+            "raw": {"feature_identification": "CLUSTER corrosion"},
+        })
+        result = run_aurora_alignment(old, new, align_clusters=True)
+
+        bypassed_keys = {feature.key for feature, _reason in result.bypassed_old}
+        self.assertNotIn("OLD:cluster", bypassed_keys)
+        self.assertFalse(any(
+            "Clustered metal loss" in reason for _f, reason in result.bypassed_old
+        ))
+        # It went to the matcher, so it appears as a group like any other
+        # metal loss rather than vanishing between the two buckets.
+        grouped = {
+            member.key
+            for group in result.groups
+            for member in list(group.old_members) + list(group.new_members)
+        }
+        self.assertIn("OLD:cluster", grouped)
+
 
 class ConfigurationTests(unittest.TestCase):
     """Section 30 — thresholds are configuration, and are versioned."""

@@ -31,12 +31,13 @@ const STEP_NOTES: Record<string, string> = {
     'Sections scope the report. AURORA’s own matching corridor is the persistent physical '
     + 'joint, which is derived from the structural map rather than from these boundaries.',
   features:
-    'Visibility rules apply to the report. Clustered metal loss is excluded from matching by '
-    + 'AURORA regardless, because vendors regroup those pits differently on every run.',
+    'Visibility rules apply to the report. Whether clustered metal loss is matched at all is set '
+    + 'on the Tolerances step, and AURORA honours that decision like every other strategy.',
   scenario:
     'These tolerances are recorded with the session but do not gate AURORA. Its candidate gate '
     + 'is a Mahalanobis distance built from each tool’s stated or default uncertainty, applied '
-    + 'to residuals measured after the local transform.',
+    + 'to residuals measured after the local transform. The clustered metal loss setting below '
+    + 'is not a gate and does apply: it decides what AURORA is given to match.',
   exec:
     'Structure first, then coordinates, then correspondence. Where direct matching collapses '
     + 'inside a well-registered corridor, Pattern Rescue estimates the local transform instead '
