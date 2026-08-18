@@ -40,8 +40,8 @@ test('accepts finite domain inputs including zero depth and zero growth rates', 
 
   const result = processRow(row, config);
   assert.equal(result.maxDepthPct, 0);
-  assert.equal(result.crDepth, 0);
-  assert.equal(result.crLength, 0);
+  assert.equal(result.crDepthSource, 0);
+  assert.equal(result.crLengthSource, 0);
   assert.ok(Number.isFinite(result.ERF));
   assert.ok(Number.isFinite(result.safePressure));
 });

@@ -1,7 +1,8 @@
 import { evaluateB31g, type B31gGeometry } from './b31g.ts';
 import { analysisHorizonYears } from './lifeProjection.ts';
 import { computeRemnantLife, EMPTY_SERVICE_LIFE, type FfsRemnantLimit } from './remnantLife.ts';
-import { growthRateFor, lengthApplicationFor, severityOf } from './screening.ts';
+import { lengthApplicationFor, severityOf } from './screening.ts';
+import { resolvedDepthRate } from './growthResolution.ts';
 import type {
   FfsConfig,
   FfsLifeStatus,
@@ -64,8 +65,8 @@ export function scenarioInputsForPreset(
 ): FfsScenarioInputs {
   const reported = {
     requiredPressureMpa: nominal.p0,
-    depthGrowthRateMmPerYear: nominal.crDepth,
-    lengthGrowthRateMmPerYear: nominal.crLength,
+    depthGrowthRateMmPerYear: nominal.crDepthSource,
+    lengthGrowthRateMmPerYear: nominal.crLengthSource,
   };
 
   if (preset === 'as-reported') {
@@ -78,7 +79,15 @@ export function scenarioInputsForPreset(
 
   const screened = {
     requiredPressureMpa: nominal.p0,
-    depthGrowthRateMmPerYear: growthRateFor(nominal, screening),
+    // Under the uniform basis every feature runs on the configured rate. On the
+    // per-feature basis the rate is read off the projection rather than
+    // re-resolved here: re-resolving without the population context skipped the
+    // ladder's derived rungs, so a preset seeded the drawer with 0 mm/y for
+    // exactly the features the assessment had projected on a derived rate, and
+    // the drawer then disagreed with the results table it was opened from.
+    depthGrowthRateMmPerYear: screening.growthBasis === 'uniform'
+      ? screening.growthRateMmPerYear
+      : resolvedDepthRate(nominal),
     // Resolved the same way as depth, so a preset cannot seed the drawer with a
     // length rate the screening basis would never have used.
     lengthGrowthRateMmPerYear: lengthApplicationFor(nominal, screening).rateMmPerYear,

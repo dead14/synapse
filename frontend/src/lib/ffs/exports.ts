@@ -31,6 +31,17 @@ import {
   type FfsReportContext,
   type FfsScenarioSummary,
 } from './reportCase.ts';
+import { resolvedDepthRate } from './growthResolution.ts';
+
+/**
+ * How many features were projected on one class of growth evidence.
+ *
+ * Reads the evidence record rather than the source column, so a rate the growth
+ * ladder derived is counted as derived and not as a measurement of zero.
+ */
+function depthBasisCount(items: FfsScreenedResult[], basis: string): number {
+  return items.filter((item) => (item.nominal.growthEvidence?.depth.analysisBasis ?? 'none') === basis).length;
+}
 
 export function triggerDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -161,6 +172,14 @@ export function buildResultsWorkbook(
     ['Depth rejection limit [% WT]', screening.depthRejectionPct],
     [],
     ['Total features assessed', items.length],
+    // The evidence base, stated beside the population it qualifies. Every life
+    // and priority in this workbook is projected from a growth rate, and these
+    // four rows say how many of those rates anyone measured.
+    ['  of which depth growth was run-pair measured', depthBasisCount(items, 'reported')],
+    ['  of which depth growth is a NEW-only zero-baseline estimate', depthBasisCount(items, 'estimated')],
+    ['  of which depth growth was derived or assumed', depthBasisCount(items, 'explicit-fallback')
+      + depthBasisCount(items, 'service-age') + depthBasisCount(items, 'population-percentile')],
+    ['  of which no depth growth rate could be established', depthBasisCount(items, 'none')],
     ['As-managed active features', reportCase.asManaged.populationCount],
     ['Verified permanent repairs', reportCase.repairCounts.permanentVerified],
     ['Permanent repair labels pending capacity credit', reportCase.repairCounts.permanentPendingEvidence],
@@ -232,7 +251,11 @@ export function buildResultsWorkbook(
       num(n.safetyFactor, 4), safetyFactorSourceLabel(n.safetyFactorSource),
       num(n.p0, 4),
       n.isClusteredMetalLoss ? 'Yes' : 'No',
-      num(n.crDepth, 4), growthObservationLabel(n.growthEvidence?.depth.observation),
+      // The rate the projection consumed, not the source column. A feature the
+      // run pair never matched imports a zero here and is projected on a rate
+      // the ladder resolved; writing the zero made the published remnant life
+      // unreachable from the published inputs.
+      num(resolvedDepthRate(n), 4), growthObservationLabel(n.growthEvidence?.depth.observation),
       growthAnalysisBasisLabel(n.growthEvidence?.depth.analysisBasis),
       num(n.growthEvidence?.depth.rawRateMmPerYear ?? null, 4),
       n.growthEvidence?.intervalYears ?? '', n.growthEvidence?.depth.formula ?? '',
@@ -372,7 +395,11 @@ export function buildResultsWorkbook(
       'Feature ID', 'Alignment source key', 'Alignment session', 'Selection reason',
       'LD [m]', 'Section', 'Surface', 'Orientation', 'Max depth [%WT]', 'Length [mm]',
       'Width [mm]', 'Nominal wall thickness [mm]', 'Wall source',
-      'CR depth used [mm/y]', 'CR length used [mm/y]',
+      // This sheet is the record of what went in, so these are the source
+      // columns as imported — not the rates the projection resolved to. The
+      // assessment sheet carries those, and the two disagree by design for
+      // every feature the run pair never matched.
+      'CR depth as imported [mm/y]', 'CR length as imported [mm/y]',
       'OLD survey year', 'NEW survey year', 'Interval [years]', 'Depth growth observation',
       'Depth analysis basis', 'Raw depth growth [mm/y]', 'Depth growth formula', 'Depth growth note',
     ];
@@ -384,7 +411,7 @@ export function buildResultsWorkbook(
         record?.selectionReason ?? '',
         n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2),
         reportedWidth(n.width), num(n.wall, 2), wallThicknessSourceLabel(record?.wallThicknessSource),
-        num(n.crDepth, 4), num(n.crLength, 4),
+        num(n.crDepthSource, 4), num(n.crLengthSource, 4),
         record?.growthEvidence.oldSurveyYear ?? '', record?.growthEvidence.newSurveyYear ?? '',
         record?.growthEvidence.intervalYears ?? '',
         growthObservationLabel(record?.growthEvidence.depth.observation),

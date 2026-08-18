@@ -8,6 +8,7 @@ import {
   type LdBin,
 } from './statistics.ts';
 import type { FfsConfig, FfsScreenedResult } from './types.ts';
+import { resolvedDepthRate, resolvedLengthRate } from './growthResolution.ts';
 
 /**
  * Point payload carried through Chart.js so tooltips can name the feature.
@@ -96,11 +97,15 @@ export function buildOrientationScatter(items: FfsScreenedResult[]): SplitScatte
 }
 
 export function buildDepthCrScatter(items: FfsScreenedResult[]): SplitScatter {
-  return splitScatter(items, (item) => item.nominal.crDepth);
+  return splitScatter(items, (item) => resolvedDepthRate(item.nominal));
 }
 
 export function buildLengthCrScatter(items: FfsScreenedResult[]): SplitScatter {
-  return splitScatter(items, (item) => item.nominal.crLength);
+  // Null, so `splitScatter` drops the feature rather than plotting it at zero.
+  // Reading the source column put a flat wall of points on the axis for every
+  // feature whose length rate was never established, which read as thousands of
+  // defects measured not to be lengthening.
+  return splitScatter(items, (item) => resolvedLengthRate(item.nominal));
 }
 
 export function buildErfScatter(items: FfsScreenedResult[]): SplitScatter {

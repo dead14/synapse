@@ -83,7 +83,7 @@ test('as-reported does not inherit a uniform screening growth assumption', () =>
   const forecastInputs = scenarioInputsForPreset('forecast', result, uniformScreening);
   const asReported = evaluateFfsScenario(result, config, uniformScreening, asReportedInputs);
 
-  assert.equal(asReportedInputs.depthGrowthRateMmPerYear, result.crDepth);
+  assert.equal(asReportedInputs.depthGrowthRateMmPerYear, result.crDepthSource);
   assert.equal(forecastInputs.depthGrowthRateMmPerYear, 0.5);
   assert.equal(asReported.limitStatus, result.remnantLife.status);
   assertClose(asReported.limitYears ?? -1, result.remnantLife.years ?? -1, 0.01);

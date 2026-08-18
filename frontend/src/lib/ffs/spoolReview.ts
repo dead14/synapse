@@ -23,7 +23,8 @@ import type {
   FfsScreeningConfig,
   FfsSeverity,
 } from './types.ts';
-import { findInteractions, growthApplicationFor } from './screening.ts';
+import { findInteractions } from './screening.ts';
+import { resolvedDepthRate } from './growthResolution.ts';
 import { remnantSortValue } from './lifeProjection.ts';
 import { maxOf } from '../../utils/numericRange.ts';
 
@@ -210,21 +211,25 @@ function summariseGrowth(
   let unavailableCount = 0;
 
   for (const member of members) {
-    // The rate the forecast actually ran on, not the raw column: under the
-    // uniform basis every feature runs on the configured rate regardless of
-    // what the ILI pair reported, and quoting the reported one would describe
-    // an assessment nobody performed.
-    const application = growthApplicationFor(member.nominal, screening);
-    if (application.observation === 'unavailable' && application.rateMmPerYear <= 0) {
+    // The rate the forecast actually ran on, read off the projection itself.
+    // This used to re-run the resolver without the population context, which
+    // skipped its derived rungs and reported zero for every feature the ladder
+    // had in fact supplied a rate to. The remnant-life record cannot disagree
+    // with the projection, because it is the projection.
+    const rate = resolvedDepthRate(member.nominal);
+    const basis = screening.growthBasis === 'uniform'
+      ? 'uniform-assumption'
+      : member.nominal.growthEvidence?.depth.analysisBasis ?? 'none';
+    if (!(rate > 0)) {
       unavailableCount += 1;
       continue;
     }
-    if (application.analysisBasis === 'reported' || application.analysisBasis === 'estimated') {
-      measuredCount += 1;
-    } else {
-      assumedCount += 1;
-    }
-    rates.push(application.rateMmPerYear);
+    // Only a run-pair rate counts as measured. A zero-baseline estimate is an
+    // assumption about a feature nobody matched, and counting it here was what
+    // let a spool report "38 measured" when it held one measurement.
+    if (basis === 'reported') measuredCount += 1;
+    else assumedCount += 1;
+    rates.push(rate);
   }
 
   if (rates.length === 0) {

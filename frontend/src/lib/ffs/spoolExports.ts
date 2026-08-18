@@ -16,6 +16,7 @@ import * as XLSX from 'xlsx';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from './types.ts';
 import type { FfsReportContext } from './reportCase.ts';
 import { formatRemnantLife, remnantLimitLabel } from './lifeProjection.ts';
+import { resolvedDepthRate, resolvedLengthRate } from './growthResolution.ts';
 import { methodProfileLabel, pressureBasisLabel } from './assessmentProfile.ts';
 import { safeFilename, triggerDownload } from './exports.ts';
 import {
@@ -323,8 +324,9 @@ export function buildSpoolReviewWorkbook(
         num(n.ERF, 4),
         num(member.conservative.ERF, 4),
         n.acceptance,
-        num(n.crDepth, 4),
-        num(n.crLength, 4),
+        num(resolvedDepthRate(n), 4),
+        // Words, not a zero, when no length rate was ever established.
+        resolvedLengthRate(n) === null ? 'Not calculated' : num(resolvedLengthRate(n), 4),
         formatRemnantLife(n.remnantLife),
         remnantLimitLabel(n.remnantLife),
         n.remnantLife.dueDateIso ?? '',

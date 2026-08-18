@@ -20,6 +20,7 @@ import {
   pressureBasisLabel,
   safetyFactorSourceLabel,
 } from '../../lib/ffs/assessmentProfile.ts';
+import { resolvedDepthRate, resolvedLengthRate } from '../../lib/ffs/growthResolution.ts';
 import type { FfsRepairCreditDecision } from '../../lib/ffs/reportCase';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
 import { MathInline, MathBlock } from '../ds';
@@ -280,6 +281,8 @@ export default function FfsDetailModal({
 
   const n = item.nominal;
   const life = n.remnantLife;
+  // The rate the projection consumed, never the source column.
+  const lengthRate = resolvedLengthRate(n);
   // The depth rejection line this projection was actually measured to. Read
   // from the projection rather than assumed to be 80: it is configurable, and
   // remnantLife carries the value that was used.
@@ -495,17 +498,20 @@ export default function FfsDetailModal({
               <InputCard
                 label="CR Depth"
                 symbolTex="\CRd"
-                value={n.crDepth.toFixed(4)}
+                value={resolvedDepthRate(n).toFixed(4)}
                 unit="mm/y"
                 description={growthAnalysisBasisLabel(n.growthEvidence?.depth.analysisBasis)}
                 basis={n.growthEvidence?.depth.note ?? 'No structured growth provenance was attached to this row.'}
                 showWorking={showWorking}
               />
+              {/* A rate that was never established prints as words, never as
+                  0.0000 mm/y. The zero read as a measurement that this defect
+                  is not lengthening, which is the one thing nobody measured. */}
               <InputCard
                 label="CR Length"
                 symbolTex="\CRl"
-                value={n.crLength.toFixed(4)}
-                unit="mm/y"
+                value={lengthRate === null ? 'Not calculated' : lengthRate.toFixed(4)}
+                unit={lengthRate === null ? undefined : 'mm/y'}
                 basis={n.growthEvidence?.length.note ?? 'No structured growth provenance was attached to this row.'}
                 showWorking={showWorking}
                 description={growthAnalysisBasisLabel(n.growthEvidence?.length.analysisBasis)}
@@ -526,7 +532,7 @@ export default function FfsDetailModal({
                 <strong>
                   {n.growthEvidence?.depth.analysisRateMmPerYear === null
                     ? 'Not calculable'
-                    : `${n.crDepth.toFixed(4)} mm/y`}
+                    : `${resolvedDepthRate(n).toFixed(4)} mm/y`}
                 </strong>
                 <p>{growthAnalysisBasisLabel(n.growthEvidence?.depth.analysisBasis)}</p>
               </div>

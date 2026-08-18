@@ -69,7 +69,7 @@ test('NEW-only estimated growth requires engineering review even when strength p
     },
     length: nominal.growthEvidence!.length,
   };
-  nominal.crDepth = 0.75;
+  nominal.crDepthSource = 0.75;
   const item = screenResults([nominal], config, DEFAULT_SCREENING_CONFIG)[0];
 
   assert.equal(item.nominal.acceptance, 'Acceptable');
