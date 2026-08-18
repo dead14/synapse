@@ -15,6 +15,7 @@ import {
   mapAlignmentRowsToFfs,
   resolveDesignFactor,
   resolveOuterDiameter,
+  resolveSmys,
   alignmentSectionOptions,
   summariseReleasedIntake,
   type AlignmentEngineeringInputs,
@@ -449,6 +450,86 @@ test('a section wall stands in for its own stretch, not the line wall', () => {
   assert.equal(aerial.provenance.wallThicknessSource, 'section-nominal');
   // The feature says which wall it borrowed, not merely that it borrowed one.
   assert.ok(aerial.warnings.some((warning) => /section nominal wall of 11.1 mm/.test(warning)));
+});
+
+/* ── Per-section grade ─────────────────────────────────────────────────── */
+
+/** An X52 line with an X60 spool welded in at the aerial crossing. */
+const twoGrades: AlignmentEngineeringInputs = {
+  ...engineering,
+  smysMpa: 359,
+  sectionPipeSpecs: [
+    { section: 'River Crossing RC#86', designFactor: 0.6 },
+    { section: 'Aerial Section', designFactor: 0.72, smysMpa: 414 },
+  ],
+};
+
+test('a section grade wins over the line default and records its source', () => {
+  assert.deepEqual(resolveSmys('Aerial Section', twoGrades), {
+    smysMpa: 414,
+    source: 'section-override',
+  });
+  // A section that names no grade is line pipe, not an omission.
+  assert.deepEqual(resolveSmys('River Crossing RC#86', twoGrades), {
+    smysMpa: 359,
+    source: 'line-default',
+  });
+  assert.deepEqual(resolveSmys('Unnamed stretch', twoGrades), {
+    smysMpa: 359,
+    source: 'line-default',
+  });
+});
+
+test('the X60 stretch is assessed on X60, and the row says so', () => {
+  const mapped = mapAlignmentRowsToFfs(
+    [
+      alignmentRow() as never,
+      alignmentRow({
+        'Source Key NEW': 'new:2', 'Identif. NEW': 'A-2',
+        'Section NEW': 'Aerial Section', 'Log Dist NEW (m)': 1453.539,
+      }) as never,
+    ],
+    twoGrades,
+    'session-1',
+    { selectedKeys: new Set(['new:1', 'new:2']) },
+  );
+
+  assert.equal(mapped.accepted.length, 2);
+  const [crossing, aerial] = mapped.accepted;
+  assert.equal(crossing.row['SMYS [MPa]'], '359');
+  assert.equal(crossing.row['SMYS Source'], 'line-default');
+  assert.equal(aerial.row['SMYS [MPa]'], '414');
+  assert.equal(aerial.row['SMYS Source'], 'section-override');
+  assert.equal(aerial.provenance.smysMpa, 414);
+  assert.equal(aerial.provenance.smysSource, 'section-override');
+});
+
+test('the same defect is a different safe pressure on the two grades', () => {
+  // SMYS sets the flow stress, and the flow stress multiplies the failure
+  // pressure, so a stronger grade is a higher safe pressure at one depth.
+  const x52 = processRow(row({ 'SMYS [MPa]': '359' }), config);
+  const x60 = processRow(row({ 'SMYS [MPa]': '414' }), config);
+  assert.ok(x60.safePressure > x52.safePressure);
+  // A manual workbook carries no source column, and the row is where the
+  // engineer typed the grade.
+  assert.equal(x52.smysSource, 'row-supplied');
+});
+
+test('a section grade that is present but unusable is refused, not ignored', () => {
+  assert.throws(
+    () => mapAlignmentRowsToFfs(
+      [alignmentRow() as never],
+      {
+        ...engineering,
+        sectionPipeSpecs: [
+          { section: 'River Crossing RC#86', designFactor: 0.6, smysMpa: 0 },
+        ],
+      },
+      'session-1',
+      { selectedKeys: new Set(['new:1']) },
+    ),
+    /SMYS for section "River Crossing RC#86"/,
+  );
 });
 
 test('a wall read off the joint is a measurement, and never the section fallback', () => {

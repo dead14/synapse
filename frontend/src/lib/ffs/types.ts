@@ -133,6 +133,18 @@ export interface FfsSectionPipeSpec {
    * falling back to the line wall there would put the 20 in wall on 24 in pipe.
    */
   nominalWallThicknessMm?: number | null;
+  /**
+   * Specified minimum yield strength of the grade in this section, in MPa.
+   * Absent, null, or non-positive means the stretch is the line default grade.
+   *
+   * A line is no more uniform in grade than it is in diameter: a station run in
+   * X52 stepping into X60 line pipe, or an X65 crossing in an X52 line, is the
+   * ordinary case. SMYS enters B31G through the flow stress — 1.1·SMYS, or
+   * SMYS + 69 MPa on the Modified method — so it scales the failure pressure
+   * directly, and assessing an X60 stretch at X52 understates it by the ratio
+   * of the two grades.
+   */
+  smysMpa?: number | null;
 }
 
 /**
@@ -149,6 +161,15 @@ export type FfsDesignFactorSource = 'section-override' | 'line-default' | 'row-s
  * D behind an ERF is a decision the report has to be able to show.
  */
 export type FfsOuterDiameterSource = 'section-override' | 'line-default' | 'row-supplied';
+
+/**
+ * Which rule produced the SMYS a feature was assessed with.
+ *
+ * The same three cases again, and recorded per feature for the same reason: the
+ * grade multiplies the flow stress, so on a line of more than one grade the
+ * strength behind an ERF is a decision the report has to be able to show.
+ */
+export type FfsSmysSource = 'section-override' | 'line-default' | 'row-supplied';
 
 /**
  * Where the safety factor dividing the failure pressure came from.
@@ -318,6 +339,8 @@ export interface FfsInput {
   designFactorSource: FfsDesignFactorSource;
   /** Which rule supplied `od`. */
   outerDiameterSource: FfsOuterDiameterSource;
+  /** Which rule supplied `smys`. */
+  smysSource: FfsSmysSource;
   /** The divisor between failure pressure and safe pressure: P_S = P_F / SF. */
   safetyFactor: number;
   safetyFactorSource: FfsSafetyFactorSource;

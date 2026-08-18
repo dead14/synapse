@@ -9,7 +9,11 @@ import {
 } from './lifeProjection.ts';
 import { designLifeUsage, EMPTY_SERVICE_LIFE } from './remnantLife.ts';
 import { buildSectionPipeSpecSummary, buildSectionGrowthSummary } from './sectionSummary.ts';
-import { designFactorSourceLabel, outerDiameterSourceLabel } from './assessmentProfile.ts';
+import {
+  designFactorSourceLabel,
+  outerDiameterSourceLabel,
+  smysSourceLabel,
+} from './assessmentProfile.ts';
 import {
   buildFfsReportCase,
   createFfsReportContext,
@@ -259,11 +263,12 @@ export function buildNarrative(
   // the reader has to take on trust.
   const pipeSpecRows = buildSectionPipeSpecSummary(items);
   const diameters = new Set(pipeSpecRows.map((row) => row.outerDiameterMm));
+  const grades = new Set(pipeSpecRows.map((row) => row.smysMpa));
   blocks.push({ kind: 'heading', level: 2, text: '2.1  Pipe spec by section' });
   blocks.push({
     kind: 'table',
     table: {
-      caption: 'Table 2-1  Outside diameter, design factor and safety factor applied to each section',
+      caption: 'Table 2-1  Outside diameter, grade, design factor and safety factor applied to each section',
       columns: [
         { header: 'Section', align: 'left' },
         { header: 'From [m]', align: 'right' },
@@ -271,6 +276,8 @@ export function buildNarrative(
         { header: 'Features', align: 'right' },
         { header: 'OD [mm]', align: 'right' },
         { header: 'OD source', align: 'left' },
+        { header: 'SMYS [MPa]', align: 'right' },
+        { header: 'SMYS source', align: 'left' },
         { header: 'Design factor', align: 'right' },
         { header: 'Source', align: 'left' },
         { header: 'Safety factor', align: 'right' },
@@ -282,6 +289,8 @@ export function buildNarrative(
         row.featureCount.toLocaleString(),
         row.outerDiameterMm.toLocaleString(undefined, { maximumFractionDigits: 1 }),
         outerDiameterSourceLabel(row.outerDiameterSource),
+        row.smysMpa.toLocaleString(undefined, { maximumFractionDigits: 1 }),
+        smysSourceLabel(row.smysSource),
         row.designFactor.toFixed(2),
         designFactorSourceLabel(row.source),
         `${row.safetyFactor.toFixed(2)}${row.safetyFactorSource === 'explicit' ? '' : ' (1/F)'}`,
@@ -300,6 +309,18 @@ export function buildNarrative(
         + 'stretch of line recorded above. Every remaining-strength figure in this report was calculated '
         + 'on the diameter of the section the feature sits in, and features in different sections are '
         + 'therefore not directly comparable on depth and length alone.',
+    });
+  }
+  // The grade is stated on the same terms and for the same reason. SMYS sets
+  // the flow stress, and the flow stress multiplies the failure pressure, so a
+  // line of two grades gives two different safe pressures for one defect.
+  if (grades.size > 1) {
+    blocks.push({
+      kind: 'paragraph',
+      text: `This line is not of one grade. ${grades.size} specified minimum yield strengths were `
+        + `assessed — ${[...grades].sort((a, b) => a - b).map((value) => `${value} MPa`).join(', ')} — each `
+        + 'on the stretch of line recorded above. The flow stress, and with it the estimated failure '
+        + 'pressure, is taken from the grade of the section the feature sits in.',
     });
   }
 

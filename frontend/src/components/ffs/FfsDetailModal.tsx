@@ -14,6 +14,7 @@ import {
   growthObservationLabel,
   designFactorSourceLabel,
   outerDiameterSourceLabel,
+  smysSourceLabel,
   b314DispositionLabel,
   methodProfileLabel,
   pressureBasisLabel,
@@ -457,8 +458,8 @@ export default function FfsDetailModal({
                 symbolTex="\SMYS"
                 value={n.smys.toFixed(1)}
                 unit="MPa"
-                description="Specified"
-                basis="Specified minimum yield strength of the grade — a specification floor, not a measured or certified property of this joint."
+                description={smysSourceLabel(n.smysSource)}
+                basis="Specified minimum yield strength of the grade this feature sits in — a line of more than one grade carries one per section. A specification floor, not a measured or certified property of this joint."
                 showWorking={showWorking}
               />
               <InputCard

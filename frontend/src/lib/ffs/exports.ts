@@ -15,6 +15,7 @@ import {
   b314DispositionLabel,
   designFactorSourceLabel,
   outerDiameterSourceLabel,
+  smysSourceLabel,
   wallThicknessSourceLabel,
   engineeringDisposition,
   safetyFactorSourceLabel,
@@ -199,7 +200,8 @@ export function buildResultsWorkbook(
 
   const header = [
     'Feature ID', 'LD [m]', 'Section', 'Surface', 'Orientation', 'Max depth [%]', 'Length [mm]', 'Width [mm]',
-    'Wall [mm]', 'OD [mm]', 'OD source', 'SMYS [MPa]', 'Design factor', 'Design factor source',
+    'Wall [mm]', 'OD [mm]', 'OD source', 'SMYS [MPa]', 'SMYS source',
+    'Design factor', 'Design factor source',
     'Safety factor', 'Safety factor source', 'P0 [MPa]',
     'Clustered metal loss',
     'CR depth used [mm/y]', 'Depth growth observation', 'Depth analysis basis',
@@ -225,7 +227,8 @@ export function buildResultsWorkbook(
     return [
       n.featureId ?? '', n.ld, n.section, n.surface, n.orient, num(n.maxDepthPct, 2), num(n.length, 2), reportedWidth(n.width),
       num(n.wall, 2), num(n.od, 2), outerDiameterSourceLabel(n.outerDiameterSource),
-      num(n.smys, 2), num(n.df, 4), designFactorSourceLabel(n.designFactorSource),
+      num(n.smys, 2), smysSourceLabel(n.smysSource),
+      num(n.df, 4), designFactorSourceLabel(n.designFactorSource),
       num(n.safetyFactor, 4), safetyFactorSourceLabel(n.safetyFactorSource),
       num(n.p0, 4),
       n.isClusteredMetalLoss ? 'Yes' : 'No',
@@ -295,11 +298,12 @@ export function buildResultsWorkbook(
   // buried in the row export.
   const designFactorHeader = [
     'Section', 'From [m]', 'To [m]', 'Features', 'OD [mm]', 'OD source',
-    'Design factor', 'Source', 'Safety factor',
+    'SMYS [MPa]', 'SMYS source', 'Design factor', 'Source', 'Safety factor',
   ];
   const designFactorRows = buildSectionPipeSpecSummary(items).map((row) => [
     row.section, num(row.startLd, 3), num(row.endLd, 3), row.featureCount,
     num(row.outerDiameterMm, 2), outerDiameterSourceLabel(row.outerDiameterSource),
+    num(row.smysMpa, 2), smysSourceLabel(row.smysSource),
     num(row.designFactor, 4), designFactorSourceLabel(row.source), num(row.safetyFactor, 4),
   ]);
 
