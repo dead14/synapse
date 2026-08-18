@@ -381,7 +381,6 @@ export default function StepMatchingSections({ config, onBack, onNext }: Props) 
 
           <StatGrid>
             <Stat
-              lead
               label="NEW axis"
               value={activePair?.newRun?.year || config?.summaryData?.masterRun?.year || '—'}
               hint="Spatial master"

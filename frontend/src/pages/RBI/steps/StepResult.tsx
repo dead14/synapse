@@ -72,7 +72,7 @@ export default function StepResult({
     <>
       <StepPanel title="Summary" blurb={`${assessment.lineName}, inspected ${assessment.assessmentDateIso}.`}>
         <StatGrid>
-          <Stat label="Sections" value={assessment.sections.length} lead />
+          <Stat label="Sections" value={assessment.sections.length} />
           <Stat
             label="At unacceptable risk"
             value={assessment.totals.unacceptable}

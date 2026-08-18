@@ -742,9 +742,8 @@ layer(base);
   }
 
   .alignment-dataset-card.is-master {
-    border-color: var(--ds-primary-border);
+    border-color: var(--ds-primary);
     background: var(--ds-primary-softer);
-    box-shadow: inset 3px 0 0 var(--ds-primary);
   }
 
   .alignment-dataset-card__head {

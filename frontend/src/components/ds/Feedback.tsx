@@ -47,16 +47,14 @@ interface StatProps {
   value: ReactNode;
   hint?: ReactNode;
   tone?: Tone;
-  /** Adds the accent rule on the leading edge, for the headline metric. */
-  lead?: boolean;
   compact?: boolean;
   className?: string;
 }
 
-export function Stat({ label, value, hint, tone = 'neutral', lead, compact, className = '' }: StatProps) {
+export function Stat({ label, value, hint, tone = 'neutral', compact, className = '' }: StatProps) {
   const toneClass = tone === 'neutral' || tone === 'primary' ? '' : ` ds-stat--${tone}`;
   return (
-    <div className={`ds-stat${toneClass}${lead ? ' ds-stat--primary' : ''}${className ? ` ${className}` : ''}`}>
+    <div className={`ds-stat${toneClass}${className ? ` ${className}` : ''}`}>
       <span className="ds-stat__label">{label}</span>
       <span className={`ds-stat__value${compact ? ' ds-stat__value--sm' : ''}`}>{value}</span>
       {hint ? <span className="ds-stat__hint">{hint}</span> : null}

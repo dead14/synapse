@@ -254,7 +254,7 @@ export default function CorrosionAnalysisPage() {
 
       {!loading && !error && (
         <div className="ds-stack ds-stack--lg">
-          <Panel className="corrosion-review-brief">
+          <Panel>
             <PanelHeader
               plain
               eyebrow="Engineering review route"
@@ -281,7 +281,7 @@ export default function CorrosionAnalysisPage() {
 
           {/* Vitals band — the four numbers that frame everything below */}
           <StatGrid>
-            <Stat lead label="Metal loss" value={vitals.metalLoss.toLocaleString()} hint={`${vitals.assessable.toLocaleString()} with complete dimensions`} />
+            <Stat label="Metal loss" value={vitals.metalLoss.toLocaleString()} hint={`${vitals.assessable.toLocaleString()} with complete dimensions`} />
             <Stat label="Max depth" value={vitals.maxDepthPct === null ? '—' : `${vitals.maxDepthPct.toFixed(1)}%`} hint="Of wall thickness" tone={vitals.maxDepthPct !== null && vitals.maxDepthPct >= 60 ? 'danger' : 'neutral'} />
             <Stat label="Max ERF" value={vitals.maxErf === null ? '—' : vitals.maxErf.toFixed(3)} hint={vitals.maxErf !== null && vitals.maxErf >= 1 ? 'At or above 1' : 'Below 1'} tone={vitals.maxErf !== null && vitals.maxErf >= 1 ? 'danger' : 'success'} />
             <Stat label="Active growth" value={vitals.activeGrowth.toLocaleString()} hint="Measurably corroding" tone={vitals.activeGrowth > 0 ? 'warning' : 'neutral'} />
@@ -410,7 +410,7 @@ export default function CorrosionAnalysisPage() {
           {tab === 'growth' && (
             <div className="ds-stack">
               <StatGrid>
-                <Stat lead label="Matched" value={change.matched.toLocaleString()} hint="Present in both runs" />
+                <Stat label="Matched" value={change.matched.toLocaleString()} hint="Present in both runs" />
                 <Stat label="Growing" value={change.growing.toLocaleString()} hint="Depth increased" tone={change.growing > 0 ? 'warning' : 'neutral'} />
                 <Stat label="Dormant" value={change.dormant.toLocaleString()} hint="No measurable growth" tone="success" />
                 <Stat label="New this run" value={change.newlyReported.toLocaleString()} hint="Not in the previous run" />
@@ -503,7 +503,7 @@ export default function CorrosionAnalysisPage() {
             />
             <PanelBody className="ds-stack ds-stack--sm">
               <StatGrid>
-                <Stat lead compact label="Population sent to FFS" value={vitals.metalLoss.toLocaleString()} hint="All metal loss on the NEW run" />
+                <Stat compact label="Population sent to FFS" value={vitals.metalLoss.toLocaleString()} hint="All metal loss on the NEW run" />
                 <Stat compact label="B31G-ready" value={vitals.assessable.toLocaleString()} hint="Complete dimensions" tone="success" />
                 <Stat compact label="Needs data repair" value={vitals.incomplete.toLocaleString()} hint="FFS will record the rejection reason" tone={vitals.incomplete > 0 ? 'warning' : 'neutral'} />
                 <Stat compact label="Validated now" value={releasedCount.toLocaleString()} hint={review?.stale ? 'Stale — re-validate' : 'Saved'} />
