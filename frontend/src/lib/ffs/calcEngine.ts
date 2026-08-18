@@ -2,6 +2,7 @@ import type {
   FfsConfig,
   FfsDesignFactorSource,
   FfsGrowthComponentEvidence,
+  FfsOuterDiameterSource,
   FfsRepairStatus,
   FfsResult,
   FfsSafetyFactorSource,
@@ -81,6 +82,17 @@ function designFactorSourceOf(value: string | undefined): FfsDesignFactorSource 
   return 'row-supplied';
 }
 
+/**
+ * A manual workbook carries no source column, and gets none: the engineer typed
+ * the diameter on the row, which is exactly `row-supplied`. Only the alignment
+ * import writes this, the same way it writes 'Design Factor Source'.
+ */
+function outerDiameterSourceOf(value: string | undefined): FfsOuterDiameterSource {
+  const normalized = String(value ?? '').trim();
+  if (normalized === 'section-override' || normalized === 'line-default') return normalized;
+  return 'row-supplied';
+}
+
 function repairStatusOf(value: string | undefined): FfsRepairStatus {
   if (value === 'Temporary repair') return 'temporary-repair';
   if (value === 'Permanent repair verified') return 'permanent-repair-verified';
@@ -130,6 +142,7 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
   const usGwDistanceM = optionalNumber(row['Dist U/S GW [m]']);
   const jointLengthM = optionalNumber(row['Joint Length [m]']);
   const designFactorSource = designFactorSourceOf(row['Design Factor Source']);
+  const outerDiameterSource = outerDiameterSourceOf(row['Outer Diameter Source']);
   // B31G para. 1.9 wants the hydrotest-to-MAOP ratio here. Where the source did
   // not supply one, fall back to the historic 1/F so existing assessments keep
   // their numbers — and record which of the two the figure actually is.
@@ -201,7 +214,7 @@ export function processRow(row: Record<string, string>, config: FfsConfig): FfsR
     featureId, ld: parseFloat(ld as string) || ld as any, section, surface, maxDepthPct, length, width, orient, wall,
     crDepth, crLength, df, od, smys, p0, repairStatus, repairMethod, repairDate, repairReference,
     recommendation, actionOwner, isClusteredMetalLoss,
-    jointNumber, usGwDistanceM, jointLengthM, designFactorSource,
+    jointNumber, usGwDistanceM, jointLengthM, designFactorSource, outerDiameterSource,
     safetyFactor: +safetyFactor.toFixed(4), safetyFactorSource,
     growthEvidence: {
       oldSurveyYear: null,

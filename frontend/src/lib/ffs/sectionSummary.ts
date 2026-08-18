@@ -11,7 +11,12 @@
 
 import { isInternal } from './statistics.ts';
 import { lifeSortValue } from './lifeProjection.ts';
-import type { FfsDesignFactorSource, FfsSafetyFactorSource, FfsScreenedResult } from './types.ts';
+import type {
+  FfsDesignFactorSource,
+  FfsOuterDiameterSource,
+  FfsSafetyFactorSource,
+  FfsScreenedResult,
+} from './types.ts';
 import { maxBy, maxOf, maxOrNull as sharedMaxOrNull, minBy, minOf } from '../../utils/numericRange.ts';
 
 function sectionNameOf(item: FfsScreenedResult): string {
@@ -114,30 +119,38 @@ export function buildSectionGrowthSummary(items: FfsScreenedResult[]): FfsSectio
   return rows.sort((a, b) => a.section.localeCompare(b.section));
 }
 
-export interface FfsSectionDesignFactorRow {
+export interface FfsSectionPipeSpecRow {
   section: string;
   designFactor: number;
   source: FfsDesignFactorSource;
   /** The divisor actually applied to the failure pressure in this section. */
   safetyFactor: number;
   safetyFactorSource: FfsSafetyFactorSource;
+  /** The pipe this stretch was assessed on, and which rule supplied it. */
+  outerDiameterMm: number;
+  outerDiameterSource: FfsOuterDiameterSource;
   featureCount: number;
   startLd: number;
   endLd: number;
 }
 
 /**
- * The design factor each section was actually assessed with, read back off the
- * results rather than off the form. A section that somehow carries two factors
- * is emitted as two rows, because silently showing one of them would hide a
- * misconfigured override.
+ * The pipe spec each section was actually assessed with, read back off the
+ * results rather than off the form.
+ *
+ * A section that somehow carries two design factors — or two diameters — is
+ * emitted as two rows, because silently showing one of them would hide a
+ * misconfigured override. On a line that steps from 20 in to 24 in that is the
+ * table an engineer checks first, so the diameter is grouped on as strictly as
+ * the factor is.
  */
-export function buildSectionDesignFactorSummary(
+export function buildSectionPipeSpecSummary(
   items: FfsScreenedResult[],
-): FfsSectionDesignFactorRow[] {
+): FfsSectionPipeSpecRow[] {
   const grouped = new Map<string, FfsScreenedResult[]>();
   for (const item of items) {
-    const key = `${sectionNameOf(item)}|${item.nominal.df}|${item.nominal.safetyFactor}`;
+    const key = `${sectionNameOf(item)}|${item.nominal.df}|${item.nominal.safetyFactor}`
+      + `|${item.nominal.od}`;
     const bucket = grouped.get(key);
     if (bucket) bucket.push(item);
     else grouped.set(key, [item]);
@@ -154,6 +167,8 @@ export function buildSectionDesignFactorSummary(
         source: members[0].nominal.designFactorSource,
         safetyFactor: members[0].nominal.safetyFactor,
         safetyFactorSource: members[0].nominal.safetyFactorSource,
+        outerDiameterMm: members[0].nominal.od,
+        outerDiameterSource: members[0].nominal.outerDiameterSource,
         featureCount: members.length,
         startLd: minOf(distances),
         endLd: maxOf(distances),

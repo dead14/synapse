@@ -8,7 +8,8 @@ import {
   remnantLimitLabel,
 } from './lifeProjection.ts';
 import { designLifeUsage, EMPTY_SERVICE_LIFE } from './remnantLife.ts';
-import { buildSectionDesignFactorSummary, buildSectionGrowthSummary } from './sectionSummary.ts';
+import { buildSectionPipeSpecSummary, buildSectionGrowthSummary } from './sectionSummary.ts';
+import { designFactorSourceLabel, outerDiameterSourceLabel } from './assessmentProfile.ts';
 import {
   buildFfsReportCase,
   createFfsReportContext,
@@ -252,39 +253,55 @@ export function buildNarrative(
           ],
   });
 
-  // A line does not have one design factor. Stating which factor each stretch
-  // was assessed against is the difference between a reviewable result and a
-  // number the reader has to take on trust.
-  const designFactorRows = buildSectionDesignFactorSummary(items);
-  blocks.push({ kind: 'heading', level: 2, text: '2.1  Design factor by section' });
+  // A line does not have one design factor, and does not always have one
+  // diameter either. Stating what each stretch is made of and what it was
+  // assessed against is the difference between a reviewable result and a number
+  // the reader has to take on trust.
+  const pipeSpecRows = buildSectionPipeSpecSummary(items);
+  const diameters = new Set(pipeSpecRows.map((row) => row.outerDiameterMm));
+  blocks.push({ kind: 'heading', level: 2, text: '2.1  Pipe spec by section' });
   blocks.push({
     kind: 'table',
     table: {
-      caption: 'Table 2-1  Design factor and safety factor applied to each section',
+      caption: 'Table 2-1  Outside diameter, design factor and safety factor applied to each section',
       columns: [
         { header: 'Section', align: 'left' },
         { header: 'From [m]', align: 'right' },
         { header: 'To [m]', align: 'right' },
         { header: 'Features', align: 'right' },
+        { header: 'OD [mm]', align: 'right' },
+        { header: 'OD source', align: 'left' },
         { header: 'Design factor', align: 'right' },
         { header: 'Source', align: 'left' },
         { header: 'Safety factor', align: 'right' },
       ],
-      rows: designFactorRows.map((row) => [
+      rows: pipeSpecRows.map((row) => [
         row.section,
         row.startLd.toLocaleString(undefined, { maximumFractionDigits: 1 }),
         row.endLd.toLocaleString(undefined, { maximumFractionDigits: 1 }),
         row.featureCount.toLocaleString(),
+        row.outerDiameterMm.toLocaleString(undefined, { maximumFractionDigits: 1 }),
+        outerDiameterSourceLabel(row.outerDiameterSource),
         row.designFactor.toFixed(2),
-        row.source === 'section-override'
-          ? 'Section override'
-          : row.source === 'line-default'
-            ? 'Line default'
-            : 'Supplied per row',
+        designFactorSourceLabel(row.source),
         `${row.safetyFactor.toFixed(2)}${row.safetyFactorSource === 'explicit' ? '' : ' (1/F)'}`,
       ]),
     },
   });
+  // Said in prose as well as in the table, because a multi-diameter line changes
+  // how every downstream figure in this report has to be read: D sets the hoop
+  // stress and the Folias term, so an ERF from one stretch is not comparable to
+  // an ERF from the other at the same depth and length.
+  if (diameters.size > 1) {
+    blocks.push({
+      kind: 'paragraph',
+      text: `This line is not of one diameter. ${diameters.size} outside diameters were assessed — `
+        + `${[...diameters].sort((a, b) => a - b).map((value) => `${value} mm`).join(', ')} — each on the `
+        + 'stretch of line recorded above. Every remaining-strength figure in this report was calculated '
+        + 'on the diameter of the section the feature sits in, and features in different sections are '
+        + 'therefore not directly comparable on depth and length alone.',
+    });
+  }
 
   blocks.push({ kind: 'heading', level: 2, text: '2.2  Screening assumptions' });
   blocks.push({

@@ -128,10 +128,21 @@ export default function FfsSetupPage() {
   const [yieldToTensileRatio, setYieldToTensileRatio] = useState('');
   const [unusualLoading, setUnusualLoading] = useState(false);
 
-  // Sections come from the features in scope, and the factor for each is typed
-  // once against a stretch the engineer has already named and reviewed. Keyed
-  // by the normalised section name so a reload keeps the entered values.
+  // Sections come from the features in scope, and each is described once
+  // against a stretch the engineer has already named and bounded on girth
+  // welds. Keyed by the normalised section name so a reload keeps the values.
   const [sectionFactors, setSectionFactors] = useState<Record<string, string>>({});
+  /**
+   * Outside diameter per section, in the displayed diameter unit.
+   *
+   * Blank is the ordinary answer and means "line default pipe" — a line of one
+   * diameter needs nothing entered here. It is filled in on a line that steps
+   * from, say, 20 in to 24 in at a reducer, where B31G has no single D to fall
+   * back on: the failure pressure carries D in the denominator.
+   */
+  const [sectionDiameters, setSectionDiameters] = useState<Record<string, string>>({});
+  /** Nominal wall per section, in the displayed diameter unit; blank is normal. */
+  const [sectionWalls, setSectionWalls] = useState<Record<string, string>>({});
 
   const normalizeDisplayValue = (
     value: string,
@@ -198,12 +209,34 @@ export default function FfsSetupPage() {
     });
   }, [sectionOptions, designFactor]);
 
-  /** The overrides as the import layer wants them: named section, numeric factor. */
-  const sectionDesignFactors = sectionOptions
-    .map((option) => ({
-      section: option.section,
-      designFactor: Number(sectionFactors[normalizedSectionKey(option.section)] ?? designFactor),
-    }))
+  /**
+   * A section's typed length in millimetres, or null where it is blank.
+   *
+   * Blank and unparseable are deliberately not the same answer: blank means the
+   * section is line default pipe, and only the second is an error.
+   */
+  const sectionLengthMm = (raw: string | undefined): number | null => {
+    if (raw === undefined || raw.trim() === '') return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? toMillimetres(value, diameterUnit) : Number.NaN;
+  };
+
+  /** The spec as the import layer wants it: named section, numbers in mm. */
+  const sectionPipeSpecs = sectionOptions
+    .map((option) => {
+      const key = normalizedSectionKey(option.section);
+      const od = sectionLengthMm(sectionDiameters[key]);
+      const wall = sectionLengthMm(sectionWalls[key]);
+      return {
+        section: option.section,
+        designFactor: Number(sectionFactors[key] ?? designFactor),
+        // Null rather than the line value: the import records which of the two
+        // a feature was assessed on, and pushing the default down here would
+        // have every section reporting a "section override" it never carried.
+        outerDiameterMm: od !== null && Number.isFinite(od) ? od : null,
+        nominalWallThicknessMm: wall !== null && Number.isFinite(wall) ? wall : null,
+      };
+    })
     .filter((rule) => Number.isFinite(rule.designFactor) && rule.designFactor > 0);
 
   const invalidSectionFactors = sectionOptions.filter((option) => {
@@ -216,6 +249,43 @@ export default function FfsSetupPage() {
     if (raw.trim() === '') return true;
     const value = Number(raw);
     return !Number.isFinite(value) || value <= 0 || value > 1;
+  });
+
+  /** The minimum outside diameter the line-level field also enforces, in mm. */
+  const MIN_OUTER_DIAMETER_MM = 50;
+
+  const invalidSectionDiameters = sectionOptions.filter((option) => {
+    const od = sectionLengthMm(sectionDiameters[normalizedSectionKey(option.section)]);
+    return od !== null && (!Number.isFinite(od) || od < MIN_OUTER_DIAMETER_MM);
+  });
+
+  /**
+   * Every diameter this assessment will actually use, in mm and sorted.
+   *
+   * Read off the resolved spec rather than off the typed fields, so a section
+   * left blank counts as the line default instead of dropping out — the whole
+   * point of the callout is telling an engineer their line is not uniform.
+   */
+  const distinctSectionDiameters = [...new Set(
+    sectionPipeSpecs
+      .map((rule) => rule.outerDiameterMm ?? Number(outerDiameterMmForCalculation))
+      .filter((value) => Number.isFinite(value) && value > 0),
+  )].sort((a, b) => a - b);
+
+  const invalidSectionWalls = sectionOptions.filter((option) => {
+    const key = normalizedSectionKey(option.section);
+    const wall = sectionLengthMm(sectionWalls[key]);
+    if (wall === null) return false;
+    if (!Number.isFinite(wall) || wall <= 0) return true;
+    // Wall and diameter are entered side by side and are easy to transpose. A
+    // wall at or past half the diameter leaves no bore, and B31G's failure
+    // pressure is derived for thin wall — caught here, not as a NaN in the
+    // Folias term partway down the results table.
+    const od = sectionLengthMm(sectionDiameters[key]);
+    const effectiveOd = od !== null && Number.isFinite(od) && od > 0
+      ? od
+      : Number(outerDiameterMmForCalculation);
+    return Number.isFinite(effectiveOd) && effectiveOd > 0 && effectiveOd <= 2 * wall;
   });
 
   const explicitSafetyFactor = safetyFactorMode === 'explicit' ? Number(safetyFactor) : null;
@@ -248,13 +318,23 @@ export default function FfsSetupPage() {
    * fallback is typed. The engineer sees the answer before filling in the form,
    * instead of a thrown error after pressing Run.
    */
+  // `sectionPipeSpecs` is derived fresh on every render, so its identity is not
+  // a usable dependency. The typed values behind it are, once serialised.
+  const sectionPipeSpecsKey = JSON.stringify(sectionPipeSpecs);
   const intake = useMemo(
     () => summariseReleasedIntake(
       alignmentRowsWithExclusions,
       { selectedKeys, scope: intakeScope },
-      nominalWallThicknessMm,
+      // Section walls count here too: a stretch carrying its own wall makes
+      // rows assessable that the line wall alone would not, and this preview
+      // has to say what the import will actually accept.
+      { lineNominalWallMm: nominalWallThicknessMm, sectionPipeSpecs },
     ),
-    [alignmentRowsWithExclusions, selectedKeys, intakeScope, nominalWallThicknessMm],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      alignmentRowsWithExclusions, selectedKeys, intakeScope, nominalWallThicknessMm,
+      sectionPipeSpecsKey,
+    ],
   );
 
   const alignmentReadinessReasons = getAlignmentImportReadiness({
@@ -286,6 +366,14 @@ export default function FfsSetupPage() {
     ...(sourceMode === 'released' ? alignmentReadinessReasons : manualReadinessReasons),
     ...(sourceMode === 'released' && invalidSectionFactors.length > 0
       ? [`Enter a design factor between 0 and 1 for: ${invalidSectionFactors.map((option) => option.section).join(', ')}.`]
+      : []),
+    ...(sourceMode === 'released' && invalidSectionDiameters.length > 0
+      ? [`Section outer diameter must be at least ${convertLength(MIN_OUTER_DIAMETER_MM, 'mm', diameterUnit)} ${diameterUnit}, `
+        + `or left blank to use the line default: ${invalidSectionDiameters.map((option) => option.section).join(', ')}.`]
+      : []),
+    ...(sourceMode === 'released' && invalidSectionWalls.length > 0
+      ? ['Section nominal wall must be greater than zero and leave a bore on its own diameter, '
+        + `or left blank: ${invalidSectionWalls.map((option) => option.section).join(', ')}.`]
       : []),
     ...safetyFactorReasons,
     ...serviceLifeReasons,
@@ -461,7 +549,7 @@ export default function FfsSetupPage() {
         outerDiameterMm: Number(outerDiameterMmForCalculation),
         smysMpa: Number(smysMpaForCalculation),
         designFactor: Number(designFactor),
-        sectionDesignFactors,
+        sectionPipeSpecs,
         safetyFactor: explicitSafetyFactor,
         operatingPressureMpa: Number(operatingPressureMpaForCalculation),
         fallbackDepthGrowthMmPerYear: Number(fallbackDepthGrowth),
@@ -959,8 +1047,9 @@ export default function FfsSetupPage() {
                 )}
                 {intake.usingNominalWall > 0 && (
                   <p className="mt-1 text-[11px] font-medium leading-relaxed text-amber-700 dark:text-amber-400">
-                    {intake.usingNominalWall.toLocaleString()} of them will use the line nominal wall you
-                    entered, because the run reported none. Each says so in its warnings.
+                    {intake.usingNominalWall.toLocaleString()} of them will use a nominal wall you entered —
+                    their section's where it has one, the line's otherwise — because the run reported none.
+                    Each says which in its warnings.
                   </p>
                 )}
                 {intake.excludedByIntervention > 0 && (
@@ -1030,13 +1119,25 @@ export default function FfsSetupPage() {
 
             <div className="grid grid-cols-2 gap-3">
               <label className="block text-xs font-semibold text-slate-500">
-                Outer Diameter [{diameterUnit}]
+                Outer Diameter (line default) [{diameterUnit}]
                 <select
                   value={diameterUnit}
                   onChange={(event) => {
                     const next = event.target.value as LengthUnit;
-                    setOuterDiameterMm((value) => normalizeDisplayValue(value, (numeric) => convertLength(numeric, diameterUnit, next)));
-                    setNominalWallThickness((value) => normalizeDisplayValue(value, (numeric) => convertLength(numeric, diameterUnit, next)));
+                    const reunit = (value: string) => normalizeDisplayValue(
+                      value,
+                      (numeric) => convertLength(numeric, diameterUnit, next),
+                    );
+                    setOuterDiameterMm(reunit);
+                    setNominalWallThickness(reunit);
+                    // The per-section figures are held in the displayed unit
+                    // too. Left unconverted, switching to inches turned a typed
+                    // 610 mm section into 610 in without touching the field.
+                    const reunitAll = (previous: Record<string, string>) => Object.fromEntries(
+                      Object.entries(previous).map(([key, value]) => [key, reunit(value)]),
+                    );
+                    setSectionDiameters(reunitAll);
+                    setSectionWalls(reunitAll);
                     setDiameterUnit(next);
                   }}
                   className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
@@ -1065,7 +1166,7 @@ export default function FfsSetupPage() {
                 </select>
               </label>
               <label className="block text-xs font-semibold text-slate-500">
-                Nominal wall thickness [{diameterUnit}]
+                Nominal wall thickness (line default) [{diameterUnit}]
                 <input
                   type="number"
                   min="0"
@@ -1076,7 +1177,7 @@ export default function FfsSetupPage() {
                 />
                 <span className="mt-1 block text-[10px] font-normal leading-snug">
                   Optional. Used only where the run reported no wall for a feature, and disclosed on every
-                  feature that used it.
+                  feature that used it. A section with its own wall below uses that instead.
                 </span>
               </label>
               <label className="block text-xs font-semibold text-slate-500">
@@ -1154,13 +1255,16 @@ export default function FfsSetupPage() {
               <div className="rounded-xl border border-slate-200 dark:border-slate-700">
                 <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
-                    Design factor by section
+                    Pipe spec by section
                   </p>
                   <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
                     {sectionOptions.length} section{sectionOptions.length === 1 ? '' : 's'} carry released
-                    features. Buried line pipe and a river crossing or riser rarely share a factor — assessing
-                    a crossing at the line-pipe factor overstates its safe pressure. Each feature records
-                    which value it was assessed with.
+                    features, each bounded on the girth welds you sectioned the alignment on. Buried line pipe
+                    and a river crossing or riser rarely share a design factor, and a line that steps from one
+                    diameter to another at a reducer does not share a diameter either. Leave the diameter blank
+                    wherever the stretch is line default pipe. Wall is a last resort: where the tally carries
+                    it, the run reports it or it is read off the joint's girth welds, and nothing here is used.
+                    Each feature records which values it was assessed with.
                   </p>
                 </div>
                 <div className="max-h-64 overflow-y-auto">
@@ -1170,6 +1274,8 @@ export default function FfsSetupPage() {
                         <th className="px-4 py-2">Section</th>
                         <th className="px-2 py-2 text-right">Features</th>
                         <th className="px-2 py-2 text-right">Range [m]</th>
+                        <th className="px-2 py-2 text-right">OD [{diameterUnit}]</th>
+                        <th className="px-2 py-2 text-right">Wall [{diameterUnit}]</th>
                         <th className="px-4 py-2 text-right">Design factor</th>
                       </tr>
                     </thead>
@@ -1179,11 +1285,26 @@ export default function FfsSetupPage() {
                         const value = sectionFactors[key] ?? designFactor;
                         const numeric = Number(value);
                         const invalid = value.trim() === '' || !Number.isFinite(numeric) || numeric <= 0 || numeric > 1;
+                        const odValue = sectionDiameters[key] ?? '';
+                        const wallValue = sectionWalls[key] ?? '';
+                        const odInvalid = invalidSectionDiameters.includes(option);
+                        const wallInvalid = invalidSectionWalls.includes(option);
+                        // Only what the engineer actually set apart from the
+                        // line is marked. A blank diameter is the ordinary
+                        // answer, not an omission.
+                        const overridden = (value !== designFactor && !invalid)
+                          || (odValue.trim() !== '' && !odInvalid)
+                          || (wallValue.trim() !== '' && !wallInvalid);
+                        const cellClass = (bad: boolean) => `w-24 rounded-lg border bg-slate-50 px-2 py-1.5 text-right text-xs tabular-nums text-slate-800 focus:outline-none dark:bg-slate-900 dark:text-slate-200 ${
+                          bad
+                            ? 'border-rose-400 focus:border-rose-500'
+                            : 'border-slate-200 focus:border-indigo-500 dark:border-slate-700'
+                        }`;
                         return (
                           <tr key={key}>
                             <td className="px-4 py-2 font-medium text-slate-700 dark:text-slate-200">
                               {option.section}
-                              {value !== designFactor && !invalid && (
+                              {overridden && (
                                 <span className="ml-2 rounded border border-indigo-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-indigo-600 dark:border-indigo-800/60 dark:text-indigo-400">
                                   Override
                                 </span>
@@ -1194,6 +1315,36 @@ export default function FfsSetupPage() {
                             </td>
                             <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-slate-400">
                               {option.startLd.toFixed(0)} – {option.endLd.toFixed(0)}
+                            </td>
+                            <td className="px-2 py-2 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={odValue}
+                                placeholder={outerDiameterMm || 'line'}
+                                aria-label={`Outer diameter for ${option.section}`}
+                                aria-invalid={odInvalid}
+                                onChange={(event) =>
+                                  setSectionDiameters((previous) => ({ ...previous, [key]: event.target.value }))
+                                }
+                                className={cellClass(odInvalid)}
+                              />
+                            </td>
+                            <td className="px-2 py-2 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={wallValue}
+                                placeholder={nominalWallThickness || 'line'}
+                                aria-label={`Nominal wall thickness for ${option.section}`}
+                                aria-invalid={wallInvalid}
+                                onChange={(event) =>
+                                  setSectionWalls((previous) => ({ ...previous, [key]: event.target.value }))
+                                }
+                                className={cellClass(wallInvalid)}
+                              />
                             </td>
                             <td className="px-4 py-2 text-right">
                               <input
@@ -1207,11 +1358,7 @@ export default function FfsSetupPage() {
                                 onChange={(event) =>
                                   setSectionFactors((previous) => ({ ...previous, [key]: event.target.value }))
                                 }
-                                className={`w-24 rounded-lg border bg-slate-50 px-2 py-1.5 text-right text-xs tabular-nums text-slate-800 focus:outline-none dark:bg-slate-900 dark:text-slate-200 ${
-                                  invalid
-                                    ? 'border-rose-400 focus:border-rose-500'
-                                    : 'border-slate-200 focus:border-indigo-500 dark:border-slate-700'
-                                }`}
+                                className={cellClass(invalid)}
                               />
                             </td>
                           </tr>
@@ -1220,6 +1367,17 @@ export default function FfsSetupPage() {
                     </tbody>
                   </table>
                 </div>
+                {distinctSectionDiameters.length > 1 && (
+                  <div className="border-t border-slate-200 px-4 py-2.5 dark:border-slate-700">
+                    <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                      This line will be assessed at {distinctSectionDiameters.length} diameters
+                      {' — '}
+                      {distinctSectionDiameters.map((value) => `${value} mm`).join(', ')}. B31G carries the
+                      diameter in the failure pressure and in the Folias term, so the same depth and length
+                      do not give the same ERF on both.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1278,8 +1436,8 @@ export default function FfsSetupPage() {
                   Each section is assessed at{' '}
                   <MathInline tex={FFS_TEX.safetyFactorFromDesign} label="SF equals one over F" />
                   {' '}on its own design factor
-                  {sectionDesignFactors.length > 0 && (
-                    <> — {[...new Set(sectionDesignFactors.map((rule) => rule.designFactor))]
+                  {sectionPipeSpecs.length > 0 && (
+                    <> — {[...new Set(sectionPipeSpecs.map((rule) => rule.designFactor))]
                       .sort((a, b) => a - b)
                       .map((factor) => `${factor} → ${(1 / factor).toFixed(2)}`)
                       .join(', ')}</>

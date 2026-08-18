@@ -14,7 +14,9 @@ import {
 import {
   mapAlignmentRowsToFfs,
   resolveDesignFactor,
+  resolveOuterDiameter,
   alignmentSectionOptions,
+  summariseReleasedIntake,
   type AlignmentEngineeringInputs,
 } from '../src/lib/ffs/alignmentImport.ts';
 import { buildSectionGrowthSummary } from '../src/lib/ffs/sectionSummary.ts';
@@ -290,7 +292,7 @@ test('a temporary repair stays in the repair programme regardless of its remnant
   assert.equal(repairProgrammeTargets(items, 5).length, 1);
 });
 
-/* ── Per-section design factor ─────────────────────────────────────────── */
+/* ── Per-section pipe spec ─────────────────────────────────────────────── */
 
 const engineering: AlignmentEngineeringInputs = {
   outerDiameterMm: 219.1,
@@ -299,7 +301,7 @@ const engineering: AlignmentEngineeringInputs = {
   operatingPressureMpa: 9.35,
   fallbackDepthGrowthMmPerYear: 0,
   fallbackLengthGrowthMmPerYear: 0,
-  sectionDesignFactors: [
+  sectionPipeSpecs: [
     { section: 'River Crossing RC#86', designFactor: 0.6 },
     { section: 'Aerial Section', designFactor: 0.72 },
   ],
@@ -359,6 +361,162 @@ test('the crossing is assessed at its own design factor, not the line-pipe one',
   assert.equal(mapped.accepted[0].row['Design Factor Source'], 'section-override');
   assert.equal(mapped.accepted[0].provenance.designFactor, 0.6);
   assert.equal(mapped.accepted[0].provenance.section, 'River Crossing RC#86');
+});
+
+/* ── Per-section diameter ──────────────────────────────────────────────── */
+
+/** A line that leaves the station at 20 in and steps up to 24 in at a reducer. */
+const twoDiameters: AlignmentEngineeringInputs = {
+  ...engineering,
+  outerDiameterMm: 508,
+  nominalWallThicknessMm: 9.5,
+  sectionPipeSpecs: [
+    { section: 'River Crossing RC#86', designFactor: 0.6 },
+    // The 24 in stretch: its own diameter and its own wall.
+    { section: 'Aerial Section', designFactor: 0.72, outerDiameterMm: 610, nominalWallThicknessMm: 11.1 },
+  ],
+};
+
+test('a section diameter wins over the line default and records its source', () => {
+  assert.deepEqual(resolveOuterDiameter('Aerial Section', twoDiameters), {
+    outerDiameterMm: 610,
+    source: 'section-override',
+  });
+  // A section that names no diameter is line default pipe, not an omission.
+  assert.deepEqual(resolveOuterDiameter('River Crossing RC#86', twoDiameters), {
+    outerDiameterMm: 508,
+    source: 'line-default',
+  });
+  assert.deepEqual(resolveOuterDiameter('Unnamed stretch', twoDiameters), {
+    outerDiameterMm: 508,
+    source: 'line-default',
+  });
+});
+
+test('the 24 in stretch is assessed on 24 in pipe, and the row says so', () => {
+  const mapped = mapAlignmentRowsToFfs(
+    [
+      alignmentRow() as never,
+      alignmentRow({
+        'Source Key NEW': 'new:2', 'Identif. NEW': 'A-2',
+        'Section NEW': 'Aerial Section', 'Log Dist NEW (m)': 1453.539,
+      }) as never,
+    ],
+    twoDiameters,
+    'session-1',
+    { selectedKeys: new Set(['new:1', 'new:2']) },
+  );
+
+  assert.equal(mapped.accepted.length, 2);
+  const [crossing, aerial] = mapped.accepted;
+  assert.equal(crossing.row['Outer Diameter Ds'], '508');
+  assert.equal(crossing.row['Outer Diameter Source'], 'line-default');
+  assert.equal(aerial.row['Outer Diameter Ds'], '610');
+  assert.equal(aerial.row['Outer Diameter Source'], 'section-override');
+  assert.equal(aerial.provenance.outerDiameterMm, 610);
+  assert.equal(aerial.provenance.outerDiameterSource, 'section-override');
+});
+
+test('the same defect is a different ERF on the two diameters', () => {
+  // B31G carries D in the failure pressure and in z = L²/(D·t), so identical
+  // depth and length on a wider pipe is not the same remaining strength.
+  const narrow = processRow(row({ 'Outer Diameter Ds': '508' }), config);
+  const wide = processRow(row({ 'Outer Diameter Ds': '610' }), config);
+  assert.notEqual(narrow.ERF, wide.ERF);
+  assert.equal(narrow.outerDiameterSource, 'row-supplied');
+});
+
+test('a section wall stands in for its own stretch, not the line wall', () => {
+  const mapped = mapAlignmentRowsToFfs(
+    [
+      // Neither run reported a wall, so both fall back — to different pipe.
+      alignmentRow({ 'Wall WT NEW (mm)': '-' }) as never,
+      alignmentRow({
+        'Source Key NEW': 'new:2', 'Identif. NEW': 'A-2',
+        'Section NEW': 'Aerial Section', 'Wall WT NEW (mm)': '-',
+      }) as never,
+    ],
+    twoDiameters,
+    'session-1',
+    { selectedKeys: new Set(['new:1', 'new:2']) },
+  );
+
+  assert.equal(mapped.accepted.length, 2);
+  const [crossing, aerial] = mapped.accepted;
+  assert.equal(crossing.row['Nominal Wall Thickness [mm]'], '9.5');
+  assert.equal(crossing.provenance.wallThicknessSource, 'line-nominal');
+  assert.equal(aerial.row['Nominal Wall Thickness [mm]'], '11.1');
+  assert.equal(aerial.provenance.wallThicknessSource, 'section-nominal');
+  // The feature says which wall it borrowed, not merely that it borrowed one.
+  assert.ok(aerial.warnings.some((warning) => /section nominal wall of 11.1 mm/.test(warning)));
+});
+
+test('a wall read off the joint is a measurement, and never the section fallback', () => {
+  const mapped = mapAlignmentRowsToFfs(
+    [alignmentRow({
+      'Section NEW': 'Aerial Section',
+      // The tally carried the thickness on the girth-weld rows, and the
+      // alignment engine filled it in from the welds bounding this joint.
+      'Wall WT NEW (mm)': 12.7,
+      'Wall WT Source NEW': 'gw_joint',
+    }) as never],
+    twoDiameters,
+    'session-1',
+    { selectedKeys: new Set(['new:1']) },
+  );
+
+  const [feature] = mapped.accepted;
+  // The joint's own 12.7 mm, not the 11.1 mm typed against this section.
+  assert.equal(feature.row['Nominal Wall Thickness [mm]'], '12.7');
+  assert.equal(feature.provenance.wallThicknessSource, 'joint-inherited');
+  assert.ok(feature.warnings.some((warning) => /girth\s+welds bounding its joint/.test(warning)));
+  // It is disclosed, but never as a wall the engineer assumed.
+  assert.ok(!feature.warnings.some((warning) => /nominal wall of/.test(warning)));
+});
+
+test('the intake preview counts typed walls, not walls taken off the joint', () => {
+  const summary = summariseReleasedIntake(
+    [
+      alignmentRow({ 'Wall WT NEW (mm)': 12.7, 'Wall WT Source NEW': 'gw_joint' }) as never,
+      alignmentRow({
+        'Source Key NEW': 'new:2', 'Identif. NEW': 'A-2', 'Wall WT NEW (mm)': '-',
+      }) as never,
+    ],
+    { selectedKeys: new Set(['new:1', 'new:2']) },
+    { lineNominalWallMm: 9.5 },
+  );
+
+  assert.equal(summary.assessable, 2);
+  // Only the second borrowed a figure an engineer typed.
+  assert.equal(summary.usingNominalWall, 1);
+});
+
+test('a section diameter that cannot be pipe stops the run rather than the results table', () => {
+  const impossible: AlignmentEngineeringInputs = {
+    ...twoDiameters,
+    sectionPipeSpecs: [{ section: 'Aerial Section', designFactor: 0.72, outerDiameterMm: 20 }],
+  };
+  assert.throws(
+    () => mapAlignmentRowsToFfs([alignmentRow() as never], impossible, 's', {
+      selectedKeys: new Set(['new:1']),
+    }),
+    /at least 50 mm/,
+  );
+
+  // Wall and diameter sit side by side in the table and are easy to transpose.
+  const transposed: AlignmentEngineeringInputs = {
+    ...twoDiameters,
+    sectionPipeSpecs: [{
+      section: 'Aerial Section', designFactor: 0.72,
+      outerDiameterMm: 11.1, nominalWallThicknessMm: 610,
+    }],
+  };
+  assert.throws(
+    () => mapAlignmentRowsToFfs([alignmentRow() as never], transposed, 's', {
+      selectedKeys: new Set(['new:1']),
+    }),
+    /at least 50 mm|leaves no bore/,
+  );
 });
 
 test('a lower design factor lowers the safe pressure and raises the ERF', () => {
