@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   FiAlertCircle,
@@ -36,6 +36,12 @@ import {
   type FfsIntakeScope,
 } from '../../lib/ffs/alignmentImport';
 import { convertLength, convertPressure, toMegapascals, toMillimetres, type LengthUnit, type PressureUnit } from '../../lib/ffs/units';
+import { fetchPipelineDossier } from '../../lib/pipelines/pipelineClient';
+import {
+  registeredDiameters,
+  sectionPipeFromRegister,
+  type PipelineSpecification,
+} from '../../domain/pipelineSpecification';
 import {
   fetchFfsCandidates,
   fetchFfsEligibleSessions,
@@ -155,6 +161,43 @@ export default function FfsSetupPage() {
    */
   const [sectionSmys, setSectionSmys] = useState<Record<string, string>>({});
 
+  /**
+   * The pipeline dossier filed for this line at intake.
+   *
+   * Alignment carries anomaly geometry, not line design — but the intake does,
+   * and it is the same engineer typing the same numbers. Loading it here means
+   * an assessment is run against the recorded line rather than against whatever
+   * was retyped, and a line built from more than one size arrives with its
+   * register already describing the sections.
+   */
+  const [dossier, setDossier] = useState<PipelineSpecification | null>(null);
+  const [dossierNote, setDossierNote] = useState('');
+  /**
+   * The last value this page filled in for each field.
+   *
+   * A field is replaceable while it is blank, still at its initial default, or
+   * still holding whatever the dossier last put there. Anything else was typed
+   * by an engineer and is never overwritten — switching sessions must not
+   * silently discard a deliberate correction.
+   */
+  const autofilledRef = useRef<Record<string, string>>({
+    designFactor: '0.72',
+    weldJointFactor: '1',
+  });
+
+  const adopt = (
+    key: string,
+    apply: (updater: (current: string) => string) => void,
+    next: string,
+  ) => {
+    if (next === '') return;
+    apply((current) => {
+      if (current.trim() !== '' && current !== autofilledRef.current[key]) return current;
+      autofilledRef.current[key] = next;
+      return next;
+    });
+  };
+
   const normalizeDisplayValue = (
     value: string,
     convert: (numeric: number) => number,
@@ -219,6 +262,68 @@ export default function FfsSetupPage() {
       return changed ? next : previous;
     });
   }, [sectionOptions, designFactor]);
+
+  /**
+   * Sections take their pipe from the register, where the record has one.
+   *
+   * The register is bounded on odometer metres from the pipe book; the sections
+   * are bounded on girth welds an engineer clicked. They describe the same line
+   * and will not agree to the metre, so each section adopts the stretch it
+   * overlaps most (see `segmentForRange`). Only a cell nobody has typed into is
+   * filled — the register is evidence, not an override of the engineer.
+   */
+  useEffect(() => {
+    if (!dossier || dossier.segments.length === 0 || sectionOptions.length === 0) return;
+    const asLength = (value: number | null) => (
+      value === null ? null : Number(convertLength(value, 'mm', diameterUnit).toFixed(6)).toString()
+    );
+    const asPressure = (value: number | null) => (
+      value === null ? null : Number(convertPressure(value, 'MPa', pressureUnit).toFixed(6)).toString()
+    );
+
+    const resolved = sectionOptions.map((option) => ({
+      key: normalizedSectionKey(option.section),
+      pipe: sectionPipeFromRegister(dossier, { startM: option.startLd, endM: option.endLd }),
+    }));
+
+    const fillBlank = (
+      previous: Record<string, string>,
+      valueFor: (entry: typeof resolved[number]) => string | null,
+    ) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const entry of resolved) {
+        const value = valueFor(entry);
+        if (value === null) continue;
+        if (next[entry.key] === undefined || next[entry.key].trim() === '') {
+          next[entry.key] = value;
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    };
+
+    setSectionDiameters((previous) => fillBlank(previous, (entry) => asLength(entry.pipe.outerDiameterMm)));
+    setSectionWalls((previous) => fillBlank(previous, (entry) => asLength(entry.pipe.nominalWallThicknessMm)));
+    setSectionSmys((previous) => fillBlank(previous, (entry) => asPressure(entry.pipe.smysMpa)));
+    // The design factor cell is never blank — it is seeded with the line
+    // default — so a registered value replaces the default rather than filling
+    // a gap, and stops at anything the engineer typed over it.
+    setSectionFactors((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const entry of resolved) {
+        const value = entry.pipe.designFactor;
+        if (value === null) continue;
+        const current = next[entry.key];
+        if (current === undefined || current === designFactor) {
+          next[entry.key] = String(value);
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [dossier, sectionOptions, diameterUnit, pressureUnit, designFactor]);
 
   /**
    * A section's typed length in millimetres, or null where it is blank.
@@ -455,6 +560,69 @@ export default function FfsSetupPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRunId]);
 
+  /**
+   * Fills the line-level inputs from the pipeline dossier.
+   *
+   * Only what the record actually states is applied, and only over a field
+   * nobody has typed into. An assessment that ran against a value the engineer
+   * chose must keep running against it when the page is reloaded.
+   */
+  const applyDossier = (specification: PipelineSpecification) => {
+    const length = (value: number | null) => (
+      value === null ? '' : Number(convertLength(value, 'mm', diameterUnit).toFixed(6)).toString()
+    );
+    const pressure = (value: number | null) => (
+      value === null ? '' : Number(convertPressure(value, 'MPa', pressureUnit).toFixed(6)).toString()
+    );
+
+    adopt('outerDiameter', setOuterDiameterMm, length(specification.outerDiameterMm));
+    adopt('nominalWall', setNominalWallThickness, length(specification.nominalWallThicknessMm));
+    adopt('smys', setSmysMpa, pressure(specification.smysMpa));
+    adopt('designFactor', setDesignFactor, specification.designFactor === null ? '' : String(specification.designFactor));
+    // The pressure the assessment is required to hold. The dossier records
+    // MAOP, design and operating pressure separately, so the basis selected
+    // below decides which one stands here rather than one being assumed.
+    const requiredPressure = pressureBasis === 'maop'
+      ? specification.maopMpa
+      : pressureBasis === 'current-operating'
+        ? specification.operatingPressureMpa
+        : pressureBasis === 'mop'
+          ? specification.maopMpa ?? specification.operatingPressureMpa
+          : specification.designPressureMpa;
+    adopt('operatingPressure', setOperatingPressureMpa, pressure(requiredPressure));
+    adopt('internalDesignPressure', setInternalDesignPressure, pressure(specification.internalDesignPressureMpa));
+    adopt('designLife', setDesignLifeYears, specification.designLifeYears === null ? '' : String(specification.designLifeYears));
+    adopt('commissioningYear', setCommissioningYear, specification.commissioningYear === null ? '' : String(specification.commissioningYear));
+    adopt('weldJointFactor', setWeldJointFactor, specification.weldJointFactor === null ? '' : String(specification.weldJointFactor));
+    adopt('yieldToTensile', setYieldToTensileRatio, specification.yieldToTensileRatio === null ? '' : String(specification.yieldToTensileRatio));
+  };
+
+  const loadDossier = async (pipelineId: number, pipelineName: string) => {
+    try {
+      const record = await fetchPipelineDossier(pipelineId);
+      if (!record?.specification) {
+        setDossier(null);
+        setDossierNote(`No pipeline data has been recorded for ${pipelineName}. Enter the line design below.`);
+        return;
+      }
+      setDossier(record.specification);
+      applyDossier(record.specification);
+      const diameters = registeredDiameters(record.specification);
+      setDossierNote(
+        `Line design taken from the pipeline record for ${pipelineName}`
+        + (record.specification.segments.length > 0
+          ? `, which registers ${record.specification.segments.length} stretch`
+            + `${record.specification.segments.length === 1 ? '' : 'es'}`
+            + (diameters.length > 1 ? ` across ${diameters.length} diameters` : '')
+            + '.'
+          : '.'),
+      );
+    } catch {
+      setDossier(null);
+      setDossierNote('');
+    }
+  };
+
   const loadSession = async (sessionId: string) => {
     setAlignmentLoading(true);
     setAlignmentError('');
@@ -503,6 +671,8 @@ export default function FfsSetupPage() {
       );
       const session = sessions.find((item) => item.id === sessionId);
       if (!lineName && session) setLineName(session.pipelineName);
+      if (session?.pipelineId) void loadDossier(session.pipelineId, session.pipelineName);
+      else { setDossier(null); setDossierNote(''); }
       // The upload recorded when the run was flown, so the engineer should not
       // have to retype it. Only an untouched field is filled: a date typed by
       // hand is a deliberate correction and must survive changing sessions.
@@ -684,7 +854,8 @@ export default function FfsSetupPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+      <div className="flex flex-col gap-6">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         {/* LEFT COLUMN: SETUP */}
         <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
           <div className="mb-5 flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-indigo-600 dark:text-indigo-400">
@@ -1203,61 +1374,161 @@ export default function FfsSetupPage() {
               </details>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
+              </>
+            ) : (
+              <>
+                <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 dark:border-indigo-900 dark:bg-indigo-950/20">
+                  <div className="flex items-start gap-3">
+                    <FiFileText className="mt-0.5 h-5 w-5 shrink-0 text-indigo-600" />
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                        Upload the controlled FFS template
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Manual rows are assessed as a separate source and are never mixed with released alignment
+                        features. XLSX, XLS, and CSV files up to 10 MB are supported. The template includes optional
+                        Feature ID, repair evidence, recommendation, and action-owner fields used by Case Review;
+                        Feature ID becomes mandatory when the output is prepared as an auditable report.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <SynButton
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="inline-flex w-full items-center justify-center gap-2"
+                  onClick={downloadManualFfsTemplate}
+                >
+                  <FiDownload /> Download FFS template
+                </SynButton>
+
+                <label
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    void loadManualFile(event.dataTransfer.files?.[0] || null);
+                  }}
+                  className="flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center transition hover:border-indigo-400 hover:bg-indigo-50/40 dark:border-slate-600 dark:bg-slate-900"
+                >
+                  <FiUploadCloud className="h-8 w-8 text-indigo-500" />
+                  <span className="mt-3 text-sm font-semibold text-slate-700 dark:text-slate-200">
+                    {manualFile?.name || 'Drop the completed template here'}
+                  </span>
+                  <span className="mt-1 text-xs text-slate-500">
+                    {manualRows.length > 0
+                      ? `${manualRows.length.toLocaleString()} row(s) loaded`
+                      : 'or click to browse XLSX, XLS, or CSV'}
+                  </span>
+                  <input
+                    type="file"
+                    accept={MANUAL_FFS_ACCEPT}
+                    className="sr-only"
+                    onChange={(event) => void loadManualFile(event.target.files?.[0] || null)}
+                  />
+                </label>
+
+                {alignmentMessage && (
+                  <p className="text-xs font-medium text-emerald-600">{alignmentMessage}</p>
+                )}
+                {alignmentError && (
+                  <p role="alert" className="text-xs font-medium text-red-600">{alignmentError}</p>
+                )}
+              </>
+            )}
+
+          </div>
+        </div>
+        </div>
+
+        {/* Line design and the inputs that decide the disposition beside B31G.
+            They run the full width because they are a form of their own: crammed
+            into a half-width column they stacked one field per row and pushed the
+            section table off the bottom of the screen. */}
+        {sourceMode === 'released' && (
+          <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-indigo-600 dark:text-indigo-400">
+                <FiSettings className="h-5 w-5" />
+                Line design &amp; assessment inputs
+              </div>
+              {/* One place to say what unit everything below is in. These used
+                  to be two ordinary fields in the middle of the grid, where
+                  they read as line data rather than as a display choice. */}
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                  Size
+                  <select
+                    value={diameterUnit}
+                    aria-label="Diameter and wall unit"
+                    onChange={(event) => {
+                      const next = event.target.value as LengthUnit;
+                      const reunit = (value: string) => normalizeDisplayValue(
+                        value,
+                        (numeric) => convertLength(numeric, diameterUnit, next),
+                      );
+                      setOuterDiameterMm(reunit);
+                      setNominalWallThickness(reunit);
+                      // The per-section figures are held in the displayed unit
+                      // too. Left unconverted, switching to inches turned a typed
+                      // 610 mm section into 610 in without touching the field.
+                      const reunitAll = (previous: Record<string, string>) => Object.fromEntries(
+                        Object.entries(previous).map(([key, value]) => [key, reunit(value)]),
+                      );
+                      setSectionDiameters(reunitAll);
+                      setSectionWalls(reunitAll);
+                      setDiameterUnit(next);
+                    }}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  >
+                    <option value="mm">mm</option>
+                    <option value="in">inch</option>
+                  </select>
+                </label>
+                <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                  Pressure
+                  <select
+                    value={pressureUnit}
+                    aria-label="Pressure and stress unit"
+                    onChange={(event) => {
+                      const next = event.target.value as PressureUnit;
+                      setSmysMpa((value) => normalizeDisplayValue(value, (numeric) => convertPressure(numeric, pressureUnit, next)));
+                      setOperatingPressureMpa((value) => normalizeDisplayValue(value, (numeric) => convertPressure(numeric, pressureUnit, next)));
+                      setInternalDesignPressure((value) => normalizeDisplayValue(value, (numeric) => convertPressure(numeric, pressureUnit, next)));
+                      // Held in the displayed unit like the section diameters, so
+                      // a typed 415 MPa must not become 415 psi on the switch.
+                      setSectionSmys((previous) => Object.fromEntries(
+                        Object.entries(previous).map(([key, value]) => [
+                          key,
+                          normalizeDisplayValue(value, (numeric) => convertPressure(numeric, pressureUnit, next)),
+                        ]),
+                      ));
+                      setPressureUnit(next);
+                    }}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  >
+                    <option value="MPa">MPa</option>
+                    <option value="bar">bar</option>
+                    <option value="psi">psi</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            {dossierNote && (
+              <p className="mb-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-[11px] leading-relaxed text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/20 dark:text-emerald-300">
+                <FiCheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span>
+                  {dossierNote}{' '}
+                  Anything you type here overrides the record for this assessment only.
+                </span>
+              </p>
+            )}
+            <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               <label className="block text-xs font-semibold text-slate-500">
                 Outer Diameter (line default) [{diameterUnit}]
-                <select
-                  value={diameterUnit}
-                  onChange={(event) => {
-                    const next = event.target.value as LengthUnit;
-                    const reunit = (value: string) => normalizeDisplayValue(
-                      value,
-                      (numeric) => convertLength(numeric, diameterUnit, next),
-                    );
-                    setOuterDiameterMm(reunit);
-                    setNominalWallThickness(reunit);
-                    // The per-section figures are held in the displayed unit
-                    // too. Left unconverted, switching to inches turned a typed
-                    // 610 mm section into 610 in without touching the field.
-                    const reunitAll = (previous: Record<string, string>) => Object.fromEntries(
-                      Object.entries(previous).map(([key, value]) => [key, reunit(value)]),
-                    );
-                    setSectionDiameters(reunitAll);
-                    setSectionWalls(reunitAll);
-                    setDiameterUnit(next);
-                  }}
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                  aria-label="Outer diameter unit"
-                >
-                  <option value="mm">mm</option>
-                  <option value="in">inch</option>
-                </select>
                 <input type="number" min="0" step="any" value={outerDiameterMm} onChange={(event) => setOuterDiameterMm(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
-              </label>
-              <label className="block text-xs font-semibold text-slate-500">
-                Pressure unit
-                <select
-                  value={pressureUnit}
-                  onChange={(event) => {
-                    const next = event.target.value as PressureUnit;
-                    setSmysMpa((value) => normalizeDisplayValue(value, (numeric) => convertPressure(numeric, pressureUnit, next)));
-                    setOperatingPressureMpa((value) => normalizeDisplayValue(value, (numeric) => convertPressure(numeric, pressureUnit, next)));
-                    // Held in the displayed unit like the section diameters, so
-                    // a typed 415 MPa must not become 415 psi on the switch.
-                    setSectionSmys((previous) => Object.fromEntries(
-                      Object.entries(previous).map(([key, value]) => [
-                        key,
-                        normalizeDisplayValue(value, (numeric) => convertPressure(numeric, pressureUnit, next)),
-                      ]),
-                    ));
-                    setPressureUnit(next);
-                  }}
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                >
-                  <option value="MPa">MPa</option>
-                  <option value="bar">bar</option>
-                  <option value="psi">psi</option>
-                </select>
               </label>
               <label className="block text-xs font-semibold text-slate-500">
                 Nominal wall thickness (line default) [{diameterUnit}]
@@ -1345,6 +1616,170 @@ export default function FfsSetupPage() {
                 <span className="mt-1 block text-[10px] font-normal leading-snug">Optional explicit assumption; NEW-only length is not inferred from zero.</span>
               </label>
             </div>
+            {/* B31G para. 1.9 divides the failure pressure by a safety factor —
+                the hydrotest-to-MAOP ratio, usually not below 1.25 — not by the
+                B31.8 design factor. The two only coincide while the line runs at
+                its design hoop stress, so the choice is made explicitly here. */}
+            <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
+                Safety factor
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                Divides the estimated failure pressure to give the safe operating pressure.
+              </p>
+              <MathBlock
+                tex={FFS_TEX.safePressure}
+                label="safe pressure equals failure pressure over safety factor"
+              />
+              <div role="radiogroup" aria-label="Safety factor basis" className="ds-segmented mt-2.5 w-max">
+                {([
+                  { value: 'derived', label: 'Derive from design factor', hint: 'SF = 1/F per section. Historic B31G practice and the basis of the Level 0 tables; correct only at the design hoop stress.' },
+                  { value: 'explicit', label: 'Explicit safety factor', hint: 'The ratio B31G para. 1.9 asks for: minimum hydrostatic test pressure over MAOP or MOP.' },
+                ] as const).map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={safetyFactorMode === option.value}
+                    title={option.hint}
+                    className={`ds-segmented__option${safetyFactorMode === option.value ? ' is-active' : ''}`}
+                    onClick={() => setSafetyFactorMode(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              {safetyFactorMode === 'explicit' ? (
+                <label className="mt-3 block text-xs font-semibold text-slate-500">
+                  Safety factor
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={safetyFactor}
+                    onChange={(event) => setSafetyFactor(event.target.value)}
+                    className="mt-1.5 w-32 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm tabular-nums text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  />
+                  {Number(safetyFactor) > 0 && Number(safetyFactor) < 1.25 && (
+                    <span className="mt-1 block text-[10px] font-normal leading-snug text-amber-600">
+                      Below the 1.25 minimum B31G para. 1.9 recommends. The report will carry a blocking finding.
+                    </span>
+                  )}
+                </label>
+              ) : (
+                <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400">
+                  Each section is assessed at{' '}
+                  <MathInline tex={FFS_TEX.safetyFactorFromDesign} label="SF equals one over F" />
+                  {' '}on its own design factor
+                  {sectionPipeSpecs.length > 0 && (
+                    <> — {[...new Set(sectionPipeSpecs.map((rule) => rule.designFactor))]
+                      .sort((a, b) => a - b)
+                      .map((factor) => `${factor} → ${(1 / factor).toFixed(2)}`)
+                      .join(', ')}</>
+                  )}
+                  .
+                </p>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <label className="block text-xs font-semibold text-slate-500">
+                Original design life [years]
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={designLifeYears}
+                  onChange={(event) => setDesignLifeYears(event.target.value)}
+                  placeholder="e.g. 25"
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                />
+                <span className="mt-1 block text-[10px] font-normal leading-snug">Remnant life is not reported above this. Leave empty for no cap.</span>
+              </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                Commissioning year
+                <input
+                  type="number"
+                  min="1900"
+                  max="2100"
+                  step="1"
+                  value={commissioningYear}
+                  onChange={(event) => setCommissioningYear(event.target.value)}
+                  placeholder="e.g. 1985"
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                />
+                <span className="mt-1 block text-[10px] font-normal leading-snug">Reported as consumed design life, and used to derive a service-age corrosion rate for any feature the run pair could not measure.</span>
+              </label>
+            </div>
+
+            {/* ASME B31.4-2025 inputs. They do not touch the B31G calculation —
+                they decide the Code disposition beside it: the para. 403.2.1
+                design thickness the 20 % no-repair band is a fraction of, and
+                the para. 451.6.2.2(b) triggers for engineering analysis. */}
+            <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <label className="block text-xs font-semibold text-slate-500">
+                Internal design pressure [{pressureUnit}]
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={internalDesignPressure}
+                  onChange={(event) => setInternalDesignPressure(event.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                />
+                <span className="mt-1 block text-[10px] font-normal leading-snug">The P of para. 403.2.1, from the pipe dossier. Left blank, the required operating pressure stands in — which understates t and narrows the 20 % no-repair band. The report states which was used.</span>
+              </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                Weld joint factor E (B31.4 Table 403.2.1-1)
+                <select
+                  value={weldJointFactor}
+                  onChange={(event) => setWeldJointFactor(event.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                >
+                  <option value="1">1.00 — seamless, ERW, electric flash welded</option>
+                  <option value="0.8">0.80 — electric fusion welded</option>
+                  <option value="0.6">0.60 — furnace butt welded, continuous welded</option>
+                </select>
+                <span className="mt-1 block text-[10px] font-normal leading-snug">Sets the design thickness t = P·D / (2·F·E·SMYS) the B31.4 20 % no-repair band is measured against.</span>
+              </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                Yield-to-tensile ratio
+                <input
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="any"
+                  value={yieldToTensileRatio}
+                  onChange={(event) => setYieldToTensileRatio(event.target.value)}
+                  placeholder="e.g. 0.88"
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                />
+                <span className="mt-1 block text-[10px] font-normal leading-snug">Above 0.93, B31.4 para. 451.6.2.2(b) requires an engineering analysis instead of B31G. Leave empty if the dossier gives none.</span>
+              </label>
+            </div>
+
+            <label className="flex items-start gap-2 text-xs font-semibold text-slate-500">
+              <input
+                type="checkbox"
+                checked={unusualLoading}
+                onChange={(event) => setUnusualLoading(event.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Unusual axial loads, lateral movement, or settlement
+                <span className="mt-0.5 block text-[10px] font-normal leading-snug">B31.4 para. 451.6.2.2(b) requires an engineering analysis for these lines; the B31G screen is then reported but is not the Code disposition.</span>
+              </span>
+            </label>
+
+            <p className="text-xs text-slate-500">Inputs are converted to MPa and mm before the ASME B31G calculation. ERF compares the selected required pressure basis with the calculated safe pressure; current operating pressure is not silently treated as MAOP.</p>
+            </div>
+          </div>
+        )}
+
+        {/* The per-section register needs the width: seven columns of numbers
+            do not fit beside another panel. */}
+        {sourceMode === 'released' && (
+          <div className="space-y-4">
             {sectionOptions.length > 0 && (
               <div className="rounded-xl border border-slate-200 dark:border-slate-700">
                 <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
@@ -1505,246 +1940,36 @@ export default function FfsSetupPage() {
                 )}
               </div>
             )}
+          </div>
+        )}
 
-            {/* B31G para. 1.9 divides the failure pressure by a safety factor —
-                the hydrotest-to-MAOP ratio, usually not below 1.25 — not by the
-                B31.8 design factor. The two only coincide while the line runs at
-                its design hoop stress, so the choice is made explicitly here. */}
-            <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
-                Safety factor
-              </p>
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-                Divides the estimated failure pressure to give the safe operating pressure.
-              </p>
-              <MathBlock
-                tex={FFS_TEX.safePressure}
-                label="safe pressure equals failure pressure over safety factor"
-              />
-              <div role="radiogroup" aria-label="Safety factor basis" className="ds-segmented mt-2.5 w-max">
-                {([
-                  { value: 'derived', label: 'Derive from design factor', hint: 'SF = 1/F per section. Historic B31G practice and the basis of the Level 0 tables; correct only at the design hoop stress.' },
-                  { value: 'explicit', label: 'Explicit safety factor', hint: 'The ratio B31G para. 1.9 asks for: minimum hydrostatic test pressure over MAOP or MOP.' },
-                ] as const).map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={safetyFactorMode === option.value}
-                    title={option.hint}
-                    className={`ds-segmented__option${safetyFactorMode === option.value ? ' is-active' : ''}`}
-                    onClick={() => setSafetyFactorMode(option.value)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-              {safetyFactorMode === 'explicit' ? (
-                <label className="mt-3 block text-xs font-semibold text-slate-500">
-                  Safety factor
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={safetyFactor}
-                    onChange={(event) => setSafetyFactor(event.target.value)}
-                    className="mt-1.5 w-32 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm tabular-nums text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                  />
-                  {Number(safetyFactor) > 0 && Number(safetyFactor) < 1.25 && (
-                    <span className="mt-1 block text-[10px] font-normal leading-snug text-amber-600">
-                      Below the 1.25 minimum B31G para. 1.9 recommends. The report will carry a blocking finding.
-                    </span>
-                  )}
-                </label>
-              ) : (
-                <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400">
-                  Each section is assessed at{' '}
-                  <MathInline tex={FFS_TEX.safetyFactorFromDesign} label="SF equals one over F" />
-                  {' '}on its own design factor
-                  {sectionPipeSpecs.length > 0 && (
-                    <> — {[...new Set(sectionPipeSpecs.map((rule) => rule.designFactor))]
-                      .sort((a, b) => a - b)
-                      .map((factor) => `${factor} → ${(1 / factor).toFixed(2)}`)
-                      .join(', ')}</>
-                  )}
-                  .
-                </p>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block text-xs font-semibold text-slate-500">
-                Original design life [years]
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={designLifeYears}
-                  onChange={(event) => setDesignLifeYears(event.target.value)}
-                  placeholder="e.g. 25"
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                />
-                <span className="mt-1 block text-[10px] font-normal leading-snug">Remnant life is not reported above this. Leave empty for no cap.</span>
-              </label>
-              <label className="block text-xs font-semibold text-slate-500">
-                Commissioning year
-                <input
-                  type="number"
-                  min="1900"
-                  max="2100"
-                  step="1"
-                  value={commissioningYear}
-                  onChange={(event) => setCommissioningYear(event.target.value)}
-                  placeholder="e.g. 1985"
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                />
-                <span className="mt-1 block text-[10px] font-normal leading-snug">Reported as consumed design life, and used to derive a service-age corrosion rate for any feature the run pair could not measure.</span>
-              </label>
-            </div>
-
-            {/* ASME B31.4-2025 inputs. They do not touch the B31G calculation —
-                they decide the Code disposition beside it: the para. 403.2.1
-                design thickness the 20 % no-repair band is a fraction of, and
-                the para. 451.6.2.2(b) triggers for engineering analysis. */}
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block text-xs font-semibold text-slate-500">
-                Internal design pressure [{pressureUnit}]
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={internalDesignPressure}
-                  onChange={(event) => setInternalDesignPressure(event.target.value)}
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                />
-                <span className="mt-1 block text-[10px] font-normal leading-snug">The P of para. 403.2.1, from the pipe dossier. Left blank, the required operating pressure stands in — which understates t and narrows the 20 % no-repair band. The report states which was used.</span>
-              </label>
-              <label className="block text-xs font-semibold text-slate-500">
-                Weld joint factor E (B31.4 Table 403.2.1-1)
-                <select
-                  value={weldJointFactor}
-                  onChange={(event) => setWeldJointFactor(event.target.value)}
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                >
-                  <option value="1">1.00 — seamless, ERW, electric flash welded</option>
-                  <option value="0.8">0.80 — electric fusion welded</option>
-                  <option value="0.6">0.60 — furnace butt welded, continuous welded</option>
-                </select>
-                <span className="mt-1 block text-[10px] font-normal leading-snug">Sets the design thickness t = P·D / (2·F·E·SMYS) the B31.4 20 % no-repair band is measured against.</span>
-              </label>
-              <label className="block text-xs font-semibold text-slate-500">
-                Yield-to-tensile ratio
-                <input
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="any"
-                  value={yieldToTensileRatio}
-                  onChange={(event) => setYieldToTensileRatio(event.target.value)}
-                  placeholder="e.g. 0.88"
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                />
-                <span className="mt-1 block text-[10px] font-normal leading-snug">Above 0.93, B31.4 para. 451.6.2.2(b) requires an engineering analysis instead of B31G. Leave empty if the dossier gives none.</span>
-              </label>
-            </div>
-
-            <label className="flex items-start gap-2 text-xs font-semibold text-slate-500">
-              <input
-                type="checkbox"
-                checked={unusualLoading}
-                onChange={(event) => setUnusualLoading(event.target.checked)}
-                className="mt-0.5"
-              />
-              <span>
-                Unusual axial loads, lateral movement, or settlement
-                <span className="mt-0.5 block text-[10px] font-normal leading-snug">B31.4 para. 451.6.2.2(b) requires an engineering analysis for these lines; the B31G screen is then reported but is not the Code disposition.</span>
-              </span>
-            </label>
-
-            <p className="text-xs text-slate-500">Inputs are converted to MPa and mm before the ASME B31G calculation. ERF compares the selected required pressure basis with the calculated safe pressure; current operating pressure is not silently treated as MAOP.</p>
-              </>
-            ) : (
-              <>
-                <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 dark:border-indigo-900 dark:bg-indigo-950/20">
-                  <div className="flex items-start gap-3">
-                    <FiFileText className="mt-0.5 h-5 w-5 shrink-0 text-indigo-600" />
-                    <div>
-                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                        Upload the controlled FFS template
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Manual rows are assessed as a separate source and are never mixed with released alignment
-                        features. XLSX, XLS, and CSV files up to 10 MB are supported. The template includes optional
-                        Feature ID, repair evidence, recommendation, and action-owner fields used by Case Review;
-                        Feature ID becomes mandatory when the output is prepared as an auditable report.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <SynButton
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="inline-flex w-full items-center justify-center gap-2"
-                  onClick={downloadManualFfsTemplate}
-                >
-                  <FiDownload /> Download FFS template
-                </SynButton>
-
-                <label
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    void loadManualFile(event.dataTransfer.files?.[0] || null);
-                  }}
-                  className="flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center transition hover:border-indigo-400 hover:bg-indigo-50/40 dark:border-slate-600 dark:bg-slate-900"
-                >
-                  <FiUploadCloud className="h-8 w-8 text-indigo-500" />
-                  <span className="mt-3 text-sm font-semibold text-slate-700 dark:text-slate-200">
-                    {manualFile?.name || 'Drop the completed template here'}
-                  </span>
-                  <span className="mt-1 text-xs text-slate-500">
-                    {manualRows.length > 0
-                      ? `${manualRows.length.toLocaleString()} row(s) loaded`
-                      : 'or click to browse XLSX, XLS, or CSV'}
-                  </span>
-                  <input
-                    type="file"
-                    accept={MANUAL_FFS_ACCEPT}
-                    className="sr-only"
-                    onChange={(event) => void loadManualFile(event.target.files?.[0] || null)}
-                  />
-                </label>
-
-                {alignmentMessage && (
-                  <p className="text-xs font-medium text-emerald-600">{alignmentMessage}</p>
-                )}
-                {alignmentError && (
-                  <p role="alert" className="text-xs font-medium text-red-600">{alignmentError}</p>
-                )}
-              </>
-            )}
-
-            {readinessReasons.length > 0 && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+        {/* What is still missing sits beside the button that is waiting on it,
+            instead of at the bottom of a column the reader has already left. */}
+        <div className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between dark:border-slate-700 dark:bg-slate-800">
+          <div className="min-w-0 flex-1">
+            {readinessReasons.length > 0 ? (
+              <div className="text-xs text-amber-800 dark:text-amber-400">
                 <p className="font-semibold">Complete these items to run the assessment:</p>
                 <ul className="mt-1 list-disc space-y-1 pl-4">
                   {readinessReasons.map((reason) => <li key={reason}>{reason}</li>)}
                 </ul>
               </div>
+            ) : (
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Ready. Every input is converted to MPa and mm before the ASME B31G calculation.
+              </p>
             )}
-
-            <SynButton
-              onClick={() => void runAssessment()}
-              disabled={readinessReasons.length > 0 || isProcessing || alignmentLoading}
-              variant="lime"
-              size="lg"
-              className="inline-flex w-full items-center justify-center gap-2"
-            >
-              {isProcessing ? `Processing (${progress}%)` : <><FiCheckCircle /> Run Assessment</>}
-            </SynButton>
           </div>
+
+          <SynButton
+            onClick={() => void runAssessment()}
+            disabled={readinessReasons.length > 0 || isProcessing || alignmentLoading}
+            variant="lime"
+            size="lg"
+            className="inline-flex w-full shrink-0 items-center justify-center gap-2 md:w-auto md:min-w-56"
+          >
+            {isProcessing ? `Processing (${progress}%)` : <><FiCheckCircle /> Run Assessment</>}
+          </SynButton>
         </div>
       </div>
 

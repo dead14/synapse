@@ -2001,6 +2001,229 @@
 /* The numbers put into the form, one step quieter than the form itself. */
 .ds-math-block--substitution { margin-top: 0.1em; color: var(--ds-muted); }
 
+/* ===========================================================================
+ * Pipeline dossier
+ *
+ * The intake form used to be two fixed columns of single-file fields, so one
+ * side ran twice as long as the other and the eye had nowhere to land. Groups
+ * flow the full width and the fields inside them wrap on their own measure,
+ * which keeps every group the same visual weight at any window size.
+ * ======================================================================== */
+
+.pipe-spec { display: grid; gap: 1.25rem; min-width: 0; }
+
+.pipe-spec__group {
+  display: grid;
+  gap: 0.875rem;
+  min-width: 0;
+  border-top: 1px solid var(--ds-line);
+  padding-top: 1rem;
+}
+
+.pipe-spec__group:first-child { border-top: 0; padding-top: 0; }
+
+.pipe-spec__group-head {
+  display: grid;
+  gap: 0.3rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.pipe-spec__group-head h4 {
+  margin: 0;
+  color: var(--ds-ink);
+  font-size: var(--ds-t-sm);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.pipe-spec__group-head p {
+  grid-column: 1 / -1;
+  margin: 0;
+  max-width: 64rem;
+  color: var(--ds-muted);
+  font-size: var(--ds-t-xs);
+  line-height: 1.55;
+  order: 2;
+}
+
+.pipe-spec__units {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.pipe-spec__units label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--ds-muted);
+  font-size: var(--ds-t-micro);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* auto-fit rather than a fixed column count: a group of six fields and a group
+   of two both fill the row instead of leaving a ragged half-width gap. */
+.pipe-spec__grid {
+  display: grid;
+  gap: 0.75rem 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  min-width: 0;
+}
+
+.pipe-spec__empty {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  border: 1px dashed var(--ds-line-strong);
+  border-radius: var(--ds-r-sm);
+  background: var(--ds-surface-sunken);
+  padding: 0.75rem 0.875rem;
+  color: var(--ds-muted);
+  font-size: var(--ds-t-xs);
+}
+
+.pipe-spec__register { max-height: 22rem; }
+.pipe-spec__register .ds-table :is(td, th) { vertical-align: middle; }
+.pipe-spec__register .ds-input,
+.pipe-spec__register .ds-select { min-width: 5.5rem; }
+.pipe-spec__register td:first-child .ds-input { min-width: 9rem; }
+
+.pipe-spec__problems {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  border: 1px solid var(--ds-danger-border);
+  border-radius: var(--ds-r-sm);
+  background: var(--ds-danger-soft);
+  padding: 0.65rem 0.875rem 0.65rem 1.75rem;
+  color: var(--ds-danger);
+  font-size: var(--ds-t-xs);
+}
+
+@media (max-width: 40rem) {
+  .pipe-spec__group-head { grid-template-columns: minmax(0, 1fr); }
+  .pipe-spec__units { grid-column: 1; grid-row: auto; }
+}
+
+/* ===========================================================================
+ * Pipeline register page
+ * ======================================================================== */
+
+.pipeline-register {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+@media (min-width: 64rem) {
+  .pipeline-register { grid-template-columns: 20rem minmax(0, 1fr); }
+}
+
+.pipeline-register__list {
+  display: grid;
+  gap: 0.375rem;
+  align-content: start;
+  overflow: hidden;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r-md);
+  background: var(--ds-surface);
+  padding: 0.5rem;
+  box-shadow: var(--ds-shadow-xs);
+}
+
+.pipeline-register__list-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.5rem 0.25rem;
+  color: var(--ds-muted);
+  font-size: var(--ds-t-micro);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.pipeline-register__item {
+  display: grid;
+  gap: 0.15rem;
+  border: 1px solid transparent;
+  border-radius: var(--ds-r-sm);
+  background: transparent;
+  padding: 0.5rem 0.625rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--ds-dur) var(--ds-ease);
+}
+
+.pipeline-register__item:hover { background: var(--ds-surface-sunken); }
+
+.pipeline-register__item.is-active {
+  border-color: var(--ds-primary-border);
+  background: var(--ds-primary-soft);
+}
+
+.pipeline-register__item strong { color: var(--ds-ink); font-size: var(--ds-t-sm); font-weight: 650; }
+.pipeline-register__item span { color: var(--ds-muted); font-size: var(--ds-t-micro); }
+
+.pipeline-register__badge {
+  justify-self: start;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r-pill);
+  padding: 0 0.4rem;
+  color: var(--ds-muted) !important;
+  font-family: var(--ds-font-data);
+}
+
+.pipeline-register__detail {
+  min-width: 0;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r-md);
+  background: var(--ds-surface);
+  padding: 1.25rem;
+  box-shadow: var(--ds-shadow-xs);
+}
+
+.pipeline-register__detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1.15rem;
+  border-bottom: 1px solid var(--ds-line);
+  padding-bottom: 0.875rem;
+}
+
+.pipeline-register__detail-head h2 {
+  margin: 0;
+  color: var(--ds-ink);
+  font-size: var(--ds-t-lg);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.pipeline-register__detail-head p {
+  margin: 0.2rem 0 0;
+  max-width: 46rem;
+  color: var(--ds-muted);
+  font-size: var(--ds-t-xs);
+  line-height: 1.55;
+}
+
+.pipeline-register__empty {
+  margin: 0;
+  padding: 1rem 0.5rem;
+  color: var(--ds-muted);
+  font-size: var(--ds-t-xs);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ds-btn, .ds-segmented__option, .ds-switch, .ds-switch::after, .ds-table tbody tr,
   .ds-input, .ds-select, .ds-textarea, .sec-brush__section,

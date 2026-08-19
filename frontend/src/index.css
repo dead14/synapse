@@ -944,6 +944,39 @@ layer(base);
     padding: 1.15rem;
   }
 
+  /* The dossier panel runs the full width of the intake and holds its own
+     grouped grid, so the two-column stack the old asset/specs panels used
+     would only re-create the lopsided column this replaced. */
+  .alignment-intake__dossier .alignment-config-panel__body {
+    display: grid;
+    gap: 1.15rem;
+  }
+
+  .alignment-intake__dossier-name {
+    display: grid;
+    gap: 0.35rem;
+    justify-items: start;
+    max-width: 42rem;
+  }
+
+  .alignment-intake__dossier-name .ds-input { width: 100%; }
+
+  .alignment-intake__dossier-hint,
+  .alignment-intake__dossier-note {
+    margin: 0;
+    color: var(--ds-muted);
+    font-size: 0.7rem;
+    line-height: 1.5;
+  }
+
+  .alignment-intake__dossier-note {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: var(--ds-success);
+    font-weight: 600;
+  }
+
   .alignment-config-panel__body label {
     margin-bottom: 0.35rem;
     color: var(--ds-ink-soft);

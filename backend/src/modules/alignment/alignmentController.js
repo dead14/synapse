@@ -398,6 +398,9 @@ exports.uploadCsv = async (req, res) => {
             return res.status(200).json({
                 message: 'Existing inspection run reused',
                 pipeline_run_id: Number(intake.run.run_id),
+                // The line this run belongs to, so the intake can file the
+                // pipeline dossier against it without a second lookup.
+                pipeline_id: intake.pipelineId ?? null,
                 run_summary: audit.feature_counts || { total: acceptedRows },
                 audit: { ...audit, accepted_rows: audit.accepted_rows ?? acceptedRows },
                 source_sha256: intake.run.source_sha256 || null,
@@ -408,6 +411,7 @@ exports.uploadCsv = async (req, res) => {
         return res.status(202).json({
             message: 'Ingestion queued',
             jobId: job.job_id,
+            pipeline_id: intake.pipelineId ?? null,
             state: job.state,
             progress: Number(job.progress || 0),
             sourceFile: job.source_file,

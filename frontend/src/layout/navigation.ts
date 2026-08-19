@@ -25,6 +25,9 @@ export const navigationGroups: NavigationGroup[] = [
       // two different sets of actions. Import now happens inside the alignment
       // wizard, which is where a run is actually used.
       { label: 'ILI alignment', path: '/alignment-history', description: 'Inspection runs, their alignment results, and FFS handoff' },
+      // The line design data behind every assessment. It used to live only in
+      // the intake form, which threw it away, so FFS asked for it again.
+      { label: 'Pipeline register', path: '/pipelines', description: 'Line design data: diameter, wall, grade, pressures, and multi-size stretches' },
       { label: 'Activity log', path: '/activity-logs', description: 'What each user did, in order' },
     ],
   },

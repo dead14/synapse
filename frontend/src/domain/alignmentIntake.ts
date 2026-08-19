@@ -13,6 +13,12 @@ export interface IngestionFeatureCounts {
 
 export interface IngestionResponse {
   pipeline_run_id?: unknown;
+  /**
+   * The line the run was filed under. The intake needs it to file the pipeline
+   * dossier, and only the upload response knows it — the pipeline is created or
+   * found by name on the server.
+   */
+  pipeline_id?: unknown;
   jobId?: unknown;
   state?: string;
   progress?: unknown;

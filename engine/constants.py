@@ -39,7 +39,7 @@ FEATURE_TYPE_NORMALIZATION = {
     "bend":"Bend","bend begin":"Bend","bend end":"Bend","elbow":"Bend",
     "bend start":"Bend",
     "anomaly":"Metal Loss","metal loss":"Metal Loss","corrosion":"Metal Loss",
-    "external metal":"Metal Loss","internal metal loss":"Metal Loss",
+    "internal metal loss":"Metal Loss","external metal loss":"Metal Loss",
     "anom":"Metal Loss","cocl":"Metal Loss","corr":"Metal Loss",
     "metal loss cluster":"Metal Loss","cluster corrosion":"Metal Loss",
     "pipe mill anomaly":"Metal Loss",
@@ -56,6 +56,14 @@ FEATURE_TYPE_NORMALIZATION = {
     "marker":"Marker","above ground marker":"Marker","agm":"Marker",
     "data recording begin":"Recording","data recording end":"Recording",
     "othe":"Other","other":"Other","pipeline fixture":"Other",
+    # "External metal" is metal *on* the outside of the pipe -- a strap, a
+    # bracket, a magnet, whatever the tool saw as ferrous mass beside the wall.
+    # It is not wall that has gone missing, and it used to be filed as
+    # "Metal Loss", which put a feature with no depth into the anomaly
+    # population that FFS assesses and that the intake summary counts.
+    # "External metal loss" keeps its own entry above and is unaffected.
+    "external metal":"Other","external metal object":"Other",
+    "metal object":"Other","external object":"Other",
 }
 
 SURFACE_NORMALIZATION = {

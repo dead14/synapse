@@ -10,6 +10,7 @@ import AppLayout from './layout/AppLayout';
 const DashboardPage = lazy(() => import('./pages/Dashboard/DashboardPage'));
 const AlignmentPage = lazy(() => import('./AlignmentPage'));
 const PipelineRuns = lazy(() => import('./PipelineRuns'));
+const PipelineRegisterPage = lazy(() => import('./pages/Pipelines/PipelineRegisterPage'));
 const RbiPage = lazy(() => import('./pages/RBI/RbiPage'));
 const IliComparisonPage = lazy(() => import('./IliComparisonPage'));
 const IliSectioningPage = lazy(() => import('./sectioning/IliSectioningPage'));
@@ -20,6 +21,7 @@ const DesignSystemPage = lazy(() => import('./pages/DesignSystemPage'));
 const SpoolPreviewPage = lazy(() => import('./pages/SpoolPreviewPage'));
 const FfsPreviewPage = lazy(() => import('./pages/FfsPreviewPage'));
 const TolerancesPreviewPage = lazy(() => import('./pages/TolerancesPreviewPage'));
+const PipelineSpecPreviewPage = lazy(() => import('./pages/PipelineSpecPreviewPage'));
 const MasterAdminPage = lazy(() => import('./pages/MasterAdmin/MasterAdminPage'));
 const CorrosionAnalysisPage = lazy(() => import('./pages/Corrosion/CorrosionAnalysisPage'));
 const FfsSetupPage = lazy(() => import('./pages/FFS/FfsSetupPage'));
@@ -113,6 +115,7 @@ export default function App() {
         {import.meta.env.DEV && <Route path="/spool-preview" element={<SpoolPreviewPage />} />}
         {import.meta.env.DEV && <Route path="/ffs-preview" element={<FfsPreviewPage />} />}
         {import.meta.env.DEV && <Route path="/tolerances-preview" element={<TolerancesPreviewPage />} />}
+        {import.meta.env.DEV && <Route path="/pipeline-preview" element={<PipelineSpecPreviewPage />} />}
 
         <Route element={<RequireAuth />}>
           <Route element={<AppLayout />}>
@@ -123,6 +126,7 @@ export default function App() {
             <Route path="/data" element={<Navigate to="/alignment-history" replace />} />
             <Route path="/runs" element={<Navigate to="/alignment-history" replace />} />
             <Route path="/alignment-history" element={<PipelineRuns />} />
+            <Route path="/pipelines" element={<PipelineRegisterPage />} />
             <Route path="/alignment" element={<AlignmentPage />} />
             <Route path="/ili-comparison" element={<IliComparisonPage />} />
             <Route path="/ili-sectioning" element={<IliSectioningPage />} />

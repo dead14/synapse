@@ -167,6 +167,12 @@ exports.listEligibleSessions = async (req, res) => {
             const entry = {
                 id: String(row.id),
                 pipelineName: sessionLabel(row),
+                // The line this session ran on. FFS reads the pipeline dossier
+                // through it, so the design data an engineer filed at intake
+                // does not have to be typed a second time here.
+                pipelineId: row.pipeline_id === null || row.pipeline_id === undefined
+                    ? null
+                    : Number(row.pipeline_id),
                 inspectionDate: sessionInspectionDate(row),
                 completedAt: row.completed_at,
                 reviewedAt: row.reviewed_at,

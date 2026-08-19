@@ -22,6 +22,20 @@ class ParserDictionaryTests(unittest.TestCase):
         self.assertEqual(normalize_feature_type("metal-loss"), "Metal Loss")
         self.assertEqual(normalize_feature_type("corosion"), "Metal Loss")
 
+    def test_external_metal_is_not_filed_as_metal_loss(self):
+        # Metal on the outside of the pipe is not wall that has gone missing.
+        # Filed as "Metal Loss" it entered the anomaly population FFS assesses
+        # while carrying no depth at all.
+        self.assertEqual(normalize_feature_type("External Metal"), "Other")
+        self.assertEqual(normalize_feature_type("external-metal"), "Other")
+        self.assertEqual(normalize_feature_type("External Metal Object"), "Other")
+        self.assertEqual(normalize_feature_type("Metal Object"), "Other")
+
+    def test_external_metal_loss_is_still_metal_loss(self):
+        self.assertEqual(normalize_feature_type("External Metal Loss"), "Metal Loss")
+        self.assertEqual(normalize_feature_type("EXTERNAL METAL LOSS"), "Metal Loss")
+        self.assertEqual(normalize_feature_type("external corrosion"), "Metal Loss")
+
     def test_dictionary_workbook_resolves_to_the_repository_root(self):
         workbook = Path(seed_dictionary.EXCEL_PATH).resolve()
 
