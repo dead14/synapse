@@ -147,22 +147,30 @@ test('remnant life is not reported above the design life the line has left', () 
   assert.ok(Math.abs(capped.remnantLife.years! - 25.4) < 0.2);
   assert.equal(capped.remnantLife.governingLimit, 'Original design life');
   assert.equal(capped.remnantLife.designLifeCapApplied, true);
+  // The cap quoted is the design life left at the inspection, not the 40 y total.
+  assert.ok(Math.abs(capped.remnantLife.designLifeCapYears! - 25.4) < 0.2);
 });
 
-test('a line already past its design life is capped at no remaining design life', () => {
+test('a line already past its design life is flagged, not capped to zero', () => {
   // Commissioned 1985 with a 25-year design life: the dossier ran out in 2010,
-  // so the 2024 inspection has none of it left. Comparing against the *total*
-  // design life instead reported 25 further years for a line 14 years past it.
+  // so the 2024 inspection has none of it left. Clamping the remaining design
+  // life at zero made the rule bind on every feature, so a shallow ACCEPTABLE
+  // anomaly reported a remnant life of "Now" due on the ILI date. The dossier
+  // bound is dropped instead, and the corrosion limit is what gets reported.
   const slow = row({ 'Max Depth [%]': '20', 'CR Depth [mm/y]': '0.15', 'CR Length [mm/y]': '0' });
-  const capped = processRow(slow, {
+  const uncapped = processRow(slow, { ...config, analysisHorizonYears: 100 });
+  const past = processRow(slow, {
     ...config,
     analysisHorizonYears: 100,
     serviceLife: { designLifeYears: 25, commissioningYear: 1985 },
   });
 
-  assert.equal(capped.remnantLife.years, 0);
-  assert.equal(capped.remnantLife.governingLimit, 'Original design life');
-  assert.equal(capped.remnantLife.designLifeCapApplied, true);
+  assert.equal(past.remnantLife.years, uncapped.remnantLife.years);
+  assert.equal(past.remnantLife.governingLimit, uncapped.remnantLife.governingLimit);
+  assert.equal(past.remnantLife.designLifeCapApplied, false);
+  assert.equal(past.remnantLife.designLifeCapYears, null);
+  assert.equal(past.remnantLife.pastDesignLifeAtInspection, true);
+  assert.notEqual(past.remnantLife.dueDateIso, config.iliDate.toISOString().slice(0, 10));
 });
 
 test('without a commissioning year the total design life remains the bound', () => {
@@ -175,6 +183,8 @@ test('without a commissioning year the total design life remains the bound', () 
 
   assert.equal(capped.remnantLife.years, 25);
   assert.equal(capped.remnantLife.designLifeCapApplied, true);
+  assert.equal(capped.remnantLife.designLifeCapYears, 25);
+  assert.equal(capped.remnantLife.pastDesignLifeAtInspection, false);
 });
 
 test('the design-life cap never manufactures a figure where no limit was reached', () => {

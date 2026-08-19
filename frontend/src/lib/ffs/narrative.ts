@@ -415,6 +415,7 @@ export function buildNarrative(
             ? 'Length held constant'
             : '',
           n.remnantLife.designLifeCapApplied ? 'Capped at design life' : '',
+          n.remnantLife.pastDesignLifeAtInspection ? 'Past original design life' : '',
         ].filter(Boolean);
         return [
           Number(n.ld).toLocaleString(),
@@ -541,9 +542,13 @@ export function buildNarrative(
       'wall, which is the project rejection line, or the safe pressure falling to the required pressure ' +
       `(ERF 1.0), which is the code acceptance criterion. Results are bounded to a ` +
       `${horizonYears}-year analysis horizon` +
-      (service.designLifeYears !== null
-        ? ` and are not reported above the ${service.designLifeYears}-year original design life.`
-        : '. No original design life was supplied, so no design-life limit is applied.'),
+      (service.designLifeYears === null
+        ? '. No original design life was supplied, so no design-life limit is applied.'
+        : usage !== null && usage.designLifeRemainingYears <= 0
+          ? `. The line is already past its ${service.designLifeYears}-year original design life, so no `
+            + 'design-life bound is applied and the figures below are corrosion-governed only.'
+          : ` and are not reported above the design life remaining at the inspection, out of the `
+            + `${service.designLifeYears}-year original design life.`),
   });
 
   const lifeGoverning = reportCase.remnantLife.governing;
@@ -566,7 +571,10 @@ export function buildNarrative(
         // that does not evaluate to the years quoted at the end of the row.
         `${`${depthLimitPct} %WT limit`.padEnd(20)}(${(depthLimitPct / 100).toFixed(2)} - ${(governing.nominal.maxDepthPct / 100).toFixed(2)}) x ${lifeGoverning.nominal.wall.toFixed(2)} mm / ${remnant.depthRateMmPerYear.toFixed(3)} mm/y = ${remnant.depthLimitYears === null ? `not reached in ${horizonYears} y` : `${remnant.depthLimitYears.toFixed(2)} y`}`,
         `ERF 1.0 limit       ${remnant.erfLimitYears === null ? `not reached in ${horizonYears} y` : `${remnant.erfLimitYears.toFixed(2)} y`}`,
-        service.designLifeYears !== null ? `Design life limit   ${service.designLifeYears.toFixed(2)} y` : '',
+        remnant.designLifeCapYears !== null
+          ? `Design life limit   ${remnant.designLifeCapYears.toFixed(2)} y remaining of ${service.designLifeYears} y`
+          : '',
+        remnant.pastDesignLifeAtInspection ? 'Design life limit   past design life — not applied' : '',
         '',
         `Remnant life        ${formatRemnantLife(remnant)}  (${remnantLimitLabel(remnant)})`,
         `Due date            ${remnant.dueDateIso ?? '—'}`,

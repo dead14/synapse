@@ -639,6 +639,18 @@ export function buildFfsReportCase(
     ));
   }
 
+  const pastDesignLifeCount = activeItems.filter(
+    (item) => item.nominal.remnantLife.pastDesignLifeAtInspection,
+  ).length;
+  if (pastDesignLifeCount > 0) {
+    findings.push(finding(
+      'LINE_PAST_ORIGINAL_DESIGN_LIFE',
+      'warning',
+      'The line had already consumed its original design life at the inspection date, so the design-life rule does not bound the reported figures. The remnant lives below are corrosion-governed only, and continued service past the design life is a life-extension decision outside this assessment.',
+      pastDesignLifeCount,
+    ));
+  }
+
   const zeroBaselineEstimateCount = activeItems.filter(
     (item) => item.nominal.growthEvidence?.depth.observation === 'new-only-zero-baseline-estimate',
   ).length;

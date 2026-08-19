@@ -232,7 +232,7 @@ export function buildResultsWorkbook(
     // it. They answer different questions and are allowed to differ.
     'B31.4 design thickness t [mm]', 'Depth / t design', 'B31.4 disposition', 'B31.4 reference',
     'Remnant life [y]', 'Due date', 'Governing limit',
-    `Years to ${depthLimitPct}% depth`, 'Years to ERF 1', 'Length held constant', 'Capped at design life',
+    `Years to ${depthLimitPct}% depth`, 'Years to ERF 1', 'Length held constant', 'Capped at design life', 'Past design life at inspection',
     'Conservative depth [%]', 'Conservative length [mm]', 'ERF conservative', 'P_safe conservative [MPa]',
     'Forecast depth [%]', 'ERF forecast',
     'Remnant life tolerance-adjusted [y]', 'Priority', 'Severity', 'Engineering disposition',
@@ -277,6 +277,7 @@ export function buildResultsWorkbook(
       life.erfLimitYears === null ? '' : num(life.erfLimitYears, 2),
       life.lengthHeldConstant ? 'Yes' : 'No',
       life.designLifeCapApplied ? 'Yes' : 'No',
+      life.pastDesignLifeAtInspection ? 'Yes' : 'No',
       num(item.conservative.depthPct, 2), num(item.conservative.lengthMm, 2),
       num(item.conservative.ERF), num(item.conservative.safePressure),
       num(item.forecast.depthPct, 2), num(item.forecast.ERF),

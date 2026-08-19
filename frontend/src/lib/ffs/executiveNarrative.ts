@@ -614,10 +614,15 @@ export function buildExecutiveNarrative(
       `two limits governs — metal loss reaching ${screening.depthRejectionPct} %WT, which is the project ` +
       'rejection line, or the safe pressure falling to the required pressure, which is the code ' +
       'acceptance criterion. ' +
-      (config.serviceLife?.designLifeYears != null
-        ? `The reported figure is additionally capped at the ${config.serviceLife.designLifeYears}-year original ` +
-          'design life, so a feature whose own limit lies beyond it is reported at the design life instead. '
-        : 'No original design life was supplied, so no design-life cap is applied. ') +
+      (config.serviceLife?.designLifeYears == null
+        ? 'No original design life was supplied, so no design-life cap is applied. '
+        : usage !== null && usage.designLifeRemainingYears <= 0
+          ? `The line is already past its ${config.serviceLife.designLifeYears}-year original design life, so no `
+            + 'design-life cap is applied and the figures are corrosion-governed only; continued service is a '
+            + 'life-extension decision outside this assessment. '
+          : 'The reported figure is additionally capped at the design life still remaining at the inspection out '
+            + `of the ${config.serviceLife.designLifeYears}-year original design life, so a feature whose own `
+            + 'limit lies beyond it is reported at that remaining design life instead. ') +
       `Results are bounded to a ${horizonYears}-year analysis horizon.`,
   });
   blocks.push({
