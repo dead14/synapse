@@ -58,12 +58,27 @@ export interface FfsSectionGrowthRow {
   /** Shortest remnant life in the section, and the feature that sets it. */
   shortestRemnantLifeYears: number | null;
   shortestRemnantLifeFeature: FfsScreenedResult | null;
+  /** Shallowest reported metal loss in the section, as % of wall. */
+  minDepthPct: number;
   /** Deepest reported metal loss in the section, as % of wall. */
   maxDepthPct: number;
+  /** The feature that sets `maxDepthPct`, so the summary can locate it. */
+  deepestFeature: FfsScreenedResult | null;
   /** Lowest calculated safe pressure in the section, in MPa. */
   minSafePressureMpa: number;
   /** Design factors in force. More than one means the section is not uniform. */
   designFactors: number[];
+}
+
+/** The deepest feature of a set, or null when the set is empty. */
+function deepest(members: FfsScreenedResult[]): FfsScreenedResult | null {
+  let best: FfsScreenedResult | null = null;
+  for (const item of members) {
+    const depth = item.nominal.maxDepthPct;
+    if (!Number.isFinite(depth)) continue;
+    if (!best || depth > best.nominal.maxDepthPct) best = item;
+  }
+  return best;
 }
 
 /**
@@ -112,7 +127,9 @@ export function buildSectionGrowthSummary(items: FfsScreenedResult[]): FfsSectio
       ).length,
       shortestRemnantLifeYears: withLife[0]?.nominal.remnantLife.years ?? null,
       shortestRemnantLifeFeature: withLife[0] ?? null,
+      minDepthPct: minBy(members, (item) => item.nominal.maxDepthPct),
       maxDepthPct: maxBy(members, (item) => item.nominal.maxDepthPct),
+      deepestFeature: deepest(members),
       minSafePressureMpa: minBy(members, (item) => item.nominal.safePressure),
       designFactors: [...new Set(members.map((item) => item.nominal.df))].sort((a, b) => a - b),
     });

@@ -32,7 +32,7 @@ import { maxBy } from '../../utils/numericRange.ts';
 /** Features closer together than this along the pipeline form one location zone. */
 const ZONE_GAP_M = 10;
 /** Depth at or above which a feature is treated as severe regardless of ERF. */
-const SEVERE_DEPTH_PCT = 70;
+export const SEVERE_DEPTH_PCT = 70;
 /**
  * How far downstream the pairwise interaction screen will look, in metres.
  *

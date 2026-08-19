@@ -20,7 +20,8 @@ import {
   createFfsReportContext,
   type FfsReportContext,
 } from './reportCase.ts';
-import { maxBy, maxOf, minOf } from '../../utils/numericRange.ts';
+import { buildExecutiveNarrative } from './executiveNarrative.ts';
+import { maxBy } from '../../utils/numericRange.ts';
 import {
   failureStressTex,
   FFS_TEX,
@@ -131,62 +132,16 @@ export function buildNarrative(
       lifeSortValue(a.nominal.remnantLife.years) - lifeSortValue(b.nominal.remnantLife.years),
   );
   const governing = byErf[0];
-  const maxDepth = maxBy(items, (item) => item.nominal.maxDepthPct);
-  const ldValues = items.map((item) => Number(item.nominal.ld)).filter(Number.isFinite);
-  const ldMin = minOf(ldValues);
-  const ldMax = maxOf(ldValues);
 
-  // ── 1.0 Introduction ──────────────────────────────────────────────
-  blocks.push({ kind: 'heading', level: 1, text: '1.0  Introduction' });
-  blocks.push({
-    kind: 'paragraph',
-    text:
-      `This report presents the fitness-for-service (FFS) assessment of ${total.toLocaleString()} metal-loss ` +
-      `features reported for ${config.lineName || 'the assessed pipeline'}. The in-line inspection was ` +
-      `carried out on ${config.iliDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}. ` +
-      `Repair disposition capacity credit is evaluated as of ${reportContext.asOfDateIso}. ` +
-      `Features span log distance ${ldMin.toLocaleString()} m to ${ldMax.toLocaleString()} m, with a maximum ` +
-      `reported depth of ${maxDepth.toFixed(1)}% of wall thickness.`,
-  });
-
-  blocks.push({ kind: 'heading', level: 2, text: '1.1  Decision summary' });
-  blocks.push({
-    kind: 'paragraph',
-    text:
-      `As-inspected, ${reportCase.asInspected.populationCount.toLocaleString()} feature(s) were assessed. ` +
-      (reportCase.asInspected.governingErf
-        ? `The governing nominal ERF is ${fmt(reportCase.asInspected.governingErf.nominal.ERF)} at ` +
-          `LD ${Number(reportCase.asInspected.governingErf.nominal.ld).toLocaleString()} m.`
-        : 'No governing feature is available.'),
-  });
-  blocks.push({
-    kind: 'paragraph',
-    text:
-      `As-managed, ${reportCase.asManaged.populationCount.toLocaleString()} active feature(s) remain after ` +
-      `${reportCase.repairCounts.permanentVerified.toLocaleString()} verified permanent repair(s). ` +
-      (reportCase.repairCounts.permanentPendingEvidence > 0
-        ? `${reportCase.repairCounts.permanentPendingEvidence.toLocaleString()} permanent-repair label(s) remain active because identity, evidence, or chronology does not yet qualify for capacity credit. `
-        : '') +
-      `${reportCase.repairCounts.temporary.toLocaleString()} temporary repair(s) remain active and receive ` +
-      `no capacity credit in this scenario.` +
-      (reportCase.asManaged.governingErf
-        ? ` The active governing feature is ${reportCase.asManaged.governingErf.nominal.featureId ?? 'unidentified'} ` +
-          `at LD ${Number(reportCase.asManaged.governingErf.nominal.ld).toLocaleString()} m.`
-        : ' No active governing feature remains.'),
-  });
-  blocks.push({
-    kind: 'paragraph',
-    text:
-      `The remaining-strength evaluation follows the ${methodName(config)} method as a Level 1 evaluation ` +
-      `(ASME B31G-2023 para. 1.6). Its acceptance criterion is that the estimated failure stress is at least ` +
-      `the safety factor times the hoop stress at the required pressure. Results are reported here as an ` +
-      `estimated repair factor (ERF) — the ratio of the required pressure to the calculated safe pressure — ` +
-      `which restates the same criterion as ERF below 1.0. ERF is an industry convention and is not a term ` +
-      `defined by B31G. The additional condition that reported depth stay below ` +
-      `${screening.depthRejectionPct}% of wall thickness is a project rejection rule, not a code limit: ` +
-      `B31G para. 1.2(f) permits evaluation at any depth provided the sizing accuracy and the effective ` +
-      `corrosion rate are justified.`,
-  });
+  // ── 1  Executive summary ─────────────────────────────────────────
+  // Written to the client's own ILI report template: 1.1 summary of results
+  // through 1.7 management statement, in their order and under their headings,
+  // so this document reads beside the contractor's report rather than against
+  // it. The engineering detail those sections summarise stays where it was, in
+  // sections 2 onwards, and the summary quotes it rather than restating it.
+  blocks.push(
+    ...buildExecutiveNarrative(items, config, screening, reportContext, reportCase, options),
+  );
 
   // ── 2.0 Methodology ───────────────────────────────────────────────
   blocks.push({ kind: 'heading', level: 1, text: '2.0  Assessment methodology' });
