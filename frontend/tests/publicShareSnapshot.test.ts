@@ -169,3 +169,29 @@ test('changes the share scope when the referenced alignment run changes', () => 
 
   assert.notEqual(firstRun, secondRun);
 });
+
+test('a case filed under the old growth column names revives under the current ones', () => {
+  // crDepth/crLength became crDepthSource/crLengthSource when the source column
+  // and the rate the projection ran on stopped being the same thing. A document
+  // filed before that came back with the new names undefined, which the tables
+  // absorbed silently and the what-if drawer did not.
+  const revived = reviveFfsShareState(buildFfsShareState({
+    results: [{ key: 'ffs:1', crDepth: 0.31, crLength: 1.4 }],
+    config: { lineName: 'Line 12', iliDate: new Date('2026-03-14T00:00:00.000Z') },
+  }));
+
+  assert.ok(revived);
+  assert.equal(revived.results[0].crDepthSource, 0.31);
+  assert.equal(revived.results[0].crLengthSource, 1.4);
+});
+
+test('a case that carries the current growth columns is not rewritten by the rename bridge', () => {
+  const revived = reviveFfsShareState(buildFfsShareState({
+    results: [{ key: 'ffs:1', crDepthSource: 0, crLengthSource: 0, crDepth: 9, crLength: 9 }],
+    config: { lineName: 'Line 12', iliDate: new Date('2026-03-14T00:00:00.000Z') },
+  }));
+
+  assert.ok(revived);
+  assert.equal(revived.results[0].crDepthSource, 0);
+  assert.equal(revived.results[0].crLengthSource, 0);
+});

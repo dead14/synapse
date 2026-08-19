@@ -192,3 +192,35 @@ test('invalid scenario assumptions are rejected instead of silently clamped', ()
     /analysis horizon/i,
   );
 });
+
+test('a case filed under the old growth column names still seeds every preset', () => {
+  // The stored document from before crDepth/crLength were renamed. Reading the
+  // current names off it yielded undefined, which the drawer then formatted —
+  // the crash that took the whole workspace down on "Open what-if".
+  const result = nominal();
+  const legacy = { ...result } as Record<string, unknown>;
+  legacy.crDepth = legacy.crDepthSource;
+  legacy.crLength = legacy.crLengthSource;
+  delete legacy.crDepthSource;
+  delete legacy.crLengthSource;
+  const stale = legacy as unknown as ReturnType<typeof nominal>;
+
+  for (const preset of ['as-reported', 'conservative', 'forecast'] as const) {
+    const inputs = scenarioInputsForPreset(preset, stale, screening);
+    for (const [label, value] of Object.entries(inputs)) {
+      if (typeof value === 'boolean') continue;
+      assert.ok(
+        Number.isFinite(value),
+        `${preset} seeded ${label} with ${String(value)}, which the drawer cannot format`,
+      );
+    }
+  }
+});
+
+test('a stored case missing its remnant projection still bounds the forecast preset', () => {
+  const result = nominal();
+  const stale = { ...result, remnantLife: undefined } as unknown as ReturnType<typeof nominal>;
+  const inputs = scenarioInputsForPreset('forecast', stale, screening);
+  assert.ok(Number.isFinite(inputs.forecastYears));
+  assert.equal(inputs.forecastYears, screening.forecastYears);
+});
