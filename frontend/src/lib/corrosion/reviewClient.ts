@@ -28,6 +28,15 @@ export interface FfsEligibleSession {
   id: string;
   pipelineName: string;
   /**
+   * The line this session ran on, when the session records one.
+   *
+   * FFS reads the pipeline dossier through it, so the design data an engineer
+   * filed at intake — diameter, wall, grade, pressures, and the register of
+   * stretches a multi-size line is built from — does not have to be typed a
+   * second time here.
+   */
+  pipelineId: number | null;
+  /**
    * The day the assessed run was flown, `YYYY-MM-DD`, taken from the master run
    * recorded at upload. Null for sessions built before the intake collected it —
    * the setup screen then asks for the date instead of assuming one.

@@ -146,6 +146,7 @@ const complianceRoutes = require('./modules/compliance/complianceRoutes');
 const directAssessmentRoutes = require('./modules/directAssessment/directAssessmentRoutes');
 const fieldMeasurementRoutes = require('./modules/fieldMeasurements/fieldMeasurementRoutes');
 const ingestionRoutes = require('./modules/ingestion/ingestionRoutes');
+const pipelineRoutes = require('./modules/pipelines/pipelineRoutes');
 const masterAdminRoutes = require('./modules/masterAdmin/masterAdminRoutes');
 const publicShareRoutes = require('./modules/publicShares/publicShareRoutes');
 
@@ -161,6 +162,7 @@ app.use('/api/compliance', complianceRoutes);
 app.use('/api/direct-assessments', directAssessmentRoutes);
 app.use('/api/field-measurements', fieldMeasurementRoutes);
 app.use('/api/public-shares', publicShareRoutes);
+app.use('/api', pipelineRoutes); // pipeline dossier: /api/pipelines
 app.use('/api', ffsRoutes); // for /api/download-template
 app.use('/api', rbiRoutes);
 app.use('/api', alignmentRoutes); // for /api/upload-csv and /api/run

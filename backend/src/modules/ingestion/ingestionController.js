@@ -52,7 +52,7 @@ exports.enqueueIngestion = async ({ file, pipelineName, surveyYear, surveyDate, 
         sourceSha256: stored.sourceSha256,
     });
     if (existingRun) {
-        return { kind: 'existing', run: existingRun };
+        return { kind: 'existing', run: existingRun, pipelineId: Number(pipeline.id) };
     }
     const created = await repository.createIngestionJob(pool, {
         jobId,
@@ -101,5 +101,5 @@ exports.enqueueIngestion = async ({ file, pipelineName, surveyYear, surveyDate, 
         }
         throw queueUnavailableError(error);
     }
-    return { kind: 'queued', job: created };
+    return { kind: 'queued', job: created, pipelineId: Number(pipeline.id) };
 };

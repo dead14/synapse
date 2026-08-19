@@ -351,21 +351,67 @@ def build_data_row(worksheet, row):
     return cells
 
 
+# The pipeline dossier, in the canonical units it is stored in. The keys are
+# written by `frontend/src/domain/pipelineExport.ts`; the two lists are matched
+# by name, so a rename on one side leaves a blank cell rather than an error and
+# both have to move together.
 PIPELINE_FIELDS = [
     ("Pipeline Name", "pipelineName"),
-    ("Segment Route", "segmentRoute"),
     ("Environment", "environment"),
-    ("Length (km)", "lengthKm"),
     ("Product Medium", "productMedium"),
-    ("MAOP (psi)", "maopPsi"),
-    ("Outer Diameter", "outerDiameter"),
+    ("Length (km)", "lengthKm"),
+    ("Location Class", "locationClass"),
+    ("Installation Year", "installationYear"),
+    ("Commissioning Year", "commissioningYear"),
+    ("Design Life (years)", "designLifeYears"),
+    ("Outer Diameter (mm)", "outerDiameterMm"),
     ("Nominal WT (mm)", "nominalWtMm"),
+    ("SMYS (MPa)", "smysMpa"),
+    ("Design Factor", "designFactor"),
     ("Material Grade", "materialGrade"),
     ("Seam Type", "seamType"),
     ("External Coating", "externalCoating"),
-    ("Installation Year", "installationYear"),
-    ("Location Class", "locationClass"),
+    ("MAOP (MPa)", "maopMpa"),
+    ("Design Pressure (MPa)", "designPressureMpa"),
+    ("Operating Pressure (MPa)", "operatingPressureMpa"),
+    ("Internal Design Pressure (MPa)", "internalDesignPressureMpa"),
+    ("Weld Joint Factor E", "weldJointFactor"),
+    ("Yield-to-Tensile Ratio", "yieldToTensileRatio"),
+    ("Registered Stretches", "segmentCount"),
 ]
+
+# One block per registered stretch of pipe. A line of one size has none, and
+# nothing is written; a line that steps diameter or grade carries a block for
+# each, because a single outer diameter would not describe it.
+SEGMENT_FIELDS = [
+    ("Name", "Label"),
+    ("Range", "Range"),
+    ("Outer Diameter (mm)", "OuterDiameterMm"),
+    ("Nominal WT (mm)", "NominalWtMm"),
+    ("SMYS (MPa)", "SmysMpa"),
+    ("Design Factor", "DesignFactor"),
+    ("Material Grade", "MaterialGrade"),
+]
+
+
+def pipeline_sheet_rows(pipeline_data):
+    """Field/value pairs for the dossier sheet, register included."""
+    rows = [
+        (label, safe_cell_value(pipeline_data.get(key)))
+        for label, key in PIPELINE_FIELDS
+    ]
+    try:
+        segment_count = int(pipeline_data.get("segmentCount") or 0)
+    except (TypeError, ValueError):
+        segment_count = 0
+    for position in range(1, max(0, segment_count) + 1):
+        rows.append((f"— Stretch {position} —", ""))
+        for label, suffix in SEGMENT_FIELDS:
+            rows.append((
+                f"Stretch {position} {label}",
+                safe_cell_value(pipeline_data.get(f"segment{position}{suffix}")),
+            ))
+    return rows
 
 
 def append_header_row(worksheet, headers, fill=DARK_BLUE_FILL):
@@ -399,15 +445,10 @@ def build_pipeline_sheet(workbook, pipeline_data):
         None,
     ])
     append_header_row(worksheet, ["Field", "Value"], BLUE_FILL)
-    for label, key in PIPELINE_FIELDS:
+    for label, value in pipeline_sheet_rows(pipeline_data):
         worksheet.append([
             styled_cell(worksheet, label, fill=NEW_FILL, font=MATCHED_FONT, border=THIN_BORDER),
-            styled_cell(
-                worksheet,
-                safe_cell_value(pipeline_data.get(key)),
-                fill=OLD_FILL,
-                border=THIN_BORDER,
-            ),
+            styled_cell(worksheet, value, fill=OLD_FILL, border=THIN_BORDER),
         ])
 
     worksheet.append([])
@@ -643,16 +684,12 @@ def build_xlsxwriter_pipeline_sheet(workbook, pipeline_data, formats):
     worksheet.set_column("B:B", 42)
     worksheet.merge_range("A1:B1", "PIPELINE DATA", formats["title_blue"])
     worksheet.write_row("A2", ["Field", "Value"], formats["header_blue"])
-    for row_index, (label, key) in enumerate(PIPELINE_FIELDS, 2):
+    rows = pipeline_sheet_rows(pipeline_data)
+    for row_index, (label, value) in enumerate(rows, 2):
         worksheet.write(row_index, 0, label, formats["pipeline_label"])
-        worksheet.write(
-            row_index,
-            1,
-            safe_cell_value(pipeline_data.get(key)),
-            formats["pipeline_value"],
-        )
+        worksheet.write(row_index, 1, value, formats["pipeline_value"])
 
-    section_row = 2 + len(PIPELINE_FIELDS) + 1
+    section_row = 2 + len(rows) + 1
     worksheet.write(section_row, 0, "INSPECTION RUNS", formats["title_gold"])
     run_headers = ["Role", "Survey Year", "Vendor", "File Name", "Run ID", "Records"]
     worksheet.write_row(section_row + 1, 0, run_headers, formats["header_gold"])

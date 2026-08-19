@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiSettings, FiShield, FiPlus, FiDownload, FiArrowRight } from 'react-icons/fi';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { FiUploadCloud, FiInfo, FiChevronDown, FiChevronUp, FiDatabase, FiShield, FiPlus, FiDownload, FiArrowRight, FiCheckCircle } from 'react-icons/fi';
 import { apiFetch, apiUrl } from '../utils/api';
 import { Button, LinkButton } from '../components/ds';
 import { useToast } from '../components/common/ToastProvider';
@@ -12,6 +12,17 @@ import {
   type IngestionFileProgress,
   type IngestionResponse,
 } from '../domain/alignmentIntake';
+import PipelineSpecFields from '../components/pipeline/PipelineSpecFields';
+import {
+  EMPTY_PIPELINE_SPEC_FORM,
+  formToSpecification,
+  pipelineSpecFormProblems,
+  specificationToForm,
+  type PipelineSpecForm,
+} from '../domain/pipelineSpecForm';
+import { pipelineExportFields } from '../domain/pipelineExport';
+import { isBlankSpecification, type PipelineRegisterEntry } from '../domain/pipelineSpecification';
+import { fetchPipelineDossier, fetchPipelineRegister, savePipelineDossier } from '../lib/pipelines/pipelineClient';
 
 interface StepUploadILIProps {
   onNext: (data?: any) => void;
@@ -183,32 +194,34 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
   // as one figure covering the whole intake.
   const [fileProgress, setFileProgress] = useState<IngestionFileProgress[]>([]);
   const [sessionName, setSessionName] = useState('');
-  const [pipelineData, setPipelineData] = useState({
-    segmentRoute: '',
-    environment: '',
-    lengthKm: '',
-    productMedium: '',
-    maopPsi: '',
-    designPressureMpa: '',
-    operatingPressureMpa: '',
-    outerDiameter: '',
-    nominalWtMm: '',
-    materialGrade: '',
-    smysMpa: '',
-    designFactor: '',
-    seamType: '',
-    externalCoating: '',
-    installationYear: '',
-    buildYear: '',
-    designLifeYears: '',
-    locationClass: '',
-  });
-  const setPipelineField = (field: keyof typeof pipelineData, value: string) => {
-    setPipelineData((current) => ({ ...current, [field]: value }));
-  };
+  /**
+   * The line's design data, as typed.
+   *
+   * It used to live here as loose strings that travelled no further than the
+   * Excel export, so FFS asked the same engineer for the same numbers again in
+   * different units. It is now the pipeline dossier: filed against the line on
+   * import, and read back by every assessment that follows.
+   */
+  const [specForm, setSpecForm] = useState<PipelineSpecForm>(EMPTY_PIPELINE_SPEC_FORM);
+  // Whether the operator has touched the dossier. A recorded dossier is loaded
+  // over an untouched form and offered as a button over a typed one, so
+  // switching the pipeline name never wipes out work in progress.
+  const [specTouched, setSpecTouched] = useState(false);
+  const [register, setRegister] = useState<PipelineRegisterEntry[]>([]);
+  const [dossierNote, setDossierNote] = useState('');
+  const specProblems = pipelineSpecFormProblems(specForm);
+
+  /** The pipeline this session's name already names, if the org has one. */
+  const matchedPipeline = useMemo(() => {
+    const name = sessionName.trim().toLowerCase();
+    if (!name) return null;
+    return register.find((entry) => entry.pipelineName.trim().toLowerCase() === name) || null;
+  }, [register, sessionName]);
   // Aborts in-flight ingestion work (upload + status polling) on unmount and
   // suppresses state updates that would otherwise land after navigation.
   const unmountAbortRef = useRef<AbortController | null>(null);
+  /** The line the uploads were filed under, learned from the first response. */
+  const pipelineIdRef = useRef<number | null>(null);
   const [strategies, setStrategies] = useState<StrategyCapability[]>(() =>
     STRATEGY_ORDER.map((id) => ({
       id,
@@ -223,6 +236,50 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
     unmountAbortRef.current = controller;
     return () => controller.abort();
   }, []);
+
+  // The lines this organization already has a dossier for. Read once: the
+  // register is small, and the alternative is a lookup on every keystroke in
+  // the name field.
+  useEffect(() => {
+    let active = true;
+    fetchPipelineRegister()
+      .then((entries) => { if (active) setRegister(entries); })
+      .catch(() => {
+        // No register is not an error here: the intake still files a dossier
+        // once the run is imported and the pipeline exists.
+      });
+    return () => { active = false; };
+  }, []);
+
+  /**
+   * Loads the dossier already filed for the named line.
+   *
+   * Applied without asking only while the form is untouched, which is the
+   * ordinary case: an engineer types the line name first and expects the
+   * numbers they filed last time to be there.
+   */
+  const loadDossier = async (pipelineId: number, pipelineName: string) => {
+    try {
+      const dossier = await fetchPipelineDossier(pipelineId);
+      if (!dossier?.specification) return;
+      setSpecForm(specificationToForm(dossier.specification, {
+        diameterUnit: specForm.diameterUnit,
+        pressureUnit: specForm.pressureUnit,
+      }));
+      setSpecTouched(false);
+      setDossierNote(`Loaded the dossier filed for ${pipelineName}.`);
+    } catch {
+      setDossierNote('');
+    }
+  };
+
+  useEffect(() => {
+    if (!matchedPipeline?.recorded || specTouched) return;
+    void loadDossier(matchedPipeline.pipelineId, matchedPipeline.pipelineName);
+    // Only the identity of the matched line should re-trigger this; the form
+    // state it writes is deliberately not a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchedPipeline?.pipelineId, matchedPipeline?.recorded]);
 
   useEffect(() => {
     let active = true;
@@ -308,6 +365,9 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
       });
     };
     setIsProcessing(true);
+    // A line the register already knows is the dossier's home even if the
+    // upload is a re-use of a run already imported.
+    pipelineIdRef.current = matchedPipeline?.pipelineId ?? null;
     setFileProgress(datasets.map((dataset) => ({ name: dataset.file?.name || '', percent: 0 })));
     try {
       const masterFile = datasets[masterIndex]?.file as File | null;
@@ -334,6 +394,12 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
           body: formData,
           signal,
         });
+        // Every upload in this intake names the same line, so whichever answers
+        // first identifies the pipeline the dossier is filed against.
+        const uploadedPipelineId = Number(queued.pipeline_id);
+        if (Number.isSafeInteger(uploadedPipelineId) && uploadedPipelineId > 0) {
+          pipelineIdRef.current = uploadedPipelineId;
+        }
         const response = queued.jobId
           ? await waitForIngestion(
             String(queued.jobId),
@@ -363,6 +429,26 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         ingest: ingestCallback,
       });
       Object.assign(summaryData, runPair);
+
+      // File the dossier against the line the runs were imported into. A
+      // failure here does not stop the alignment: the design data is
+      // supporting evidence, and losing the import over it would cost the run.
+      const specification = formToSpecification(specForm);
+      if (pipelineIdRef.current !== null) {
+        try {
+          await savePipelineDossier(pipelineIdRef.current, specification, signal);
+        } catch (error) {
+          if (!signal?.aborted) {
+            console.error('Failed to file the pipeline dossier:', error);
+            toast.error('The runs were imported, but the pipeline data could not be saved.');
+          }
+        }
+      } else if (!isBlankSpecification(specification)) {
+        // Nothing to file it against: the server answered without naming the
+        // line. Say so rather than letting the dossier disappear silently.
+        toast.error('The runs were imported, but the pipeline this line belongs to could not be identified, '
+          + 'so the pipeline data was not saved. Enter it in the Pipeline register.');
+      }
 
       if (algorithm === 'phylogenetic') {
         const sorted = [...runPair.historicalRuns, runPair.masterRun]
@@ -400,7 +486,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
         enablePartialRun,
         pipelineData: {
           pipelineName,
-          ...pipelineData,
+          ...pipelineExportFields(specification),
           inspectionRuns,
         },
       });
@@ -456,7 +542,7 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
             </LinkButton>
             <Button
               onClick={handleInitialize}
-              disabled={!allFilesUploaded || isProcessing}
+              disabled={!allFilesUploaded || isProcessing || specProblems.length > 0}
               endIcon={allFilesUploaded && !isProcessing ? <FiArrowRight aria-hidden="true" /> : undefined}
             >
               {isProcessing ? processingLabel || 'Importing data…' : 'Initialize alignment'}
@@ -484,156 +570,76 @@ export default function StepUploadILI({ onNext }: StepUploadILIProps) {
       )}
 
       <div className="flex flex-col-reverse gap-4">
-        {/* Left Column (Now Bottom): Asset & Specs */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          
-          {/* Section 1: Asset Identification */}
-          <div className="alignment-config-panel">
-            <button 
-              onClick={() => toggleSection('asset')}
-              className="alignment-config-panel__trigger"
-            >
-              <h3 className="flex items-center gap-2 font-semibold">
-                <FiInfo aria-hidden="true" /> Asset &amp; operations
-              </h3>
-              {isExpanded('asset') ? <FiChevronUp /> : <FiChevronDown />}
-            </button>
-            
-            {isExpanded('asset') && (
-              <div className="alignment-config-panel__body grid grid-cols-1 sm:grid-cols-2">
-                <div className="sm:col-span-2">
-                  <label className="ds-field__label">Pipeline Name (From — To)</label>
-                  <input type="text" value={sessionName} onChange={(e) => setSessionName(e.target.value)} className="ds-input" placeholder="e.g. Station A — Station B" />
-                </div>
-                <div>
-                  <label className="ds-field__label">Environment</label>
-                  <select className="ds-select" value={pipelineData.environment} onChange={(event) => setPipelineField('environment', event.target.value)}>
-                    <option value="">Not provided</option>
-                    <option value="Onshore">Onshore</option>
-                    <option value="Offshore">Offshore</option>
-                    <option value="Subsea">Subsea</option>
-                    <option value="Swamp">Swamp</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="ds-field__label">Pipe Length (km)</label>
-                  <input type="number" value={pipelineData.lengthKm} onChange={(event) => setPipelineField('lengthKm', event.target.value)} className="ds-input" placeholder="e.g. 150" />
-                </div>
-                <div>
-                  <label className="ds-field__label">Product Medium</label>
-                  <select className="ds-select" value={pipelineData.productMedium} onChange={(event) => setPipelineField('productMedium', event.target.value)}>
-                    <option value="">Not provided</option>
-                    <option value="Natural Gas (Dry)">Natural Gas (Dry)</option>
-                    <option value="Natural Gas (Wet)">Natural Gas (Wet)</option>
-                    <option value="Crude Oil">Crude Oil</option>
-                    <option value="Refined Product">Refined Product</option>
-                    <option value="Water">Water</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="ds-field__label">Build Year</label>
-                  <input type="text" value={pipelineData.buildYear} onChange={(event) => setPipelineField('buildYear', event.target.value)} className="ds-input" placeholder="e.g. 1995" />
-                </div>
-                <div>
-                  <label className="ds-field__label">Design Life (years)</label>
-                  <input type="number" value={pipelineData.designLifeYears} onChange={(event) => setPipelineField('designLifeYears', event.target.value)} className="ds-input" placeholder="e.g. 30" />
-                </div>
-              </div>
-            )}
-          </div>
+        {/* Pipeline dossier — one record for the line, not a form that is
+            thrown away. It is filed against the pipeline the runs import into
+            and read back by FFS, RBI, and the next intake for the same line. */}
+        <div className="alignment-config-panel alignment-intake__dossier">
+          <button
+            onClick={() => toggleSection('dossier')}
+            className="alignment-config-panel__trigger"
+          >
+            <h3 className="flex items-center gap-2 font-semibold">
+              <FiInfo aria-hidden="true" /> Pipeline data
+              {matchedPipeline?.recorded && (
+                <span className="ds-badge ds-badge--success ds-badge--pill">On record</span>
+              )}
+            </h3>
+            {isExpanded('dossier') ? <FiChevronUp /> : <FiChevronDown />}
+          </button>
 
-          {/* Section 2: Physical Specs & Protection */}
-          <div className="alignment-config-panel">
-            <button 
-              onClick={() => toggleSection('specs')}
-              className="alignment-config-panel__trigger"
-            >
-              <h3 className="flex items-center gap-2 font-semibold">
-                <FiSettings aria-hidden="true" /> Physical specs &amp; protection
-              </h3>
-              {isExpanded('specs') ? <FiChevronUp /> : <FiChevronDown />}
-            </button>
-            
-            {isExpanded('specs') && (
-              <div className="alignment-config-panel__body grid grid-cols-1 sm:grid-cols-2">
-                <div>
-                  <label className="ds-field__label">Outer Diameter (OD)</label>
-                  <input type="text" value={pipelineData.outerDiameter} onChange={(event) => setPipelineField('outerDiameter', event.target.value)} className="ds-input" placeholder="e.g. 10 inch or 273.1 mm" />
-                </div>
-                <div>
-                  <label className="ds-field__label">Nominal WT (mm)</label>
-                  <input type="number" step="0.01" value={pipelineData.nominalWtMm} onChange={(event) => setPipelineField('nominalWtMm', event.target.value)} className="ds-input" placeholder="e.g. 12.7" />
-                </div>
-                <div>
-                  <label className="ds-field__label">MAOP (psi)</label>
-                  <input type="number" value={pipelineData.maopPsi} onChange={(event) => setPipelineField('maopPsi', event.target.value)} className="ds-input" placeholder="e.g. 1200" />
-                </div>
-                <div>
-                  <label className="ds-field__label">Design Pressure (MPa)</label>
-                  <input type="number" step="0.01" value={pipelineData.designPressureMpa} onChange={(event) => setPipelineField('designPressureMpa', event.target.value)} className="ds-input" placeholder="e.g. 10.0" />
-                </div>
-                <div>
-                  <label className="ds-field__label">Operating Pressure (MPa)</label>
-                  <input type="number" step="0.01" value={pipelineData.operatingPressureMpa} onChange={(event) => setPipelineField('operatingPressureMpa', event.target.value)} className="ds-input" placeholder="e.g. 9.46" />
-                </div>
-                <div>
-                  <label className="ds-field__label">Design Factor</label>
-                  <input type="number" step="0.01" value={pipelineData.designFactor} onChange={(event) => setPipelineField('designFactor', event.target.value)} className="ds-input" placeholder="e.g. 0.72" />
-                </div>
-                <div>
-                  <label className="ds-field__label">Material Grade</label>
-                  <select className="ds-select" value={pipelineData.materialGrade} onChange={(event) => setPipelineField('materialGrade', event.target.value)}>
-                    <option value="">Not provided</option>
-                    <option value="API 5L X42">API 5L X42</option>
-                    <option value="API 5L X52">API 5L X52</option>
-                    <option value="API 5L X60">API 5L X60</option>
-                    <option value="API 5L X65">API 5L X65</option>
-                    <option value="API 5L X70">API 5L X70</option>
-                    <option value="API 5L X80">API 5L X80</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="ds-field__label">SMYS (MPa)</label>
-                  <input type="number" step="0.1" value={pipelineData.smysMpa} onChange={(event) => setPipelineField('smysMpa', event.target.value)} className="ds-input" placeholder="e.g. 358.5" />
-                </div>
-                <div>
-                  <label className="ds-field__label">Seam Type</label>
-                  <select className="ds-select" value={pipelineData.seamType} onChange={(event) => setPipelineField('seamType', event.target.value)}>
-                    <option value="">Not provided</option>
-                    <option value="SMLS (Seamless)">SMLS (Seamless)</option>
-                    <option value="ERW">ERW</option>
-                    <option value="DSAW">DSAW</option>
-                    <option value="SAWH">SAWH</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="ds-field__label">External Coating</label>
-                  <select className="ds-select" value={pipelineData.externalCoating} onChange={(event) => setPipelineField('externalCoating', event.target.value)}>
-                    <option value="">Not provided</option>
-                    <option value="3LPE">3LPE</option>
-                    <option value="FBE">FBE</option>
-                    <option value="Coal Tar Enamel (CTE)">Coal Tar Enamel (CTE)</option>
-                    <option value="Bare">Bare</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="ds-field__label">Inst. Year / Loc Class</label>
-                  <div className="flex gap-2">
-                    <input type="text" value={pipelineData.installationYear} onChange={(event) => setPipelineField('installationYear', event.target.value)} className="ds-input" placeholder="Year" />
-                    <select className="ds-select" value={pipelineData.locationClass} onChange={(event) => setPipelineField('locationClass', event.target.value)}>
-                      <option value="">Not provided</option>
-                      <option value="Class 1">Class 1</option>
-                      <option value="Class 2">Class 2</option>
-                      <option value="Class 3">Class 3</option>
-                      <option value="Class 4">Class 4</option>
-                    </select>
-                  </div>
-                </div>
+          {isExpanded('dossier') && (
+            <div className="alignment-config-panel__body">
+              <div className="alignment-intake__dossier-name">
+                <label className="ds-field__label" htmlFor="intake-pipeline-name">
+                  Pipeline / line name (From — To)
+                </label>
+                <input
+                  id="intake-pipeline-name"
+                  type="text"
+                  value={sessionName}
+                  onChange={(event) => setSessionName(event.target.value)}
+                  className="ds-input"
+                  placeholder="e.g. Station A — Station B"
+                />
+                <p className="alignment-intake__dossier-hint">
+                  {matchedPipeline
+                    ? matchedPipeline.recorded
+                      ? `${matchedPipeline.pipelineName} is already on record with `
+                        + `${matchedPipeline.runCount.toLocaleString()} run(s) and `
+                        + `${matchedPipeline.segmentCount.toLocaleString()} registered stretch(es). `
+                        + 'Saving here updates that record.'
+                      : `${matchedPipeline.pipelineName} exists but has no design data recorded yet.`
+                    : 'The runs are imported under this name, and the design data below is filed against it.'}
+                </p>
+                {dossierNote && (
+                  <p className="alignment-intake__dossier-note">
+                    <FiCheckCircle aria-hidden="true" /> {dossierNote}
+                  </p>
+                )}
+                {matchedPipeline?.recorded && specTouched && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void loadDossier(matchedPipeline.pipelineId, matchedPipeline.pipelineName)}
+                  >
+                    Reload the recorded dossier
+                  </Button>
+                )}
               </div>
-            )}
-          </div>
 
+              <PipelineSpecFields
+                value={specForm}
+                problems={specProblems}
+                onChange={(next) => {
+                  setSpecTouched(true);
+                  setDossierNote('');
+                  setSpecForm(next);
+                }}
+              />
+            </div>
+          )}
         </div>
+
 
         {/* Right Column: ILI Uploads */}
         <div className="flex flex-col gap-4">

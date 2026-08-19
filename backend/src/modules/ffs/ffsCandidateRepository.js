@@ -159,6 +159,7 @@ async function listReviewedSessions(pool, orgId) {
                 s.status,
                 s.params_json,
                 s.completed_at,
+                s.pipeline_id,
                 p.name AS stored_pipeline_name,
                 COALESCE(review.selected_count, 0) AS selected_count,
                 COALESCE(review.reviewed_count, 0) AS reviewed_count,
