@@ -137,9 +137,15 @@ export function formatPipelineRemnantLife(
   }
 }
 
-/** Safe pressure in the two units this report is read in. */
+/**
+ * Safe pressure in the two units this report is read in.
+ *
+ * Two decimals on the bar figure, not none: the client's report states pressures
+ * to 0.01 barg, and a summary rounding 94.60 to 95 beside a table that prints
+ * 94.60 reads as two different pressures.
+ */
 export function formatPressure(mpa: number): string {
-  return `${mpa.toFixed(2)} MPa (${(mpa / MEGAPASCALS_PER_BAR).toFixed(0)} barg)`;
+  return `${mpa.toFixed(2)} MPa (${(mpa / MEGAPASCALS_PER_BAR).toFixed(2)} barg)`;
 }
 
 /**

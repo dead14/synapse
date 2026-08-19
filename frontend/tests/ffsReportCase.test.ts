@@ -234,7 +234,12 @@ test('the report narrative states inspected and managed scenarios and carries th
   assert.match(text, /As-inspected/i);
   assert.match(text, /As-managed/i);
   assert.match(text, /Repair disposition register/i);
-  assert.doesNotMatch(text, /RBI|risk based inspection/i);
+  // The client's template carries a risk section, and this report now carries
+  // one too — but a fitness-for-service calculation has no consequence input,
+  // so it may never state a category. The invariant is that the narrative
+  // discloses the absence rather than that the word "risk" is absent from it.
+  assert.match(text, /establishes no risk category/i);
+  assert.doesNotMatch(text, /categoris?zed as (low|medium|high) risk/i);
 });
 
 test('narrative recommendations are based on active as-managed features, not repaired history', () => {
