@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FiRotateCcw, FiSliders } from 'react-icons/fi';
-import { formatLifeProjection, lifeProjectionStatusLabel } from '../../lib/ffs/lifeProjection.ts';
+import { analysisHorizonYears, formatLifeProjection, lifeProjectionStatusLabel } from '../../lib/ffs/lifeProjection.ts';
 import { axisMaximum, pressureRailLayout } from '../../lib/ffs/pressureRail.ts';
 import {
   evaluateFfsScenario,
@@ -182,6 +182,10 @@ export default function FfsScenarioLab({
     }
   }, [config, inputs, nominal, screening]);
 
+  // The bound the scenario is actually rejected against lives on the assessment
+  // configuration, so the slider is drawn from the same figure rather than from
+  // the horizon a stored projection happens to carry.
+  const horizonYears = analysisHorizonYears(config);
   const pressureMaximum = axisMaximum([nominal.p0, nominal.safePressure, nominal.Pf]);
   const forecastPreset = scenarioInputsForPreset('forecast', nominal, screening);
   const assessedGrowthRate = forecastPreset.depthGrowthRateMmPerYear;
@@ -284,10 +288,10 @@ export default function FfsScenarioLab({
               label="Projection point"
               value={inputs.forecastYears}
               min={0}
-              max={nominal.remnantLife.analysisHorizonYears}
+              max={horizonYears}
               step={0.5}
               unit="years"
-              hint={`Bounded to the configured ${nominal.remnantLife.analysisHorizonYears}-year analysis horizon.`}
+              hint={`Bounded to the configured ${horizonYears}-year analysis horizon.`}
               onChange={(forecastYears) => updateInputs({ forecastYears })}
             />
           </div>

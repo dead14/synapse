@@ -67,6 +67,37 @@ function reviveDate(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+/** A stored numeric column, or null when the document carries nothing readable. */
+function storedNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * The stored results, under the column names this build reads.
+ *
+ * `crDepth`/`crLength` became `crDepthSource`/`crLengthSource` when the source
+ * column and the rate the projection was run on stopped being the same thing.
+ * The rename is carried here so a case filed before it is read back with the
+ * rates it was filed with: without this every reader of the new names saw
+ * `undefined`, which the tables absorbed silently and the what-if drawer did
+ * not — it formats the seed before anything can reject it, so opening the
+ * drawer on a stored case took the whole workspace down.
+ *
+ * Only the names are translated. No value is substituted, and a document that
+ * already carries the current names is passed through untouched.
+ */
+function reviveResults(value: unknown): FfsResult[] {
+  return asArray<unknown>(value).map((row) => {
+    if (!isRecord(row)) return row as FfsResult;
+    if (row.crDepthSource !== undefined && row.crLengthSource !== undefined) return row as unknown as FfsResult;
+    return {
+      ...row,
+      crDepthSource: row.crDepthSource ?? storedNumber(row.crDepth) ?? 0,
+      crLengthSource: row.crLengthSource ?? storedNumber(row.crLength) ?? 0,
+    } as unknown as FfsResult;
+  });
+}
+
 /**
  * The published state as the results page expects it, or null when the link
  * carries nothing the page could honestly render.
@@ -75,7 +106,7 @@ export function reviveFfsShareState(state: FfsShareState | null | undefined): Re
   if (!state || state.kind !== 'FFS' || !isRecord(state.config)) return null;
   const iliDate = reviveDate(state.config.iliDate);
   if (!iliDate) return null;
-  const results = asArray<FfsResult>(state.results);
+  const results = reviveResults(state.results);
   if (results.length === 0) return null;
 
   const config = { ...state.config, iliDate } as unknown as FfsConfig;
