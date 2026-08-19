@@ -27,7 +27,9 @@ import {
   FFS_TEX,
   flowStressTex,
   FOLIAS_TEX,
+  remnantLifeWorking,
 } from '../src/lib/ffs/notation.ts';
+import { remnantLimitLabel } from '../src/lib/ffs/lifeProjection.ts';
 import { RBI_TEX } from '../src/lib/rbi/notation.ts';
 import { ALIGNMENT_TEX } from '../src/lib/alignment/notation.ts';
 import { DEFAULT_SCREENING_CONFIG, type FfsConfig } from '../src/lib/ffs/types.ts';
@@ -125,6 +127,77 @@ test('every step of the trace typesets on every method, stress mode and branch',
         assertParses(step.formulaTex, `${where}:${step.id}.formulaTex`);
         if (step.substitutionTex) {
           assertParses(step.substitutionTex, `${where}:${step.id}.substitutionTex`);
+        }
+      }
+    }
+  }
+});
+
+/**
+ * The remnant-life block, on every shape of projection it reports.
+ *
+ * Its equations are substituted from figures that are routinely null — a defect
+ * with no axial rate, one that reaches no limit inside the horizon, one whose
+ * reported life is the original design life rather than either B31G limit. Each
+ * of those takes a different branch through the working, and a branch that only
+ * fires on an unusual feature is the one an engineer opens under pressure and
+ * the one nobody typeset by hand.
+ */
+test('every remnant-life equation typesets on every projection outcome', () => {
+  const features: { where: string; overrides: Record<string, string> }[] = [
+    { where: 'growing', overrides: {} },
+    { where: 'shallow', overrides: { 'Max Depth [%]': '5', 'CR Depth [mm/y]': '0.001' } },
+    { where: 'deep and long', overrides: { 'Max Depth [%]': '70', 'Length [mm]': '900' } },
+  ];
+
+  for (const method of ['original', 'modified'] as const) {
+    for (const { where, overrides } of features) {
+      const scoped: FfsConfig = { ...traceConfig, method };
+      const result = processRow(row(overrides), scoped);
+      const life = result.remnantLife;
+      // The branches the intake cannot produce on its own: the axial rate and
+      // the two limits are established downstream of the row, so they are
+      // varied here rather than left to whichever case the sample data hits.
+      const lives = [
+        { label: 'as computed', life },
+        { label: 'length held constant', life: { ...life, lengthHeldConstant: true } },
+        {
+          label: 'no limit reached',
+          life: {
+            ...life,
+            years: null,
+            dueDateIso: null,
+            governingLimit: null,
+            depthLimitYears: null,
+            erfLimitYears: null,
+          },
+        },
+        {
+          label: 'design life cap',
+          life: { ...life, designLifeCapApplied: true, designLifeYears: 25 },
+        },
+      ];
+
+      for (const variant of lives) {
+        for (const evidence of [result.growthEvidence, undefined]) {
+          const working = remnantLifeWorking({
+            result: { ...result, growthEvidence: evidence },
+            life: variant.life,
+            method,
+            iliDateIso: '2024-01-01',
+            governingLabel: remnantLimitLabel(variant.life),
+            depthTolerancePct: DEFAULT_SCREENING_CONFIG.depthTolerancePct,
+            lengthToleranceMm: DEFAULT_SCREENING_CONFIG.lengthToleranceMm,
+          });
+          const at = `${method}/${where}/${variant.label}/${evidence ? 'evidence' : 'no evidence'}`;
+
+          for (const [key, line] of Object.entries(working)) {
+            assert.notEqual(line.formulaTex, '', `${at}:${key} has no TeX form`);
+            assertParses(line.formulaTex, `${at}:${key}.formulaTex`);
+            if (line.substitutionTex) {
+              assertParses(line.substitutionTex, `${at}:${key}.substitutionTex`);
+            }
+          }
         }
       }
     }

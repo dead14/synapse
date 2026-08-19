@@ -91,7 +91,7 @@ test('the safety-factor step names the provenance it actually used', () => {
 
   assert.match(derivedStep.formula, /1 \/ DF/);
   assert.doesNotMatch(explicitStep.formula, /1 \/ DF/);
-  assert.match(explicitStep.basis, /para\. 1\.9/);
+  assert.match(explicitStep.formula, /hydrotest/);
 });
 
 test('the flow-stress step prints the converted 10 ksi uplift, not a rounded 69', () => {

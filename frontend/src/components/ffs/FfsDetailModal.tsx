@@ -1,5 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { FiAlertCircle, FiCheckCircle, FiChevronLeft, FiChevronRight, FiEye, FiEyeOff, FiX, FiXCircle } from 'react-icons/fi';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  FiAlertCircle,
+  FiCheckCircle,
+  FiChevronDown,
+  FiChevronLeft,
+  FiChevronRight,
+  FiChevronUp,
+  FiEye,
+  FiEyeOff,
+  FiX,
+  FiXCircle,
+} from 'react-icons/fi';
 import {
   formatRemnantLife,
   remnantLifeCaveats,
@@ -18,9 +29,9 @@ import {
   b314DispositionLabel,
   methodProfileLabel,
   pressureBasisLabel,
-  safetyFactorSourceLabel,
 } from '../../lib/ffs/assessmentProfile.ts';
 import { resolvedDepthRate, resolvedLengthRate } from '../../lib/ffs/growthResolution.ts';
+import { remnantLifeWorking } from '../../lib/ffs/notation.ts';
 import type { FfsRepairCreditDecision } from '../../lib/ffs/reportCase';
 import type { FfsConfig, FfsScreenedResult, FfsScreeningConfig } from '../../lib/ffs/types';
 import { MathInline, MathBlock } from '../ds';
@@ -47,8 +58,6 @@ function InputCard({
   value,
   unit,
   description,
-  basis,
-  showWorking = true,
 }: {
   label: string;
   /** A plain word standing in for a symbol — `Method`, `Owner`, `Ref`. */
@@ -66,9 +75,6 @@ function InputCard({
   value: string;
   unit?: string;
   description: string;
-  /** Where the figure came from, for the reader who has to defend it. */
-  basis?: string;
-  showWorking?: boolean;
 }) {
   return (
     <div className="ffs-detail__input-card">
@@ -84,7 +90,6 @@ function InputCard({
         {' = '}
         {description}
       </p>
-      {basis && showWorking && <p className="ffs-detail__basis">{basis}</p>}
     </div>
   );
 }
@@ -134,7 +139,6 @@ function CalcStep({ step, showWorking }: { step: FfsCalcStep; showWorking: boole
                     />
                   </div>
                 )}
-                <p className="ffs-detail__basis">{step.basis}</p>
               </>
             )}
           </div>
@@ -148,13 +152,22 @@ function CalcStep({ step, showWorking }: { step: FfsCalcStep; showWorking: boole
   );
 }
 
+/**
+ * One reported figure, with the equation that produced it.
+ *
+ * The card used to close on a paragraph of prose explaining where the number
+ * came from. Two of them are the general form and this feature's numbers in
+ * that form instead: a reader checking the figure can now reproduce it from the
+ * card rather than take a sentence's word for it, which is the only kind of
+ * justification a fitness-for-service reviewer can actually act on.
+ */
 function LifeCard({
   label,
   value,
   unit,
   description,
   formulaTex,
-  basis,
+  substitutionTex,
   showWorking = true,
   tone = 'default',
 }: {
@@ -162,17 +175,10 @@ function LifeCard({
   value: string;
   unit?: string;
   description: string;
-  /**
-   * The equation the figure comes from, typeset above the prose.
-   *
-   * Split out of `basis` rather than left embedded in it. These cards used to
-   * open with `P_F = 2·S_F·t/D — step 8.`, which put the one part of the
-   * sentence that is not prose in the middle of a paragraph set at 0.6rem, in
-   * the reading face, with a middle dot standing in for multiplication.
-   */
+  /** The general form, typeset under the figure. */
   formulaTex?: string;
-  /** The rule behind the figure, in words, shown when working is on. */
-  basis?: string;
+  /** The same form with this feature's numbers in it. */
+  substitutionTex?: string;
   showWorking?: boolean;
   tone?: 'default' | 'accent' | 'good' | 'warn' | 'bad';
 }) {
@@ -187,10 +193,54 @@ function LifeCard({
       {formulaTex && showWorking && (
         <div className="ffs-detail__life-formula">
           <MathBlock tex={formulaTex} scale="sm" />
+          {substitutionTex && (
+            <div className="ffs-detail__life-sub">
+              <MathBlock tex={`= ${substitutionTex}`} scale="sm" />
+            </div>
+          )}
         </div>
       )}
-      {basis && showWorking && <p className="ffs-detail__basis">{basis}</p>}
     </div>
+  );
+}
+
+/**
+ * A section the reader can put away.
+ *
+ * Repair evidence and the applicability checklist are the two blocks in this
+ * drawer that are read once and then in the way — on an unrepaired feature the
+ * repair block is six em dashes. They collapse, and the header keeps whatever
+ * badge the section carried so the state is still legible closed.
+ */
+function CollapsibleSection({
+  title,
+  badge,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  badge?: ReactNode;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="ffs-detail__section">
+      <div className="ffs-detail__section-heading-row">
+        <h3 className="ffs-detail__section-title">{title}</h3>
+        {badge}
+        <button
+          type="button"
+          onClick={() => setOpen((current) => !current)}
+          aria-expanded={open}
+          className="ffs-detail__working-toggle"
+        >
+          {open ? <FiChevronUp aria-hidden="true" /> : <FiChevronDown aria-hidden="true" />}
+          {open ? 'Hide' : 'Show'}
+        </button>
+      </div>
+      {open && children}
+    </section>
   );
 }
 
@@ -289,9 +339,22 @@ export default function FfsDetailModal({
   const depthLimitPct = Number(
     (Number.isFinite(life.depthLimitPct) ? life.depthLimitPct : 80).toFixed(2),
   );
-  const depthLimitRatio = (depthLimitPct / 100).toFixed(2);
   const caveats = remnantLifeCaveats(life);
   const isOriginal = config.method === 'original';
+  const iliDateIso = config.iliDate.toISOString().slice(0, 10);
+  // Every equation the remnant-life block prints, substituted from the figures
+  // the engine reported. It is assembled in `notation` with the rest of the
+  // module's TeX so the expressions are typeset in a test rather than only on
+  // screen, where a broken one shows up as a red token nobody is watching for.
+  const lifeWorking = remnantLifeWorking({
+    result: n,
+    life,
+    method: config.method,
+    iliDateIso,
+    governingLabel: remnantLimitLabel(life),
+    depthTolerancePct: screening.depthTolerancePct,
+    lengthToleranceMm: screening.lengthToleranceMm,
+  });
   // The idealised metal-loss area. The Original method's parabola is two
   // thirds of the depth × length box and the Modified method's is 0.85 of it —
   // which the vulgar fraction `⅔dL` said in a glyph that does not exist at
@@ -299,6 +362,11 @@ export default function FfsDetailModal({
   const areaTex = isOriginal ? '\\tfrac{2}{3}\\,d\\,L' : '0.85\\,d\\,L';
   const failed = n.acceptance === 'Un-Acceptable';
   const repairCredited = repairCreditDecision?.credited === true;
+  // Whether the block has anything in it beyond the feature key. An unrepaired
+  // feature with no dossier opens collapsed; anything recorded opens on screen.
+  const hasRepairRecord =
+    n.repairStatus !== 'unrepaired' ||
+    Boolean(n.repairMethod || n.repairDate || n.repairReference || n.actionOwner || n.recommendation);
   const methodChecks = applicabilityChecks(item);
   const methodApplicability = applicabilityStatus(item);
   const disposition = engineeringDisposition(item);
@@ -385,7 +453,6 @@ export default function FfsDetailModal({
                 unit="MPa"
                 description={timesRequired(n.Pf, n.p0)}
                 formulaTex="\Pfail = \frac{2\,\Sfail\,t}{D}"
-                basis="Step 8. An estimate of the pressure at which the corroded wall would fail, carrying no margin. It is never an operating limit."
                 showWorking={showWorking}
               />
               <LifeCard
@@ -394,7 +461,6 @@ export default function FfsDetailModal({
                 unit="MPa"
                 description={timesRequired(n.safePressure, n.p0)}
                 formulaTex={`\\Psafe = \\frac{\\Pfail}{\\SFac} \\quad\\text{at}\\quad \\SFac = ${fmt(n.SF, 4)}`}
-                basis={`Step 10, with the safety factor ${safetyFactorSourceLabel(n.safetyFactorSource).toLowerCase()}. This is the pressure the assessment stands behind for this feature.`}
                 showWorking={showWorking}
                 tone="good"
               />
@@ -403,7 +469,6 @@ export default function FfsDetailModal({
                 value={fmt(n.p0, 3)}
                 unit="MPa"
                 description={pressureBasisLabel(config)}
-                basis="The pressure the feature is assessed against, taken from the assessment setup. Every ERF on this screen is measured against it."
                 showWorking={showWorking}
               />
               <LifeCard
@@ -411,7 +476,6 @@ export default function FfsDetailModal({
                 value={formatErf(n.ERF)}
                 description={Number.isFinite(n.ERF) ? `${(n.ERF * 100).toFixed(1)}% of safe pressure used` : 'No safe-pressure basis'}
                 formulaTex="\ERF = \frac{\Pop}{\Psafe}"
-                basis="Step 11. An operator convention, not a B31G term: the code criterion is that the safe pressure equals or exceeds the required pressure."
                 showWorking={showWorking}
                 tone={n.ERF >= 1 ? 'bad' : n.ERF >= screening.reviewBandErf ? 'warn' : 'default'}
               />
@@ -435,8 +499,6 @@ export default function FfsDetailModal({
                 symbolTex="d_{\mathrm{meas}}"
                 value={`${n.maxDepthPct.toFixed(2)}%`}
                 description={`${n.maxDepthPct.toFixed(0)}% of wall`}
-                basis="ILI-reported maximum depth. No sizing tolerance is applied here — that is the conservative tier below."
-                showWorking={showWorking}
               />
               <InputCard
                 label="Wall Thickness (t)"
@@ -444,8 +506,6 @@ export default function FfsDetailModal({
                 value={n.wall.toFixed(2)}
                 unit="mm"
                 description="Nominal"
-                basis="Nominal wall for this joint. Depth %, the area term, and both Barlow pressures are all taken against it, so an incorrect wall moves every number in this drawer."
-                showWorking={showWorking}
               />
               <InputCard
                 label="Outer Diameter (D)"
@@ -453,8 +513,6 @@ export default function FfsDetailModal({
                 value={n.od.toFixed(1)}
                 unit="mm"
                 description={outerDiameterSourceLabel(n.outerDiameterSource)}
-                basis="Nominal outside diameter of the pipe this feature sits in — a line of more than one diameter carries one per section. Used for both the normalised length and the Barlow relation, which is why the two are consistent."
-                showWorking={showWorking}
               />
               <InputCard
                 label="SMYS"
@@ -462,8 +520,6 @@ export default function FfsDetailModal({
                 value={n.smys.toFixed(1)}
                 unit="MPa"
                 description={smysSourceLabel(n.smysSource)}
-                basis="Specified minimum yield strength of the grade this feature sits in — a line of more than one grade carries one per section. A specification floor, not a measured or certified property of this joint."
-                showWorking={showWorking}
               />
               <InputCard
                 label={'Required Pressure P₀'}
@@ -471,20 +527,12 @@ export default function FfsDetailModal({
                 value={n.p0.toFixed(3)}
                 unit="MPa"
                 description={pressureBasisLabel(config)}
-                basis="The pressure the acceptance criterion is applied at, set once for the assessment."
-                showWorking={showWorking}
               />
               <InputCard
                 label="Design Factor"
                 symbolTex="\DFac"
                 value={n.df.toFixed(3)}
                 description={designFactorSourceLabel(n.designFactorSource)}
-                basis={
-                  n.safetyFactorSource === 'explicit'
-                    ? 'The B31.8 design factor for this section. Recorded for traceability only: this assessment divides by the explicit safety factor from step 1, so the design factor does not enter the pressures.'
-                    : 'The B31.8 design factor for this section. With no hydrotest ratio supplied it also sets the safety factor, as SF = 1/DF.'
-                }
-                showWorking={showWorking}
               />
               <InputCard
                 label="Defect Length"
@@ -492,8 +540,6 @@ export default function FfsDetailModal({
                 value={n.length.toFixed(0)}
                 unit="mm"
                 description="ILI measured"
-                basis="Axial extent of the metal-loss box as reported. It sets the normalised length and therefore which branch of the method applies."
-                showWorking={showWorking}
               />
               <InputCard
                 label="CR Depth"
@@ -501,8 +547,6 @@ export default function FfsDetailModal({
                 value={resolvedDepthRate(n).toFixed(4)}
                 unit="mm/y"
                 description={growthAnalysisBasisLabel(n.growthEvidence?.depth.analysisBasis)}
-                basis={n.growthEvidence?.depth.note ?? 'No structured growth provenance was attached to this row.'}
-                showWorking={showWorking}
               />
               {/* A rate that was never established prints as words, never as
                   0.0000 mm/y. The zero read as a measurement that this defect
@@ -512,8 +556,6 @@ export default function FfsDetailModal({
                 symbolTex="\CRl"
                 value={lengthRate === null ? 'Not calculated' : lengthRate.toFixed(4)}
                 unit={lengthRate === null ? undefined : 'mm/y'}
-                basis={n.growthEvidence?.length.note ?? 'No structured growth provenance was attached to this row.'}
-                showWorking={showWorking}
                 description={growthAnalysisBasisLabel(n.growthEvidence?.length.analysisBasis)}
               />
             </div>
@@ -552,9 +594,9 @@ export default function FfsDetailModal({
             )}
           </section>
 
-          <section className="ffs-detail__section">
-            <div className="ffs-detail__section-heading-row">
-              <h3 className="ffs-detail__section-title">Method applicability and disposition</h3>
+          <CollapsibleSection
+            title="Method applicability and disposition"
+            badge={
               <span className={`ffs-detail__applicability ffs-detail__applicability--${methodApplicability}`}>
                 {methodApplicability === 'outside-domain'
                   ? 'Outside supported domain'
@@ -562,7 +604,8 @@ export default function FfsDetailModal({
                     ? 'Applicability evidence incomplete'
                     : 'Applicable'}
               </span>
-            </div>
+            }
+          >
             <div className="ffs-detail__checks">
               {methodChecks.map((check) => {
                 const Icon = check.status === 'pass' ? FiCheckCircle : check.status === 'fail' ? FiXCircle : FiAlertCircle;
@@ -578,13 +621,23 @@ export default function FfsDetailModal({
               <span>Engineering disposition</span>
               <strong>{disposition}</strong>
             </div>
-          </section>
+          </CollapsibleSection>
 
-          {/* Repair disposition and evidence */}
-          <section className="mb-6">
-            <h3 className="mb-3 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              Repair disposition and evidence
-            </h3>
+          {/* Repair disposition and evidence. Closed by default on a feature
+              carrying none: six em dashes is not worth a screen of the drawer. */}
+          <CollapsibleSection
+            title="Repair disposition and evidence"
+            defaultOpen={hasRepairRecord}
+            badge={
+              <span className="ffs-detail__repair-chip">
+                {n.repairStatus === 'permanent-repair-verified'
+                  ? 'Permanent repair'
+                  : n.repairStatus === 'temporary-repair'
+                    ? 'Temporary repair'
+                    : 'Unrepaired'}
+              </span>
+            }
+          >
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               <InputCard
                 label="Feature identity"
@@ -638,7 +691,7 @@ export default function FfsDetailModal({
                 </Callout>
               </div>
             )}
-          </section>
+          </CollapsibleSection>
 
           {/* Step-by-step calculation, built from the same result the engine
               produced and self-checked against it. */}
@@ -753,70 +806,85 @@ export default function FfsDetailModal({
             </div>
           </section>
 
-          {/* Remnant life */}
+          {/* Remnant life.
+
+              Eleven cards in one flat grid put the reported answer, the two
+              limits behind it, the rates it consumed and the state of the
+              feature at the due date on the same footing, so nothing on screen
+              said which was a result and which was an input to one. They are
+              four groups now, in the order the questions arrive, and every card
+              carries the equation with this feature's numbers in it — the
+              figure is reproduced from the card rather than taken on trust. */}
           <section className="ffs-detail__section">
             <h3 className="ffs-detail__section-title">Remnant life</h3>
+
+            <p className="ffs-detail__life-subhead">Reported outcome</p>
             <div className="ffs-detail__life-grid">
               <LifeCard
-                label="Remnant Life"
+                label="Remnant life"
                 value={formatRemnantLife(life)}
-                description={`As reported, from the ILI date of ${config.iliDate.toISOString().slice(0, 10)}`}
-                basis="The earlier of the two limits below, projected from the as-reported dimensions at the growth rates on this row. It is a projection under a stated growth assumption, not a service-life guarantee."
+                description={`As reported, from the ILI date of ${iliDateIso}`}
+                formulaTex={lifeWorking.remnantLife.formulaTex}
+                substitutionTex={lifeWorking.remnantLife.substitutionTex}
                 showWorking={showWorking}
                 tone={life.years !== null && life.years < config.highlightYears ? 'warn' : 'default'}
               />
               <LifeCard
-                label="Due Date"
+                label="Due date"
                 value={life.dueDateIso ?? '—'}
-                description={life.dueDateIso ? 'ILI date + calculated limit time' : 'No finite date established'}
-                basis="Counted from the inspection date, not from today. Time elapsed since the run has already been consumed and is not added back."
+                description={life.dueDateIso ? 'ILI date plus the remnant life' : 'No finite date established'}
+                formulaTex={lifeWorking.dueDate.formulaTex}
+                substitutionTex={lifeWorking.dueDate.substitutionTex}
                 showWorking={showWorking}
               />
               <LifeCard
-                label="Governing Limit"
+                label="Governing limit"
                 value={remnantLimitLabel(life)}
                 description={life.governingLimit ? 'First condition reached' : 'No limit reached'}
-                basis="Whichever limit is reached first. A tie goes to the depth limit, because quoting an ERF date past the depth line would report a number outside the range the method is written for."
+                formulaTex={lifeWorking.governingLimit.formulaTex}
+                substitutionTex={lifeWorking.governingLimit.substitutionTex}
                 showWorking={showWorking}
                 tone={life.governingLimit === 'ERF = 1' ? 'bad' : 'default'}
               />
-              {/* Both criteria, always. The governing figure alone hides how
-                  close the other limit is, which is what decides whether a
-                  repair buys years or months. */}
-              {/* The depth line is configurable, so neither the heading nor the
-                  arithmetic beneath it may hard-code 80: at a project screening
-                  at 70 %WT the working printed a sum that does not produce the
-                  number above it. `depthLimitPct` is what the projection used. */}
+            </div>
+
+            {/* Both criteria, always. The governing figure alone hides how
+                close the other limit is, which is what decides whether a
+                repair buys years or months. */}
+            {/* The depth line is configurable, so neither the heading nor the
+                arithmetic beneath it may hard-code 80: at a project screening
+                at 70 %WT the working printed a sum that does not produce the
+                number above it. `depthLimitPct` is what the projection used. */}
+            <p className="ffs-detail__life-subhead">Limits projected</p>
+            <div className="ffs-detail__life-grid">
               <LifeCard
-                label={`Years to ${depthLimitPct}% Depth`}
+                label={`Years to ${depthLimitPct}% depth`}
                 value={life.depthLimitYears === null ? '—' : life.depthLimitYears.toFixed(2)}
                 unit={life.depthLimitYears === null ? undefined : 'y'}
                 description="Closed form, from the as-reported depth"
-                formulaTex={
-                  `t_{\\text{depth}} = \\frac{\\left(${depthLimitRatio} - \\frac{d}{t}\\right) t}{\\CRd}`
-                  + ` = \\frac{\\left(${depthLimitRatio} - ${fmt(n.dt, 4)}\\right)`
-                  + ` \\times ${n.wall.toFixed(2)}}{${life.depthRateMmPerYear.toFixed(4)}}`
-                }
-                basis={`The ${depthLimitPct} %WT line is a project rejection threshold, not a B31G applicability limit.`}
+                formulaTex={lifeWorking.depthLimit.formulaTex}
+                substitutionTex={lifeWorking.depthLimit.substitutionTex}
                 showWorking={showWorking}
               />
               <LifeCard
                 label="Years to ERF 1.0"
                 value={life.erfLimitYears === null ? '—' : life.erfLimitYears.toFixed(2)}
                 unit={life.erfLimitYears === null ? undefined : 'y'}
-                description="Depth and length both projected"
-                basis={
+                description={
                   life.lengthHeldConstant
-                    ? 'Found by bisection on the projected geometry. No length growth rate was established, so the axial extent is held constant and this figure is non-conservative in the length direction.'
-                    : 'Found by bisection on the projected geometry, growing depth and length together. A flaw that lengthens loses capacity through the bulging term even at constant depth.'
+                    ? 'Depth projected, length held constant'
+                    : 'Depth and length both projected'
                 }
+                formulaTex={lifeWorking.erfLimit.formulaTex}
+                substitutionTex={lifeWorking.erfLimit.substitutionTex}
                 showWorking={showWorking}
               />
               <LifeCard
                 label="Tolerance-adjusted"
                 value={formatRemnantLife(item.remnantLifeConservative)}
                 description={`+${screening.depthTolerancePct}% WT and +${2 * screening.lengthToleranceMm} mm`}
-                basis="The same calculation from tolerance-adjusted dimensions — the sensitivity case, reported beside the as-reported figure rather than instead of it."
+                formulaTex={lifeWorking.toleranceAdjusted.formulaTex}
+                substitutionTex={lifeWorking.toleranceAdjusted.substitutionTex}
                 showWorking={showWorking}
                 tone={
                   item.remnantLifeConservative.years !== null &&
@@ -825,51 +893,60 @@ export default function FfsDetailModal({
                     : 'default'
                 }
               />
+            </div>
+
+            <p className="ffs-detail__life-subhead">Growth rates the projection consumed</p>
+            <div className="ffs-detail__life-grid">
               <LifeCard
-                label="CR Depth"
+                label="CR depth"
                 value={life.depthRateMmPerYear.toFixed(3)}
                 unit="mm/y"
                 description={growthObservationLabel(n.growthEvidence?.depth.observation)}
-                basis={n.growthEvidence?.depth.note ?? 'No structured growth provenance was attached to this row.'}
+                formulaTex={lifeWorking.crDepth.formulaTex}
+                substitutionTex={lifeWorking.crDepth.substitutionTex}
                 showWorking={showWorking}
               />
+              {/* A rate that was never established prints as words, never as
+                  0.000 mm/y. The zero read as a measurement that this defect is
+                  not lengthening, which is the one thing nobody measured. */}
               <LifeCard
-                label="CR Length"
+                label="CR length"
                 value={life.lengthHeldConstant ? 'Not calculated' : life.lengthRateMmPerYear.toFixed(3)}
                 unit={life.lengthHeldConstant ? undefined : 'mm/y'}
                 description={growthObservationLabel(n.growthEvidence?.length.observation)}
-                basis={
-                  life.lengthHeldConstant
-                    ? 'No usable axial rate. This is not a measured zero — it is the difference between "this flaw is not lengthening" and "nobody established whether it is".'
-                    : (n.growthEvidence?.length.note ?? 'Supplied on the assessment row.')
-                }
+                formulaTex={lifeWorking.crLength.formulaTex}
+                substitutionTex={lifeWorking.crLength.substitutionTex}
                 showWorking={showWorking}
                 tone={life.lengthHeldConstant ? 'warn' : 'default'}
               />
+            </div>
+
+            <p className="ffs-detail__life-subhead">The feature at the remnant-life date</p>
+            <div className="ffs-detail__life-grid">
               <LifeCard
-                label="ERF at Limit"
+                label="ERF at limit"
                 value={fmt(n.atFailure_ERF, 4)}
-                description="At the remnant-life date"
-                formulaTex="\ERF\big|_{t = t_{\text{remnant}}}"
-                basis="The feature re-evaluated at the remnant-life date. It reads 1.0 when ERF governs, and below 1.0 when the depth limit or the design-life cap got there first."
+                description="Re-evaluated at the due date"
+                formulaTex={lifeWorking.erfAtLimit.formulaTex}
+                substitutionTex={lifeWorking.erfAtLimit.substitutionTex}
                 showWorking={showWorking}
               />
               <LifeCard
-                label="Depth % at Limit"
+                label="Depth % at limit"
                 value={n.atFailure_depth === null ? '—' : n.atFailure_depth.toFixed(2)}
                 unit="%"
-                description="At the remnant-life date"
-                formulaTex="d_{\%} = \frac{d + \CRd\,t_{\text{remnant}}}{t}\times 100"
-                basis="Projected depth at the remnant-life date, at the depth growth rate above."
+                description="Projected at the depth rate above"
+                formulaTex={lifeWorking.depthAtLimit.formulaTex}
+                substitutionTex={lifeWorking.depthAtLimit.substitutionTex}
                 showWorking={showWorking}
               />
               <LifeCard
                 label="Failure stress at limit"
                 value={fmt(n.atFailure_Sf, 4)}
                 unit="MPa"
-                description="At the remnant-life date"
-                formulaTex="\Sfail\big|_{t = t_{\text{remnant}}}"
-                basis="Failure stress recomputed at the projected depth and length, through the same equation as step 7."
+                description="Step 7 at the projected geometry"
+                formulaTex={lifeWorking.failureStressAtLimit.formulaTex}
+                substitutionTex={lifeWorking.failureStressAtLimit.substitutionTex}
                 showWorking={showWorking}
               />
             </div>

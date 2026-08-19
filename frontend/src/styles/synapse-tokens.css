@@ -1260,26 +1260,45 @@
   color: var(--syn-muted);
 }
 
-/* The equation behind a metric card, above the prose that qualifies it. Sits
-   between the two so the reader's eye goes value → equation → caveat, which is
-   the order the questions arrive in. */
+/* The equation behind a metric card, under the figure it produced. A card is
+   narrow and an equation is not, so this scrolls in its own track rather than
+   pushing the grid wider than the drawer. */
 .ffs-detail__life-formula {
   margin-top: 0.3rem;
   font-size: 0.72rem;
   color: var(--syn-ink-soft);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+/* The same form with this feature's numbers in it, one step down from the
+   general form the way the calculation trace sets its substitution line. */
+.ffs-detail__life-sub {
+  margin-top: 0.1rem;
+  font-size: 0.92em;
+  color: var(--syn-muted);
 }
 
-/* Where a figure comes from: clause, project rule, or input column. Set in the
-   reading face rather than the data face — it is prose, not a number. */
-.ffs-detail__basis {
-  margin: 0.35rem 0 0;
-  font-size: 0.6rem;
-  font-weight: 400;
-  line-height: 1.5;
+/* Names one group of cards inside a section — outcome, limits, rates, state at
+   the due date. Lighter than a section title: it divides, it does not open. */
+.ffs-detail__life-subhead {
+  margin: 0.85rem 0 0.35rem;
+  font: 700 0.55rem var(--syn-font-data);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--syn-muted);
-  text-transform: none;
-  letter-spacing: 0;
 }
+.ffs-detail__life-subhead:first-of-type { margin-top: 0; }
+
+/* Repair state, kept in the section header so it stays legible collapsed. */
+.ffs-detail__repair-chip {
+  flex-shrink: 0;
+  border: 1px solid var(--syn-line);
+  border-radius: 999px;
+  padding: 0.2rem 0.5rem;
+  font: 700 0.55rem var(--syn-font-data);
+  color: var(--syn-muted);
+}
+
 
 /* Collapses the derivation down to the answers. */
 .ffs-detail__working-toggle {
@@ -1344,7 +1363,11 @@
 .ffs-detail__tiers-table tbody tr:hover td { background: var(--syn-surface); }
 
 /* Life projection cards */
-.ffs-detail__metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; }
+/* `minmax(0, 1fr)`, not `1fr`. A typeset equation does not shrink, and an
+   `auto` minimum lets one push its track — and the whole drawer — wider than
+   the dialog, which is how a long substitution took the body sideways. The
+   equation scrolls inside its own card instead. */
+.ffs-detail__metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem; }
 /* Marks a tier whose depth was capped at the wall before evaluation, so the
    substituted geometry is visible next to the number it produced. */
 .ffs-detail__clamp-note {
@@ -1354,13 +1377,14 @@
   white-space: nowrap;
 }
 
-.ffs-detail__life-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
+.ffs-detail__life-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem; }
 @media (max-width: 640px) {
   .ffs-detail__metric-grid,
-  .ffs-detail__life-grid { grid-template-columns: repeat(2, 1fr); }
+  .ffs-detail__life-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 .ffs-detail__life-card {
+  min-width: 0;
   border: 1px solid var(--syn-line);
   border-radius: var(--syn-radius-control);
   background: var(--syn-surface);
