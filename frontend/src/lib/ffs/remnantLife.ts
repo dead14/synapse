@@ -17,7 +17,10 @@
  *   • depth reaches 80 % of nominal wall — the applicability limit of B31G
  *   • ERF reaches 1.0 — the safe pressure falls to the required pressure
  * The third is a project rule, not a code rule: the residual life assessment is
- * not reported above the original design life of the line.
+ * not reported above the design life the line has left at the inspection. It
+ * bounds a corrosion result; it never replaces one. A line already past its
+ * original design life is therefore flagged, not clamped to zero remaining
+ * life — see `computeRemnantLife`.
  */
 
 import {
@@ -83,6 +86,17 @@ export interface FfsRemnantLife {
   lengthHeldConstant: boolean;
   /** True when the original-design-life rule reduced the reported figure. */
   designLifeCapApplied: boolean;
+  /**
+   * True when the line had already consumed its original design life at the
+   * ILI date. The cap is then *not* applied: see `computeRemnantLife`.
+   */
+  pastDesignLifeAtInspection: boolean;
+  /**
+   * The bound the design-life rule actually imposed, in years after the ILI
+   * date. Null when no design life was supplied, or when the line is already
+   * past it and the rule therefore does not bind.
+   */
+  designLifeCapYears: number | null;
   designLifeYears: number | null;
   analysisHorizonYears: number;
 }
@@ -240,10 +254,22 @@ export function computeRemnantLife(request: FfsRemnantLifeRequest): FfsRemnantLi
   // is no cap at all; and where it did bind it quoted more life than the design
   // dossier allows. Without a commissioning year the consumed share is unknown,
   // so the total is retained as the only defensible bound.
+  //
+  // A line already past its original design life is not capped at all. Clamping
+  // the remaining design life at zero made the rule bind on every feature of
+  // such a line, so an assessment of hundreds of shallow, ACCEPTABLE anomalies
+  // reported a remnant life of "Now" against a due date equal to the ILI date,
+  // in the same row as a B31.4 disposition of "May remain". That is a statement
+  // about the dossier, not about the metal loss, and it erased the corrosion
+  // result it was meant to bound. Operating past the design life is a life-
+  // extension decision for the operator; the assessment reports the corrosion-
+  // governed limit and flags the condition instead of overwriting the answer
+  // with a zero.
   const usage = designLifeUsage(service, iliDate);
-  const designLifeCapYears = designLifeYears === null
+  const pastDesignLifeAtInspection = usage !== null && usage.designLifeRemainingYears <= 0;
+  const designLifeCapYears = designLifeYears === null || pastDesignLifeAtInspection
     ? null
-    : (usage === null ? designLifeYears : Math.max(0, usage.designLifeRemainingYears));
+    : (usage === null ? designLifeYears : usage.designLifeRemainingYears);
 
   let years: number | null = null;
   let governingLimit: FfsRemnantLimit | null = null;
@@ -262,8 +288,8 @@ export function computeRemnantLife(request: FfsRemnantLifeRequest): FfsRemnantLi
     status = hasGrowthBasis ? 'not-reached-within-horizon' : 'insufficient-growth-basis';
   }
 
-  // The residual life assessment is not reported above the original design life
-  // of the line. This caps a calculated figure; it never manufactures one where
+  // The residual life assessment is not reported above the design life the line
+  // has left at the inspection. This caps a calculated figure; it never manufactures one where
   // no limit was reached, because that would turn "we did not find a limit"
   // into a dated service-life claim.
   let designLifeCapApplied = false;
@@ -288,6 +314,8 @@ export function computeRemnantLife(request: FfsRemnantLifeRequest): FfsRemnantLi
     lengthRateMmPerYear,
     lengthHeldConstant: !request.lengthRateAvailable || !(lengthRateMmPerYear > 0),
     designLifeCapApplied,
+    pastDesignLifeAtInspection,
+    designLifeCapYears: designLifeCapYears === null ? null : round2(designLifeCapYears),
     designLifeYears,
     analysisHorizonYears: horizonYears,
   };

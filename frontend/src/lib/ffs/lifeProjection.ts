@@ -84,8 +84,19 @@ export function remnantLifeCaveats(remnant: FfsRemnantLife): string[] {
     caveats.push('Axial length held constant — no length growth rate was established.');
   }
   if (remnant.designLifeCapApplied) {
+    // The bound is the design life *left* at the inspection, so that is the
+    // figure quoted. Naming the line's total design life here described a cap
+    // the calculation never used.
     caveats.push(
-      `Capped at the ${remnant.designLifeYears} y original design life; the calculated limit is later.`,
+      `Capped at the ${remnant.designLifeCapYears} y of the ${remnant.designLifeYears} y original `
+      + 'design life remaining at the inspection; the calculated limit is later.',
+    );
+  }
+  if (remnant.pastDesignLifeAtInspection) {
+    caveats.push(
+      `The line was already past its ${remnant.designLifeYears} y original design life at the `
+      + 'inspection. The figure is the corrosion-governed limit; continued service is a '
+      + 'life-extension decision this assessment informs but does not make.',
     );
   }
   if (remnant.basis === 'tolerance-adjusted') {
