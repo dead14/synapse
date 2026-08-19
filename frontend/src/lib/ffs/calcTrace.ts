@@ -20,8 +20,10 @@
  * test suite. A formula string and the maths behind it can no longer drift apart
  * without a test going red.
  *
- * `basis` is the sentence an engineer needs when a reviewer asks where a number
- * came from: which clause, which project decision, or which input column.
+ * A step says what it produces, the general form, this feature's numbers in that
+ * form, and the answer. It carries no prose commentary: the derivation is the
+ * justification, and a paragraph beside every number was read as noise rather
+ * than as evidence.
  */
 
 import {
@@ -30,7 +32,7 @@ import {
   MODIFIED_B31G_Z_CUTOFF,
   ORIGINAL_B31G_Z_CUTOFF,
 } from './b31g.ts';
-import { growthAnalysisBasisLabel, pressureBasisLabel } from './assessmentProfile.ts';
+import { growthAnalysisBasisLabel } from './assessmentProfile.ts';
 import { resolvedDepthRate, resolvedLengthRate } from './growthResolution.ts';
 import { formatLifeProjection } from './lifeProjection.ts';
 import { texMark, texNumber, texText } from '../math/tex.ts';
@@ -65,12 +67,6 @@ export interface FfsCalcStep {
   unit?: string;
   /** Short branch or condition tag. */
   note?: string;
-  /**
-   * Where this number comes from and what stands behind it — clause, project
-   * rule, or input column. This is what makes the step defensible rather than
-   * merely reproducible.
-   */
-  basis: string;
   tone: FfsCalcTone;
   /**
    * True for the steps that carry the assessment: an engineer skimming for the
@@ -162,9 +158,6 @@ export function buildCalcTrace(
       ? `\\SFac = ${tex(n.SF, 4)} ${texText('entered on the assessment')}`
       : `\\frac{1}{${tex(n.df, 3)}}`,
     value: n.SF,
-    basis: explicitSf
-      ? 'ASME B31G-2023 para. 1.9: the ratio of the minimum hydrostatic test pressure required for the construction type to the MAOP or MOP, usually not below 1.25. Entered directly, not inferred from the design factor.'
-      : `No hydrotest ratio was supplied, so the historic practice behind the section 3 tables applies: a line designed to F = ${num(n.df, 2)} carries SF = 1/F. This is only correct while the line operates at its design hoop stress.`,
     tone: explicitSf ? 'default' : 'warn',
     governing: false,
     audit: {
@@ -183,7 +176,6 @@ export function buildCalcTrace(
     substitutionTex: `\\frac{${tex(n.maxDepthPct, 2)}}{100}\\times ${tex(n.wall, 2)}`,
     value: n.d,
     unit: 'mm',
-    basis: 'ILI-reported maximum depth as a percentage of the nominal wall, converted to millimetres against the wall thickness on the same row.',
     tone: 'default',
     governing: false,
     audit: {
@@ -201,7 +193,6 @@ export function buildCalcTrace(
     formulaTex: '\\frac{d}{t}',
     substitutionTex: `\\frac{${tex(n.d, 4)}}{${tex(n.wall, 2)}}`,
     value: n.dt,
-    basis: 'The fraction of wall lost. It drives the area term in the remaining-strength equation and is the quantity the 80 %WT line is drawn against.',
     tone: 'default',
     governing: false,
     audit: { recomputed: n.d / n.wall, matches: agrees(n.dt, n.d / n.wall) },
@@ -216,7 +207,6 @@ export function buildCalcTrace(
     formulaTex: 'z = \\frac{L^{2}}{D\\,t}',
     substitutionTex: `\\frac{${tex(n.length, 0)}^{2}}{${tex(n.od, 1)}\\times ${tex(n.wall, 2)}}`,
     value: n.z,
-    basis: 'The dimensionless axial extent that selects which branch of the method applies. D is the nominal outside diameter, matching the Barlow relation used for the pressures below.',
     tone: 'default',
     governing: false,
     audit: {
@@ -237,7 +227,6 @@ export function buildCalcTrace(
       value: null,
       display: 'n/a',
       note: `z > ${ORIGINAL_B31G_Z_CUTOFF}`,
-      basis: 'ASME B31G-2023 para. 2.2(a): past z = 20 the Original method takes the metal loss as a full-wall rectangle and drops the bulging term, leaving S_F = S_flow (1 − d/t).',
       tone: 'default',
       governing: false,
       audit: { recomputed: null, matches: true },
@@ -253,7 +242,6 @@ export function buildCalcTrace(
       substitutionTex: `\\sqrt{1 + 0.8 \\times ${tex(n.z, 4)}}`,
       value: n.M,
       note: `z ≤ ${ORIGINAL_B31G_Z_CUTOFF}`,
-      basis: 'The Original B31G short-anomaly bulging factor. It raises the stress a flaw of this length sees relative to a through-wall crack of the same extent.',
       tone: 'accent',
       governing: false,
       audit: { recomputed, matches: agrees(n.M, recomputed) },
@@ -270,7 +258,6 @@ export function buildCalcTrace(
         `\\sqrt{1 + 0.6275 \\times ${tex(n.z, 4)} - 0.003375 \\times ${tex(n.z, 4)}^{2}}`,
       value: n.M,
       note: `z ≤ ${MODIFIED_B31G_Z_CUTOFF}`,
-      basis: 'The Modified B31G polynomial bulging factor, fitted over a wider range of anomaly lengths than the Original square-root form.',
       tone: 'accent',
       governing: false,
       audit: { recomputed, matches: agrees(n.M, recomputed) },
@@ -286,7 +273,6 @@ export function buildCalcTrace(
       substitutionTex: `0.032 \\times ${tex(n.z, 4)} + 3.3`,
       value: n.M,
       note: `z > ${MODIFIED_B31G_Z_CUTOFF}`,
-      basis: 'Past z = 50 the Modified polynomial turns over, so the method switches to the linear form to keep the factor increasing with length.',
       tone: 'accent',
       governing: false,
       audit: { recomputed, matches: agrees(n.M, recomputed) },
@@ -312,9 +298,6 @@ export function buildCalcTrace(
       : `1.1 \\times ${tex(n.smys, 1)}`,
     value: n.sflow,
     unit: 'MPa',
-    basis: usesUplift
-      ? 'The Modified B31G flow stress: specified minimum yield plus a 10 ksi uplift, which is 68.9476 MPa. The uplift is defined in ksi, so the MPa figure is the converted constant rather than a rounded 69.'
-      : 'The Original B31G flow stress, 1.1 × SMYS — a nominal collapse stress between yield and ultimate, not a measured material property.',
     tone: 'default',
     governing: false,
     audit: { recomputed: flowRecomputed, matches: agrees(n.sflow, flowRecomputed) },
@@ -348,11 +331,6 @@ export function buildCalcTrace(
         + `{1 - \\frac{${tex(k, 4)} \\times ${tex(n.dt, 4)}}{${tex(n.M ?? 1, 4)}}}`,
     value: n.Sf,
     unit: 'MPa',
-    basis: longOriginal
-      ? 'Remaining strength with the metal loss taken as a full-depth rectangle over the whole length.'
-      : isOriginal
-        ? 'ASME B31G-2023 para. 2.2: the metal loss is idealised as a parabola, so the lost area is ⅔ of the depth × length box.'
-        : 'Modified B31G idealises the metal loss as 0.85 of the depth × length box — closer to real corrosion than either the parabola or the rectangle.',
     tone: 'accent',
     governing: false,
     audit: { recomputed: sfRecomputed, matches: agrees(n.Sf, sfRecomputed) },
@@ -369,7 +347,6 @@ export function buildCalcTrace(
     substitutionTex: `\\frac{2 \\times ${tex(n.Sf, 4)} \\times ${tex(n.wall, 2)}}{${tex(n.od, 1)}}`,
     value: n.Pf,
     unit: 'MPa',
-    basis: 'The failure stress turned back into a pressure through the Barlow relation on the outside diameter. This is an estimate of the pressure at which the corroded pipe would fail, carrying no margin.',
     tone: 'default',
     governing: true,
     audit: { recomputed: pfRecomputed, matches: agrees(n.Pf, pfRecomputed) },
@@ -386,7 +363,6 @@ export function buildCalcTrace(
     substitutionTex: `\\frac{${tex(n.p0, 3)} \\times ${tex(n.od, 1)}}{2 \\times ${tex(n.wall, 2)}}`,
     value: n.So,
     unit: 'MPa',
-    basis: `The stress the sound wall carries at the required pressure (${pressureBasisLabel(config)}). Shown for context: the acceptance criterion below is applied on pressures, not on this stress.`,
     tone: 'default',
     governing: false,
     audit: { recomputed: soRecomputed, matches: agrees(n.So, soRecomputed) },
@@ -405,7 +381,6 @@ export function buildCalcTrace(
     substitutionTex: `\\frac{${tex(n.Pf, 4)}}{${tex(n.SF, 4)}}`,
     value: n.safePressure,
     unit: 'MPa',
-    basis: 'ASME B31G-2023 para. 2.2 Step 8: the estimated failure pressure reduced by the safety factor from step 1. This is the pressure the assessment stands behind for this feature.',
     tone: 'good',
     governing: true,
     audit: { recomputed: safeRecomputed, matches: agrees(n.safePressure, safeRecomputed) },
@@ -421,7 +396,6 @@ export function buildCalcTrace(
     formulaTex: '\\ERF = \\frac{\\Pop}{\\Psafe}',
     substitutionTex: `\\frac{${tex(n.p0, 3)}}{${tex(n.safePressure, 4)}}`,
     value: n.ERF,
-    basis: 'How much of the safe pressure the required pressure consumes. ERF is an operator convention layered on the code, not a B31G term — the criterion in para. 2.2 Step 8 is that the safe pressure equals or exceeds the required pressure, and ERF ≥ 1 is the same statement inverted.',
     tone: n.ERF >= 1 ? 'bad' : n.ERF >= screening.reviewBandErf ? 'warn' : 'good',
     governing: true,
     audit: { recomputed: erfRecomputed, matches: agrees(n.ERF, erfRecomputed) },
@@ -443,7 +417,6 @@ export function buildCalcTrace(
       + `${texMark(depthPasses)}`,
     value: null,
     display: n.acceptance === 'Acceptable' ? 'Acceptable' : 'Not acceptable',
-    basis: `ERF exactly 1.0 is the safe-pressure limit itself, so it does not pass. The ${num(depthLimitPct, 0)} %WT gate is a project rejection line, not a B31G applicability limit — para. 1.2(f) permits evaluation at any depth provided the sizing accuracy and the effective corrosion rate are justified, and it is the section 3 tables that stop at 80 %.`,
     tone: n.acceptance === 'Acceptable' ? 'good' : 'bad',
     governing: true,
     audit: {
@@ -472,8 +445,6 @@ export function buildCalcTrace(
     substitutionTex: texText(basisLabel),
     value: depthRate,
     unit: 'mm/y',
-    basis: n.growthEvidence?.depth.note
-      ?? 'No structured growth provenance was attached to this row.',
     tone: n.growthEvidence?.depth.analysisBasis === 'reported' ? 'good' : 'warn',
     governing: false,
     audit: {
@@ -506,7 +477,6 @@ export function buildCalcTrace(
     display: life.depthLimitYears === null
       ? `Not reached in ${life.analysisHorizonYears} y`
       : undefined,
-    basis: 'The depth line is a project rejection threshold and the applicability boundary of the section 3 tables. Reported only where it falls inside the analysis horizon.',
     tone: 'default',
     governing: false,
     audit: {
@@ -538,9 +508,6 @@ export function buildCalcTrace(
     display: life.years === null
       ? formatLifeProjection(life.years, life.status, life.analysisHorizonYears)
       : undefined,
-    basis: life.lengthHeldConstant
-      ? 'Projected with the axial length held constant, because no length growth rate was established. A defect that lengthens loses capacity through the Folias term as well, and that path is not in this figure.'
-      : 'Projected with both dimensions growing, so the Folias term tracks the lengthening as well as the deepening.',
     tone: life.lengthHeldConstant ? 'warn' : 'default',
     governing: true,
     audit: {
