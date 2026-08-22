@@ -9,7 +9,6 @@ import {
   FiClock,
   FiGitCommit,
   FiFileText,
-  FiGrid,
   FiLayers,
   FiMaximize2,
   FiRotateCcw,
@@ -35,12 +34,10 @@ import { primaryRunPair, resolveRunPairs } from '../domain/runPairs';
 import {
   ANOMALY_MATCHERS,
   buildMatchingRulesConfig,
-  CLUSTER_ALIGNMENT_MODES,
   defaultMatchingRules,
   US_GW_DISTANCE_SOURCES,
   WALL_THICKNESS_SOURCES,
   type AnomalyMatcher,
-  type ClusterAlignment,
   type ToleranceValues,
   type UsGwDistanceSource,
   type WallThicknessSource,
@@ -453,51 +450,6 @@ export default function StepScenarioFilter({ onNext, onBack, config }: StepScena
               upstream weld of that joint, or the downstream one when the upstream weld reports
               none. Nothing is read from further away. Every result row records whether its
               thickness was reported at the defect or taken from the joint.
-            </Callout>
-          )}
-        </PanelBody>
-      </Panel>
-
-      {/* Clustered metal loss ---------------------------------------------- */}
-      <Panel>
-        <PanelHeader
-          plain
-          eyebrow="Evidence"
-          title="Clustered metal loss"
-          subtitle="Whether a vendor-merged corrosion group is a defect with an identity across runs, or a grouping this vendor redraws every time."
-        />
-        <PanelBody className="ds-stack">
-          <div className="ds-row">
-            {CLUSTER_ALIGNMENT_MODES.map((mode) => (
-              <Button
-                key={mode.id}
-                size="sm"
-                variant={current.cluster_alignment === mode.id ? 'primary' : 'secondary'}
-                aria-pressed={current.cluster_alignment === mode.id}
-                onClick={() => patch({ cluster_alignment: mode.id as ClusterAlignment })}
-              >
-                {mode.label}
-              </Button>
-            ))}
-          </div>
-          <p className="tol-row__desc">
-            {CLUSTER_ALIGNMENT_MODES.find((mode) => mode.id === current.cluster_alignment)?.hint}
-          </p>
-          {current.cluster_alignment === 'align' ? (
-            <Callout tone="warning" icon={<FiGrid aria-hidden="true" />}>
-              A cluster’s reported extent is a bounding box over several pits. Align them only when
-              this vendor grouped both runs by the same rule — otherwise the pair compares two
-              different populations of metal loss, and the growth rate that comes out of it measures
-              the regrouping rather than the corrosion. The rows are matched on their reported
-              dimensions like any other anomaly, so the depth and length in the result are the
-              cluster’s envelope, not a single defect’s.
-            </Callout>
-          ) : (
-            <Callout tone="info" icon={<FiGrid aria-hidden="true" />}>
-              Clusters stay in the result table in distance order and still feed ERF and
-              fitness-for-service, which read one run’s reported dimensions. What they lose is the
-              run-pair growth rate: a cluster’s remnant life falls back to the zero-baseline or
-              fallback rate, and its ERF at the survey date is unchanged.
             </Callout>
           )}
         </PanelBody>

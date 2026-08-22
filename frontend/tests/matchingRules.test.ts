@@ -37,10 +37,6 @@ test('combined scenario and tolerance settings persist the exact engine contract
     // fill existed reported exactly what its pipetally carried, so reopening it
     // must not start inheriting thicknesses it never had.
     wall_thickness_source: 'uploaded',
-    // And again: a session saved before the cluster switch existed ran with
-    // clusters held out of alignment, so reopening it must not start pairing
-    // them and rewriting its growth rates.
-    cluster_alignment: 'bypass',
     // Absent from a saved session means the matcher that existed at the time.
     anomaly_matcher: 'hungarian',
     // A session saved before the weld-offset gate was separated from the
@@ -76,9 +72,11 @@ test('feature rules emit hiddenFeatures only when something is hidden', () => {
   assert.equal(buildFeatureRulesConfig([]).hiddenFeatures, undefined);
 });
 
-test('an explicit cluster decision survives the round trip to the engine contract', () => {
+test('a saved cluster switch is dropped rather than carried to the engine', () => {
+  // The setting is gone: every metal-loss record is aligned, so a session
+  // saved while the switch existed must not reach the engine still carrying it.
   const defaults = defaultMatchingRules({
-    ToleranceConfig: { cluster_alignment: 'align' },
+    ToleranceConfig: { cluster_alignment: 'bypass' },
   });
   const result = buildMatchingRulesConfig({
     shared: defaults.shared,
@@ -87,14 +85,8 @@ test('an explicit cluster decision survives the round trip to the engine contrac
     perPairEnabled: false,
   });
 
-  assert.equal(result.ToleranceConfig.cluster_alignment, 'align');
-  // Anything the engine would not recognise falls back to the safe rule
-  // rather than reaching it as a value it has to guess about.
-  assert.equal(
-    defaultMatchingRules({ ToleranceConfig: { cluster_alignment: 'sometimes' } })
-      .shared.cluster_alignment,
-    'bypass',
-  );
+  assert.equal(Object.hasOwn(defaults.shared, 'cluster_alignment'), false);
+  assert.equal(Object.hasOwn(result.ToleranceConfig, 'cluster_alignment'), false);
 });
 
 test('per-pair mode sends each run pair its own engine tolerances', () => {

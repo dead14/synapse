@@ -33,31 +33,11 @@ _THOUSANDS_SEPARATED = re.compile(r"^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$")
 # corrosion", "Corrosion CLUSTER", "Clustered metal loss", "Corrosion
 # clustering" — but all of them carry the word itself in one of the
 # classification columns.  Matching on the word, not on a fixed label, is what
-# makes this survive a new vendor export.
+# makes this survive a new vendor export.  The word decides nothing about
+# alignment: a clustered record is metal loss and is offered to the matcher on
+# the same terms as any other.  It is read only to keep a merged corrosion
+# group out of the fitting classes below.
 CLUSTER_LABEL_PATTERN = re.compile(r"\b(?:cluster|klaster|kluster)s?(?:ed|ing)?\b", re.IGNORECASE)
-
-CLUSTER_BYPASS_REASON = "Clustered metal loss — excluded from alignment"
-
-# Whether a clustered record takes part in alignment at all.  ``bypass`` is the
-# default and the historical behaviour, for the reason spelled out in
-# ``_is_cluster_feature``.  ``align`` exists because some vendors report a
-# cluster as a standing feature with a stable identity across runs — the same
-# grouping rules applied to both reports — and for those an engineer wants the
-# pair and the growth rate that comes with it.  It is a per-session decision
-# about the uploaded data, not a default anyone should inherit silently.
-CLUSTER_ALIGNMENT_MODES = ("bypass", "align")
-DEFAULT_CLUSTER_ALIGNMENT = "bypass"
-
-
-def resolve_cluster_alignment(tol_config: dict | None) -> bool:
-    """True when the session asked for clusters to be aligned like anomalies.
-
-    Anything unrecognised — including a session saved before this setting
-    existed — resolves to the bypass rule, so reopening an old run never
-    silently changes what it matched.
-    """
-    mode = str((tol_config or {}).get("cluster_alignment", "") or "").strip().lower()
-    return mode == "align"
 
 # Pipe furniture an ILI reports alongside the anomalies.  Each entry is one
 # identity class: a bend is only ever paired with a bend, a valve only with a
@@ -584,10 +564,6 @@ class HungarianAnomalyAlignmentEngine:
         self.ds_gw_distance_tolerance = distance_tolerance_m
         self.use_us_gw_distance = True
         self.length_tolerance = 400.0
-        # Resolved again from the effective ToleranceConfig in
-        # `perform_alignment`; set here because the manual and AURORA entry
-        # points build rows without ever going through that method.
-        self.align_clusters = False
         self.session = SessionLocal()
 
         # Resolve chronology from survey years. Older wizard sessions stored
@@ -596,9 +572,6 @@ class HungarianAnomalyAlignmentEngine:
         self._cached_session = self.session.query(AlignmentSession).filter(AlignmentSession.id == self.session_id).first()
         self._effective_params = None
         params_json = self._session_params()
-        self.align_clusters = resolve_cluster_alignment(
-            (params_json or {}).get("ToleranceConfig")
-        )
         if params_json:
             old_run, new_run, self.swap_persisted_runs = self._resolve_run_bindings(params_json)
             # Never fabricate survey years.  Defaulting to current_year-5 /
@@ -1244,23 +1217,13 @@ class HungarianAnomalyAlignmentEngine:
 
     @classmethod
     def _is_cluster_feature(cls, feature: dict) -> bool:
-        """A clustered metal-loss record: a vendor-merged group, not one defect.
+        """A clustered metal-loss record: a vendor-merged group of pits.
 
-        Its reported extent is a bounding box over several pits, and the vendor
-        regroups those pits differently on every run — the same corrosion can
-        be one cluster in the OLD report and three in the NEW one.  Pairing a
-        cluster across runs therefore compares two different populations of
-        metal loss, and any growth rate that comes out of it is an artefact of
-        the grouping, not of corrosion.
-
-        Clusters are conserved as bypass rows instead: they stay in the result
-        table in distance order and still feed ERF / FFS, which read the
-        reported dimensions of a single run.  The exclusion is from *alignment*
-        only, never from the report.
-
-        This answers "is this record a cluster", not "may it be aligned".  The
-        second question belongs to the session: see ``resolve_cluster_alignment``
-        and the ``align_clusters`` argument on the callers below.
+        This answers "is this record a cluster" and nothing else.  A cluster is
+        metal loss, so it is aligned across runs exactly like any other anomaly
+        and carries the growth rate its pair produces.  The only thing the
+        label still decides is that a merged corrosion group is not pipe
+        furniture — see ``_fitting_class``.
         """
         return any(
             CLUSTER_LABEL_PATTERN.search(label)
@@ -1268,16 +1231,12 @@ class HungarianAnomalyAlignmentEngine:
         )
 
     @classmethod
-    def _is_matchable_anomaly(cls, feature: dict, align_clusters: bool = False) -> bool:
+    def _is_matchable_anomaly(cls, feature: dict) -> bool:
         """Only anomaly / metal-loss records are eligible for Hungarian.
 
-        Clustered records are anomalies but are not eligible unless the session
-        says so; see ``_is_cluster_feature`` for why the default is to hold them
-        back.  The default is False so every caller that has not been given a
-        session decision keeps the conservative rule.
+        Clustered records are metal loss and are eligible on the same terms as
+        any other anomaly.
         """
-        if not align_clusters and cls._is_cluster_feature(feature):
-            return False
         feature_type = str(feature.get("originalType", "")).strip().lower()
         raw_type = str(feature.get("raw", {}).get("type", "")).strip().lower()
         return feature_type in {"anomaly", "metal loss", "metal_loss"} or raw_type == "anomaly"
@@ -1564,9 +1523,10 @@ class HungarianAnomalyAlignmentEngine:
     def _fitting_class(cls, feature: dict) -> str | None:
         """Which identity class this fitting belongs to, or None if unknown.
 
-        A clustered record is never a fitting, and an unrecognised label returns
-        None so it keeps flowing to the bypass bucket instead of being paired
-        against something it may have nothing to do with.
+        A merged corrosion group is metal loss, not pipe furniture, and an
+        unrecognised label returns None so it keeps flowing to the bypass
+        bucket instead of being paired against something it may have nothing to
+        do with.
         """
         if cls._is_cluster_feature(feature):
             return None
@@ -1665,7 +1625,7 @@ class HungarianAnomalyAlignmentEngine:
         return pairs, unmatched_old, unmatched_new
 
     @classmethod
-    def _partition_hungarian_features(cls, features: list[dict], align_clusters: bool = False):
+    def _partition_hungarian_features(cls, features: list[dict]):
         """Split Phase-2 input without re-emitting any Phase-1 GW feature."""
         # Phase ownership is determined by feature type, not identifier alone.
         # IDs are not guaranteed unique across vendor exports; filtering every
@@ -1676,11 +1636,11 @@ class HungarianAnomalyAlignmentEngine:
         for feature in features:
             if cls._is_gw_feature(feature):
                 continue
-            # Clusters land here too, unless the session opted them into
-            # alignment: _is_matchable_anomaly is what decides.
+            # Clustered metal loss lands in `anomalies` with every other
+            # metal-loss record: _is_matchable_anomaly is what decides.
             (
                 anomalies
-                if cls._is_matchable_anomaly(feature, align_clusters)
+                if cls._is_matchable_anomaly(feature)
                 else bypassed
             ).append(feature)
         return anomalies, bypassed
@@ -2110,16 +2070,6 @@ class HungarianAnomalyAlignmentEngine:
         self.fitting_distance_tolerance_m = float(tol_config.get(
             "fitting_distance_tolerance", DEFAULT_FITTING_DISTANCE_TOLERANCE_M,
         ))
-        # Not a gate — it decides whether clustered metal loss is offered to the
-        # matcher at all.  Said out loud because the same upload aligned under
-        # the two modes produces different growth rates, and the reader of a
-        # result has to be able to tell which one produced it.
-        self.align_clusters = resolve_cluster_alignment(tol_config)
-        print(
-            "      [Validation] Clustered metal loss: "
-            + ("aligned as anomalies" if self.align_clusters else "held out of alignment"),
-            file=sys.stderr,
-        )
 
         gw_matches_final = [
             self._logical_gw_pair(pair)
@@ -2186,12 +2136,8 @@ class HungarianAnomalyAlignmentEngine:
         # metal-loss rows, while genuine non-GW features may remain visible in
         # the bypass buckets.  This prevents unmatched GWs from appearing once
         # in gw_unmatched and a second time as Bypassed OLD/NEW.
-        anomalies_1, non_anomaly_old = self._partition_hungarian_features(
-            anomalies_1_all, self.align_clusters,
-        )
-        anomalies_2, non_anomaly_new = self._partition_hungarian_features(
-            anomalies_2_all, self.align_clusters,
-        )
+        anomalies_1, non_anomaly_old = self._partition_hungarian_features(anomalies_1_all)
+        anomalies_2, non_anomaly_new = self._partition_hungarian_features(anomalies_2_all)
 
         print(f"      [Validation] Valid Anomaly Candidates Run1: {len(anomalies_1)} (Out of {len(anomalies_1_all)})", file=sys.stderr)
         print(f"      [Validation] Valid Anomaly Candidates Run2: {len(anomalies_2)} (Out of {len(anomalies_2_all)})", file=sys.stderr)
@@ -2414,18 +2360,6 @@ class HungarianAnomalyAlignmentEngine:
             old_section = section_for(f1, "OLD")
             new_section = section_for(f2, "NEW")
             row_section = new_section or old_section
-            # The bypass bucket holds two very different things — supports and
-            # markers that were never anomalies, and clusters that were held
-            # back on purpose.  Say which, or the engineer cannot tell whether
-            # a missing match is a rule or a defect in the run.  When the
-            # session aligns clusters there is no such rule to report, and
-            # stamping the reason anyway would describe a bypass that did not
-            # happen.
-            bypass_reason = "-"
-            if not self.align_clusters and any(
-                feature and self._is_cluster_feature(feature) for feature in (f1, f2)
-            ):
-                bypass_reason = CLUSTER_BYPASS_REASON
             return {
                 **self._match_evidence_fields(evidence),
                 "session_id": self.session_id,
@@ -2434,7 +2368,11 @@ class HungarianAnomalyAlignmentEngine:
                 "match_status": status,
                 "Match/Unmatch": status,
                 "Result Group": result_group,
-                "Bypass Reason": bypass_reason,
+                # The bypass bucket holds records that were never matchable
+                # anomalies — supports, markers, unrecognised furniture.  No
+                # metal-loss record is held out of alignment by rule any more,
+                # so no row carries a reason of its own.
+                "Bypass Reason": "-",
                 "Run Year OLD": self.run_1_year,
                 "Run Year NEW": self.run_2_year,
                 # The interval the rates above were divided by, in decimal

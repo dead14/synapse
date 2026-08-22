@@ -108,11 +108,10 @@ export, the corrosion review and the FFS intake need no strategy branch:
   members sharing one `AURORA Group ID`. `MANY_TO_MANY_REGION` members carry
   the status `Region only`: the region corresponds, the box mapping does not.
 - `anomaly_only_old` / `anomaly_only_new` — no candidate passed the gate.
-- `bypassed_*` — clusters, structural-change zones, features outside the
-  registered map, and pipe furniture. Excluded from alignment, never from the
-  report. Clusters are here only under the default `ToleranceConfig.cluster_alignment`
-  of `bypass`; a session set to `align` hands them to the matcher as ordinary
-  metal loss, and they then appear in the anomaly buckets like anything else.
+- `bypassed_*` — structural-change zones, features outside the registered map,
+  and pipe furniture. Excluded from alignment, never from the report. A
+  vendor-merged corrosion cluster is not among them: it is metal loss and goes
+  to the matcher like any other, so it lands in the anomaly buckets.
 - `filtered_*` — unreadable odometer or outside the tie-in domain.
 
 Every input source key appears exactly once; `audit.isConserved` is checked in
@@ -175,7 +174,7 @@ recovery, an outlier that must *not* be rescued by the region's rotation,
 missing welds as gaps, inserted welds as a change zone, a distant look-alike
 rejected by the corridor, rescue acceptance and rescue refusal on a repetitive
 pattern, split and merge, region-versus-feature confidence, insufficient
-evidence, cluster conservation, configuration merging, and the worker bucket
+evidence, cluster matching, configuration merging, and the worker bucket
 contract.
 
 ## Not built

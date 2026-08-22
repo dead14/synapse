@@ -168,9 +168,9 @@ export function summarizeConservationAudit(
 
 /**
  * Same rule as `hungarian_engine._is_cluster_feature`: a vendor-merged
- * corrosion group is never aligned across runs. Every vendor writes it
- * differently — "CLUSTER corrosion", "Corrosion CLUSTER", "Clustered metal
- * loss" — so the word itself is what is matched, not a fixed label.
+ * corrosion group. Every vendor writes it differently — "CLUSTER corrosion",
+ * "Corrosion CLUSTER", "Clustered metal loss" — so the word itself is what is
+ * matched, not a fixed label.
  */
 const CLUSTER_LABEL_PATTERN = /\b(?:cluster|klaster|kluster)s?(?:ed|ing)?\b/i;
 
@@ -185,13 +185,10 @@ const CLUSTER_CLASSIFICATION_COLUMNS = [
 /**
  * Whether either side of a comparison row is clustered metal loss.
  *
- * This answers "is this row a cluster", not "may it be reassigned". Callers
- * pair it with the session's `ToleranceConfig.cluster_alignment`: under the
- * default `bypass` the engine kept these out of matching, and the manual
- * reassignment path applies the same rule so an engineer cannot pair by hand
- * what the algorithm refused to pair. Under `align` the engine paired them, and
- * the manual path must not contradict it. The row stays in the table either
- * way — clusters are excluded from *alignment*, never from the report or ERF.
+ * A cluster is aligned across runs like any other metal loss, so this decides
+ * nothing about matching or manual reassignment. It is read by the FFS intake,
+ * which has to disclose that a B31G result covers a vendor-merged envelope
+ * rather than a single defect.
  */
 export function isClusteredAlignmentRow<T extends Record<string, unknown>>(row: T): boolean {
   return CLUSTER_CLASSIFICATION_COLUMNS.some((column) => {

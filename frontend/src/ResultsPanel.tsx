@@ -13,7 +13,6 @@ import {
   alignmentResultColumns,
   alignmentDisplayValue,
   depthGrowthMmPerYear,
-  isClusteredAlignmentRow,
   MASTER_AXIS_COLUMN,
   MATCH_EVIDENCE_KEY,
   sortAlignmentRowsByMasterAxis,
@@ -113,13 +112,6 @@ interface ResultsPanelProps {
    * published link freezes the same visibility the author was reading.
    */
   hiddenFeatures?: string[];
-  /**
-   * The session's clustered-metal-loss decision. Under `bypass` the engine held
-   * clusters out of matching and the manual reassignment path stays locked to
-   * agree with it; under `align` they were matched like any other anomaly, so
-   * the lock would contradict the run that produced these rows.
-   */
-  clusterAlignment?: 'bypass' | 'align';
 }
 
 /** Parse a clock value to hours (0..12) regardless of format ("HH:MM" or Excel serial fraction). */
@@ -377,10 +369,7 @@ export default function ResultsPanel({
   interventions: interventionsProp,
   sections: sectionsProp,
   hiddenFeatures = [],
-  clusterAlignment = 'bypass',
 }: ResultsPanelProps) {
-  // Only the bypass mode locks a cluster row out of manual pairing.
-  const clustersLocked = clusterAlignment !== 'align';
   const data = useMemo(() => {
     let flattened: any[] = [];
     if (Array.isArray(rawData)) {
@@ -460,11 +449,10 @@ export default function ResultsPanel({
     const moving = reassignSource.movingSide;
     return data
       .filter((row: any) => !isExcludedRow(row)
-        && !(clustersLocked && isClusteredAlignmentRow(row))
         && (hasRowValue(row, `Source Key ${anchor}`) || hasRowValue(row, `Identif. ${anchor}`))
         && !hasRowValue(row, `Source Key ${moving}`) && !hasRowValue(row, `Identif. ${moving}`))
       .sort((a: any, b: any) => (parseFloat(a[`Log Dist ${anchor} (m)`]) || 0) - (parseFloat(b[`Log Dist ${anchor} (m)`]) || 0));
-  }, [data, reassignSource, clustersLocked]);
+  }, [data, reassignSource]);
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState('');
@@ -1367,18 +1355,12 @@ export default function ResultsPanel({
                         {sortedData.slice(visibleRows.startIdx, visibleRows.endIdx + 1).map((row: any, i: number) => {
                           const actualIdx = visibleRows.startIdx + i;
                           const isSelected = selectedRowIdx !== null && selectedRowIdx !== undefined && row.__origIdx === selectedRowIdx;
-                          // Under the default rule clusters are held out of
-                          // alignment by the engine, and the manual path must
-                          // not put them back in. A session that aligned them
-                          // leaves the row as reassignable as any other.
-                          const isClusterRow = clustersLocked && isClusteredAlignmentRow(row);
                           // A drop only lands where the moving side is free —
                           // the parent refuses anything else, and lighting up a
                           // row that will be rejected is worse than not lighting.
                           const isDragTarget = activeTab === 'Interventions'
                             && dragged !== null
                             && dragged.rowIdx !== row.__origIdx
-                            && !isClusterRow
                             && !hasRowValue(row, `Source Key ${dragged.movingSide}`)
                             && !hasRowValue(row, `Identif. ${dragged.movingSide}`);
 
@@ -1401,13 +1383,10 @@ export default function ResultsPanel({
                           const bgClass = '';
 
                           // Either orphan half can be carried onto a partner.
-                          const movableSide: 'OLD' | 'NEW' | null = isClusterRow
-                            ? null
-                            : (exclusionTarget(row)?.side === 'NEW' ? 'NEW'
-                              : exclusionTarget(row)?.side === 'OLD' ? 'OLD' : null);
+                          const movableSide: 'OLD' | 'NEW' | null = exclusionTarget(row)?.side === 'NEW' ? 'NEW'
+                            : exclusionTarget(row)?.side === 'OLD' ? 'OLD' : null;
                           const isReassignableSource = activeTab === 'Interventions' && movableSide !== null;
                           const isUnassignable = activeTab === 'Interventions'
-                            && !isClusterRow
                             && isMatchedRow(row)
                             && hasRowValue(row, 'Source Key OLD')
                             && hasRowValue(row, 'Source Key NEW');

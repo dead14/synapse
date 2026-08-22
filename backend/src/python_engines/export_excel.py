@@ -140,8 +140,8 @@ ONE_DECIMAL_COLUMNS = frozenset(_new(9, 10, 11) | _old(9))
 # missing; one only the NEW run reported is new.
 #
 # "Not compared" is deliberately not "missing": a bypassed row was never offered
-# to the matcher (a vendor-merged cluster above all), so the NEW run saying
-# nothing about it says nothing about the pipe.
+# to the matcher (a support, a marker, an unrecognised label), so the NEW run
+# saying nothing about it says nothing about the pipe.
 POF_MATCH_STATUS = {
     "match": ("Matched", "matched"),
     "matched": ("Matched", "matched"),

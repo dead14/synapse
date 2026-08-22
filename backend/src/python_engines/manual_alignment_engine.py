@@ -2,23 +2,17 @@ import json
 import os
 import sys
 
-from hungarian_engine import CLUSTER_BYPASS_REASON, HungarianAnomalyAlignmentEngine
+from hungarian_engine import HungarianAnomalyAlignmentEngine
 
 
-def _manual_row(feature, side, status, result_group, old_year, new_year, align_clusters=False):
+def _manual_row(feature, side, status, result_group, old_year, new_year):
     is_old = side == "OLD"
     return {
         "match_status": status,
         "Match/Unmatch": status,
         "Result Group": result_group,
-        # Only a bypass this run actually applied is named.  A session that
-        # aligns clusters bypassed nothing, so the column stays empty.
-        "Bypass Reason": (
-            CLUSTER_BYPASS_REASON
-            if not align_clusters
-            and HungarianAnomalyAlignmentEngine._is_cluster_feature(feature)
-            else "-"
-        ),
+        # A manual run pairs nothing, so it bypasses nothing by rule either.
+        "Bypass Reason": "-",
         "Run Year OLD": old_year,
         "Run Year NEW": new_year,
         "Source Key OLD": feature.get("source_key") if is_old else "-",
@@ -42,7 +36,7 @@ def _manual_row(feature, side, status, result_group, old_year, new_year, align_c
     }
 
 
-def build_manual_output(old_features, new_features, old_year, new_year, align_clusters=False):
+def build_manual_output(old_features, new_features, old_year, new_year):
     HungarianAnomalyAlignmentEngine._ensure_source_keys(old_features, "OLD")
     HungarianAnomalyAlignmentEngine._ensure_source_keys(new_features, "NEW")
     output = {
@@ -62,7 +56,7 @@ def build_manual_output(old_features, new_features, old_year, new_year, align_cl
             if HungarianAnomalyAlignmentEngine._is_gw_feature(feature):
                 bucket = "gw_unmatched"
                 group = "GW"
-            elif HungarianAnomalyAlignmentEngine._is_matchable_anomaly(feature, align_clusters):
+            elif HungarianAnomalyAlignmentEngine._is_matchable_anomaly(feature):
                 bucket = "anomaly_only_old" if side == "OLD" else "anomaly_only_new"
                 group = "ANOMALY"
             else:
@@ -75,7 +69,6 @@ def build_manual_output(old_features, new_features, old_year, new_year, align_cl
                 group,
                 old_year,
                 new_year,
-                align_clusters,
             ))
 
     rows = [row for value in output.values() for row in value]
@@ -96,7 +89,6 @@ def main(session_id):
         new_features,
         engine.run_1_year,
         engine.run_2_year,
-        engine.align_clusters,
     )
     result_path = os.environ.get("ALIGNMENT_RESULT_FILE")
     if result_path:

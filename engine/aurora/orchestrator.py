@@ -85,7 +85,6 @@ STATE_REVIEW_READY = "REVIEW_READY"
 STATE_FAILED_INPUT = "FAILED_INPUT"
 STATE_INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
 
-BYPASS_CLUSTER = "Clustered metal loss — excluded from alignment"
 BYPASS_UNREGISTERED = "Outside the registered physical map — no local frame"
 BYPASS_CHANGE_ZONE = (
     "Structural change zone — cross-boundary identity is not forced"
@@ -178,20 +177,12 @@ class AuroraResult:
 
 def _partition_features(
     features: list[CanonicalFeature],
-    align_clusters: bool = False,
 ) -> tuple[list[CanonicalFeature], list[CanonicalFeature], list[tuple[CanonicalFeature, str]]]:
     """Split a run into anchors, matchable metal loss, and bypassed evidence.
 
-    A clustered record is metal loss but is not aligned by default: its extent
-    is a bounding box over several pits that the vendor regroups differently on
-    every run, so pairing it compares two different populations.  It is
-    conserved as a bypass row instead — excluded from alignment, never from the
-    report.
-
-    ``align_clusters`` is the session's decision to treat clusters as ordinary
-    metal loss instead, for vendors that report a cluster as a standing feature
-    with the same grouping rules applied to both runs.  It defaults to the
-    conservative rule.
+    A clustered record is metal loss and is aligned as such.  The CLUSTER class
+    is kept because the report still says a row is a vendor-merged group — an
+    FFS caveat about what the envelope describes — but it decides nothing here.
     """
     anchors: list[CanonicalFeature] = []
     metal_loss: list[CanonicalFeature] = []
@@ -199,12 +190,7 @@ def _partition_features(
     for feature in features:
         if feature.is_anchor:
             anchors.append(feature)
-        elif feature.feature_class == CLUSTER:
-            if align_clusters:
-                metal_loss.append(feature)
-            else:
-                bypassed.append((feature, BYPASS_CLUSTER))
-        elif feature.feature_class == METAL_LOSS:
+        elif feature.feature_class in (METAL_LOSS, CLUSTER):
             metal_loss.append(feature)
         else:
             bypassed.append((feature, "Not a matchable anomaly class"))
@@ -294,7 +280,6 @@ def run_aurora_alignment(
     new_run: dict | None = None,
     pipeline_key: str = "pipeline",
     config_overrides: dict | None = None,
-    align_clusters: bool = False,
 ) -> AuroraResult:
     """Execute the normative pipeline for one run pair."""
     config = resolve_config(config_overrides)
@@ -312,12 +297,8 @@ def run_aurora_alignment(
     for feature in new_unpositioned:
         result.bypassed_new.append((feature, "No readable odometer position"))
 
-    old_anchor_features, old_metal_loss, old_bypassed = _partition_features(
-        old_positioned, align_clusters,
-    )
-    new_anchor_features, new_metal_loss, new_bypassed = _partition_features(
-        new_positioned, align_clusters,
-    )
+    old_anchor_features, old_metal_loss, old_bypassed = _partition_features(old_positioned)
+    new_anchor_features, new_metal_loss, new_bypassed = _partition_features(new_positioned)
     result.bypassed_old.extend(old_bypassed)
     result.bypassed_new.extend(new_bypassed)
 

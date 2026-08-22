@@ -294,7 +294,7 @@ class StreamedWorkbookTests(unittest.TestCase):
     def test_a_bypassed_row_is_not_reported_as_a_missing_feature(self):
         # POF wording: the OLD run reported it and the NEW run did not, so it is
         # missing. A bypassed row was never offered to the matcher, and calling
-        # that missing is how an unaligned cluster becomes a repair scope.
+        # that missing is how a pipe support becomes a repair scope.
         self.assertEqual(export_excel.pof_match_status("Only OLD"), "Missing")
         self.assertEqual(export_excel.pof_match_status("Only NEW"), "New")
         self.assertEqual(export_excel.pof_match_status("Bypassed OLD"), "Not compared (OLD)")

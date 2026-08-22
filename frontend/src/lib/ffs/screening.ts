@@ -810,7 +810,7 @@ export function buildActionRegister(
         ? 'Temporary repair remains active and receives no capacity credit.'
         : '',
       target.nominal.isClusteredMetalLoss
-        ? 'Reported as clustered metal loss: the B31G result covers a merged group, not a single defect, and no run-pair growth rate exists for it.'
+        ? 'Reported as clustered metal loss: the B31G result covers a merged group, not a single defect.'
         : '',
       target.nominal.recommendation?.trim()
         ? `Recorded disposition: ${target.nominal.recommendation.trim()}`

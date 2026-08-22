@@ -781,7 +781,6 @@ function deriveGrowthEvidence(
   wallMm: number,
   engineering: AlignmentEngineeringInputs,
   warnings: string[],
-  isClusteredMetalLoss: boolean,
 ): FfsGrowthEvidence {
   const oldSurveyYear = surveyYear(source['Run Year OLD']);
   const newSurveyYear = surveyYear(source['Run Year NEW']);
@@ -803,30 +802,13 @@ function deriveGrowthEvidence(
   const hasOldFeature = present(source['Source Key OLD']) ||
     present(source['Identif. OLD']) ||
     present(source['Depth OLD (%WT)']);
-  // A bypassed row is not a NEW-only defect. Clusters land in the bypass bucket
-  // with no OLD side and no "matched" status, which made them look NEW-only and
-  // earned them a zero-baseline growth estimate — while the disclosure printed
-  // beside them said they carry no run-pair growth rate at all. The vendor
-  // regroups the pits differently on every run, so there is no baseline to
-  // estimate from and no rate is derived.
-  const isNewOnly = !hasOldFeature && !markedMatched && !isClusteredMetalLoss;
+  // Every metal-loss row is offered to the matcher, merged corrosion groups
+  // included, so a row with no OLD side and no "matched" status really is a
+  // defect the OLD run did not report.
+  const isNewOnly = !hasOldFeature && !markedMatched;
 
   let depth: FfsGrowthComponentEvidence;
-  if (isClusteredMetalLoss && !markedMatched) {
-    depth = unavailableComponent(
-      'unavailable',
-      null,
-      engineering.fallbackDepthGrowthMmPerYear,
-      null,
-      'Clustered metal loss is excluded from run-pair matching, so no measured or '
-      + 'zero-baseline depth rate exists for it.',
-    );
-    warnings.push(
-      engineering.fallbackDepthGrowthMmPerYear > 0
-        ? 'Clustered metal loss carries no run-pair growth rate; the explicit fallback rate was used.'
-        : 'Clustered metal loss carries no run-pair growth rate; depth projection cannot be calculated.',
-    );
-  } else if (isNewOnly && intervalYears !== null) {
+  if (isNewOnly && intervalYears !== null) {
     const rate = roundedRate(((depthPct / 100) * wallMm) / intervalYears);
     depth = {
       observation: 'new-only-zero-baseline-estimate',
@@ -1189,12 +1171,11 @@ export function mapAlignmentRowsToFfs(
         `Reported at ${depth.toFixed(1)} %WT, past the 80 %WT project rejection line: assessed and reported, but the sizing accuracy and the effective corrosion rate must be justified before the result is relied on.`,
       );
     }
-    // Same rule the alignment engine uses to keep merged groups out of matching,
-    // so FFS labels exactly the rows the engine refused to pair.
+    // A vendor-merged group is aligned like any other metal loss, so this is
+    // not a matching caveat: B31G is written for one defect, and the reader has
+    // to be told this row's envelope covers several.
     const isClusteredMetalLoss = isClusteredAlignmentRow(source);
-    const growthEvidence = deriveGrowthEvidence(
-      source, depth, wall, engineering, warnings, isClusteredMetalLoss,
-    );
+    const growthEvidence = deriveGrowthEvidence(source, depth, wall, engineering, warnings);
     const depthGrowthMm = growthEvidence.depth.analysisRateMmPerYear ?? 0;
     // The column has to carry a finite number for the calculation contract, but
     // the evidence record is what downstream consumers read to decide whether
@@ -1212,7 +1193,7 @@ export function mapAlignmentRowsToFfs(
     const explicitSafetyFactor = engineering.safetyFactor ?? null;
     if (isClusteredMetalLoss) {
       warnings.push(
-        'Reported as clustered metal loss: assessed as one merged defect and carrying no run-pair growth rate.',
+        'Reported as clustered metal loss: assessed as one merged defect, so the depth and length are the envelope of a group rather than a single pit.',
       );
     }
 

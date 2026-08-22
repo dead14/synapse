@@ -90,9 +90,10 @@ export interface LaneFeature {
   external: boolean | null;
   featureType: string;
   /**
-   * True when the vendor reported this record as a merged corrosion group. The
-   * engine refuses to align these, so the viewer must not present the box as
-   * one defect either — see {@link CLUSTER_LABEL_PATTERN}.
+   * True when the vendor reported this record as a merged corrosion group. It
+   * is aligned like any other metal loss; the flag exists because the box the
+   * viewer draws is the envelope of several pits, not one defect — see
+   * {@link CLUSTER_LABEL_PATTERN}.
    */
   isCluster: boolean;
   matchedBack: boolean | null;
@@ -160,8 +161,8 @@ const KIND_PATTERNS: Array<[FeatureKind, RegExp]> = [
 /**
  * Same rule as `hungarian_engine._is_cluster_feature` and
  * `alignmentDisplay.isClusteredAlignmentRow`: a vendor-merged corrosion group.
- * Its extent is a bounding box over several pits, so it is never aligned across
- * runs and must never be read as one defect on the viewer.
+ * Its extent is a bounding box over several pits, so it must never be read as
+ * one defect on the viewer — a separate lane band is what says so.
  */
 const CLUSTER_LABEL_PATTERN = /\b(?:cluster|klaster|kluster)s?(?:ed|ing)?\b/i;
 

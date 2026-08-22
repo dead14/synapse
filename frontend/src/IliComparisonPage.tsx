@@ -150,11 +150,6 @@ export default function IliComparisonPage({
   // and conserved every row, and turning a class back on must not require a
   // re-run.
   const [hiddenFeatures, setHiddenFeatures] = useState<string[]>([]);
-  // The Tolerances step's clustered-metal-loss decision. Unlike the visibility
-  // rules above this one was applied by the engine, so it is read back only to
-  // keep the manual reassignment path agreeing with the run that produced these
-  // rows — changing it means re-running the alignment.
-  const [clusterAlignment, setClusterAlignment] = useState<'bypass' | 'align'>('bypass');
   const data = useMemo(
     () => applyInterventions(baseData, interventions),
     [baseData, interventions],
@@ -286,12 +281,6 @@ export default function IliComparisonPage({
           : session.config?.sections;
         setSections(Array.isArray(configuredSections) ? configuredSections : []);
         setHiddenFeatures(normalizeHiddenFeatures(session.config?.hiddenFeatures));
-        setClusterAlignment(
-          (session.config?.ToleranceConfig as { cluster_alignment?: unknown } | undefined)
-            ?.cluster_alignment === 'align'
-            ? 'align'
-            : 'bypass',
-        );
         setPipelineExportData(createPipelineExportData(session.config || {}));
       } catch (caughtError) {
         if ((caughtError as Error).name !== 'AbortError') {
@@ -661,7 +650,6 @@ export default function IliComparisonPage({
                 interventions={interventions}
                 sections={sections}
                 hiddenFeatures={hiddenFeatures}
-                clusterAlignment={clusterAlignment}
               />
             </div>
           </div>

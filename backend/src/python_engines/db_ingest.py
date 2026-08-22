@@ -544,11 +544,10 @@ def normalize_ingestion_frame(raw, field_map):
     ]
     # Normalisation collapses a vendor label onto a canonical class, and that
     # loses information downstream consumers need. "Cluster corrosion" becomes
-    # "Metal Loss", and the alignment engine's cluster rule — which reads
-    # feature_type, feature_identification and dim_classification — then had no
-    # column left carrying the word "cluster", so vendor-merged groups were fed
-    # into anomaly matching after all. The source label is kept in
-    # feature_identification whenever the vendor left that column empty.
+    # "Metal Loss", and every reader that has to say a row is a vendor-merged
+    # group — the FFS intake above all — then has no column left carrying the
+    # word "cluster". The source label is kept in feature_identification
+    # whenever the vendor left that column empty.
     universal["feature_identification"] = [
         feature_identifications[index]
         if not pd.isna(feature_identifications[index])

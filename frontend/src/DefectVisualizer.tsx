@@ -94,10 +94,10 @@ export default function DefectVisualizer({ data, selectedRowIdx, onSelectRowIdx 
       ['Width', feature.widthMm === null ? '—' : `${feature.widthMm} mm`],
       ['Feature identification', feature.featureType || '—'],
     );
-    // Said outright, because the run-to-run columns above stay empty for these
-    // rows by rule rather than because the runs disagreed.
+    // Said outright, because the dimensions above describe the envelope of a
+    // group of pits, not one defect.
     if (feature.isCluster) {
-      rows.push(['Clustered', 'Merged group — not aligned across runs']);
+      rows.push(['Clustered', 'Merged group — dimensions are the envelope']);
     }
     return rows;
   };

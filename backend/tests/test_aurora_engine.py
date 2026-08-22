@@ -417,7 +417,7 @@ class InsufficientEvidenceTests(unittest.TestCase):
             16,
         )
 
-    def test_clustered_metal_loss_is_conserved_but_never_aligned(self):
+    def test_clustered_metal_loss_goes_to_the_matcher_like_any_metal_loss(self):
         positions = joint_positions(count=10)
         old, new = build_pair(positions, features_per_joint=1)
         old.append({
@@ -433,31 +433,6 @@ class InsufficientEvidenceTests(unittest.TestCase):
             "raw": {"feature_identification": "CLUSTER corrosion"},
         })
         result = run_aurora_alignment(old, new)
-
-        bypassed_keys = {feature.key for feature, _reason in result.bypassed_old}
-        self.assertIn("OLD:cluster", bypassed_keys)
-        self.assertTrue(any(
-            "Clustered metal loss" in reason for _f, reason in result.bypassed_old
-        ))
-
-    def test_a_session_may_offer_clusters_to_the_matcher(self):
-        # The same two runs, with the engineer's decision that this vendor's
-        # clusters are stable enough to carry an identity across runs.
-        positions = joint_positions(count=10)
-        old, new = build_pair(positions, features_per_joint=1)
-        old.append({
-            "id": "OLDC", "source_key": "OLD:cluster",
-            "abs_distance_m": positions[2] + 4.0, "originalType": "metal loss",
-            "clock_position": "6:00", "depth_pct": 40.0,
-            "raw": {"feature_identification": "CLUSTER corrosion"},
-        })
-        new.append({
-            "id": "NEWC", "source_key": "NEW:cluster",
-            "abs_distance_m": positions[2] + 4.0, "originalType": "metal loss",
-            "clock_position": "6:00", "depth_pct": 45.0,
-            "raw": {"feature_identification": "CLUSTER corrosion"},
-        })
-        result = run_aurora_alignment(old, new, align_clusters=True)
 
         bypassed_keys = {feature.key for feature, _reason in result.bypassed_old}
         self.assertNotIn("OLD:cluster", bypassed_keys)

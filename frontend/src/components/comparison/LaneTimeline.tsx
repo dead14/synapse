@@ -930,7 +930,7 @@ export default function LaneTimeline({
                     role="button"
                     tabIndex={0}
                     style={{ cursor: 'pointer' }}
-                    aria-label={`Clustered anomaly ${feature.id} of ${lane.label} at ${formatMeters(feature.rawM)}, clock position ${feature.clockLabel}, not aligned across runs`}
+                    aria-label={`Clustered anomaly ${feature.id} of ${lane.label} at ${formatMeters(feature.rawM)}, clock position ${feature.clockLabel}, merged corrosion group`}
                     onClick={(event) => { event.stopPropagation(); onFeatureClick(feature, lane, event); }}
                     onKeyDown={(event) => {
                       if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -1115,7 +1115,7 @@ export default function LaneTimeline({
         </span>
         <span className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--syn-ink-soft)' }}>
           <svg width="12" height="9"><rect x="0" y="1.5" width="12" height="6" fill="var(--syn-muted)" fillOpacity="0.3" stroke="var(--syn-muted)" strokeWidth="0.9" strokeDasharray="3 2" /></svg>
-          Clustered anomalies (own strip, never aligned)
+          Clustered anomalies (own strip, box is the envelope)
         </span>
         <span className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--syn-ink-soft)' }}>
           <svg width="12" height="9"><line x1="6" y1="0" x2="6" y2="9" stroke="var(--syn-line-strong)" strokeWidth="1.4" /></svg>

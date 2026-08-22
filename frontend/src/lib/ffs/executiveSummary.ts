@@ -274,7 +274,7 @@ export function buildExecutiveSummary(
     {
       label: 'Clustered metal loss',
       count: items.filter((item) => item.nominal.isClusteredMetalLoss).length,
-      detail: 'Vendor-merged groups assessed as one defect, with no run-pair growth rate.',
+      detail: 'Vendor-merged groups assessed as one defect: the reported box is the envelope of several pits.',
     },
     {
       label: 'Zero-baseline growth estimate',
