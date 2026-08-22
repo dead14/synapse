@@ -265,18 +265,17 @@ test('an ordinary corrosion row is never mistaken for a cluster', () => {
   }
 });
 
-test('a cluster is excluded from the manual reassignment candidates but stays a table row', () => {
-  // Mirrors ResultsPanel's candidate rule: an OLD row with no NEW pair yet.
-  const rows = [
-    { 'Source Key OLD': 'OLD:1', 'Feature Identification OLD': 'Corrosion', 'Log Dist OLD (m)': 12 },
-    { 'Source Key OLD': 'OLD:2', 'Feature Identification OLD': 'CLUSTER corrosion', 'Log Dist OLD (m)': 18 },
-  ];
+test('the cluster flag reports what a row is, and gates nothing', () => {
+  // It is read by the FFS intake so a B31G result can say it covers a merged
+  // envelope. Alignment does not consult it: a cluster pairs like any other
+  // metal loss, by hand as well as by engine.
+  const row = {
+    'Source Key OLD': 'OLD:2',
+    'Feature Identification OLD': 'CLUSTER corrosion',
+    'Log Dist OLD (m)': 18,
+  };
 
-  const candidates = rows.filter((row) => !isClusteredAlignmentRow(row));
-
-  assert.deepEqual(candidates.map((row) => row['Source Key OLD']), ['OLD:1']);
-  // The cluster is still one of the rows the table renders and FFS reads.
-  assert.equal(rows.length, 2);
+  assert.equal(isClusteredAlignmentRow(row), true);
 });
 
 test('a switchable class is recognised from the labels a vendor actually writes', () => {

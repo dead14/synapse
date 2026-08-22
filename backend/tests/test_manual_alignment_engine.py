@@ -30,7 +30,7 @@ class ManualAlignmentEngineTests(unittest.TestCase):
         self.assertEqual(len(output["anomaly_only_old"]), 1)
         self.assertEqual(len(output["anomaly_only_new"]), 1)
 
-    def test_clustered_metal_loss_is_conserved_as_a_bypass_row_with_its_reason(self):
+    def test_clustered_metal_loss_is_reported_as_an_anomaly_not_a_bypass(self):
         old_features = [
             {
                 "id": "old-ml",
@@ -52,36 +52,15 @@ class ManualAlignmentEngineTests(unittest.TestCase):
 
         output = manual_alignment_engine.build_manual_output(old_features, [], 2020, 2026)
 
-        self.assertEqual([row["Identif. OLD"] for row in output["anomaly_only_old"]], ["old-ml"])
-        self.assertEqual([row["Identif. OLD"] for row in output["bypassed_old"]], ["old-cluster"])
         self.assertEqual(
-            output["bypassed_old"][0]["Bypass Reason"],
-            manual_alignment_engine.CLUSTER_BYPASS_REASON,
+            [row["Identif. OLD"] for row in output["anomaly_only_old"]],
+            ["old-ml", "old-cluster"],
         )
-        self.assertEqual(output["anomaly_only_old"][0]["Bypass Reason"], "-")
-        # The cluster is held back from matching, never dropped from the report.
-        self.assertTrue(output["audit"]["isConserved"])
-
-    def test_a_session_that_aligns_clusters_reports_them_as_anomalies(self):
-        old_features = [
-            {
-                "id": "old-cluster",
-                "source_key": "OLD:cluster",
-                "abs_distance_m": 7.0,
-                "originalType": "metal loss",
-                "depth_pct": 22.0,
-                "raw": {"feature_identification": "CLUSTER corrosion"},
-            },
-        ]
-
-        output = manual_alignment_engine.build_manual_output(
-            old_features, [], 2020, 2026, True,
-        )
-
-        self.assertEqual([row["Identif. OLD"] for row in output["anomaly_only_old"]], ["old-cluster"])
         self.assertEqual(output["bypassed_old"], [])
-        # No bypass happened, so no bypass is claimed.
-        self.assertEqual(output["anomaly_only_old"][0]["Bypass Reason"], "-")
+        # No row is held out of matching by rule, so no row claims a reason.
+        self.assertTrue(all(
+            row["Bypass Reason"] == "-" for row in output["anomaly_only_old"]
+        ))
         self.assertTrue(output["audit"]["isConserved"])
 
 

@@ -622,7 +622,7 @@ export function buildFfsReportCase(
     findings.push(finding(
       'CLUSTERED_METAL_LOSS_ASSESSED',
       'warning',
-      'Clustered metal loss is assessed as a single rectangular defect. B31G is written for one feature, and a merged group is never matched across runs, so neither the remaining strength nor the growth rate carries the usual meaning.',
+      'Clustered metal loss is assessed as a single rectangular defect. B31G is written for one feature, and the reported box is the envelope of several pits, so the remaining strength does not carry its usual meaning.',
       clusteredCount,
     ));
   }

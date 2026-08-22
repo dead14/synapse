@@ -160,7 +160,7 @@ export function applicabilityChecks(item: FfsScreenedResult): FfsApplicabilityCh
       // written for one defect and this row is a vendor-merged group.
       status: n.isClusteredMetalLoss ? 'review' : 'pass',
       detail: n.isClusteredMetalLoss
-        ? 'Reported as clustered metal loss. The result treats the merged envelope as one defect, and no run-pair growth rate exists because clusters are never matched across runs.'
+        ? 'Reported as clustered metal loss. The result treats the merged envelope as one defect, so the depth and length describe a group of pits rather than one.'
         : 'Reported as an individual metal-loss feature.',
     },
     {

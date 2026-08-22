@@ -11,7 +11,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "python_engines"))
 
 import hungarian_engine
-from hungarian_engine import HungarianAnomalyAlignmentEngine, resolve_cluster_alignment
+from hungarian_engine import HungarianAnomalyAlignmentEngine
 
 
 class HungarianToleranceTests(unittest.TestCase):
@@ -620,7 +620,9 @@ class HungarianGwLockTests(unittest.TestCase):
         self.assertFalse(HungarianAnomalyAlignmentEngine._is_cluster_feature(feature))
         self.assertTrue(HungarianAnomalyAlignmentEngine._is_matchable_anomaly(feature))
 
-    def test_clustered_metal_loss_is_conserved_as_bypass_instead_of_matched(self):
+    def test_clustered_metal_loss_is_matched_like_any_other_anomaly(self):
+        # A vendor-merged group is metal loss.  It goes to the matcher on the
+        # same terms as a single pit, whatever the vendor called it.
         features = [
             {
                 "id": "single-defect",
@@ -637,36 +639,6 @@ class HungarianGwLockTests(unittest.TestCase):
                 "originalType": "anomaly",
                 "raw": {"type": "anomaly", "feature_identification": "Corrosion CLUSTER"},
             },
-        ]
-
-        self.assertFalse(HungarianAnomalyAlignmentEngine._is_matchable_anomaly(features[1]))
-        self.assertFalse(HungarianAnomalyAlignmentEngine._is_matchable_anomaly(features[2]))
-
-        anomalies, bypassed = HungarianAnomalyAlignmentEngine._partition_hungarian_features(
-            features,
-        )
-
-        self.assertEqual([feature["id"] for feature in anomalies], ["single-defect"])
-        self.assertEqual(
-            [feature["id"] for feature in bypassed],
-            ["vendor-cluster", "vendor-cluster-reversed"],
-        )
-
-    def test_session_can_opt_clusters_into_alignment(self):
-        # Some vendors report a cluster as a standing feature grouped by the
-        # same rule in both runs.  The engineer says so on the Tolerances step;
-        # nothing about the labels themselves changes.
-        features = [
-            {
-                "id": "single-defect",
-                "originalType": "metal loss",
-                "raw": {"feature_identification": "Corrosion"},
-            },
-            {
-                "id": "vendor-cluster",
-                "originalType": "metal loss",
-                "raw": {"feature_identification": "CLUSTER corrosion"},
-            },
             {
                 "id": "support",
                 "originalType": "support",
@@ -674,36 +646,33 @@ class HungarianGwLockTests(unittest.TestCase):
             },
         ]
 
-        self.assertTrue(
-            HungarianAnomalyAlignmentEngine._is_matchable_anomaly(features[1], True)
-        )
-        # Still a cluster — the flag governs eligibility, not classification.
+        self.assertTrue(HungarianAnomalyAlignmentEngine._is_matchable_anomaly(features[1]))
+        self.assertTrue(HungarianAnomalyAlignmentEngine._is_matchable_anomaly(features[2]))
+        # Still recognised as a cluster — the label classifies, it does not gate.
         self.assertTrue(HungarianAnomalyAlignmentEngine._is_cluster_feature(features[1]))
 
         anomalies, bypassed = HungarianAnomalyAlignmentEngine._partition_hungarian_features(
-            features, True,
+            features,
         )
 
         self.assertEqual(
             [feature["id"] for feature in anomalies],
-            ["single-defect", "vendor-cluster"],
+            ["single-defect", "vendor-cluster", "vendor-cluster-reversed"],
         )
-        # Opting clusters in must not drag pipe furniture along with them.
+        # Matching clusters must not drag pipe furniture along with them.
         self.assertEqual([feature["id"] for feature in bypassed], ["support"])
 
-    def test_cluster_alignment_defaults_to_bypass_for_every_unknown_value(self):
-        # A session saved before the setting existed, and any value that is not
-        # the explicit opt-in, keep the conservative rule.
-        for tol_config in (None, {}, {"cluster_alignment": ""},
-                           {"cluster_alignment": "bypass"},
-                           {"cluster_alignment": "yes please"}):
-            with self.subTest(tol_config=tol_config):
-                self.assertFalse(resolve_cluster_alignment(tol_config))
+    def test_a_merged_corrosion_group_is_never_read_as_pipe_furniture(self):
+        # The only thing the cluster label still decides: a merged group whose
+        # text happens to name a fitting is metal loss, not a fitting to pair
+        # ordinally.
+        feature = {
+            "originalType": "metal loss",
+            "raw": {"feature_identification": "Corrosion cluster at support"},
+        }
 
-        for tol_config in ({"cluster_alignment": "align"},
-                           {"cluster_alignment": " ALIGN "}):
-            with self.subTest(tol_config=tol_config):
-                self.assertTrue(resolve_cluster_alignment(tol_config))
+        self.assertIsNone(HungarianAnomalyAlignmentEngine._fitting_class(feature))
+        self.assertTrue(HungarianAnomalyAlignmentEngine._is_matchable_anomaly(feature))
 
     def test_scenario_depth_does_not_filter_matching_candidates(self):
         engine = HungarianAnomalyAlignmentEngine.__new__(HungarianAnomalyAlignmentEngine)

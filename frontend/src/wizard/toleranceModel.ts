@@ -136,14 +136,12 @@ export function formatTolerance(spec: ToleranceSpec, value: number): string {
 /**
  * What a named profile actually sets.
  *
- * `wall_thickness_source` and `cluster_alignment` are deliberately not part of
- * it. A profile describes how strictly pairs are gated; where a thickness
- * reading comes from, and whether this vendor's clusters are stable enough to
- * pair at all, are evidence decisions about the uploaded data that survive
- * switching profiles. Including them would let picking "Conservative" silently
- * undo either one.
+ * `wall_thickness_source` is deliberately not part of it. A profile describes
+ * how strictly pairs are gated; where a thickness reading comes from is an
+ * evidence decision about the uploaded data that survives switching profiles.
+ * Including it would let picking "Conservative" silently undo it.
  */
-export type ProfileValues = Omit<ToleranceValues, 'wall_thickness_source' | 'cluster_alignment'>;
+export type ProfileValues = Omit<ToleranceValues, 'wall_thickness_source'>;
 
 export interface ToleranceProfile {
   id: string;
@@ -200,11 +198,11 @@ const CHOICE_KEYS = ['use_us_gw_distance', 'us_gw_distance_source', 'anomaly_mat
 
 /**
  * The evidence decisions a profile does not own. They are excluded from
- * `matchProfile` — a profile is still itself with either one set — but they are
- * part of what "unsaved changes" means, because each one changes what the
- * engine is given rather than how strictly it gates.
+ * `matchProfile` — a profile is still itself whichever way this is set — but
+ * they are part of what "unsaved changes" means, because each one changes what
+ * the engine is given rather than how strictly it gates.
  */
-const EVIDENCE_KEYS = ['wall_thickness_source', 'cluster_alignment'] as const;
+const EVIDENCE_KEYS = ['wall_thickness_source'] as const;
 
 function sameChoices(left: ProfileValues, right: ProfileValues): boolean {
   return CHOICE_KEYS.every((key) => left[key] === right[key]);

@@ -379,9 +379,10 @@ export interface FfsInput {
   growthEvidence?: FfsGrowthEvidence;
   /**
    * True when the ILI record is a vendor-merged corrosion group rather than a
-   * single defect. B31G is written for one metal-loss feature, and a cluster box
-   * is never matched across runs, so both the remaining-strength result and the
-   * growth rate mean something different for these rows.
+   * single defect. It is aligned across runs like any other metal loss; the
+   * flag is here because B31G is written for one metal-loss feature and the
+   * reported box is the envelope of several pits, so the remaining-strength
+   * result means something different for these rows.
    */
   isClusteredMetalLoss: boolean;
   /**

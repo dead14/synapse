@@ -312,7 +312,7 @@ function buildDrivers(spool: Omit<FfsSpool, 'drivers'>): string[] {
   if (spool.clusterCount > 0) {
     drivers.push(
       `${spool.clusterCount} of the ${spool.metalLossTotal} records are vendor-merged clusters: their extent is a ` +
-      'bounding box over several pits and they carry no run-pair growth rate.',
+      'bounding box over several pits, not the profile of one defect.',
     );
   }
   if (spool.interactionCount > 0) {

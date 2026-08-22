@@ -27,10 +27,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from hungarian_engine import (  # noqa: E402  (path set up above)
-    CLUSTER_BYPASS_REASON,
-    HungarianAnomalyAlignmentEngine,
-)
+from hungarian_engine import HungarianAnomalyAlignmentEngine  # noqa: E402  (path set up above)
 
 from engine.aurora import run_aurora_alignment  # noqa: E402
 from engine.aurora.canonical import GIRTH_WELD, TEE_OFFTAKE, VALVE  # noqa: E402
@@ -99,19 +96,6 @@ class AuroraRowBuilder:
             odo_diff = round(
                 float(new_record["abs_distance_m"]) - float(old_record["abs_distance_m"]), 4
             )
-
-        # Only a bypass this run actually applied is named.  When the session
-        # aligns clusters, a cluster row is an ordinary result and stamping the
-        # exclusion reason on it would describe a rule that never ran.
-        if (
-            bypass_reason == _EMPTY
-            and not getattr(self.engine, "align_clusters", False)
-            and any(
-                record and HungarianAnomalyAlignmentEngine._is_cluster_feature(record)
-                for record in (old_record, new_record)
-            )
-        ):
-            bypass_reason = CLUSTER_BYPASS_REASON
 
         row = {
             "session_id": self.engine.session_id,
@@ -298,9 +282,6 @@ def build_aurora_output(
         new_run=getattr(engine, "_run_2_meta", {}),
         pipeline_key=pipeline_key,
         config_overrides=config_overrides,
-        # Resolved on the engine from the session's ToleranceConfig, so all
-        # three strategies read one saved decision.
-        align_clusters=getattr(engine, "align_clusters", False),
     )
 
     builder = AuroraRowBuilder(engine)

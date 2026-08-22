@@ -353,7 +353,7 @@ export default function FfsResultsTable({
                         {n.featureId ?? '—'}
                         {n.isClusteredMetalLoss && (
                           <span
-                            title="Clustered metal loss: a vendor-merged group assessed as one defect, with no run-pair growth rate."
+                            title="Clustered metal loss: a vendor-merged group assessed as one defect, so the box is the envelope of several pits."
                             className="rounded border border-violet-200 bg-violet-50 px-1 py-px font-sans text-[8px] font-bold uppercase tracking-wide text-violet-700 dark:border-violet-800/60 dark:bg-violet-950/30 dark:text-violet-300"
                           >
                             CL

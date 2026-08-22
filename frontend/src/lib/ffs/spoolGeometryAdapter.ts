@@ -58,7 +58,6 @@ function externalOf(surface: string | null | undefined): boolean | null {
  * feature grew without pretending to hold the previous run's dimensions.
  */
 function statusOf(item: FfsScreenedResult): SpoolMatchStatus {
-  if (item.nominal.isClusteredMetalLoss) return 'bypassed';
   // Read the source observation, never the rate. Testing `rate > 0` called a
   // feature "matched" whenever the growth ladder had supplied it a derived
   // rate — so a NEW-only anomaly the run pair never saw was outlined as a
@@ -123,9 +122,7 @@ export function spoolFeatureFromFfs(item: FfsScreenedResult): SpoolFeature {
     lengthGrowthMmPerYear: resolvedLengthRate(n),
     intervalYears: null,
     section: n.section,
-    bypassReason: n.isClusteredMetalLoss
-      ? 'Clustered metal loss — assessed as one merged defect'
-      : null,
+    bypassReason: null,
     physicsWarning: null,
     comment: n.recommendation,
   };

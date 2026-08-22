@@ -213,9 +213,10 @@ function classifyStatus(
 ): SpoolMatchStatus {
   const resultGroup = text(row['Result Group']).toLowerCase();
   const matchStatus = text(row.match_status ?? row['Match/Unmatch']).toLowerCase();
-  // The engine parks anything it refuses to align — clusters above all — in a
-  // bypassed bucket. That is a statement about the alignment, not about the
-  // metal, so it gets its own status instead of being read as "new".
+  // The engine parks anything that was never a matchable anomaly — supports,
+  // markers, unrecognised labels — in a bypassed bucket. That is a statement
+  // about the alignment, not about the metal, so it gets its own status
+  // instead of being read as "new".
   if (resultGroup.includes('bypass') || present(row['Bypass Reason']) || matchStatus.includes('bypass')) {
     return 'bypassed';
   }
